@@ -1,0 +1,28 @@
+# Build artifacts
+/build/
+*.o
+*.a
+*.out
+*.vcd
+*.fst
+obj_dir/
+
+# C model binaries
+/bin/
+
+# Verilator/iverilog outputs
+*.vvp
+verilated*
+
+# Editor / OS cruft
+.DS_Store
+*~
+.vscode/
+.idea/
+
+# Local agent/editor settings (machine-specific)
+.claude/
+
+# Generated test vectors (regeneratable)
+/tests/generated/*.vec
+/tests/traces/*.trace
