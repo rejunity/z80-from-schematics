@@ -185,7 +185,38 @@ void z80_exec_step(z80_t *c)
         finish(c); break;
     case EXEC_PREFIX:
         set_prefix_from_ir(c);
-        z80_start_m1(c);            /* continue: fetch the real opcode */
+        if (c->prefix == PFX_DDCB || c->prefix == PFX_FDCB) {
+            /* DD/FD CB d op: d and op are operand reads, not M1 fetches */
+            c->ctl.exec = EXEC_DDCB;
+            c->ctl.idx  = (c->prefix == PFX_DDCB) ? 1u : 2u;
+            z80_start_mcycle(c, BUSOP_MRD, z80_pc_inc(c), 0, 0);  /* read d */
+        } else {
+            z80_start_m1(c);        /* continue: fetch the real opcode */
+        }
+        break;
+    case EXEC_DDCB:
+        if (m == 2) { c->tmpl = RB;  /* displacement d */
+                      z80_start_mcycle(c, BUSOP_MRD, z80_pc_inc(c), 0, 0); } /* read op */
+        else if (m == 3) { c->tmph = RB;  /* CB opcode */
+                      c->rf[RFP_WZ] = (uint16_t)(c->rf[hlp] + (int8_t)c->tmpl);
+                      z80_start_mcycle(c, BUSOP_INTERNAL, c->rf[RFP_WZ], 0, 2); }
+        else if (m == 4) z80_start_mcycle(c, BUSOP_MRD, c->rf[RFP_WZ], 0, 1); /* read (IX+d) 4T */
+        else if (m == 5) {
+            uint8_t op = c->tmph, val = RB, res = val;
+            uint8_t x = (uint8_t)(op >> 6), yy = (uint8_t)((op >> 3) & 7), zz = (uint8_t)(op & 7);
+            if (x == CB_BIT) {
+                uint8_t xy = (uint8_t)(c->rf[RFP_WZ] >> 8);
+                z80_setF(c, z80_flags_bit(yy, val, xy, z80_F(c)));
+                finish(c);
+            } else {
+                if (x == CB_ROT) { uint8_t f = z80_flags_rot(yy, val, z80_F(c), &res); z80_setF(c, f); }
+                else if (x == CB_RES) res = (uint8_t)(val & ~(1u << yy));
+                else                  res = (uint8_t)(val | (1u << yy));
+                if (zz != REG_iHL) setr(c, zz, res);   /* undocumented register copy */
+                z80_start_mcycle(c, BUSOP_MWR, c->rf[RFP_WZ], res, 0);
+            }
+        }
+        else finish(c);
         break;
     case EXEC_DI: c->iff1 = c->iff2 = false; finish(c); break;
     case EXEC_EI: c->iff1 = c->iff2 = true;  finish(c); break;

@@ -33,9 +33,9 @@ Living record of the verification state. Updated at each checkpoint.
 | I/O (IN/OUT n,A), EX/EXX/EX(SP) | done | done | done |
 | CB prefix (rot/shift/BIT/RES/SET) | done | done | done |
 | ED prefix (16-bit ADC/SBC, LD I/R, NEG, IM, RET[I/N], IN/OUT(C), RRD/RLD) | done | done | done |
-| ED block ops (LDI..OTDR) | done | pending | pending |
-| DD/FD (IX/IY, IXH/IXL, (IX+d)) | done | pending | pending |
-| DDCB/FDCB | pending | pending | pending |
+| ED block ops (LDI..OTDR) | done | done | done |
+| DD/FD (IX/IY, IXH/IXL, (IX+d)) | done | done | done |
+| DDCB/FDCB (op (IX+d) + undoc copy) | done | done | done |
 | Interrupts/refresh/wait/halt/bus | partial (HALT+refresh) | partial | pending |
 | Undocumented (X/Y, MEMPTR rules) | partial | partial | pending |
 | ZEXDOC | harness wired; blocked on prefixes | — | — |

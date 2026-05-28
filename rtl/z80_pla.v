@@ -216,8 +216,11 @@ module z80_pla (
             if (exec == `EX_PREFIX) idx = 2'd0;    // DDCB chain: leave plain
             if (rp_sel == `RFP_HL) rp_sel = (prefix == `PFX_DD) ? `RFP_IX : `RFP_IY;
         end
+        end else if (prefix == `PFX_DDCB || prefix == `PFX_FDCB) begin
+            exec = `EX_DDCB;
+            idx = (prefix == `PFX_DDCB) ? 2'd1 : 2'd2;
         end else begin
-            exec = `EX_ILLEGAL; valid = 1'b0;      // DDCB/FDCB (later stage)
+            exec = `EX_ILLEGAL; valid = 1'b0;
         end
     end
 endmodule

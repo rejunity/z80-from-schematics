@@ -169,6 +169,7 @@ typedef enum {
     EXEC_IN_C, EXEC_OUT_C,                 /* IN r,(C) / OUT (C),r           */
     EXEC_RRD, EXEC_RLD,                    /* rotate digit                   */
     EXEC_BLOCK,                            /* LDI/LDD/CPI/.../INI/.../OUTI/. */
+    EXEC_DDCB,                             /* DD/FD CB d op : op on (IX+d)    */
     EXEC_ILLEGAL
 } z80_exec_t;
 

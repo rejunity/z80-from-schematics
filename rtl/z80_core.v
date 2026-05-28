@@ -168,6 +168,7 @@ module z80_core (
     // ---- ALU operand selection + instance ----
     reg  [7:0] alu_a, alu_b, alu_xy;
     reg  [4:0] alu_md;
+    reg  [2:0] alu_rot, alu_bit;
     wire [7:0] A_cur = rf[`RFP_AF][15:8];
     wire [7:0] F_cur = rf[`RFP_AF][7:0];
     always @* begin
@@ -175,6 +176,8 @@ module z80_core (
         alu_b = 8'h00;
         alu_md = flag_mode_w;
         alu_xy = 8'h00;
+        alu_rot = rot_op_w;
+        alu_bit = bit_index_w;
         case (exec_w)
             `EX_ALU_R:           alu_b = getri(rf_src_w);
             `EX_ALU_N, `EX_ALU_M:alu_b = rbyte;
@@ -182,13 +185,16 @@ module z80_core (
             `EX_INC_M, `EX_DEC_M:alu_b = rbyte;
             `EX_CB_R: begin alu_b = getr8(rf_src_w); alu_xy = getr8(rf_src_w); end
             `EX_CB_M: begin alu_b = rbyte;           alu_xy = rf[`RFP_WZ][15:8]; end
+            `EX_DDCB: begin alu_b = rbyte;           alu_xy = rf[`RFP_WZ][15:8];
+                            alu_md = (tmph[7:6] == `CB_BIT) ? `FM_BIT : `FM_ROT;
+                            alu_rot = tmph[5:3]; alu_bit = tmph[5:3]; end
             default:             alu_b = 8'h00;
         endcase
     end
     wire [7:0] alu_res, alu_fout;
     z80_alu u_alu (
-        .mode(alu_md), .alu_op(alu_op_w), .rot_op(rot_op_w),
-        .bit_idx(bit_index_w), .xy_src(alu_xy),
+        .mode(alu_md), .alu_op(alu_op_w), .rot_op(alu_rot),
+        .bit_idx(alu_bit), .xy_src(alu_xy),
         .a(alu_a), .b(alu_b), .oldf(F_cur),
         .res(alu_res), .fout(alu_fout)
     );
@@ -238,6 +244,10 @@ module z80_core (
     reg [7:0]  edf, edv;
     reg [2:0]  mm;
     reg [15:0] memaddr;
+    reg [15:0] bbc;            // block: BC after decrement
+    reg [8:0]  bk;             // block-IO: data + (C±1) or +L
+    reg [7:0]  bdata, bn2, bnewB;
+    reg [4:0]  bhc;            // block-CP: low-nibble borrow
 
     // ---- combinational next-state ----
     always @* begin
@@ -294,8 +304,34 @@ module z80_core (
                                           (prefix == `PFX_FD) ? `PFX_FDCB : `PFX_CB;
                         default: ;
                     endcase
-                    bus_op_n = `BUSOP_M1; m_addr_n = rf[`RFP_PC]; m_wdata_n = 8'h0;
-                    m_len_n = 4'd4; t_n = 4'd1; phi_n = 1'b0; m_cycle_n = 3'd1; decoded_n = 1'b0;
+                    if (prefix_n == `PFX_DDCB || prefix_n == `PFX_FDCB) begin
+                        startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0); /* read displacement d */
+                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1;
+                    end else begin
+                        bus_op_n = `BUSOP_M1; m_addr_n = rf[`RFP_PC]; m_wdata_n = 8'h0;
+                        m_len_n = 4'd4; t_n = 4'd1; phi_n = 1'b0; m_cycle_n = 3'd1; decoded_n = 1'b0;
+                    end
+                end
+                `EX_DDCB: begin
+                    if (m_cycle == 3'd2) begin tmpl_n = rbyte;           /* d */
+                        startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0); rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
+                    else if (m_cycle == 3'd3) begin tmph_n = rbyte;      /* op */
+                        rf_n[`RFP_WZ] = rf[hlp] + {{8{tmpl[7]}}, tmpl};
+                        startm(`BUSOP_INTERNAL, rf[hlp] + {{8{tmpl[7]}}, tmpl}, 8'h0, 4'd2); end
+                    else if (m_cycle == 3'd4) startm(`BUSOP_MRD, rf[`RFP_WZ], 8'h0, 4'd1); /* read (IX+d) 4T */
+                    else if (m_cycle == 3'd5) begin
+                        if (tmph[7:6] == `CB_BIT) begin rf_n[`RFP_AF][7:0] = alu_fout; fin = 1'b1; end
+                        else begin
+                            case (tmph[7:6])
+                                `CB_ROT: begin cbres = alu_res; rf_n[`RFP_AF][7:0] = alu_fout; end
+                                `CB_RES: cbres = rbyte & ~(8'h01 << tmph[5:3]);
+                                default: cbres = rbyte |  (8'h01 << tmph[5:3]);
+                            endcase
+                            if (tmph[2:0] != 3'd6) setr8(tmph[2:0], cbres);  /* undoc copy */
+                            startm(`BUSOP_MWR, rf[`RFP_WZ], cbres, 4'd0);
+                        end
+                    end
+                    else fin = 1'b1;
                 end
                 `EX_DI: begin iff1_n = 1'b0; iff2_n = 1'b0; fin = 1'b1; end
                 `EX_EI: begin iff1_n = 1'b1; iff2_n = 1'b1; fin = 1'b1; end
@@ -735,6 +771,107 @@ module z80_core (
                     end
                     else if (m_cycle == 3'd3) startm(`BUSOP_MWR, rf[`RFP_HL], tmpl, 4'd0);
                     else fin = 1'b1;
+                end
+
+                /* ---------- ED block instructions ----------
+                   aux: [0]=dec  [2:1]=cat(0 LD,1 CP,2 IN,3 OUT)  [3]=repeat */
+                `EX_BLOCK: begin
+                    if (aux_w[2:1] == 2'd0) begin                 // LDI/LDD/LDIR/LDDR
+                        if (m_cycle == 3'd1) startm(`BUSOP_MRD, rf[`RFP_HL], 8'h0, 4'd0);
+                        else if (m_cycle == 3'd2)
+                            startm(`BUSOP_MWR, rf[`RFP_DE], rbyte, 4'd2); /* 5T write */
+                        else if (m_cycle == 3'd3) begin
+                            bbc = rf[`RFP_BC] - 16'd1; rf_n[`RFP_BC] = bbc;
+                            rf_n[`RFP_HL] = rf[`RFP_HL] + (aux_w[0] ? 16'hFFFF : 16'h1);
+                            rf_n[`RFP_DE] = rf[`RFP_DE] + (aux_w[0] ? 16'hFFFF : 16'h1);
+                            bn2 = A_cur + tmp8;                   /* A + transferred byte */
+                            edf = F_cur & (`FB_S | `FB_Z | `FB_C);
+                            if (bn2[1]) edf = edf | `FB_Y;
+                            if (bn2[3]) edf = edf | `FB_X;
+                            if (bbc != 16'd0) edf = edf | `FB_P;
+                            rf_n[`RFP_AF][7:0] = edf;
+                            if (aux_w[3] && bbc != 16'd0) begin
+                                rf_n[`RFP_PC] = rf[`RFP_PC] - 16'd2;
+                                rf_n[`RFP_WZ] = rf[`RFP_PC] - 16'd1;
+                                startm(`BUSOP_INTERNAL, rf[`RFP_PC] - 16'd2, 8'h0, 4'd5);
+                            end else fin = 1'b1;
+                        end else fin = 1'b1;
+                    end else if (aux_w[2:1] == 2'd1) begin        // CPI/CPD/CPIR/CPDR
+                        if (m_cycle == 3'd1) startm(`BUSOP_MRD, rf[`RFP_HL], 8'h0, 4'd0);
+                        else if (m_cycle == 3'd2) begin
+                            bbc = rf[`RFP_BC] - 16'd1; rf_n[`RFP_BC] = bbc;
+                            rf_n[`RFP_WZ] = rf[`RFP_WZ] + (aux_w[0] ? 16'hFFFF : 16'h1);
+                            rf_n[`RFP_HL] = rf[`RFP_HL] + (aux_w[0] ? 16'hFFFF : 16'h1);
+                            bn2 = A_cur - rbyte;                  /* res */
+                            bhc = {1'b0, A_cur[3:0]} - {1'b0, rbyte[3:0]};
+                            edf = (F_cur & `FB_C) | `FB_N;
+                            if (bn2[7]) edf = edf | `FB_S;
+                            if (bn2 == 8'h0) edf = edf | `FB_Z;
+                            if (bhc[4]) edf = edf | `FB_H;
+                            if (((bn2 - {7'b0, bhc[4]}) & 8'h02) != 8'h0) edf = edf | `FB_Y;
+                            if (((bn2 - {7'b0, bhc[4]}) & 8'h08) != 8'h0) edf = edf | `FB_X;
+                            if (bbc != 16'd0) edf = edf | `FB_P;
+                            rf_n[`RFP_AF][7:0] = edf;
+                            startm(`BUSOP_INTERNAL, rf[`RFP_HL] + (aux_w[0] ? 16'hFFFF : 16'h1), 8'h0, 4'd5);
+                        end else if (m_cycle == 3'd3) begin
+                            if (aux_w[3] && rf[`RFP_BC] != 16'd0 && !(F_cur & `FB_Z)) begin
+                                rf_n[`RFP_PC] = rf[`RFP_PC] - 16'd2;
+                                rf_n[`RFP_WZ] = rf[`RFP_PC] - 16'd1;
+                                startm(`BUSOP_INTERNAL, rf[`RFP_PC] - 16'd2, 8'h0, 4'd5);
+                            end else fin = 1'b1;
+                        end else fin = 1'b1;
+                    end else if (aux_w[2:1] == 2'd2) begin        // INI/IND/INIR/INDR
+                        if (m_cycle == 3'd1) startm(`BUSOP_INTERNAL, rf[`RFP_PC], 8'h0, 4'd1);
+                        else if (m_cycle == 3'd2) begin
+                            rf_n[`RFP_WZ] = rf[`RFP_BC] + (aux_w[0] ? 16'hFFFF : 16'h1);
+                            startm(`BUSOP_IORD, rf[`RFP_BC], 8'h0, 4'd0);
+                        end else if (m_cycle == 3'd3) begin
+                            tmpl_n = rbyte; startm(`BUSOP_MWR, rf[`RFP_HL], rbyte, 4'd0);
+                        end else if (m_cycle == 3'd4) begin
+                            bdata = tmpl;
+                            bnewB = getr8(3'd0) - 8'd1; rf_n[`RFP_BC][15:8] = bnewB;
+                            rf_n[`RFP_HL] = rf[`RFP_HL] + (aux_w[0] ? 16'hFFFF : 16'h1);
+                            bk = {1'b0, bdata} + {1'b0, (getr8(3'd1) + (aux_w[0] ? 8'hFF : 8'h1))};
+                            edf = 8'h0;
+                            if (bdata[7]) edf = edf | `FB_N;
+                            if (bk[8]) edf = edf | (`FB_H | `FB_C);
+                            if (~(^(bnewB ^ {5'b0, bk[2:0]}))) edf = edf | `FB_P;
+                            if (bnewB[7]) edf = edf | `FB_S;
+                            if (bnewB == 8'h0) edf = edf | `FB_Z;
+                            edf = edf | (bnewB & (`FB_Y | `FB_X));
+                            rf_n[`RFP_AF][7:0] = edf;
+                            if (aux_w[3] && bnewB != 8'h0) begin
+                                rf_n[`RFP_PC] = rf[`RFP_PC] - 16'd2;
+                                startm(`BUSOP_INTERNAL, rf[`RFP_PC] - 16'd2, 8'h0, 4'd5);
+                            end else fin = 1'b1;
+                        end else fin = 1'b1;
+                    end else begin                                // OUTI/OUTD/OTIR/OTDR
+                        if (m_cycle == 3'd1) startm(`BUSOP_INTERNAL, rf[`RFP_PC], 8'h0, 4'd1);
+                        else if (m_cycle == 3'd2) startm(`BUSOP_MRD, rf[`RFP_HL], 8'h0, 4'd0);
+                        else if (m_cycle == 3'd3) begin
+                            tmpl_n = rbyte;
+                            rf_n[`RFP_BC][15:8] = getr8(3'd0) - 8'd1;
+                            rf_n[`RFP_WZ] = rf_n[`RFP_BC] + (aux_w[0] ? 16'hFFFF : 16'h1);
+                            startm(`BUSOP_IOWR, rf_n[`RFP_BC], rbyte, 4'd0);
+                        end else if (m_cycle == 3'd4) begin
+                            bdata = tmpl;
+                            rf_n[`RFP_HL] = rf[`RFP_HL] + (aux_w[0] ? 16'hFFFF : 16'h1);
+                            bk = {1'b0, bdata} + {1'b0, rf_n[`RFP_HL][7:0]};
+                            bnewB = getr8(3'd0);
+                            edf = 8'h0;
+                            if (bdata[7]) edf = edf | `FB_N;
+                            if (bk[8]) edf = edf | (`FB_H | `FB_C);
+                            if (~(^(bnewB ^ {5'b0, bk[2:0]}))) edf = edf | `FB_P;
+                            if (bnewB[7]) edf = edf | `FB_S;
+                            if (bnewB == 8'h0) edf = edf | `FB_Z;
+                            edf = edf | (bnewB & (`FB_Y | `FB_X));
+                            rf_n[`RFP_AF][7:0] = edf;
+                            if (aux_w[3] && bnewB != 8'h0) begin
+                                rf_n[`RFP_PC] = rf[`RFP_PC] - 16'd2;
+                                startm(`BUSOP_INTERNAL, rf[`RFP_PC] - 16'd2, 8'h0, 4'd5);
+                            end else fin = 1'b1;
+                        end else fin = 1'b1;
+                    end
                 end
 
                 default: fin = 1'b1;
