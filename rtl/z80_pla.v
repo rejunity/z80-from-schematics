@@ -19,6 +19,8 @@ module z80_pla (
     output reg  [2:0] bit_index,
     output reg  [1:0] cb_kind,
     output reg  [3:0] aux,
+    output reg  [1:0] idx,
+    output reg        use_disp,
     output reg  [7:0] rst_addr,
     output reg        uses_cc,
     output reg        valid
@@ -56,6 +58,7 @@ module z80_pla (
         exec = `EX_NOP; flag_mode = `FM_NONE; alu_op = 3'd0;
         rf_src = 3'd0; rf_dst = 3'd0; rp_sel = `RFP_BC; cc = 3'd0;
         rot_op = 3'd0; bit_index = 3'd0; cb_kind = 2'd0; aux = 4'd0;
+        idx = 2'd0; use_disp = 1'b0;
         rst_addr = 8'h00; uses_cc = 1'b0; valid = 1'b1;
 
         if (prefix == `PFX_CB) begin
@@ -95,9 +98,7 @@ module z80_pla (
                     + ({2'b0, z[1:0]});  // z*2 + dec + repeat
             end
             // else: EX_NOP (undocumented ED slot)
-        end else if (prefix != `PFX_NONE) begin
-            exec = `EX_ILLEGAL; valid = 1'b0;
-        end else begin
+        end else if (prefix == `PFX_DD || prefix == `PFX_FD || prefix == `PFX_NONE) begin
         case (x)
         2'd0: begin
             case (z)
@@ -204,6 +205,19 @@ module z80_pla (
             endcase
         end
         endcase
+        if (prefix != `PFX_NONE) begin            // DD/FD decoration
+            idx = (prefix == `PFX_DD) ? 2'd1 : 2'd2;
+            case (exec)
+                `EX_LD_R_M, `EX_ST_M_R, `EX_ALU_M,
+                `EX_INC_M, `EX_DEC_M, `EX_LD_M_N: use_disp = 1'b1;
+                `EX_EX_DE_HL: idx = 2'd0;          // EX DE,HL unaffected
+                default: ;
+            endcase
+            if (exec == `EX_PREFIX) idx = 2'd0;    // DDCB chain: leave plain
+            if (rp_sel == `RFP_HL) rp_sel = (prefix == `PFX_DD) ? `RFP_IX : `RFP_IY;
+        end
+        end else begin
+            exec = `EX_ILLEGAL; valid = 1'b0;      // DDCB/FDCB (later stage)
         end
     end
 endmodule

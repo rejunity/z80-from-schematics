@@ -31,11 +31,20 @@ Living record of the verification state. Updated at each checkpoint.
 | 16-bit load/inc/dec/ADD HL | done | done | done |
 | branch / call / ret / rst / push / pop / DJNZ / JR | done | done | done |
 | I/O (IN/OUT n,A), EX/EXX/EX(SP) | done | done | done |
-| CB/ED/DD/FD/DDCB/FDCB prefixes | pending | pending | pending |
+| CB prefix (rot/shift/BIT/RES/SET) | done | done | done |
+| ED prefix (16-bit ADC/SBC, LD I/R, NEG, IM, RET[I/N], IN/OUT(C), RRD/RLD) | done | done | done |
+| ED block ops (LDI..OTDR) | done | pending | pending |
+| DD/FD (IX/IY, IXH/IXL, (IX+d)) | done | pending | pending |
+| DDCB/FDCB | pending | pending | pending |
 | Interrupts/refresh/wait/halt/bus | partial (HALT+refresh) | partial | pending |
 | Undocumented (X/Y, MEMPTR rules) | partial | partial | pending |
 | ZEXDOC | harness wired; blocked on prefixes | — | — |
 | ZEXALL | harness wired; blocked on prefixes | — | — |
+
+### prelim.com — PASSING
+`make prelim` runs the preliminary instruction test through the C model and prints
+"Preliminary tests complete" with no errors. This exercises basic + IX/IY behavior and
+confirms the CP/M harness (loader, BDOS shim, PC seeding) works end-to-end.
 
 ### ZEX harness (make zexdoc / zexall / prelim)
 The CP/M harness is in place: `tests/zex/{prelim,zexdoc,zexall}.com`, `scripts/zexrunner.c`

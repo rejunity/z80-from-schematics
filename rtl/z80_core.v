@@ -78,18 +78,22 @@ module z80_core (
     wire [6:0] exec_w;
     wire [4:0] flag_mode_w;
     wire [2:0] alu_op_w, rf_src_w, rf_dst_w, cc_w, rot_op_w, bit_index_w;
-    wire [1:0] cb_kind_w;
+    wire [1:0] cb_kind_w, idx_w;
     wire [3:0] rp_sel_w, aux_w;
     wire [7:0] rst_addr_w;
-    wire       uses_cc_w, valid_w;
+    wire       uses_cc_w, valid_w, use_disp_w;
 
     z80_pla u_pla (
         .prefix(prefix), .op(ir),
         .exec(exec_w), .flag_mode(flag_mode_w), .alu_op(alu_op_w),
         .rf_src(rf_src_w), .rf_dst(rf_dst_w), .rp_sel(rp_sel_w),
         .cc(cc_w), .rot_op(rot_op_w), .bit_index(bit_index_w), .cb_kind(cb_kind_w),
-        .aux(aux_w), .rst_addr(rst_addr_w), .uses_cc(uses_cc_w), .valid(valid_w)
+        .aux(aux_w), .idx(idx_w), .use_disp(use_disp_w),
+        .rst_addr(rst_addr_w), .uses_cc(uses_cc_w), .valid(valid_w)
     );
+
+    // active "HL" pair for the current instruction (IX/IY under DD/FD)
+    wire [3:0] hlp = (idx_w == 2'd1) ? `RFP_IX : (idx_w == 2'd2) ? `RFP_IY : `RFP_HL;
 
     // ---- timing pin drive (combinational from registered state) ----
     z80_timing u_timing (
@@ -129,6 +133,13 @@ module z80_core (
         endcase
     endfunction
 
+    // index-aware 8-bit read: H/L -> IXH/IXL only under DD/FD with no memory operand
+    function [7:0] getri; input [2:0] sel;
+        if (idx_w != 2'd0 && !use_disp_w && sel == 3'd4)      getri = rf[hlp][15:8];
+        else if (idx_w != 2'd0 && !use_disp_w && sel == 3'd5) getri = rf[hlp][7:0];
+        else getri = getr8(sel);
+    endfunction
+
     function [3:0] baselen; input [2:0] bop;
         case (bop)
             `BUSOP_M1:   baselen = 4'd4;
@@ -165,9 +176,9 @@ module z80_core (
         alu_md = flag_mode_w;
         alu_xy = 8'h00;
         case (exec_w)
-            `EX_ALU_R:           alu_b = getr8(rf_src_w);
+            `EX_ALU_R:           alu_b = getri(rf_src_w);
             `EX_ALU_N, `EX_ALU_M:alu_b = rbyte;
-            `EX_INC_R, `EX_DEC_R:alu_b = getr8(rf_dst_w);
+            `EX_INC_R, `EX_DEC_R:alu_b = getri(rf_dst_w);
             `EX_INC_M, `EX_DEC_M:alu_b = rbyte;
             `EX_CB_R: begin alu_b = getr8(rf_src_w); alu_xy = getr8(rf_src_w); end
             `EX_CB_M: begin alu_b = rbyte;           alu_xy = rf[`RFP_WZ][15:8]; end
@@ -196,6 +207,15 @@ module z80_core (
         endcase
     endtask
 
+    // index-aware 8-bit write (H/L -> IXH/IXL under DD/FD, no memory operand)
+    task setri; input [2:0] sel; input [7:0] val;
+        if (idx_w != 2'd0 && !use_disp_w && sel == 3'd4)
+            rf_n[hlp][15:8] = val;
+        else if (idx_w != 2'd0 && !use_disp_w && sel == 3'd5)
+            rf_n[hlp][7:0] = val;
+        else setr8(sel, val);
+    endtask
+
     task startm; input [2:0] bop; input [15:0] a; input [7:0] wd; input [3:0] extra;
         begin
             bus_op_n  = bop;
@@ -216,6 +236,8 @@ module z80_core (
     reg [16:0] r17;
     reg [12:0] r13;
     reg [7:0]  edf, edv;
+    reg [2:0]  mm;
+    reg [15:0] memaddr;
 
     // ---- combinational next-state ----
     always @* begin
@@ -250,6 +272,16 @@ module z80_core (
         end else begin
             phi_n = 1'b0;
             if ((t_state + 4'd1) > m_len) begin
+                // (IX+d)/(IY+d) displacement preamble: fetch d, then 5T addr calc
+                mm = m_cycle; memaddr = rf[hlp];
+                if (idx_w != 2'd0 && use_disp_w && m_cycle == 3'd1) begin
+                    startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
+                    rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1;
+                end else if (idx_w != 2'd0 && use_disp_w && m_cycle == 3'd2) begin
+                    rf_n[`RFP_WZ] = rf[hlp] + {{8{rbyte[7]}}, rbyte};
+                    startm(`BUSOP_INTERNAL, rf[hlp] + {{8{rbyte[7]}}, rbyte}, 8'h0, 4'd5);
+                end else begin
+                if (idx_w != 2'd0 && use_disp_w) begin mm = m_cycle - 3'd2; memaddr = rf[`RFP_WZ]; end
                 // ===== micro-sequencer (mirror z80_control.c) =====
                 case (exec_w)
                 `EX_NOP, `EX_ILLEGAL: fin = 1'b1;
@@ -269,10 +301,10 @@ module z80_core (
                 `EX_EI: begin iff1_n = 1'b1; iff2_n = 1'b1; fin = 1'b1; end
                 `EX_HALT: begin halted_n = 1'b1; fin = 1'b1; end
 
-                `EX_LD_R_R: begin setr8(rf_dst_w, getr8(rf_src_w)); fin = 1'b1; end
+                `EX_LD_R_R: begin setri(rf_dst_w, getri(rf_src_w)); fin = 1'b1; end
                 `EX_ALU_R:  begin if (alu_op_w != `ALU_CP) setr8(3'd7, alu_res);
                                   rf_n[`RFP_AF][7:0] = alu_fout; fin = 1'b1; end
-                `EX_INC_R, `EX_DEC_R: begin setr8(rf_dst_w, alu_res);
+                `EX_INC_R, `EX_DEC_R: begin setri(rf_dst_w, alu_res);
                                   rf_n[`RFP_AF][7:0] = alu_fout; fin = 1'b1; end
                 `EX_ROT_A, `EX_DAA, `EX_CPL: begin setr8(3'd7, alu_res);
                                   rf_n[`RFP_AF][7:0] = alu_fout; fin = 1'b1; end
@@ -286,7 +318,7 @@ module z80_core (
                     rf_n[`RFP_HL] = rf[`RFP_HL2]; rf_n[`RFP_HL2] = rf[`RFP_HL];
                     fin = 1'b1;
                 end
-                `EX_JP_HL: begin rf_n[`RFP_PC] = rf[`RFP_HL]; fin = 1'b1; end
+                `EX_JP_HL: begin rf_n[`RFP_PC] = rf[hlp]; fin = 1'b1; end
 
                 `EX_INC_RP: begin
                     if (m_cycle == 3'd1) begin rf_n[rp_sel_w] = rf[rp_sel_w] + 16'd1;
@@ -299,20 +331,20 @@ module z80_core (
                     else fin = 1'b1;
                 end
                 `EX_LD_SP_HL: begin
-                    if (m_cycle == 3'd1) begin rf_n[`RFP_SP] = rf[`RFP_HL];
-                        startm(`BUSOP_INTERNAL, rf[`RFP_HL], 8'h0, 4'd2); end
+                    if (m_cycle == 3'd1) begin rf_n[`RFP_SP] = rf[hlp];
+                        startm(`BUSOP_INTERNAL, rf[hlp], 8'h0, 4'd2); end
                     else fin = 1'b1;
                 end
                 `EX_ADD_HL_RP: begin
                     if (m_cycle == 3'd1) begin
-                        add16 = {1'b0, rf[`RFP_HL]} + {1'b0, rf[rp_sel_w]};
-                        add12 = {1'b0, rf[`RFP_HL][11:0]} + {1'b0, rf[rp_sel_w][11:0]};
+                        add16 = {1'b0, rf[hlp]} + {1'b0, rf[rp_sel_w]};
+                        add12 = {1'b0, rf[hlp][11:0]} + {1'b0, rf[rp_sel_w][11:0]};
                         f16 = (F_cur & (`FB_S | `FB_Z | `FB_P));
                         if (add12[12]) f16 = f16 | `FB_H;
                         if (add16[16]) f16 = f16 | `FB_C;
                         f16 = f16 | (add16[15:8] & (`FB_Y | `FB_X));
-                        rf_n[`RFP_WZ] = rf[`RFP_HL] + 16'd1;
-                        rf_n[`RFP_HL] = add16[15:0];
+                        rf_n[`RFP_WZ] = rf[hlp] + 16'd1;
+                        rf_n[hlp] = add16[15:0];
                         rf_n[`RFP_AF][7:0] = f16;
                         startm(`BUSOP_INTERNAL, add16[15:0], 8'h0, 4'd7);
                     end else fin = 1'b1;
@@ -321,7 +353,7 @@ module z80_core (
                 `EX_LD_R_N: begin
                     if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
                         rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else begin setr8(rf_dst_w, rbyte); fin = 1'b1; end
+                    else begin setri(rf_dst_w, rbyte); fin = 1'b1; end
                 end
                 `EX_ALU_N: begin
                     if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
@@ -330,28 +362,28 @@ module z80_core (
                         rf_n[`RFP_AF][7:0] = alu_fout; fin = 1'b1; end
                 end
                 `EX_LD_R_M: begin
-                    if (m_cycle == 3'd1) startm(`BUSOP_MRD, rf[`RFP_HL], 8'h0, 4'd0);
-                    else begin setr8(rf_dst_w, rbyte); fin = 1'b1; end
+                    if (mm == 3'd1) startm(`BUSOP_MRD, memaddr, 8'h0, 4'd0);
+                    else begin setri(rf_dst_w, rbyte); fin = 1'b1; end
                 end
                 `EX_ALU_M: begin
-                    if (m_cycle == 3'd1) startm(`BUSOP_MRD, rf[`RFP_HL], 8'h0, 4'd0);
+                    if (mm == 3'd1) startm(`BUSOP_MRD, memaddr, 8'h0, 4'd0);
                     else begin if (alu_op_w != `ALU_CP) setr8(3'd7, alu_res);
                         rf_n[`RFP_AF][7:0] = alu_fout; fin = 1'b1; end
                 end
                 `EX_ST_M_R: begin
-                    if (m_cycle == 3'd1) startm(`BUSOP_MWR, rf[`RFP_HL], getr8(rf_src_w), 4'd0);
+                    if (mm == 3'd1) startm(`BUSOP_MWR, memaddr, getri(rf_src_w), 4'd0);
                     else fin = 1'b1;
                 end
                 `EX_LD_M_N: begin
-                    if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
+                    if (mm == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
                         rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd2) startm(`BUSOP_MWR, rf[`RFP_HL], rbyte, 4'd0);
+                    else if (mm == 3'd2) startm(`BUSOP_MWR, memaddr, rbyte, 4'd0);
                     else fin = 1'b1;
                 end
                 `EX_INC_M, `EX_DEC_M: begin
-                    if (m_cycle == 3'd1) startm(`BUSOP_MRD, rf[`RFP_HL], 8'h0, 4'd1);
-                    else if (m_cycle == 3'd2) begin rf_n[`RFP_AF][7:0] = alu_fout;
-                        startm(`BUSOP_MWR, rf[`RFP_HL], alu_res, 4'd0); end
+                    if (mm == 3'd1) startm(`BUSOP_MRD, memaddr, 8'h0, 4'd1);
+                    else if (mm == 3'd2) begin rf_n[`RFP_AF][7:0] = alu_fout;
+                        startm(`BUSOP_MWR, memaddr, alu_res, 4'd0); end
                     else fin = 1'b1;
                 end
 
@@ -505,9 +537,9 @@ module z80_core (
                         startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0); rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
                     else if (m_cycle == 3'd3) begin tmp16_n = {rbyte, tmpl};
                         rf_n[`RFP_WZ] = {rbyte, tmpl} + 16'd1; startm(`BUSOP_MRD, {rbyte, tmpl}, 8'h0, 4'd0); end
-                    else if (m_cycle == 3'd4) begin rf_n[`RFP_HL][7:0] = rbyte;
+                    else if (m_cycle == 3'd4) begin rf_n[hlp][7:0] = rbyte;
                         startm(`BUSOP_MRD, tmp16 + 16'd1, 8'h0, 4'd0); end
-                    else begin rf_n[`RFP_HL][15:8] = rbyte; fin = 1'b1; end
+                    else begin rf_n[hlp][15:8] = rbyte; fin = 1'b1; end
                 end
                 `EX_LD_NN_HL: begin
                     if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
@@ -516,8 +548,8 @@ module z80_core (
                         startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0); rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
                     else if (m_cycle == 3'd3) begin tmp16_n = {rbyte, tmpl};
                         rf_n[`RFP_WZ] = {rbyte, tmpl} + 16'd1;
-                        startm(`BUSOP_MWR, {rbyte, tmpl}, rf[`RFP_HL][7:0], 4'd0); end
-                    else if (m_cycle == 3'd4) startm(`BUSOP_MWR, tmp16 + 16'd1, rf[`RFP_HL][15:8], 4'd0);
+                        startm(`BUSOP_MWR, {rbyte, tmpl}, rf[hlp][7:0], 4'd0); end
+                    else if (m_cycle == 3'd4) startm(`BUSOP_MWR, tmp16 + 16'd1, rf[hlp][15:8], 4'd0);
                     else fin = 1'b1;
                 end
 
@@ -540,9 +572,9 @@ module z80_core (
                     else if (m_cycle == 3'd2) begin tmpl_n = rbyte;
                         startm(`BUSOP_MRD, rf[`RFP_SP] + 16'd1, 8'h0, 4'd1); end
                     else if (m_cycle == 3'd3) begin tmph_n = rbyte;
-                        startm(`BUSOP_MWR, rf[`RFP_SP] + 16'd1, rf[`RFP_HL][15:8], 4'd0); end
-                    else if (m_cycle == 3'd4) startm(`BUSOP_MWR, rf[`RFP_SP], rf[`RFP_HL][7:0], 4'd2);
-                    else begin rf_n[`RFP_HL] = {tmph, tmpl}; rf_n[`RFP_WZ] = {tmph, tmpl}; fin = 1'b1; end
+                        startm(`BUSOP_MWR, rf[`RFP_SP] + 16'd1, rf[hlp][15:8], 4'd0); end
+                    else if (m_cycle == 3'd4) startm(`BUSOP_MWR, rf[`RFP_SP], rf[hlp][7:0], 4'd2);
+                    else begin rf_n[hlp] = {tmph, tmpl}; rf_n[`RFP_WZ] = {tmph, tmpl}; fin = 1'b1; end
                 end
 
                 `EX_CB_R: begin
@@ -714,6 +746,7 @@ module z80_core (
                     bus_op_n = `BUSOP_M1; m_addr_n = rf_n[`RFP_PC]; m_wdata_n = 8'h0;
                     m_len_n = 4'd4; t_n = 4'd1; phi_n = 1'b0; m_cycle_n = 3'd1; decoded_n = 1'b0;
                 end
+                end  // displacement-preamble else
             end else begin
                 t_n = t_state + 4'd1;
             end
