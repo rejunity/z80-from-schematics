@@ -253,6 +253,21 @@ z80_control_t z80_pla_decode(z80_prefix_t prefix, uint8_t opcode)
         return decode_cb(opcode);
     if (prefix == PFX_ED)
         return decode_ed(opcode);
+    if (prefix == PFX_DD || prefix == PFX_FD) {
+        z80_control_t c = decode_unprefixed(opcode);
+        if (c.exec == EXEC_PREFIX) return c;     /* DDCB/FDCB or chain: leave plain */
+        c.idx = (prefix == PFX_DD) ? 1u : 2u;
+        switch (c.exec) {                         /* (HL) memory -> (IX+d) */
+            case EXEC_LD_R_M: case EXEC_ST_M_R: case EXEC_ALU_M:
+            case EXEC_INC_M:  case EXEC_DEC_M:  case EXEC_LD_M_N:
+                c.use_disp = true; break;
+            case EXEC_EX_DE_HL: c.idx = 0; break; /* unaffected by DD/FD */
+            default: break;
+        }
+        if (c.rp_sel == RFP_HL)                   /* 16-bit HL pair -> IX/IY */
+            c.rp_sel = (c.idx == 1) ? RFP_IX : RFP_IY;
+        return c;
+    }
 
     /* ED/DD/FD/DDCB/FDCB are added in a later stage (task 8). */
     z80_control_t c;

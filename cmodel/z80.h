@@ -197,6 +197,8 @@ typedef struct {
     uint8_t         rot_op;     /* RLCA/.. or CB rot[y]                     */
     uint8_t         cb_kind;    /* CB op kind: CB_ROT/BIT/RES/SET           */
     uint8_t         aux;        /* misc: IM mode / block-op id / LD A,I|R   */
+    uint8_t         idx;        /* 0 = HL, 1 = IX, 2 = IY (DD/FD prefix)    */
+    bool            use_disp;   /* memory operand is (IX+d)/(IY+d)          */
     uint8_t         rst_addr;   /* RST target (y*8)                         */
     bool            uses_cc;    /* conditional instruction                  */
     bool            valid;      /* row matched                             */
@@ -267,6 +269,7 @@ typedef enum {
 void z80_init(z80_t *cpu);
 void z80_reset(z80_t *cpu);
 void z80_phase_step(z80_t *cpu);   /* advance one phase (half T-state)        */
+void z80_set_pc(z80_t *cpu, uint16_t pc); /* seed PC + pending M1 fetch addr  */
 
 /* register-file byte accessors (docs/architecture.md) */
 uint8_t  z80_get_r8(const z80_t *cpu, z80_reg8_t r); /* (HL) returns 0; mem handled by seq */

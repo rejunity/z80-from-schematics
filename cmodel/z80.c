@@ -111,6 +111,17 @@ void z80_reset(z80_t *c)
     reset_state(c);
 }
 
+/* Seed the program counter from outside (e.g. loading a CP/M .com at 0x0100).
+   Also updates the pending M1 fetch address so the next opcode is fetched from
+   pc rather than the stale reset address. Only valid at an instruction boundary
+   (start of an M1 fetch), which is the case right after reset. */
+void z80_set_pc(z80_t *c, uint16_t pc)
+{
+    c->rf[RFP_PC] = pc;
+    if (c->bus_op == BUSOP_M1 && c->t_state == 1 && !c->decoded)
+        c->m_addr = pc;
+}
+
 void z80_init(z80_t *c)
 {
     memset(c, 0, sizeof(*c));

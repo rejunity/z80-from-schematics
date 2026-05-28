@@ -46,7 +46,7 @@ int main(int argc, char **argv)
     /* CP/M low-memory setup: warm-boot vector and BDOS entry */
     s->mem[0x0000] = 0xC3; s->mem[0x0001] = 0x00; s->mem[0x0002] = 0x00; /* JP 0000 (exit trap) */
     s->mem[0x0005] = 0xC9;                                               /* RET (BDOS trap) */
-    s->cpu.rf[RFP_PC] = 0x0100;
+    z80_set_pc(&s->cpu, 0x0100);
     s->cpu.rf[RFP_SP] = 0xFFFE;
 
     long long count = 0;

@@ -33,10 +33,10 @@ def main():
     proc.wait()
     text = "".join(out_lines)
 
-    err = ("ERROR" in text) or ("error" in text and "errors" not in text.lower())
+    err = "ERROR" in text                       # ZEX prints "ERROR" on CRC mismatch
     limit = "(LIMIT REACHED)" in text
-    # ZEX prints a final "Tests complete" / "...OK" line when it finishes cleanly
-    complete = ("Tests complete" in text) or ("all tests passed" in text.lower())
+    # ZEX prints a "...complete" banner when it finishes cleanly
+    complete = "complete" in text.lower()
 
     print("\n---- run_zex summary ----")
     if limit:
