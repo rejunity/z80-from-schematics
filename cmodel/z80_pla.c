@@ -194,12 +194,65 @@ static z80_control_t decode_cb(uint8_t op)
     return c;
 }
 
+static z80_control_t decode_ed(uint8_t op)
+{
+    z80_control_t c;
+    for (unsigned i = 0; i < sizeof(c); i++) ((uint8_t *)&c)[i] = 0;
+    c.valid = true;
+    c.exec = EXEC_NOP;                    /* undocumented ED slots are NOPs */
+
+    uint8_t x = (uint8_t)(op >> 6);
+    uint8_t y = (uint8_t)((op >> 3) & 7);
+    uint8_t z = (uint8_t)(op & 7);
+    uint8_t p = (uint8_t)(y >> 1);
+    uint8_t q = (uint8_t)(y & 1);
+    static const uint8_t imtab[8] = { 0, 0, 1, 2, 0, 0, 1, 2 };
+
+    if (x == 1) {
+        switch (z) {
+        case 0: c.exec = EXEC_IN_C;  c.rf_dst = y; break;          /* IN r,(C) */
+        case 1: c.exec = EXEC_OUT_C; c.rf_src = y; break;          /* OUT (C),r */
+        case 2:
+            c.rp_sel = rp_tab[p];
+            if (q == 0) { c.exec = EXEC_SBC16; c.flag_mode = FLAG_SBC16; }
+            else        { c.exec = EXEC_ADC16; c.flag_mode = FLAG_ADC16; }
+            break;
+        case 3:
+            c.rp_sel = rp_tab[p];
+            c.exec = (q == 0) ? EXEC_LD_NNA_RP : EXEC_LD_RP_NNA;
+            break;
+        case 4: c.exec = EXEC_NEG; c.flag_mode = FLAG_SUB8; break;
+        case 5: c.exec = EXEC_RETN; break;                          /* RETN/RETI */
+        case 6: c.exec = EXEC_IM; c.aux = imtab[y]; break;
+        default: /* z==7 */
+            switch (y) {
+            case 0: c.exec = EXEC_LD_I_A; break;
+            case 1: c.exec = EXEC_LD_R_A; break;
+            case 2: c.exec = EXEC_LD_A_IR; c.aux = 0; break;        /* LD A,I */
+            case 3: c.exec = EXEC_LD_A_IR; c.aux = 1; break;        /* LD A,R */
+            case 4: c.exec = EXEC_RRD; break;
+            case 5: c.exec = EXEC_RLD; break;
+            default: c.exec = EXEC_NOP; break;
+            }
+            break;
+        }
+    } else if (x == 2 && z <= 3 && y >= 4) {
+        c.exec = EXEC_BLOCK;
+        uint8_t dec    = (y == 5 || y == 7) ? 1u : 0u;
+        uint8_t repeat = (y == 6 || y == 7) ? BLK_REPEAT : 0u;
+        c.aux = (uint8_t)((z * 2u) + dec + repeat);  /* BLK_* id (+REPEAT) */
+    }
+    return c;
+}
+
 z80_control_t z80_pla_decode(z80_prefix_t prefix, uint8_t opcode)
 {
     if (prefix == PFX_NONE)
         return decode_unprefixed(opcode);
     if (prefix == PFX_CB)
         return decode_cb(opcode);
+    if (prefix == PFX_ED)
+        return decode_ed(opcode);
 
     /* ED/DD/FD/DDCB/FDCB are added in a later stage (task 8). */
     z80_control_t c;

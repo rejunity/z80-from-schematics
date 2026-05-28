@@ -75,11 +75,11 @@ module z80_core (
     reg        fin;
 
     // ---- decode (combinational) ----
-    wire [5:0] exec_w;
+    wire [6:0] exec_w;
     wire [4:0] flag_mode_w;
     wire [2:0] alu_op_w, rf_src_w, rf_dst_w, cc_w, rot_op_w, bit_index_w;
     wire [1:0] cb_kind_w;
-    wire [3:0] rp_sel_w;
+    wire [3:0] rp_sel_w, aux_w;
     wire [7:0] rst_addr_w;
     wire       uses_cc_w, valid_w;
 
@@ -88,7 +88,7 @@ module z80_core (
         .exec(exec_w), .flag_mode(flag_mode_w), .alu_op(alu_op_w),
         .rf_src(rf_src_w), .rf_dst(rf_dst_w), .rp_sel(rp_sel_w),
         .cc(cc_w), .rot_op(rot_op_w), .bit_index(bit_index_w), .cb_kind(cb_kind_w),
-        .rst_addr(rst_addr_w), .uses_cc(uses_cc_w), .valid(valid_w)
+        .aux(aux_w), .rst_addr(rst_addr_w), .uses_cc(uses_cc_w), .valid(valid_w)
     );
 
     // ---- timing pin drive (combinational from registered state) ----
@@ -213,6 +213,9 @@ module z80_core (
     reg [12:0] add12;
     reg [7:0]  f16;
     reg [7:0]  cbres;
+    reg [16:0] r17;
+    reg [12:0] r13;
+    reg [7:0]  edf, edv;
 
     // ---- combinational next-state ----
     always @* begin
@@ -563,6 +566,143 @@ module z80_core (
                         endcase
                         startm(`BUSOP_MWR, rf[`RFP_HL], cbres, 4'd0);
                     end else fin = 1'b1;
+                end
+
+                /* ---------- ED page (non-block) ---------- */
+                `EX_ADC16, `EX_SBC16: begin
+                    if (m_cycle == 3'd1) startm(`BUSOP_INTERNAL, rf[`RFP_HL], 8'h0, 4'd7);
+                    else begin
+                        rf_n[`RFP_WZ] = rf[`RFP_HL] + 16'd1;
+                        if (exec_w == `EX_ADC16) begin
+                            r17 = {1'b0, rf[`RFP_HL]} + {1'b0, rf[rp_sel_w]} + {16'b0, F_cur[0]};
+                            r13 = {1'b0, rf[`RFP_HL][11:0]} + {1'b0, rf[rp_sel_w][11:0]} + {12'b0, F_cur[0]};
+                            edf = 8'h0;
+                            if (r13[12]) edf = edf | `FB_H;
+                            if ((~(rf[`RFP_HL] ^ rf[rp_sel_w]) & (rf[`RFP_HL] ^ r17[15:0]) & 16'h8000) != 16'h0) edf = edf | `FB_P;
+                            if (r17[16]) edf = edf | `FB_C;
+                        end else begin
+                            r17 = {1'b0, rf[`RFP_HL]} - {1'b0, rf[rp_sel_w]} - {16'b0, F_cur[0]};
+                            r13 = {1'b0, rf[`RFP_HL][11:0]} - {1'b0, rf[rp_sel_w][11:0]} - {12'b0, F_cur[0]};
+                            edf = `FB_N;
+                            if (r13[12]) edf = edf | `FB_H;
+                            if (((rf[`RFP_HL] ^ rf[rp_sel_w]) & (rf[`RFP_HL] ^ r17[15:0]) & 16'h8000) != 16'h0) edf = edf | `FB_P;
+                            if (r17[16]) edf = edf | `FB_C;
+                        end
+                        if (r17[15]) edf = edf | `FB_S;
+                        if (r17[15:0] == 16'h0) edf = edf | `FB_Z;
+                        edf = edf | (r17[15:8] & (`FB_Y | `FB_X));
+                        rf_n[`RFP_HL] = r17[15:0];
+                        rf_n[`RFP_AF][7:0] = edf;
+                        fin = 1'b1;
+                    end
+                end
+                `EX_NEG: begin
+                    edv = 8'h00 - A_cur;
+                    edf = `FB_N;
+                    if (edv[7]) edf = edf | `FB_S;
+                    if (edv == 8'h0) edf = edf | `FB_Z;
+                    if (A_cur[3:0] != 4'h0) edf = edf | `FB_H;
+                    if (A_cur == 8'h80) edf = edf | `FB_P;
+                    if (A_cur != 8'h00) edf = edf | `FB_C;
+                    edf = edf | (edv & (`FB_Y | `FB_X));
+                    rf_n[`RFP_AF][15:8] = edv;
+                    rf_n[`RFP_AF][7:0]  = edf;
+                    fin = 1'b1;
+                end
+                `EX_IM: begin im_n = aux_w[1:0]; fin = 1'b1; end
+                `EX_RETN: begin
+                    if (m_cycle == 3'd1) startm(`BUSOP_MRD, rf[`RFP_SP], 8'h0, 4'd0);
+                    else if (m_cycle == 3'd2) begin tmpl_n = rbyte; rf_n[`RFP_SP] = rf[`RFP_SP] + 16'd1;
+                        startm(`BUSOP_MRD, rf[`RFP_SP] + 16'd1, 8'h0, 4'd0); end
+                    else begin rf_n[`RFP_SP] = rf[`RFP_SP] + 16'd1;
+                        rf_n[`RFP_PC] = {rbyte, tmpl}; rf_n[`RFP_WZ] = {rbyte, tmpl};
+                        iff1_n = iff2; fin = 1'b1; end
+                end
+                `EX_LD_I_A: begin
+                    if (m_cycle == 3'd1) startm(`BUSOP_INTERNAL, rf[`RFP_PC], 8'h0, 4'd1);
+                    else begin reg_i_n = A_cur; fin = 1'b1; end
+                end
+                `EX_LD_R_A: begin
+                    if (m_cycle == 3'd1) startm(`BUSOP_INTERNAL, rf[`RFP_PC], 8'h0, 4'd1);
+                    else begin reg_r_n = A_cur; fin = 1'b1; end
+                end
+                `EX_LD_A_IR: begin
+                    if (m_cycle == 3'd1) startm(`BUSOP_INTERNAL, rf[`RFP_PC], 8'h0, 4'd1);
+                    else begin
+                        edv = aux_w[0] ? reg_r : reg_i;
+                        rf_n[`RFP_AF][15:8] = edv;
+                        edf = F_cur & `FB_C;
+                        if (edv[7]) edf = edf | `FB_S;
+                        if (edv == 8'h0) edf = edf | `FB_Z;
+                        edf = edf | (edv & (`FB_Y | `FB_X));
+                        if (iff2) edf = edf | `FB_P;
+                        rf_n[`RFP_AF][7:0] = edf; fin = 1'b1;
+                    end
+                end
+                `EX_LD_NNA_RP: begin
+                    if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
+                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
+                    else if (m_cycle == 3'd2) begin tmpl_n = rbyte;
+                        startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0); rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
+                    else if (m_cycle == 3'd3) begin tmp16_n = {rbyte, tmpl};
+                        rf_n[`RFP_WZ] = {rbyte, tmpl} + 16'd1;
+                        startm(`BUSOP_MWR, {rbyte, tmpl}, rf[rp_sel_w][7:0], 4'd0); end
+                    else if (m_cycle == 3'd4) startm(`BUSOP_MWR, tmp16 + 16'd1, rf[rp_sel_w][15:8], 4'd0);
+                    else fin = 1'b1;
+                end
+                `EX_LD_RP_NNA: begin
+                    if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
+                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
+                    else if (m_cycle == 3'd2) begin tmpl_n = rbyte;
+                        startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0); rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
+                    else if (m_cycle == 3'd3) begin tmp16_n = {rbyte, tmpl};
+                        rf_n[`RFP_WZ] = {rbyte, tmpl} + 16'd1;
+                        startm(`BUSOP_MRD, {rbyte, tmpl}, 8'h0, 4'd0); end
+                    else if (m_cycle == 3'd4) begin tmpl_n = rbyte;
+                        startm(`BUSOP_MRD, tmp16 + 16'd1, 8'h0, 4'd0); end
+                    else begin rf_n[rp_sel_w] = {rbyte, tmpl}; fin = 1'b1; end
+                end
+                `EX_IN_C: begin
+                    if (m_cycle == 3'd1) begin rf_n[`RFP_WZ] = rf[`RFP_BC] + 16'd1;
+                        startm(`BUSOP_IORD, rf[`RFP_BC], 8'h0, 4'd0); end
+                    else begin
+                        if (rf_dst_w != 3'd6) setr8(rf_dst_w, rbyte);
+                        edf = F_cur & `FB_C;
+                        if (rbyte[7]) edf = edf | `FB_S;
+                        if (rbyte == 8'h0) edf = edf | `FB_Z;
+                        edf = edf | (rbyte & (`FB_Y | `FB_X));
+                        if (~(^rbyte)) edf = edf | `FB_P;
+                        rf_n[`RFP_AF][7:0] = edf; fin = 1'b1;
+                    end
+                end
+                `EX_OUT_C: begin
+                    if (m_cycle == 3'd1) begin rf_n[`RFP_WZ] = rf[`RFP_BC] + 16'd1;
+                        startm(`BUSOP_IOWR, rf[`RFP_BC], (rf_src_w == 3'd6) ? 8'h0 : getr8(rf_src_w), 4'd0); end
+                    else fin = 1'b1;
+                end
+                `EX_RRD, `EX_RLD: begin
+                    if (m_cycle == 3'd1) startm(`BUSOP_MRD, rf[`RFP_HL], 8'h0, 4'd0);
+                    else if (m_cycle == 3'd2) begin
+                        if (exec_w == `EX_RRD) begin
+                            edv   = {A_cur[7:4], rbyte[3:0]};   // new A
+                            cbres = {A_cur[3:0], rbyte[7:4]};   // new (HL)
+                        end else begin
+                            edv   = {A_cur[7:4], rbyte[7:4]};   // new A
+                            cbres = {rbyte[3:0], A_cur[3:0]};   // new (HL)
+                        end
+                        rf_n[`RFP_AF][15:8] = edv;
+                        edf = F_cur & `FB_C;
+                        if (edv[7]) edf = edf | `FB_S;
+                        if (edv == 8'h0) edf = edf | `FB_Z;
+                        edf = edf | (edv & (`FB_Y | `FB_X));
+                        if (~(^edv)) edf = edf | `FB_P;
+                        rf_n[`RFP_AF][7:0] = edf;
+                        rf_n[`RFP_WZ] = rf[`RFP_HL] + 16'd1;
+                        tmpl_n = cbres;
+                        startm(`BUSOP_INTERNAL, rf[`RFP_HL], 8'h0, 4'd4);
+                    end
+                    else if (m_cycle == 3'd3) startm(`BUSOP_MWR, rf[`RFP_HL], tmpl, 4'd0);
+                    else fin = 1'b1;
                 end
 
                 default: fin = 1'b1;

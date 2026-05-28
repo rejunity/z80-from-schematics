@@ -8,7 +8,7 @@
 module z80_pla (
     input  wire [2:0] prefix,
     input  wire [7:0] op,
-    output reg  [5:0] exec,
+    output reg  [6:0] exec,
     output reg  [4:0] flag_mode,
     output reg  [2:0] alu_op,
     output reg  [2:0] rf_src,
@@ -18,6 +18,7 @@ module z80_pla (
     output reg  [2:0] rot_op,
     output reg  [2:0] bit_index,
     output reg  [1:0] cb_kind,
+    output reg  [3:0] aux,
     output reg  [7:0] rst_addr,
     output reg        uses_cc,
     output reg        valid
@@ -54,13 +55,46 @@ module z80_pla (
         // defaults
         exec = `EX_NOP; flag_mode = `FM_NONE; alu_op = 3'd0;
         rf_src = 3'd0; rf_dst = 3'd0; rp_sel = `RFP_BC; cc = 3'd0;
-        rot_op = 3'd0; bit_index = 3'd0; cb_kind = 2'd0;
+        rot_op = 3'd0; bit_index = 3'd0; cb_kind = 2'd0; aux = 4'd0;
         rst_addr = 8'h00; uses_cc = 1'b0; valid = 1'b1;
 
         if (prefix == `PFX_CB) begin
             cb_kind = x; rf_src = z; rf_dst = z; rot_op = y; bit_index = y;
             flag_mode = (x == `CB_ROT) ? `FM_ROT : (x == `CB_BIT) ? `FM_BIT : `FM_NONE;
             exec = (z == 3'd6) ? `EX_CB_M : `EX_CB_R;
+        end else if (prefix == `PFX_ED) begin
+            if (x == 2'd1) begin
+                case (z)
+                3'd0: begin exec = `EX_IN_C;  rf_dst = y; end
+                3'd1: begin exec = `EX_OUT_C; rf_src = y; end
+                3'd2: begin rp_sel = rp_of_p;
+                            if (q == 1'b0) begin exec = `EX_SBC16; flag_mode = `FM_SBC16; end
+                            else           begin exec = `EX_ADC16; flag_mode = `FM_ADC16; end end
+                3'd3: begin rp_sel = rp_of_p; exec = (q == 1'b0) ? `EX_LD_NNA_RP : `EX_LD_RP_NNA; end
+                3'd4: begin exec = `EX_NEG; flag_mode = `FM_SUB8; end
+                3'd5: exec = `EX_RETN;
+                3'd6: begin exec = `EX_IM;
+                            aux = ((y == 3'd2) || (y == 3'd6)) ? 4'd1 :
+                                  ((y == 3'd3) || (y == 3'd7)) ? 4'd2 : 4'd0; end
+                default: begin // z==7
+                    case (y)
+                    3'd0: exec = `EX_LD_I_A;
+                    3'd1: exec = `EX_LD_R_A;
+                    3'd2: begin exec = `EX_LD_A_IR; aux = 4'd0; end
+                    3'd3: begin exec = `EX_LD_A_IR; aux = 4'd1; end
+                    3'd4: exec = `EX_RRD;
+                    3'd5: exec = `EX_RLD;
+                    default: exec = `EX_NOP;
+                    endcase
+                end
+                endcase
+            end else if ((x == 2'd2) && (z <= 3'd3) && (y >= 3'd4)) begin
+                exec = `EX_BLOCK;
+                aux = {2'b0, z[1:0]} + ((y == 3'd5 || y == 3'd7) ? 4'd1 : 4'd0)
+                    + ((y == 3'd6 || y == 3'd7) ? 4'd8 : 4'd0)
+                    + ({2'b0, z[1:0]});  // z*2 + dec + repeat
+            end
+            // else: EX_NOP (undocumented ED slot)
         end else if (prefix != `PFX_NONE) begin
             exec = `EX_ILLEGAL; valid = 1'b0;
         end else begin

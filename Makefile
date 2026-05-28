@@ -33,6 +33,7 @@ SCRIPTS   := scripts
 # ---- C model sources (exclude any file with its own main) ----
 CMODEL_SRCS := $(filter-out $(CMODEL)/z80_main.c,$(wildcard $(CMODEL)/*.c))
 CMODEL_OBJS := $(patsubst $(CMODEL)/%.c,$(BUILD)/cmodel/%.o,$(CMODEL_SRCS))
+CMODEL_HDRS := $(wildcard $(CMODEL)/*.h)
 CMODEL_LIB  := $(BUILD)/libz80.a
 INCLUDES    := -I$(CMODEL)
 
@@ -58,7 +59,7 @@ dirs:
 # ----------------------------------------------------------------------------
 cmodel: dirs $(CMODEL_LIB)
 
-$(BUILD)/cmodel/%.o: $(CMODEL)/%.c
+$(BUILD)/cmodel/%.o: $(CMODEL)/%.c $(CMODEL_HDRS)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
@@ -76,19 +77,19 @@ ctest: cmodel $(CTEST_BINS)
 	done; \
 	if [ $$fail -ne 0 ]; then echo "C TESTS FAILED"; exit 1; else echo "ALL C TESTS PASSED"; fi
 
-$(BIN)/%: $(TESTS)/common/%.c $(CMODEL_LIB)
+$(BIN)/%: $(TESTS)/common/%.c $(CMODEL_LIB) $(CMODEL_HDRS)
 	@mkdir -p $(BIN)
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(CMODEL_LIB) -o $@
 
 # C-model trace generator
 tracegen: cmodel $(BIN)/tracegen
-$(BIN)/tracegen: $(SCRIPTS)/tracegen.c $(CMODEL_LIB)
+$(BIN)/tracegen: $(SCRIPTS)/tracegen.c $(CMODEL_LIB) $(CMODEL_HDRS)
 	@mkdir -p $(BIN)
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(CMODEL_LIB) -o $@
 
 # ZEX CP/M harness runner
 zexrunner: cmodel $(BIN)/zexrunner
-$(BIN)/zexrunner: $(SCRIPTS)/zexrunner.c $(CMODEL_LIB)
+$(BIN)/zexrunner: $(SCRIPTS)/zexrunner.c $(CMODEL_LIB) $(CMODEL_HDRS)
 	@mkdir -p $(BIN)
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(CMODEL_LIB) -o $@
 

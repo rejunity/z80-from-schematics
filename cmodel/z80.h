@@ -161,11 +161,26 @@ typedef enum {
     EXEC_ROT_A, EXEC_DAA, EXEC_CPL, EXEC_SCF, EXEC_CCF,
     EXEC_IN_A_N, EXEC_OUT_N_A,
     EXEC_CB_R, EXEC_CB_M,                  /* CB: rot/bit/res/set on r / (HL) */
+    /* ED page */
+    EXEC_ADC16, EXEC_SBC16,                /* ADC/SBC HL,rp                  */
+    EXEC_NEG, EXEC_IM, EXEC_RETN,          /* NEG, IM n, RETI/RETN           */
+    EXEC_LD_I_A, EXEC_LD_R_A, EXEC_LD_A_IR,/* LD I,A / LD R,A / LD A,I|R     */
+    EXEC_LD_NNA_RP, EXEC_LD_RP_NNA,        /* LD (nn),rp / LD rp,(nn)        */
+    EXEC_IN_C, EXEC_OUT_C,                 /* IN r,(C) / OUT (C),r           */
+    EXEC_RRD, EXEC_RLD,                    /* rotate digit                   */
+    EXEC_BLOCK,                            /* LDI/LDD/CPI/.../INI/.../OUTI/. */
     EXEC_ILLEGAL
 } z80_exec_t;
 
 /* CB operation kind (= x field of the CB opcode) */
 enum { CB_ROT = 0, CB_BIT = 1, CB_RES = 2, CB_SET = 3 };
+
+/* block-instruction id (in control.aux for EXEC_BLOCK) */
+enum {
+    BLK_LDI = 0, BLK_LDD, BLK_CPI, BLK_CPD,
+    BLK_INI, BLK_IND, BLK_OUTI, BLK_OUTD
+};
+#define BLK_REPEAT 0x08u   /* OR'd into aux for the repeating (xxxR) forms */
 
 typedef struct {
     z80_exec_t      exec;       /* datapath action                          */
@@ -181,6 +196,7 @@ typedef struct {
     uint8_t         bit_index;  /* for CB BIT/RES/SET                       */
     uint8_t         rot_op;     /* RLCA/.. or CB rot[y]                     */
     uint8_t         cb_kind;    /* CB op kind: CB_ROT/BIT/RES/SET           */
+    uint8_t         aux;        /* misc: IM mode / block-op id / LD A,I|R   */
     uint8_t         rst_addr;   /* RST target (y*8)                         */
     bool            uses_cc;    /* conditional instruction                  */
     bool            valid;      /* row matched                             */

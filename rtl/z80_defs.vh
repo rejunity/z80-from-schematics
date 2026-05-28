@@ -130,11 +130,27 @@
 `define EX_CPL        6'd47
 `define EX_SCF        6'd48
 `define EX_CCF        6'd49
-`define EX_IN_A_N     6'd50
-`define EX_OUT_N_A    6'd51
-`define EX_CB_R       6'd53
-`define EX_CB_M       6'd54
-`define EX_ILLEGAL    6'd52
+`define EX_IN_A_N     7'd50
+`define EX_OUT_N_A    7'd51
+`define EX_CB_R       7'd53
+`define EX_CB_M       7'd54
+`define EX_ILLEGAL    7'd52
+// ED page
+`define EX_ADC16      7'd55
+`define EX_SBC16      7'd56
+`define EX_NEG        7'd57
+`define EX_IM         7'd58
+`define EX_RETN       7'd59
+`define EX_LD_I_A     7'd60
+`define EX_LD_R_A     7'd61
+`define EX_LD_A_IR    7'd62
+`define EX_LD_NNA_RP  7'd63
+`define EX_LD_RP_NNA  7'd64
+`define EX_IN_C       7'd65
+`define EX_OUT_C      7'd66
+`define EX_RRD        7'd67
+`define EX_RLD        7'd68
+`define EX_BLOCK      7'd69
 
 // CB op kind (= x field of CB opcode)
 `define CB_ROT 2'd0

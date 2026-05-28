@@ -48,6 +48,36 @@ static void do_add16(z80_t *c)
     z80_setF(c, f);
 }
 
+static void do_adc16(z80_t *c, bool sub)
+{
+    uint16_t hl = c->rf[RFP_HL];
+    uint16_t rp = c->rf[c->ctl.rp_sel];
+    uint8_t  cin = (z80_F(c) & Z80_CF) ? 1u : 0u;
+    c->rf[RFP_WZ] = (uint16_t)(hl + 1);
+    uint8_t f = 0;
+    uint16_t r16;
+    if (!sub) {
+        uint32_t res = (uint32_t)hl + rp + cin;
+        if (((hl & 0x0FFF) + (rp & 0x0FFF) + cin) & 0x1000) f |= Z80_HF;
+        if ((~(hl ^ rp) & (hl ^ (uint16_t)res) & 0x8000)) f |= Z80_PF;
+        if (res & 0x10000) f |= Z80_CF;
+        r16 = (uint16_t)res;
+    } else {
+        int hc = (int)(hl & 0x0FFF) - (int)(rp & 0x0FFF) - (int)cin;
+        if (hc < 0) f |= Z80_HF;
+        uint32_t res = (uint32_t)hl - rp - cin;
+        if ((hl ^ rp) & (hl ^ (uint16_t)res) & 0x8000) f |= Z80_PF;
+        if (res & 0x10000) f |= Z80_CF;
+        f |= Z80_NF;
+        r16 = (uint16_t)res;
+    }
+    if (r16 & 0x8000) f |= Z80_SF;
+    if (r16 == 0)     f |= Z80_ZF;
+    f |= (uint8_t)(r16 >> 8) & (Z80_YF | Z80_XF);
+    c->rf[RFP_HL] = r16;
+    z80_setF(c, f);
+}
+
 static void set_prefix_from_ir(z80_t *c)
 {
     switch (c->ir) {
@@ -393,6 +423,115 @@ void z80_exec_step(z80_t *c)
             }
             z80_start_mcycle(c, BUSOP_MWR, c->rf[RFP_HL], res, 0);
         } else finish(c);
+        break;
+
+    /* ---------- ED page (non-block) ---------- */
+    case EXEC_ADC16:
+        if (m == 1) z80_start_mcycle(c, BUSOP_INTERNAL, c->rf[RFP_HL], 0, 7);
+        else { do_adc16(c, false); finish(c); }
+        break;
+    case EXEC_SBC16:
+        if (m == 1) z80_start_mcycle(c, BUSOP_INTERNAL, c->rf[RFP_HL], 0, 7);
+        else { do_adc16(c, true); finish(c); }
+        break;
+    case EXEC_NEG: {
+        uint8_t res, f = z80_flags_sub8(0, z80_A(c), 0, false, z80_F(c), &res);
+        z80_setA(c, res); z80_setF(c, f); finish(c); break;
+    }
+    case EXEC_IM: c->im = ctl->aux; finish(c); break;
+    case EXEC_RETN:
+        if (m == 1) z80_start_mcycle(c, BUSOP_MRD, z80_SP(c), 0, 0);
+        else if (m == 2) { c->tmpl = RB; z80_setSP(c, (uint16_t)(z80_SP(c) + 1));
+                           z80_start_mcycle(c, BUSOP_MRD, z80_SP(c), 0, 0); }
+        else { z80_setSP(c, (uint16_t)(z80_SP(c) + 1));
+               uint16_t nn = z80_pair_hi_lo(RB, c->tmpl); z80_setPC(c, nn); c->rf[RFP_WZ] = nn;
+               c->iff1 = c->iff2; finish(c); }
+        break;
+    case EXEC_LD_I_A:
+        if (m == 1) z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 1);
+        else { c->reg_i = z80_A(c); finish(c); }
+        break;
+    case EXEC_LD_R_A:
+        if (m == 1) z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 1);
+        else { c->reg_r = z80_A(c); finish(c); }
+        break;
+    case EXEC_LD_A_IR:
+        if (m == 1) z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 1);
+        else {
+            uint8_t v = ctl->aux ? c->reg_r : c->reg_i;
+            z80_setA(c, v);
+            uint8_t f = z80_F(c) & Z80_CF;
+            if (v & 0x80) f |= Z80_SF;
+            if (v == 0)   f |= Z80_ZF;
+            f |= v & (Z80_YF | Z80_XF);
+            if (c->iff2)  f |= Z80_PF;
+            z80_setF(c, f); finish(c);
+        }
+        break;
+    case EXEC_LD_NNA_RP:
+        if (m == 1) z80_start_mcycle(c, BUSOP_MRD, z80_pc_inc(c), 0, 0);
+        else if (m == 2) { c->tmpl = RB; z80_start_mcycle(c, BUSOP_MRD, z80_pc_inc(c), 0, 0); }
+        else if (m == 3) { uint16_t nn = z80_pair_hi_lo(RB, c->tmpl); c->tmp16 = nn;
+                           c->rf[RFP_WZ] = (uint16_t)(nn + 1);
+                           z80_start_mcycle(c, BUSOP_MWR, nn, (uint8_t)(c->rf[ctl->rp_sel] & 0xFF), 0); }
+        else if (m == 4) z80_start_mcycle(c, BUSOP_MWR, (uint16_t)(c->tmp16 + 1),
+                                          (uint8_t)(c->rf[ctl->rp_sel] >> 8), 0);
+        else finish(c);
+        break;
+    case EXEC_LD_RP_NNA:
+        if (m == 1) z80_start_mcycle(c, BUSOP_MRD, z80_pc_inc(c), 0, 0);
+        else if (m == 2) { c->tmpl = RB; z80_start_mcycle(c, BUSOP_MRD, z80_pc_inc(c), 0, 0); }
+        else if (m == 3) { uint16_t nn = z80_pair_hi_lo(RB, c->tmpl); c->tmp16 = nn;
+                           c->rf[RFP_WZ] = (uint16_t)(nn + 1);
+                           z80_start_mcycle(c, BUSOP_MRD, nn, 0, 0); }
+        else if (m == 4) { c->tmpl = RB; z80_start_mcycle(c, BUSOP_MRD, (uint16_t)(c->tmp16 + 1), 0, 0); }
+        else { c->rf[ctl->rp_sel] = z80_pair_hi_lo(RB, c->tmpl); finish(c); }
+        break;
+    case EXEC_IN_C:
+        if (m == 1) { c->rf[RFP_WZ] = (uint16_t)(c->rf[RFP_BC] + 1);
+                      z80_start_mcycle(c, BUSOP_IORD, c->rf[RFP_BC], 0, 0); }
+        else {
+            uint8_t d = RB;
+            if (ctl->rf_dst != REG_iHL) setr(c, ctl->rf_dst, d);
+            uint8_t f = z80_F(c) & Z80_CF;
+            if (d & 0x80) f |= Z80_SF;
+            if (d == 0)   f |= Z80_ZF;
+            f |= d & (Z80_YF | Z80_XF);
+            if (z80_parity(d)) f |= Z80_PF;
+            z80_setF(c, f); finish(c);
+        }
+        break;
+    case EXEC_OUT_C:
+        if (m == 1) { c->rf[RFP_WZ] = (uint16_t)(c->rf[RFP_BC] + 1);
+                      uint8_t v = (ctl->rf_src == REG_iHL) ? 0 : getr(c, ctl->rf_src);
+                      z80_start_mcycle(c, BUSOP_IOWR, c->rf[RFP_BC], v, 0); }
+        else finish(c);
+        break;
+    case EXEC_RRD:
+    case EXEC_RLD:
+        if (m == 1) z80_start_mcycle(c, BUSOP_MRD, c->rf[RFP_HL], 0, 0);
+        else if (m == 2) {
+            uint8_t mem = RB, a = z80_A(c), newA, newMem;
+            if (ctl->exec == EXEC_RRD) {
+                newA   = (uint8_t)((a & 0xF0) | (mem & 0x0F));
+                newMem = (uint8_t)((mem >> 4) | ((a & 0x0F) << 4));
+            } else {
+                newA   = (uint8_t)((a & 0xF0) | ((mem >> 4) & 0x0F));
+                newMem = (uint8_t)(((mem << 4) & 0xF0) | (a & 0x0F));
+            }
+            z80_setA(c, newA);
+            uint8_t f = z80_F(c) & Z80_CF;
+            if (newA & 0x80) f |= Z80_SF;
+            if (newA == 0)   f |= Z80_ZF;
+            f |= newA & (Z80_YF | Z80_XF);
+            if (z80_parity(newA)) f |= Z80_PF;
+            z80_setF(c, f);
+            c->rf[RFP_WZ] = (uint16_t)(c->rf[RFP_HL] + 1);
+            c->tmpl = newMem;
+            z80_start_mcycle(c, BUSOP_INTERNAL, c->rf[RFP_HL], 0, 4);
+        }
+        else if (m == 3) z80_start_mcycle(c, BUSOP_MWR, c->rf[RFP_HL], c->tmpl, 0);
+        else finish(c);
         break;
 
     default:
