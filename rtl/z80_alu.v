@@ -8,7 +8,9 @@
 module z80_alu (
     input  wire [4:0] mode,      // FM_*
     input  wire [2:0] alu_op,    // ALU_*
-    input  wire [2:0] rot_op,    // for ROT_A (0 RLCA 1 RRCA 2 RLA 3 RRA)
+    input  wire [2:0] rot_op,    // ROT_A (0 RLCA 1 RRCA 2 RLA 3 RRA) / CB rot[y]
+    input  wire [2:0] bit_idx,   // CB BIT index
+    input  wire [7:0] xy_src,    // CB BIT: source of X/Y flags
     input  wire [7:0] a,         // accumulator / source
     input  wire [7:0] b,         // operand
     input  wire [7:0] oldf,
@@ -104,9 +106,38 @@ module z80_alu (
     wire [7:0] f_ccf = (oldf & (`FB_S | `FB_Z | `FB_P)) | (oldf[0] ? `FB_H : 8'h0)
                      | (oldf[0] ? 8'h0 : `FB_C) | (a & (`FB_Y | `FB_X));
 
+    // ---- CB rotates/shifts (operate on b) ----
+    reg  [7:0] cbr; reg cbcf;
+    always @* begin
+        case (rot_op)
+            3'd0: begin cbcf = b[7]; cbr = {b[6:0], b[7]};    end // RLC
+            3'd1: begin cbcf = b[0]; cbr = {b[0], b[7:1]};    end // RRC
+            3'd2: begin cbcf = b[7]; cbr = {b[6:0], oldf[0]}; end // RL
+            3'd3: begin cbcf = b[0]; cbr = {oldf[0], b[7:1]}; end // RR
+            3'd4: begin cbcf = b[7]; cbr = {b[6:0], 1'b0};    end // SLA
+            3'd5: begin cbcf = b[0]; cbr = {b[7], b[7:1]};    end // SRA
+            3'd6: begin cbcf = b[7]; cbr = {b[6:0], 1'b1};    end // SLL
+            default: begin cbcf = b[0]; cbr = {1'b0, b[7:1]}; end // SRL
+        endcase
+    end
+    wire par_cb = ~(^cbr);
+    wire [7:0] f_rot = (cbr[7] ? `FB_S : 8'h0) | (cbr == 8'h0 ? `FB_Z : 8'h0)
+                     | (cbr & (`FB_Y | `FB_X)) | (par_cb ? `FB_P : 8'h0)
+                     | (cbcf ? `FB_C : 8'h0);
+
+    // ---- CB BIT (operate on b, X/Y from xy_src) ----
+    wire [7:0] bitmask = (8'h01 << bit_idx);
+    wire [7:0] bittest = b & bitmask;
+    wire [7:0] f_bit = (oldf & `FB_C) | `FB_H
+                     | ((bittest == 8'h0) ? (`FB_Z | `FB_P) : 8'h0)
+                     | ((bittest & 8'h80) ? `FB_S : 8'h0)
+                     | (xy_src & (`FB_Y | `FB_X));
+
     // ---- output mux ----
     always @* begin
         case (mode)
+            `FM_ROT:  begin res = cbr; fout = f_rot; end
+            `FM_BIT:  begin res = b;   fout = f_bit; end
             `FM_ADD8: begin res = sum;   fout = f_add; end
             `FM_SUB8: begin res = diff;  fout = f_sub; end
             `FM_CP8:  begin res = diff;  fout = f_sub; end  // core discards res

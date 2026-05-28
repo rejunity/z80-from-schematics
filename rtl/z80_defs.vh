@@ -132,6 +132,14 @@
 `define EX_CCF        6'd49
 `define EX_IN_A_N     6'd50
 `define EX_OUT_N_A    6'd51
+`define EX_CB_R       6'd53
+`define EX_CB_M       6'd54
 `define EX_ILLEGAL    6'd52
+
+// CB op kind (= x field of CB opcode)
+`define CB_ROT 2'd0
+`define CB_BIT 2'd1
+`define CB_RES 2'd2
+`define CB_SET 2'd3
 
 `endif

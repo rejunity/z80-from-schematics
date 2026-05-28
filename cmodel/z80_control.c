@@ -364,6 +364,37 @@ void z80_exec_step(z80_t *c)
         else finish(c);
         break;
 
+    /* ---------- CB: rotates/shifts + BIT/RES/SET ---------- */
+    case EXEC_CB_R: {
+        uint8_t val = getr(c, ctl->rf_src), res;
+        switch (ctl->cb_kind) {
+            case CB_ROT: { uint8_t f = z80_flags_rot(ctl->rot_op, val, z80_F(c), &res);
+                           setr(c, ctl->rf_dst, res); z80_setF(c, f); } break;
+            case CB_BIT: z80_setF(c, z80_flags_bit(ctl->bit_index, val, val, z80_F(c))); break;
+            case CB_RES: setr(c, ctl->rf_dst, (uint8_t)(val & ~(1u << ctl->bit_index))); break;
+            case CB_SET: setr(c, ctl->rf_dst, (uint8_t)(val | (1u << ctl->bit_index))); break;
+        }
+        finish(c); break;
+    }
+    case EXEC_CB_M:
+        if (m == 1) z80_start_mcycle(c, BUSOP_MRD, c->rf[RFP_HL], 0, 1); /* 4T read */
+        else if (ctl->cb_kind == CB_BIT) {
+            uint8_t xy = (uint8_t)(c->rf[RFP_WZ] >> 8);   /* MEMPTR high byte */
+            z80_setF(c, z80_flags_bit(ctl->bit_index, RB, xy, z80_F(c)));
+            finish(c);
+        } else if (m == 2) {
+            uint8_t val = RB, res = val;
+            switch (ctl->cb_kind) {
+                case CB_ROT: { uint8_t f = z80_flags_rot(ctl->rot_op, val, z80_F(c), &res);
+                               z80_setF(c, f); } break;
+                case CB_RES: res = (uint8_t)(val & ~(1u << ctl->bit_index)); break;
+                case CB_SET: res = (uint8_t)(val | (1u << ctl->bit_index)); break;
+                default: break;
+            }
+            z80_start_mcycle(c, BUSOP_MWR, c->rf[RFP_HL], res, 0);
+        } else finish(c);
+        break;
+
     default:
         finish(c);
         break;

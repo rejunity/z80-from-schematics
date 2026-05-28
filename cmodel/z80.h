@@ -160,8 +160,12 @@ typedef enum {
     EXEC_LD_HL_NN, EXEC_LD_NN_HL,
     EXEC_ROT_A, EXEC_DAA, EXEC_CPL, EXEC_SCF, EXEC_CCF,
     EXEC_IN_A_N, EXEC_OUT_N_A,
+    EXEC_CB_R, EXEC_CB_M,                  /* CB: rot/bit/res/set on r / (HL) */
     EXEC_ILLEGAL
 } z80_exec_t;
+
+/* CB operation kind (= x field of the CB opcode) */
+enum { CB_ROT = 0, CB_BIT = 1, CB_RES = 2, CB_SET = 3 };
 
 typedef struct {
     z80_exec_t      exec;       /* datapath action                          */
@@ -176,6 +180,7 @@ typedef struct {
     uint8_t         cc;         /* condition code index (cc[y])             */
     uint8_t         bit_index;  /* for CB BIT/RES/SET                       */
     uint8_t         rot_op;     /* RLCA/.. or CB rot[y]                     */
+    uint8_t         cb_kind;    /* CB op kind: CB_ROT/BIT/RES/SET           */
     uint8_t         rst_addr;   /* RST target (y*8)                         */
     bool            uses_cc;    /* conditional instruction                  */
     bool            valid;      /* row matched                             */

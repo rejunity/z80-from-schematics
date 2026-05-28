@@ -166,12 +166,42 @@ static z80_control_t decode_unprefixed(uint8_t op)
     return c;
 }
 
+static z80_control_t decode_cb(uint8_t op)
+{
+    z80_control_t c;
+    for (unsigned i = 0; i < sizeof(c); i++) ((uint8_t *)&c)[i] = 0;
+    c.valid = true;
+
+    uint8_t x = (uint8_t)(op >> 6);
+    uint8_t y = (uint8_t)((op >> 3) & 7);
+    uint8_t z = (uint8_t)(op & 7);
+
+    c.cb_kind   = x;            /* 0 rot, 1 bit, 2 res, 3 set */
+    c.rf_src    = z;
+    c.rf_dst    = z;
+    c.rot_op    = y;            /* rot[y] when x==0 */
+    c.bit_index = y;            /* bit index for x>=1 */
+
+    bool is_mem = (z == REG_iHL);
+    if (x == CB_BIT) {
+        c.flag_mode = FLAG_BIT;
+        c.exec = is_mem ? EXEC_CB_M : EXEC_CB_R;
+    } else {
+        if (x == CB_ROT) c.flag_mode = FLAG_ROT;  /* res/set: no flags */
+        c.exec = is_mem ? EXEC_CB_M : EXEC_CB_R;
+    }
+    c.seq = is_mem ? (x == CB_BIT ? SEQ_MRD_HL : SEQ_RMW_HL) : SEQ_NONE;
+    return c;
+}
+
 z80_control_t z80_pla_decode(z80_prefix_t prefix, uint8_t opcode)
 {
     if (prefix == PFX_NONE)
         return decode_unprefixed(opcode);
+    if (prefix == PFX_CB)
+        return decode_cb(opcode);
 
-    /* CB/ED/DD/FD/DDCB/FDCB are added in a later stage (task 8). */
+    /* ED/DD/FD/DDCB/FDCB are added in a later stage (task 8). */
     z80_control_t c;
     for (unsigned i = 0; i < sizeof(c); i++) ((uint8_t *)&c)[i] = 0;
     c.valid = false;

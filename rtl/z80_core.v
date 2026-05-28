@@ -77,7 +77,8 @@ module z80_core (
     // ---- decode (combinational) ----
     wire [5:0] exec_w;
     wire [4:0] flag_mode_w;
-    wire [2:0] alu_op_w, rf_src_w, rf_dst_w, cc_w, rot_op_w;
+    wire [2:0] alu_op_w, rf_src_w, rf_dst_w, cc_w, rot_op_w, bit_index_w;
+    wire [1:0] cb_kind_w;
     wire [3:0] rp_sel_w;
     wire [7:0] rst_addr_w;
     wire       uses_cc_w, valid_w;
@@ -86,8 +87,8 @@ module z80_core (
         .prefix(prefix), .op(ir),
         .exec(exec_w), .flag_mode(flag_mode_w), .alu_op(alu_op_w),
         .rf_src(rf_src_w), .rf_dst(rf_dst_w), .rp_sel(rp_sel_w),
-        .cc(cc_w), .rot_op(rot_op_w), .rst_addr(rst_addr_w),
-        .uses_cc(uses_cc_w), .valid(valid_w)
+        .cc(cc_w), .rot_op(rot_op_w), .bit_index(bit_index_w), .cb_kind(cb_kind_w),
+        .rst_addr(rst_addr_w), .uses_cc(uses_cc_w), .valid(valid_w)
     );
 
     // ---- timing pin drive (combinational from registered state) ----
@@ -154,7 +155,7 @@ module z80_core (
     endfunction
 
     // ---- ALU operand selection + instance ----
-    reg  [7:0] alu_a, alu_b;
+    reg  [7:0] alu_a, alu_b, alu_xy;
     reg  [4:0] alu_md;
     wire [7:0] A_cur = rf[`RFP_AF][15:8];
     wire [7:0] F_cur = rf[`RFP_AF][7:0];
@@ -162,17 +163,21 @@ module z80_core (
         alu_a = A_cur;
         alu_b = 8'h00;
         alu_md = flag_mode_w;
+        alu_xy = 8'h00;
         case (exec_w)
             `EX_ALU_R:           alu_b = getr8(rf_src_w);
             `EX_ALU_N, `EX_ALU_M:alu_b = rbyte;
             `EX_INC_R, `EX_DEC_R:alu_b = getr8(rf_dst_w);
             `EX_INC_M, `EX_DEC_M:alu_b = rbyte;
+            `EX_CB_R: begin alu_b = getr8(rf_src_w); alu_xy = getr8(rf_src_w); end
+            `EX_CB_M: begin alu_b = rbyte;           alu_xy = rf[`RFP_WZ][15:8]; end
             default:             alu_b = 8'h00;
         endcase
     end
     wire [7:0] alu_res, alu_fout;
     z80_alu u_alu (
         .mode(alu_md), .alu_op(alu_op_w), .rot_op(rot_op_w),
+        .bit_idx(bit_index_w), .xy_src(alu_xy),
         .a(alu_a), .b(alu_b), .oldf(F_cur),
         .res(alu_res), .fout(alu_fout)
     );
@@ -207,6 +212,7 @@ module z80_core (
     reg [16:0] add16;
     reg [12:0] add12;
     reg [7:0]  f16;
+    reg [7:0]  cbres;
 
     // ---- combinational next-state ----
     always @* begin
@@ -534,6 +540,29 @@ module z80_core (
                         startm(`BUSOP_MWR, rf[`RFP_SP] + 16'd1, rf[`RFP_HL][15:8], 4'd0); end
                     else if (m_cycle == 3'd4) startm(`BUSOP_MWR, rf[`RFP_SP], rf[`RFP_HL][7:0], 4'd2);
                     else begin rf_n[`RFP_HL] = {tmph, tmpl}; rf_n[`RFP_WZ] = {tmph, tmpl}; fin = 1'b1; end
+                end
+
+                `EX_CB_R: begin
+                    case (cb_kind_w)
+                        `CB_ROT: begin setr8(rf_dst_w, alu_res); rf_n[`RFP_AF][7:0] = alu_fout; end
+                        `CB_BIT: rf_n[`RFP_AF][7:0] = alu_fout;
+                        `CB_RES: setr8(rf_dst_w, getr8(rf_src_w) & ~(8'h01 << bit_index_w));
+                        `CB_SET: setr8(rf_dst_w, getr8(rf_src_w) |  (8'h01 << bit_index_w));
+                    endcase
+                    fin = 1'b1;
+                end
+                `EX_CB_M: begin
+                    if (m_cycle == 3'd1) startm(`BUSOP_MRD, rf[`RFP_HL], 8'h0, 4'd1);
+                    else if (cb_kind_w == `CB_BIT) begin rf_n[`RFP_AF][7:0] = alu_fout; fin = 1'b1; end
+                    else if (m_cycle == 3'd2) begin
+                        case (cb_kind_w)
+                            `CB_ROT: begin cbres = alu_res; rf_n[`RFP_AF][7:0] = alu_fout; end
+                            `CB_RES: cbres = rbyte & ~(8'h01 << bit_index_w);
+                            `CB_SET: cbres = rbyte |  (8'h01 << bit_index_w);
+                            default: cbres = rbyte;
+                        endcase
+                        startm(`BUSOP_MWR, rf[`RFP_HL], cbres, 4'd0);
+                    end else fin = 1'b1;
                 end
 
                 default: fin = 1'b1;

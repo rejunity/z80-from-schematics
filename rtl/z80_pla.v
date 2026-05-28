@@ -16,6 +16,8 @@ module z80_pla (
     output reg  [3:0] rp_sel,
     output reg  [2:0] cc,
     output reg  [2:0] rot_op,
+    output reg  [2:0] bit_index,
+    output reg  [1:0] cb_kind,
     output reg  [7:0] rst_addr,
     output reg        uses_cc,
     output reg        valid
@@ -52,9 +54,14 @@ module z80_pla (
         // defaults
         exec = `EX_NOP; flag_mode = `FM_NONE; alu_op = 3'd0;
         rf_src = 3'd0; rf_dst = 3'd0; rp_sel = `RFP_BC; cc = 3'd0;
-        rot_op = 3'd0; rst_addr = 8'h00; uses_cc = 1'b0; valid = 1'b1;
+        rot_op = 3'd0; bit_index = 3'd0; cb_kind = 2'd0;
+        rst_addr = 8'h00; uses_cc = 1'b0; valid = 1'b1;
 
-        if (prefix != `PFX_NONE) begin
+        if (prefix == `PFX_CB) begin
+            cb_kind = x; rf_src = z; rf_dst = z; rot_op = y; bit_index = y;
+            flag_mode = (x == `CB_ROT) ? `FM_ROT : (x == `CB_BIT) ? `FM_BIT : `FM_NONE;
+            exec = (z == 3'd6) ? `EX_CB_M : `EX_CB_R;
+        end else if (prefix != `PFX_NONE) begin
             exec = `EX_ILLEGAL; valid = 1'b0;
         end else begin
         case (x)
