@@ -170,6 +170,7 @@ typedef enum {
     EXEC_RRD, EXEC_RLD,                    /* rotate digit                   */
     EXEC_BLOCK,                            /* LDI/LDD/CPI/.../INI/.../OUTI/. */
     EXEC_DDCB,                             /* DD/FD CB d op : op on (IX+d)    */
+    EXEC_NMI, EXEC_INT,                    /* interrupt acceptance sequences  */
     EXEC_ILLEGAL
 } z80_exec_t;
 
@@ -238,6 +239,9 @@ typedef struct {
     bool         halted;
     bool         nmi_pending;
     bool         prev_nmi_n;    /* for edge detection                        */
+    bool         ei_delay;      /* suppress INT for one instruction after EI  */
+    bool         suppress_decode;/* ack-cycle M1: latch but don't decode/PC++ */
+    bool         bus_granted;   /* BUSACK active (DMA owns the bus)           */
 
     /* micro-step bookkeeping (filled by control sequencer) */
     uint8_t      ucode;         /* micro-step index within instruction       */

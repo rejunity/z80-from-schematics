@@ -32,9 +32,22 @@ def run(cmd):
         raise SystemExit(f"command failed: {' '.join(cmd)}")
     return p.stdout
 
+# halt_n is column index 12; programs end in HALT. The C model loops at HALT
+# (proper Z80 behavior, part of the interrupt subsystem); the RTL does not yet
+# model HALT/interrupts, so compare execution up to HALT entry.
+HALT_COL = 12
+def halt_cut(lines):
+    for i, ln in enumerate(lines):
+        p = ln.split()
+        if len(p) > HALT_COL and p[HALT_COL] == "0":
+            return i
+    return len(lines)
+
 def compare_one(prog, phases):
     c = trace_lines(run([TRACEGEN, prog, phases]))
     v = trace_lines(run([VVP, f"+prog={prog}", f"+phases={phases}"]))
+    cut = min(halt_cut(c), halt_cut(v))
+    c = c[:cut]; v = v[:cut]
     n = min(len(c), len(v))
     name = os.path.basename(prog)
     if n == 0:

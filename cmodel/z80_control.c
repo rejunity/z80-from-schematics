@@ -219,7 +219,7 @@ void z80_exec_step(z80_t *c)
         else finish(c);
         break;
     case EXEC_DI: c->iff1 = c->iff2 = false; finish(c); break;
-    case EXEC_EI: c->iff1 = c->iff2 = true;  finish(c); break;
+    case EXEC_EI: c->iff1 = c->iff2 = true; c->ei_delay = true; finish(c); break;
     case EXEC_HALT: c->halted = true; finish(c); break;
 
     case EXEC_LD_R_R: setri(c, ctl->rf_dst, getri(c, ctl->rf_src)); finish(c); break;
@@ -727,6 +727,35 @@ void z80_exec_step(z80_t *c)
         }
         break;
     }
+
+    /* ---------- interrupt acceptance sequences ---------- */
+    case EXEC_NMI:
+        /* m1 was the 5T M1 ack (opcode discarded). push PC, jump to 0x0066. */
+        if (m == 1) { z80_setSP(c, (uint16_t)(z80_SP(c) - 1));
+                      z80_start_mcycle(c, BUSOP_MWR, z80_SP(c), (uint8_t)(z80_PC(c) >> 8), 0); }
+        else if (m == 2) { z80_setSP(c, (uint16_t)(z80_SP(c) - 1));
+                      z80_start_mcycle(c, BUSOP_MWR, z80_SP(c), (uint8_t)(z80_PC(c) & 0xFF), 0); }
+        else { z80_setPC(c, 0x0066); c->rf[RFP_WZ] = 0x0066; finish(c); }
+        break;
+    case EXEC_INT:
+        /* m1 was the INTA ack (bus byte in tmp8). push PC, then dispatch per IM. */
+        if (m == 1) { z80_setSP(c, (uint16_t)(z80_SP(c) - 1));
+                      z80_start_mcycle(c, BUSOP_MWR, z80_SP(c), (uint8_t)(z80_PC(c) >> 8), 0); }
+        else if (m == 2) { z80_setSP(c, (uint16_t)(z80_SP(c) - 1));
+                      z80_start_mcycle(c, BUSOP_MWR, z80_SP(c), (uint8_t)(z80_PC(c) & 0xFF), 0); }
+        else if (m == 3) {
+            if (c->im == 2) {
+                c->tmp16 = (uint16_t)(((uint16_t)c->reg_i << 8) | c->tmp8); /* vector table addr */
+                z80_start_mcycle(c, BUSOP_MRD, c->tmp16, 0, 0);
+            } else {
+                uint16_t target = (c->im == 1) ? 0x0038u
+                                  : (uint16_t)(c->tmp8 & 0x38u);  /* IM0: RST from bus opcode */
+                z80_setPC(c, target); c->rf[RFP_WZ] = target; finish(c);
+            }
+        }
+        else if (m == 4) { c->tmpl = RB; z80_start_mcycle(c, BUSOP_MRD, (uint16_t)(c->tmp16 + 1), 0, 0); }
+        else { uint16_t nn = z80_pair_hi_lo(RB, c->tmpl); z80_setPC(c, nn); c->rf[RFP_WZ] = nn; finish(c); }
+        break;
 
     default:
         finish(c);

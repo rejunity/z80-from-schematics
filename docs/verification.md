@@ -36,8 +36,11 @@ Living record of the verification state. Updated at each checkpoint.
 | ED block ops (LDI..OTDR) | done | done | done |
 | DD/FD (IX/IY, IXH/IXL, (IX+d)) | done | done | done |
 | DDCB/FDCB (op (IX+d) + undoc copy) | done | done | done |
-| Interrupts/refresh/wait/halt/bus | partial (HALT+refresh) | partial | pending |
-| Undocumented (X/Y, MEMPTR rules) | partial | partial | pending |
+| Interrupts: NMI / INT IM0·1·2 / EI-delay | done | pending RTL | n/a yet |
+| HALT (loop + interrupt release) | done | pending RTL | trace cmp truncated at HALT |
+| WAIT insertion / BUSREQ-BUSACK | done | pending RTL | n/a yet |
+| Refresh (R inc, {I,R} on bus) | done | done | done |
+| Undocumented (X/Y, MEMPTR rules) | done (DDCB ix+d: see #7) | done | done |
 | ZEXDOC | harness wired; blocked on prefixes | — | — |
 | ZEXALL | harness wired; blocked on prefixes | — | — |
 

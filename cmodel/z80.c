@@ -32,6 +32,7 @@ static bool is_latch_phase(const z80_t *c)
     if (c->phi != 1) return false;
     switch (c->bus_op) {
         case BUSOP_M1:   return c->t_state == 2; /* opcode latched at T2.N */
+        case BUSOP_INTA: return c->t_state == 2; /* interrupt vector byte  */
         case BUSOP_MRD:  return c->t_state == 3; /* data at T3.N           */
         case BUSOP_IORD: return c->t_state == 4; /* data at T3 (after Tw)  */
         default:         return false;
@@ -46,9 +47,17 @@ static void do_latch(z80_t *c)
         c->tmp8 = c->pins.data_in;
         /* refresh counter: only low 7 bits increment */
         c->reg_r = (uint8_t)((c->reg_r & 0x80u) | ((c->reg_r + 1u) & 0x7Fu));
-        (void)z80_pc_inc(c);                 /* PC advances past opcode */
-        c->ctl = z80_pla_decode(c->prefix, c->ir);
-        c->decoded = true;
+        if (c->suppress_decode) {
+            c->suppress_decode = false;      /* ack M1: discard opcode, no PC++/decode */
+        } else {
+            (void)z80_pc_inc(c);             /* PC advances past opcode */
+            c->ctl = z80_pla_decode(c->prefix, c->ir);
+            c->decoded = true;
+        }
+        break;
+    case BUSOP_INTA:                          /* interrupt-ack: latch bus byte, refresh */
+        c->tmp8 = c->pins.data_in;
+        c->reg_r = (uint8_t)((c->reg_r & 0x80u) | ((c->reg_r + 1u) & 0x7Fu));
         break;
     case BUSOP_MRD:
     case BUSOP_IORD:
@@ -56,6 +65,52 @@ static void do_latch(z80_t *c)
         break;
     default: break;
     }
+}
+
+/* set up a synthetic M1-style cycle for an interrupt/HALT sequence */
+static void start_seq_m1(z80_t *c, z80_exec_t exec, uint8_t len, bool suppress)
+{
+    c->ctl.exec = exec; c->ctl.idx = 0; c->ctl.use_disp = false;
+    c->decoded = true; c->instr_done = false;
+    c->bus_op = BUSOP_M1; c->m_addr = c->rf[RFP_PC]; c->m_wdata = 0; c->m_len = len;
+    c->t_state = 1; c->phi = 0; c->m_cycle = 1; c->ucode = 0;
+    c->suppress_decode = suppress;
+}
+static void start_seq_inta(z80_t *c, uint8_t len)
+{
+    c->ctl.exec = EXEC_INT; c->ctl.idx = 0; c->ctl.use_disp = false;
+    c->decoded = true; c->instr_done = false;
+    c->bus_op = BUSOP_INTA; c->m_addr = c->rf[RFP_PC]; c->m_wdata = 0; c->m_len = len;
+    c->t_state = 1; c->phi = 0; c->m_cycle = 1; c->ucode = 0;
+}
+
+/* decide what happens at an instruction boundary: bus grant, NMI, INT, HALT, or
+   the next opcode fetch. (docs/timing.md interrupt/HALT/BUSREQ sections) */
+static void begin_next(z80_t *c)
+{
+    if (!c->pins.busreq_n) { c->bus_granted = true; return; } /* DMA owns the bus */
+
+    bool allow_int = !c->ei_delay;
+    c->ei_delay = false;
+
+    if (c->nmi_pending) {
+        c->nmi_pending = false;
+        c->halted = false;
+        c->iff2 = c->iff1; c->iff1 = false;        /* IFF1->IFF2, disable */
+        start_seq_m1(c, EXEC_NMI, 5, true);        /* 5T ack, opcode discarded */
+        return;
+    }
+    if (allow_int && !c->pins.int_n && c->iff1) {
+        c->halted = false;
+        c->iff1 = c->iff2 = false;
+        start_seq_inta(c, 7);                      /* INTA ack (IM0/1/2) */
+        return;
+    }
+    if (c->halted) {
+        start_seq_m1(c, EXEC_NOP, 4, true);        /* HALT: execute NOPs */
+        return;
+    }
+    z80_start_m1(c);
 }
 
 static void advance(z80_t *c)
@@ -72,7 +127,7 @@ static void advance(z80_t *c)
         if (c->instr_done) {
             c->instr_count++;
             c->prefix = PFX_NONE;
-            z80_start_m1(c);
+            begin_next(c);
         }
     }
 }
@@ -89,6 +144,9 @@ static void reset_state(z80_t *c)
     c->prefix = PFX_NONE;
     c->nmi_pending = false;
     c->prev_nmi_n = true;
+    c->ei_delay = false;
+    c->suppress_decode = false;
+    c->bus_granted = false;
 
     c->t_state = 1; c->phi = 0; c->m_cycle = 1;
     c->bus_op = BUSOP_M1; c->m_len = 4; c->m_addr = 0x0000;
@@ -142,6 +200,26 @@ void z80_phase_step(z80_t *c)
     if (!c->pins.reset_n) {
         reset_state(c);
         return;
+    }
+
+    /* NMI is edge-triggered: latch a falling edge on nmi_n */
+    if (c->prev_nmi_n && !c->pins.nmi_n) c->nmi_pending = true;
+    c->prev_nmi_n = c->pins.nmi_n;
+
+    /* bus grant (DMA): while BUSREQ held, release the bus and idle */
+    if (c->bus_granted) {
+        if (!c->pins.busreq_n) {
+            c->pins.busack_n = 0;
+            c->pins.m1_n = c->pins.mreq_n = c->pins.iorq_n = 1;
+            c->pins.rd_n = c->pins.wr_n = c->pins.rfsh_n = 1;
+            c->pins.data_drive = false;
+            c->pins.halt_n = c->halted ? 0 : 1;
+            return;
+        }
+        c->bus_granted = false;          /* BUSREQ released: resume */
+        c->pins.busack_n = 1;
+        z80_start_m1(c);
+        c->phase_primed = false;
     }
 
     if (c->phase_primed)
