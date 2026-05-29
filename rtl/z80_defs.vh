@@ -152,6 +152,8 @@
 `define EX_RLD        7'd68
 `define EX_BLOCK      7'd69
 `define EX_DDCB       7'd70
+`define EX_NMI        7'd71
+`define EX_INT        7'd72
 
 // CB op kind (= x field of CB opcode)
 `define CB_ROT 2'd0

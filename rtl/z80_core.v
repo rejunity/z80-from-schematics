@@ -55,6 +55,8 @@ module z80_core (
     reg [15:0] tmp16;
     reg [31:0] cycle, instr_count;
     reg        decoded;
+    reg        nmi_pending, prev_nmi_n, ei_delay, suppress_decode, bus_granted;
+    reg [1:0]  irq_seq;        // 0 none, 1 NMI, 2 INT, 3 HALT-nop
 
     // ---- next-state ----
     reg [15:0] rf_n [0:12];
@@ -72,6 +74,9 @@ module z80_core (
     reg [15:0] tmp16_n;
     reg [31:0] cycle_n, instr_count_n;
     reg        decoded_n;
+    reg        nmi_pending_n, prev_nmi_n_n, ei_delay_n, suppress_decode_n, bus_granted_n;
+    reg [1:0]  irq_seq_n;
+    reg        allow_int;
     reg        fin;
 
     // ---- decode (combinational) ----
@@ -95,6 +100,11 @@ module z80_core (
     // active "HL" pair for the current instruction (IX/IY under DD/FD)
     wire [3:0] hlp = (idx_w == 2'd1) ? `RFP_IX : (idx_w == 2'd2) ? `RFP_IY : `RFP_HL;
 
+    // effective exec: an active interrupt/HALT sequence overrides the decode
+    wire [6:0] eff_exec = (irq_seq == 2'd1) ? `EX_NMI :
+                          (irq_seq == 2'd2) ? `EX_INT :
+                          (irq_seq == 2'd3) ? `EX_NOP : exec_w;
+
     // ---- timing pin drive (combinational from registered state) ----
     z80_timing u_timing (
         .bus_op(bus_op), .t_state(t_state[2:0]), .phi(phi),
@@ -104,12 +114,13 @@ module z80_core (
         .rd_n(rd_n), .wr_n(wr_n), .rfsh_n(rfsh_n)
     );
     assign halt_n   = halted ? 1'b0 : 1'b1;
-    assign busack_n = 1'b1;            // BUSREQ/BUSACK in a later stage
+    assign busack_n = bus_granted ? 1'b0 : 1'b1;
     assign dbg_t = t_state; assign dbg_phi = phi; assign dbg_m = m_cycle;
 
     // ---- timing-point predicates ----
     wire islatch =  (phi == 1'b1) &&
                   ( ((bus_op == `BUSOP_M1)   && (t_state == 4'd2)) ||
+                    ((bus_op == `BUSOP_INTA) && (t_state == 4'd2)) ||
                     ((bus_op == `BUSOP_MRD)  && (t_state == 4'd3)) ||
                     ((bus_op == `BUSOP_IORD) && (t_state == 4'd4)) );
     wire iswait  =  (phi == 1'b1) &&
@@ -260,6 +271,13 @@ module z80_core (
         cycle_n = cycle + 32'd1; instr_count_n = instr_count; decoded_n = decoded;
         fin = 1'b0;
         add16 = 17'd0; f16 = 8'd0;
+        ei_delay_n = ei_delay; suppress_decode_n = suppress_decode;
+        bus_granted_n = bus_granted; irq_seq_n = irq_seq;
+        allow_int = 1'b0;
+
+        // NMI: latch a falling edge on nmi_n
+        prev_nmi_n_n = nmi_n;
+        nmi_pending_n = nmi_pending | (prev_nmi_n & ~nmi_n);
 
         // latch on the current phase
         if (islatch) begin
@@ -267,15 +285,27 @@ module z80_core (
                 ir_n   = data_in;
                 tmp8_n = data_in;
                 reg_r_n = {reg_r[7], (reg_r[6:0] + 7'd1)};
-                rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1;
-                decoded_n = 1'b1;
+                if (suppress_decode) suppress_decode_n = 1'b0;     // ack/halt: no PC++/decode
+                else begin rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; decoded_n = 1'b1; end
+            end else if (bus_op == `BUSOP_INTA) begin
+                tmp8_n = data_in;                                  // interrupt vector byte
+                reg_r_n = {reg_r[7], (reg_r[6:0] + 7'd1)};
             end else begin
                 tmp8_n = data_in;
             end
         end
 
+        // bus grant (DMA): idle while BUSREQ held
+        if (bus_granted) begin
+            if (busreq_n) begin                  // released: resume with a fresh M1
+                bus_granted_n = 1'b0;
+                bus_op_n = `BUSOP_M1; m_addr_n = rf[`RFP_PC]; m_len_n = 4'd4;
+                t_n = 4'd1; phi_n = 1'b0; m_cycle_n = 3'd1; decoded_n = 1'b0;
+            end
+            // else: hold all state (idle)
+        end
         // advance phase
-        if (phi == 1'b0) begin
+        else if (phi == 1'b0) begin
             phi_n = 1'b1;
         end else if (stall) begin
             phi_n = 1'b0;                 // hold T-state as Tw
@@ -283,17 +313,18 @@ module z80_core (
             phi_n = 1'b0;
             if ((t_state + 4'd1) > m_len) begin
                 // (IX+d)/(IY+d) displacement preamble: fetch d, then 5T addr calc
+                // (skipped during interrupt/HALT sequences)
                 mm = m_cycle; memaddr = rf[hlp];
-                if (idx_w != 2'd0 && use_disp_w && m_cycle == 3'd1) begin
+                if (irq_seq == 2'd0 && idx_w != 2'd0 && use_disp_w && m_cycle == 3'd1) begin
                     startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
                     rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1;
-                end else if (idx_w != 2'd0 && use_disp_w && m_cycle == 3'd2) begin
+                end else if (irq_seq == 2'd0 && idx_w != 2'd0 && use_disp_w && m_cycle == 3'd2) begin
                     rf_n[`RFP_WZ] = rf[hlp] + {{8{rbyte[7]}}, rbyte};
                     startm(`BUSOP_INTERNAL, rf[hlp] + {{8{rbyte[7]}}, rbyte}, 8'h0, 4'd5);
                 end else begin
-                if (idx_w != 2'd0 && use_disp_w) begin mm = m_cycle - 3'd2; memaddr = rf[`RFP_WZ]; end
+                if (irq_seq == 2'd0 && idx_w != 2'd0 && use_disp_w) begin mm = m_cycle - 3'd2; memaddr = rf[`RFP_WZ]; end
                 // ===== micro-sequencer (mirror z80_control.c) =====
-                case (exec_w)
+                case (eff_exec)
                 `EX_NOP, `EX_ILLEGAL: fin = 1'b1;
                 `EX_PREFIX: begin
                     case (ir)
@@ -334,7 +365,7 @@ module z80_core (
                     else fin = 1'b1;
                 end
                 `EX_DI: begin iff1_n = 1'b0; iff2_n = 1'b0; fin = 1'b1; end
-                `EX_EI: begin iff1_n = 1'b1; iff2_n = 1'b1; fin = 1'b1; end
+                `EX_EI: begin iff1_n = 1'b1; iff2_n = 1'b1; ei_delay_n = 1'b1; fin = 1'b1; end
                 `EX_HALT: begin halted_n = 1'b1; fin = 1'b1; end
 
                 `EX_LD_R_R: begin setri(rf_dst_w, getri(rf_src_w)); fin = 1'b1; end
@@ -874,14 +905,70 @@ module z80_core (
                     end
                 end
 
+                /* ---------- interrupt acceptance sequences ---------- */
+                `EX_NMI: begin
+                    if (m_cycle == 3'd1) begin rf_n[`RFP_SP] = rf[`RFP_SP] - 16'd1;
+                        startm(`BUSOP_MWR, rf[`RFP_SP] - 16'd1, rf[`RFP_PC][15:8], 4'd0); end
+                    else if (m_cycle == 3'd2) begin rf_n[`RFP_SP] = rf[`RFP_SP] - 16'd1;
+                        startm(`BUSOP_MWR, rf[`RFP_SP] - 16'd1, rf[`RFP_PC][7:0], 4'd0); end
+                    else begin rf_n[`RFP_PC] = 16'h0066; rf_n[`RFP_WZ] = 16'h0066; fin = 1'b1; end
+                end
+                `EX_INT: begin
+                    if (m_cycle == 3'd1) begin rf_n[`RFP_SP] = rf[`RFP_SP] - 16'd1;
+                        startm(`BUSOP_MWR, rf[`RFP_SP] - 16'd1, rf[`RFP_PC][15:8], 4'd0); end
+                    else if (m_cycle == 3'd2) begin rf_n[`RFP_SP] = rf[`RFP_SP] - 16'd1;
+                        startm(`BUSOP_MWR, rf[`RFP_SP] - 16'd1, rf[`RFP_PC][7:0], 4'd0); end
+                    else if (m_cycle == 3'd3) begin
+                        if (im == 2'd2) begin
+                            tmp16_n = {reg_i, tmp8};
+                            startm(`BUSOP_MRD, {reg_i, tmp8}, 8'h0, 4'd0);
+                        end else begin
+                            rf_n[`RFP_PC] = (im == 2'd1) ? 16'h0038 : {8'h00, (tmp8 & 8'h38)};
+                            rf_n[`RFP_WZ] = (im == 2'd1) ? 16'h0038 : {8'h00, (tmp8 & 8'h38)};
+                            fin = 1'b1;
+                        end
+                    end
+                    else if (m_cycle == 3'd4) begin tmpl_n = rbyte;
+                        startm(`BUSOP_MRD, tmp16 + 16'd1, 8'h0, 4'd0); end
+                    else begin rf_n[`RFP_PC] = {rbyte, tmpl}; rf_n[`RFP_WZ] = {rbyte, tmpl}; fin = 1'b1; end
+                end
+
                 default: fin = 1'b1;
                 endcase
 
                 if (fin) begin
                     instr_count_n = instr_count + 32'd1;
                     prefix_n = `PFX_NONE;
-                    bus_op_n = `BUSOP_M1; m_addr_n = rf_n[`RFP_PC]; m_wdata_n = 8'h0;
-                    m_len_n = 4'd4; t_n = 4'd1; phi_n = 1'b0; m_cycle_n = 3'd1; decoded_n = 1'b0;
+                    // begin_next: decide bus grant / NMI / INT / HALT / next opcode
+                    if (!busreq_n) begin
+                        bus_granted_n = 1'b1;            // DMA owns the bus next cycle
+                    end else begin
+                        allow_int = ~ei_delay_n;         // ei_delay_n reflects EI this cycle
+                        ei_delay_n = 1'b0;
+                        if (nmi_pending_n) begin
+                            nmi_pending_n = 1'b0; halted_n = 1'b0;
+                            iff2_n = iff1_n; iff1_n = 1'b0;
+                            irq_seq_n = 2'd1;
+                            bus_op_n = `BUSOP_M1; m_addr_n = rf[`RFP_PC]; m_wdata_n = 8'h0;
+                            m_len_n = 4'd5; t_n = 4'd1; phi_n = 1'b0; m_cycle_n = 3'd1;
+                            decoded_n = 1'b1; suppress_decode_n = 1'b1;
+                        end else if (allow_int && !int_n && iff1_n) begin
+                            halted_n = 1'b0; iff1_n = 1'b0; iff2_n = 1'b0;
+                            irq_seq_n = 2'd2;
+                            bus_op_n = `BUSOP_INTA; m_addr_n = rf[`RFP_PC]; m_wdata_n = 8'h0;
+                            m_len_n = 4'd7; t_n = 4'd1; phi_n = 1'b0; m_cycle_n = 3'd1;
+                            decoded_n = 1'b1;
+                        end else if (halted_n) begin
+                            irq_seq_n = 2'd3;
+                            bus_op_n = `BUSOP_M1; m_addr_n = rf[`RFP_PC]; m_wdata_n = 8'h0;
+                            m_len_n = 4'd4; t_n = 4'd1; phi_n = 1'b0; m_cycle_n = 3'd1;
+                            decoded_n = 1'b1; suppress_decode_n = 1'b1;
+                        end else begin
+                            irq_seq_n = 2'd0;
+                            bus_op_n = `BUSOP_M1; m_addr_n = rf_n[`RFP_PC]; m_wdata_n = 8'h0;
+                            m_len_n = 4'd4; t_n = 4'd1; phi_n = 1'b0; m_cycle_n = 3'd1; decoded_n = 1'b0;
+                        end
+                    end
                 end
                 end  // displacement-preamble else
             end else begin
@@ -901,6 +988,8 @@ module z80_core (
             prefix <= `PFX_NONE; iff1 <= 1'b0; iff2 <= 1'b0; im <= 2'd0; halted <= 1'b0;
             tmp8 <= 8'h00; tmpl <= 8'h00; tmph <= 8'h00; tmp16 <= 16'h0000;
             cycle <= 32'd0; instr_count <= 32'd0; decoded <= 1'b0;
+            nmi_pending <= 1'b0; prev_nmi_n <= 1'b1; ei_delay <= 1'b0;
+            suppress_decode <= 1'b0; bus_granted <= 1'b0; irq_seq <= 2'd0;
         end else begin
             for (i = 0; i < 13; i = i + 1) rf[i] <= rf_n[i];
             reg_i <= reg_i_n; reg_r <= reg_r_n; ir <= ir_n;
@@ -909,6 +998,8 @@ module z80_core (
             prefix <= prefix_n; iff1 <= iff1_n; iff2 <= iff2_n; im <= im_n; halted <= halted_n;
             tmp8 <= tmp8_n; tmpl <= tmpl_n; tmph <= tmph_n; tmp16 <= tmp16_n;
             cycle <= cycle_n; instr_count <= instr_count_n; decoded <= decoded_n;
+            nmi_pending <= nmi_pending_n; prev_nmi_n <= prev_nmi_n_n; ei_delay <= ei_delay_n;
+            suppress_decode <= suppress_decode_n; bus_granted <= bus_granted_n; irq_seq <= irq_seq_n;
         end
     end
 

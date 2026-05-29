@@ -48,7 +48,7 @@ module tb_z80;
 
     always #1 clk = ~clk;
 
-    integer i, phases;
+    integer i, phases, nmiph;
     reg [1023:0] progf;
 
     task dump;
@@ -60,6 +60,7 @@ module tb_z80;
     initial begin
         if (!$value$plusargs("prog=%s", progf)) progf = "prog.hex";
         if (!$value$plusargs("phases=%d", phases)) phases = 200;
+        if (!$value$plusargs("nmi=%d", nmiph)) nmiph = -1;  // pulse nmi_n low at this phase
         for (i = 0; i < 65536; i = i + 1) mem[i] = 8'h00;
         $readmemh(progf, mem);
 
@@ -67,9 +68,11 @@ module tb_z80;
         repeat (4) @(negedge clk);
         reset_n = 1'b1;
 
+        nmi_n = (0 == nmiph) ? 1'b0 : 1'b1;
         dump;                                 // line 1 = reset state (T1.P)
         for (i = 1; i < phases; i = i + 1) begin
             @(negedge clk);
+            nmi_n = (i == nmiph) ? 1'b0 : 1'b1;
             dump;
         end
         $finish;
