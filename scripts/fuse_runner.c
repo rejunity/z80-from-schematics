@@ -124,6 +124,9 @@ int main(int argc, char** argv) {
     while (read_test_in(fi, &tin) && read_test_exp(fe, &texp)) {
         ntotal++;
         z80_sys_init(s);
+        /* FUSE convention: port read returns the HIGH byte of the address bus.
+           Pre-fill s->io so any port read at (B<<8)|C / (A<<8)|N returns B/A. */
+        for (int a = 0; a < 65536; a++) s->io[a] = (uint8_t)(a >> 8);
         s->cpu.rf[RFP_AF]=tin.af; s->cpu.rf[RFP_BC]=tin.bc;
         s->cpu.rf[RFP_DE]=tin.de; s->cpu.rf[RFP_HL]=tin.hl;
         s->cpu.rf[RFP_AF2]=tin.af2; s->cpu.rf[RFP_BC2]=tin.bc2;

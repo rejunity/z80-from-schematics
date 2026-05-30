@@ -220,7 +220,15 @@ void z80_exec_step(z80_t *c)
         break;
     case EXEC_DI: c->iff1 = c->iff2 = false; finish(c); break;
     case EXEC_EI: c->iff1 = c->iff2 = true; c->ei_delay = true; finish(c); break;
-    case EXEC_HALT: c->halted = true; finish(c); break;
+    case EXEC_HALT:
+        /* Real Z80: PC stays at the HALT byte (re-fetched each M1 until
+           interrupt). Our M1 already incremented PC; back it up so external
+           observers see PC at the HALT opcode. begin_next() re-advances PC
+           by 1 when an NMI/INT exits the halted state. */
+        c->halted = true;
+        c->rf[RFP_PC] = (uint16_t)(c->rf[RFP_PC] - 1);
+        finish(c);
+        break;
 
     case EXEC_LD_R_R: setri(c, ctl->rf_dst, getri(c, ctl->rf_src)); finish(c); break;
     case EXEC_ALU_R:  do_alu(c, getri(c, ctl->rf_src)); finish(c); break;

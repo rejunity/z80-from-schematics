@@ -95,13 +95,13 @@ static void begin_next(z80_t *c)
 
     if (c->nmi_pending) {
         c->nmi_pending = false;
-        c->halted = false;
+        if (c->halted) { c->rf[RFP_PC] = (uint16_t)(c->rf[RFP_PC] + 1); c->halted = false; }
         c->iff2 = c->iff1; c->iff1 = false;        /* IFF1->IFF2, disable */
         start_seq_m1(c, EXEC_NMI, 5, true);        /* 5T ack, opcode discarded */
         return;
     }
     if (allow_int && !c->pins.int_n && c->iff1) {
-        c->halted = false;
+        if (c->halted) { c->rf[RFP_PC] = (uint16_t)(c->rf[RFP_PC] + 1); c->halted = false; }
         c->iff1 = c->iff2 = false;
         start_seq_inta(c, 7);                      /* INTA ack (IM0/1/2) */
         return;
