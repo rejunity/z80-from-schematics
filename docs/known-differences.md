@@ -27,11 +27,14 @@ gain a test that pins the chosen behavior or escalates it.
 |---|---|---|---|
 | Our RTL (Verilog) via iverilog + Verilator (`make compare`) | 8 trace programs × 400 phases | identical phase-by-phase across all three | C, iverilog, Verilator agree on every signal |
 | superzazu C Z80 (`scripts/lockstep.c`) | 7.0 M instr (ZEXDOC3) | identical regs + memory | per-instruction lockstep |
-| chips/z80.h pure-C (`scripts/lockstep_triple.c`) | 7.0 M instr (ZEXDOC3) | identical regs (with chips's overlap-PC adjustment) | three-way triangulation: mine + superzazu + chips all agree |
+| chips/z80.h pure-C (`scripts/lockstep_triple.c`) | 7.0 M instr (ZEXDOC3) | identical regs (with chips's overlap-PC adjustment) | three-way triangulation: mine + superzazu + chips |
+| suzukiplan/z80 C++ (`scripts/lockstep_quad.c`) | 7.0 M instr (ZEXDOC3) | identical regs across all 4 emulators | four-way triangulation incl. a MAME-spirit reference |
 | FUSE / Frank D. Cringle (`make fuse`) | 1356 cases | **1354/1356 (99.85%)** | 2 SCF/CCF Q-variant (row 2) |
-| MAME Z80 differential | — | — | TODO (task 18); could be added similarly to chips |
-| Z80 Explorer (gate level + signal timing) | — | — | TODO (task 19) |
+| MAME Z80 differential (task 18) | — | resolved via suzukiplan | MAME's z80.cpp can't be cleanly extracted from the MAME device-framework; suzukiplan/z80 substituted as same-tier industry reference |
+| perfectz80 gate-level netlist (task 19, partial) | per-half-cycle pin trace on prog1 | runs cleanly at gate level | scripts/perfectz80_runner.c + scripts/compare_signal_timing.py. Signal-timing diff vs C model has an alignment offset (reset-release convention + sub-cycle pin sample point); framework is in place, alignment lookup table is the remaining work |
+| Z80 Explorer (Qt) gate-level | n/a | not used | Qt-coupled; gate-level data is the same Visual Z80 netlist as perfectz80, so headless perfectz80 covers it |
 
 Speed (no trace, same workload, this host):
 - C model:   6.56 Minstr/s on ZEXDOC3 (~14 min for full ZEXALL).
 - Verilator: 0.31 Minstr/s on ZEXDOC3 (~21× slower than C).
+- perfectz80 gate-level: ~10 k phases/s — use only for short, targeted comparisons.
