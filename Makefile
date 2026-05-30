@@ -44,7 +44,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
-.PHONY: all cmodel ctest rtl iverilog verilator traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl
+.PHONY: all cmodel ctest rtl iverilog verilator traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests
 
 all: cmodel ctest
 
@@ -167,6 +167,17 @@ zexall: zexrunner
 # ----------------------------------------------------------------------------
 test: ctest rtl compare
 	@echo "== full test suite complete =="
+
+# Run every verification gate. Heavy: ZEXDOC + ZEXALL take ~30 min combined.
+all-tests: ctest rtl compare fuse fuse_rtl
+	@echo "== running ZEXDOC (~1 min) =="
+	@$(BIN)/zexrunner tests/zex/zexdoc.com 6000000000 2>&1 | tr -d '\r' | grep -E 'OK$$|ERROR|complete|elapsed' | tail -10
+	@echo "== running ZEXALL (~16 min) =="
+	@$(BIN)/zexrunner tests/zex/zexall.com 12000000000 2>&1 | tr -d '\r' | grep -E 'OK$$|ERROR|complete|elapsed' | tail -10
+	@echo "== running 4-way lockstep on zexdoc3 (~2 s) =="
+	@c++ -std=gnu++17 -O2 -w -Iscripts -Icmodel scripts/lockstep_quad.c $(CMODEL_LIB) -o $(BIN)/lockstep_quad
+	@$(BIN)/lockstep_quad tests/zex/zexdoc3.com 20000000
+	@echo "== all-tests complete =="
 
 clean:
 	rm -rf $(BUILD)
