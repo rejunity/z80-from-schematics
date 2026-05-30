@@ -1,0 +1,12 @@
+Vendored Z80 reference emulators used for cross-oracle verification.
+Originals retain their upstream licenses.
+
+  superzazu_z80.{h,c}    MIT     Anthony Beaucamp ("superzazu") - github.com/superzazu/z80
+  chips_z80.h            zlib    Andre Weissflog ("floooh")     - github.com/floooh/chips
+  suzukiplan_z80.hpp     MIT     Yoji Suzuki ("suzukiplan")     - github.com/suzukiplan/z80
+  perfectz80/*           MIT     Michael Steil, Brian Silverman,
+                                 Barry Silverman                - github.com/mist64/perfect6502
+                                 (vendored via github.com/rofl0r/visualz80)
+
+All four are integrated only for testing; the project's own emulator
+is the work of this repository.
