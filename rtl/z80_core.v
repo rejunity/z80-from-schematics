@@ -366,7 +366,12 @@ module z80_core (
                 end
                 `EX_DI: begin iff1_n = 1'b0; iff2_n = 1'b0; fin = 1'b1; end
                 `EX_EI: begin iff1_n = 1'b1; iff2_n = 1'b1; ei_delay_n = 1'b1; fin = 1'b1; end
-                `EX_HALT: begin halted_n = 1'b1; fin = 1'b1; end
+                `EX_HALT: begin
+                    halted_n = 1'b1;
+                    // back PC up to the HALT opcode (mirrors cmodel/z80_control.c)
+                    rf_n[`RFP_PC] = rf_n[`RFP_PC] - 16'd1;
+                    fin = 1'b1;
+                end
 
                 `EX_LD_R_R: begin setri(rf_dst_w, getri(rf_src_w)); fin = 1'b1; end
                 `EX_ALU_R:  begin if (alu_op_w != `ALU_CP) setr8(3'd7, alu_res);
@@ -946,21 +951,25 @@ module z80_core (
                         allow_int = ~ei_delay_n;         // ei_delay_n reflects EI this cycle
                         ei_delay_n = 1'b0;
                         if (nmi_pending_n) begin
-                            nmi_pending_n = 1'b0; halted_n = 1'b0;
+                            nmi_pending_n = 1'b0;
+                            // exiting HALT: re-advance PC past the HALT byte
+                            if (halted_n) rf_n[`RFP_PC] = rf_n[`RFP_PC] + 16'd1;
+                            halted_n = 1'b0;
                             iff2_n = iff1_n; iff1_n = 1'b0;
                             irq_seq_n = 2'd1;
-                            bus_op_n = `BUSOP_M1; m_addr_n = rf[`RFP_PC]; m_wdata_n = 8'h0;
+                            bus_op_n = `BUSOP_M1; m_addr_n = rf_n[`RFP_PC]; m_wdata_n = 8'h0;
                             m_len_n = 4'd5; t_n = 4'd1; phi_n = 1'b0; m_cycle_n = 3'd1;
                             decoded_n = 1'b1; suppress_decode_n = 1'b1;
                         end else if (allow_int && !int_n && iff1_n) begin
+                            if (halted_n) rf_n[`RFP_PC] = rf_n[`RFP_PC] + 16'd1;
                             halted_n = 1'b0; iff1_n = 1'b0; iff2_n = 1'b0;
                             irq_seq_n = 2'd2;
-                            bus_op_n = `BUSOP_INTA; m_addr_n = rf[`RFP_PC]; m_wdata_n = 8'h0;
+                            bus_op_n = `BUSOP_INTA; m_addr_n = rf_n[`RFP_PC]; m_wdata_n = 8'h0;
                             m_len_n = 4'd7; t_n = 4'd1; phi_n = 1'b0; m_cycle_n = 3'd1;
                             decoded_n = 1'b1;
                         end else if (halted_n) begin
                             irq_seq_n = 2'd3;
-                            bus_op_n = `BUSOP_M1; m_addr_n = rf[`RFP_PC]; m_wdata_n = 8'h0;
+                            bus_op_n = `BUSOP_M1; m_addr_n = rf_n[`RFP_PC]; m_wdata_n = 8'h0;
                             m_len_n = 4'd4; t_n = 4'd1; phi_n = 1'b0; m_cycle_n = 3'd1;
                             decoded_n = 1'b1; suppress_decode_n = 1'b1;
                         end else begin
