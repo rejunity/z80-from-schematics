@@ -23,9 +23,15 @@ gain a test that pins the chosen behavior or escalates it.
 
 ## Multi-oracle harness status
 
-| Oracle | Tests | Pass | Note |
+| Oracle | Workload | Result | Note |
 |---|---|---|---|
-| superzazu C Z80 (`scripts/lockstep.c`) | 7.0 M instr | identical regs+mem | lockstep diff on ZEXDOC3 |
-| FUSE / Frank D. Cringle (`make fuse`) | 1356 | 1327 (97.86%) | 29 failures grouped under rows 2, 9, 10, 11 above |
-| MAME Z80 differential | — | — | TODO (task 18) |
-| Z80 Explorer (gate level + timing) | — | — | TODO (task 19) |
+| Our RTL (Verilog) via iverilog + Verilator (`make compare`) | 8 trace programs × 400 phases | identical phase-by-phase across all three | C, iverilog, Verilator agree on every signal |
+| superzazu C Z80 (`scripts/lockstep.c`) | 7.0 M instr (ZEXDOC3) | identical regs + memory | per-instruction lockstep |
+| chips/z80.h pure-C (`scripts/lockstep_triple.c`) | 7.0 M instr (ZEXDOC3) | identical regs (with chips's overlap-PC adjustment) | three-way triangulation: mine + superzazu + chips all agree |
+| FUSE / Frank D. Cringle (`make fuse`) | 1356 cases | **1354/1356 (99.85%)** | 2 SCF/CCF Q-variant (row 2) |
+| MAME Z80 differential | — | — | TODO (task 18); could be added similarly to chips |
+| Z80 Explorer (gate level + signal timing) | — | — | TODO (task 19) |
+
+Speed (no trace, same workload, this host):
+- C model:   6.56 Minstr/s on ZEXDOC3 (~14 min for full ZEXALL).
+- Verilator: 0.31 Minstr/s on ZEXDOC3 (~21× slower than C).

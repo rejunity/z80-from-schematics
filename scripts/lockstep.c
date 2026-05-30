@@ -12,8 +12,8 @@
 #define z80_gen_nmi sz80_gen_nmi
 #define z80_gen_int sz80_gen_int
 #define z80_debug_output sz80_dbg
-#include "/tmp/z80ref/z80.h"
-#include "/tmp/z80ref/z80.c"
+#include "refs/superzazu_z80.h"
+#include "refs/superzazu_z80.c"
 #undef z80
 #undef z80_init
 #undef z80_step
