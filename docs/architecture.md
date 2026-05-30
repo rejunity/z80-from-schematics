@@ -2,8 +2,10 @@
 
 This is the **shared design contract**. The C model (`cmodel/`) and the Verilog RTL
 (`rtl/`) implement the *same* conceptual machine, in the *same* terms, so they can be
-compared phase-by-phase. Naming is kept identical across both (see brief's coding
-standards: `pin_*`, `ctl_*`, `pla_*`, `alu_*`, `rf_*`, `bus_*`, `*_n`, `*_next`, `*_q`).
+compared phase-by-phase. Naming is kept similar across both: the conceptual signals
+described below use the prose-friendly `pin_*` / `ctl_*` style, while the actual
+identifiers in code follow each language's idiom (`pins.mreq_n` etc. in C, bare
+`mreq_n` ports + `rf_n` style next-state regs in Verilog).
 
 ## 1. Clocking & phases (single clock, DFF-only)
 
@@ -32,10 +34,12 @@ edge in RTL). Two phase-steps advance one T-state. Traces are emitted once per p
 
 ### Timing/sequencer registers
 - `phi` (1 bit): current phase.
-- `t_state` (3 bits): T-state index within the current M-cycle, 1-based (1..6).
+- `t_state` (4 bits in RTL, 8 in C — holds 1..N including WAIT extensions and the
+   5-T INTERNAL/M1 cycle, 1-based).
 - `m_cycle` (3 bits): machine-cycle index within the current instruction, 1-based.
 - `bus_op` (enum): what kind of bus cycle the current M-cycle is
-  (`M1`, `MRD`, `MWR`, `IORD`, `IOWR`, `INTA`, `INTERNAL`).
+  (`BUSOP_M1`, `BUSOP_MRD`, `BUSOP_MWR`, `BUSOP_IORD`, `BUSOP_IOWR`, `BUSOP_INTA`,
+  `BUSOP_INTERNAL`, `BUSOP_NONE`).
 - WAIT extends an M-cycle by holding `t_state` (inserting `Tw`) — see `docs/timing.md`.
 
 ## 2. External pins (`pin_*`)

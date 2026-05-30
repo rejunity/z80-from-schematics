@@ -29,3 +29,4 @@ verilated*
 
 # Z80 tooling virtualenv
 .venv-z80/
+/tests/iverilog/tb_fuse.v

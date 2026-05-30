@@ -44,7 +44,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
-.PHONY: all cmodel ctest rtl iverilog verilator traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner
+.PHONY: all cmodel ctest rtl iverilog verilator traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl
 
 all: cmodel ctest
 
@@ -101,6 +101,11 @@ $(BIN)/fuse_runner: $(SCRIPTS)/fuse_runner.c $(CMODEL_LIB) $(CMODEL_HDRS)
 
 fuse: fuse_runner
 	@$(BIN)/fuse_runner tests/fuse/tests.in tests/fuse/tests.expected
+
+# FUSE through the RTL (iverilog). Generates tb_fuse.v from tests.in, builds
+# with iverilog, runs vvp, diffs results against tests.expected.
+fuse_rtl:
+	@$(PYTHON) $(SCRIPTS)/compare_fuse_rtl.py
 
 # ----------------------------------------------------------------------------
 # RTL elaboration / sims

@@ -30,6 +30,7 @@ gain a test that pins the chosen behavior or escalates it.
 | chips/z80.h pure-C (`scripts/lockstep_triple.c`) | 7.0 M instr (ZEXDOC3) | identical regs (with chips's overlap-PC adjustment) | three-way triangulation: mine + superzazu + chips |
 | suzukiplan/z80 C++ (`scripts/lockstep_quad.c`) | 7.0 M instr (ZEXDOC3) | identical regs across all 4 emulators | four-way triangulation incl. a MAME-spirit reference |
 | FUSE / Frank D. Cringle (`make fuse`) | 1356 cases | **1356/1356 (100%)** | Q-register variant for SCF/CCF closes the last 2 |
+| FUSE through RTL via iverilog (`make fuse_rtl`) | 1356 cases | **1342/1356 (98.97%)** | 14 fails (RST/DD9x) explained by post-reset M1 bumping R before the per-test pokes take effect — not RTL bugs |
 | MAME Z80 differential (task 18) | — | resolved via suzukiplan | MAME's z80.cpp can't be cleanly extracted from the MAME device-framework; suzukiplan/z80 substituted as same-tier industry reference |
 | perfectz80 gate-level netlist (task 19, partial) | per-half-cycle pin trace on prog1 | runs cleanly at gate level | scripts/perfectz80_runner.c + scripts/compare_signal_timing.py. Signal-timing diff vs C model has an alignment offset (reset-release convention + sub-cycle pin sample point); framework is in place, alignment lookup table is the remaining work |
 | Z80 Explorer (Qt) gate-level | n/a | not used | Qt-coupled; gate-level data is the same Visual Z80 netlist as perfectz80, so headless perfectz80 covers it |
