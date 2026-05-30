@@ -50,8 +50,9 @@ static void load_hex(const char *path) {
 
 int main(int argc, char **argv) {
     Verilated::commandArgs(argc, argv);
-    if (argc < 3) { fprintf(stderr, "usage: %s <prog.hex> <phases>\n", argv[0]); return 2; }
+    if (argc < 3) { fprintf(stderr, "usage: %s <prog.hex> <phases> [nmi_phase]\n", argv[0]); return 2; }
     int phases = atoi(argv[2]);
+    int nmi_phase = (argc > 3) ? atoi(argv[3]) : -1;
     memset(mem, 0, sizeof(mem));
     load_hex(argv[1]);
 
@@ -70,6 +71,8 @@ int main(int argc, char **argv) {
     dump(top);
 
     for (int i = 1; i < phases; i++) {
+        // pulse NMI low for one phase at nmi_phase (matches iverilog/tb_z80.v)
+        top->nmi_n = (i == nmi_phase) ? 0 : 1;
         top->clk = 1; top->eval();      // posedge: latch + next state
         top->clk = 0; top->eval();      // settle new outputs
         if (write_active(top)) mem[top->addr & 0xFFFF] = top->data_out;
