@@ -26,3 +26,6 @@ verilated*
 # Generated test vectors (regeneratable)
 /tests/generated/*.vec
 /tests/traces/*.trace
+
+# Z80 tooling virtualenv
+.venv-z80/

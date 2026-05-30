@@ -40,9 +40,9 @@ Living record of the verification state. Updated at each checkpoint.
 | HALT (loop + interrupt release) | done | done | full-run parity restored |
 | WAIT insertion / BUSREQ-BUSACK | done | done | done |
 | Refresh (R inc, {I,R} on bus) | done | done | done |
-| Undocumented (X/Y, MEMPTR rules) | done (DDCB ix+d: see #7) | done | done |
-| ZEXDOC | harness wired; blocked on prefixes | — | — |
-| ZEXALL | harness wired; blocked on prefixes | — | — |
+| Undocumented (X/Y, MEMPTR rules) | done | done | done |
+| ZEXDOC | **67/67 PASS** (5.76 B instr) | — | n/a (run on C) |
+| ZEXALL | **67/67 PASS** (5.76 B instr) | — | n/a (run on C) |
 
 ### prelim.com — PASSING
 `make prelim` runs the preliminary instruction test through the C model and prints
@@ -52,17 +52,22 @@ confirms the CP/M harness (loader, BDOS shim, PC seeding) works end-to-end.
 ### ZEX harness (make zexdoc / zexall / prelim)
 The CP/M harness is in place: `tests/zex/{prelim,zexdoc,zexall}.com`, `scripts/zexrunner.c`
 (loader + BDOS shim for console functions 2/9, exit trap at 0x0000, BDOS trap at 0x0005),
-and `scripts/run_zex.py`. `make zexall` runs the C model: it prints the exerciser banner
-("Z80 instruction exerciser") and reaches the first subtest `<adc,sbc> hl,...`, then
-stalls because that test — and the exerciser's own setup/CRC routines — use ED/CB/DD/FD
-prefixed instructions, which are not yet implemented (task 8). A `ZEX_MAX` instruction
-cap prevents runaway loops until prefix coverage lands. ZEXALL is the flag-exact
-acceptance gate; it cannot pass until tasks 8 (prefixes) and 9 (interrupts) are done.
+and `scripts/run_zex.py`. Both **ZEXDOC** and **ZEXALL** run to completion against the C
+model and report **67/67 PASS** (5.76 B instructions each). Cross-checked by lockstep
+diff against the superzazu C Z80 reference (`scripts/lockstep.c`): identical registers
+and memory at every instruction across the full run.
+
+`make zexdoc` and `make zexall` rebuild zexrunner first; running the binary directly
+after editing C-side code requires `make zexrunner` (or a top-level `make cmodel`, which
+now also relinks `$(BIN)/zexrunner` and `$(BIN)/tracegen` — earlier the cmodel target
+only rebuilt the library, leaving stale runner binaries on disk).
 
 ### Test results (current)
-- **C unit tests**: 147 checks across `test_alu` (incl. exhaustive 2^17 add/sub
-  verification of the nibble ALU), `test_flags`, `test_exec` (functional + exact
-  T-state timing), `test_pla`. All pass (`make ctest`).
+- **C unit tests**: ALU (incl. exhaustive 2^17 add/sub verification of the nibble ALU),
+  flags, exec (functional + exact T-state timing), PLA, CB/ED/DDCB/DD-FD prefixes, ED
+  block ops, and the interrupt subsystem (NMI/INT IM0·1·2/HALT/EI-delay). All pass
+  (`make ctest`).
+- **ZEXDOC / ZEXALL**: 67/67 each (see ZEX-harness section above).
 - **RTL elaboration**: clean under `iverilog -g2001` (`make rtl`), no latches/initial
   in synthesizable RTL.
 - **C ↔ RTL parity**: `make compare` runs `prog1.hex` and `prog2.hex` through the C

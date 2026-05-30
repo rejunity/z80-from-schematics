@@ -57,7 +57,7 @@ dirs:
 # ----------------------------------------------------------------------------
 # C model
 # ----------------------------------------------------------------------------
-cmodel: dirs $(CMODEL_LIB)
+cmodel: dirs $(CMODEL_LIB) $(BIN)/zexrunner $(BIN)/tracegen
 
 $(BUILD)/cmodel/%.o: $(CMODEL)/%.c $(CMODEL_HDRS)
 	@mkdir -p $(dir $@)

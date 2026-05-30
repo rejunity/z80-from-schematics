@@ -128,20 +128,29 @@ giant behavioral function per opcode.
 
 | Concept | C file | Verilog file |
 |---|---|---|
-| Public types, pins, top step | `cmodel/z80.h`, `z80.c` | `rtl/z80_core.v`, `z80_pins.v` |
+| Public types, pins, top step | `cmodel/z80.h`, `z80.c` | `rtl/z80_core.v` |
 | Timing sequencer | `z80_timing.c` | `z80_timing.v` |
 | PLA decode table | `z80_pla.c` | `z80_pla.v` |
-| Control / micro-sequencer | `z80_control.c` | `z80_control.v` |
-| Register file + inc/dec | `z80_regfile.c` | `z80_regfile.v`, `z80_addr.v` |
+| Control / micro-sequencer + prefix state | `z80_control.c`, `z80_internal.h` | `rtl/z80_core.v` (inlined) |
+| Register file + IDU / WZ | `z80_regfile.c` | `rtl/z80_core.v` (inlined) |
 | ALU | `z80_alu.c` | `z80_alu.v` |
-| Flags | `z80_flags.c` | `z80_flags.v` |
-| Bus muxing | `z80_bus.c` | `z80_bus.v` |
-| Interrupts / refresh | `z80_interrupts.c` | `z80_interrupts.v`, `z80_refresh.v` |
-| Prefix state | (in control) | `z80_prefix.v` |
-| Trace | `z80_trace.c` | `z80_debug_trace.v` |
+| Flags | `z80_flags.c` | `rtl/z80_core.v` (inlined) |
+| Bus muxing | `z80_bus.c` | `rtl/z80_core.v` (inlined) |
+| Interrupts / refresh / HALT / WAIT / BUSREQ | inlined in `z80.c` top step | `rtl/z80_core.v` (inlined) |
+| Trace | `z80_trace.c` | `rtl/z80_core.v` `$display` hooks |
 
-The C model is the fast reference; the RTL implements the identical machine and is
-verified against it (see `docs/verification.md`).
+The RTL is intentionally consolidated into `z80_core.v` plus four leaf files
+(`z80_alu.v`, `z80_pla.v`, `z80_timing.v`, `z80_defs.vh`); concepts that have separate
+files in the C model (regfile, bus, prefix, interrupts, refresh, flags) are inlined into
+`z80_core.v` to keep cross-module wiring tractable in Verilog-2001. The C model is the
+fast reference; the RTL implements the identical machine and is verified against it
+phase-by-phase (`make compare`; see `docs/verification.md`).
+
+### Building
+`make cmodel` builds the static library and relinks the dependent CLI binaries
+(`build/bin/zexrunner`, `build/bin/tracegen`); editing C sources requires only that one
+target. `make ctest` rebuilds and runs unit tests; `make compare` rebuilds the iverilog
+sim and diffs C↔RTL traces; `make zexdoc` / `make zexall` run the full exercisers.
 
 ## 6. Reset strategy
 
