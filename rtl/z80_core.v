@@ -318,11 +318,24 @@ module z80_core (
                 if (irq_seq == 2'd0 && idx_w != 2'd0 && use_disp_w && m_cycle == 3'd1) begin
                     startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
                     rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1;
-                end else if (irq_seq == 2'd0 && idx_w != 2'd0 && use_disp_w && m_cycle == 3'd2) begin
+                end else if (irq_seq == 2'd0 && idx_w != 2'd0 && use_disp_w && m_cycle == 3'd2 && eff_exec != `EX_LD_M_N) begin
                     rf_n[`RFP_WZ] = rf[hlp] + {{8{rbyte[7]}}, rbyte};
                     startm(`BUSOP_INTERNAL, rf[hlp] + {{8{rbyte[7]}}, rbyte}, 8'h0, 4'd5);
                 end else begin
-                if (irq_seq == 2'd0 && idx_w != 2'd0 && use_disp_w) begin mm = m_cycle - 3'd2; memaddr = rf[`RFP_WZ]; end
+                // For LD (IX+d),n on m_cycle==2: compute WZ here (no internal cycle),
+                // then fall through to EX_LD_M_N with mm==1 (N read with +2T padding).
+                if (irq_seq == 2'd0 && idx_w != 2'd0 && use_disp_w && eff_exec == `EX_LD_M_N && m_cycle == 3'd2) begin
+                    rf_n[`RFP_WZ] = rf[hlp] + {{8{rbyte[7]}}, rbyte};
+                end
+                if (irq_seq == 2'd0 && idx_w != 2'd0 && use_disp_w) begin
+                    if (eff_exec == `EX_LD_M_N) begin
+                        mm = m_cycle - 3'd1;   /* no internal cycle */
+                        memaddr = (m_cycle == 3'd2) ? (rf[hlp] + {{8{rbyte[7]}}, rbyte}) : rf[`RFP_WZ];
+                    end else begin
+                        mm = m_cycle - 3'd2;
+                        memaddr = rf[`RFP_WZ];
+                    end
+                end
                 // ===== micro-sequencer (mirror z80_control.c) =====
                 case (eff_exec)
                 `EX_NOP, `EX_ILLEGAL: fin = 1'b1;
@@ -447,8 +460,12 @@ module z80_core (
                     else fin = 1'b1;
                 end
                 `EX_LD_M_N: begin
-                    if (mm == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
+                    if (mm == 3'd1) begin
+                        /* LD (IX+d),n folds 2T IX+d compute into N read (5T total) */
+                        startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0,
+                               (idx_w != 2'd0 && use_disp_w) ? 4'd2 : 4'd0);
+                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1;
+                    end
                     else if (mm == 3'd2) startm(`BUSOP_MWR, memaddr, rbyte, 4'd0);
                     else fin = 1'b1;
                 end

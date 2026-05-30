@@ -164,17 +164,28 @@ void z80_exec_step(z80_t *c)
     uint8_t m = c->m_cycle;
     uint8_t hlp = hl_pair(c);          /* HL / IX / IY for 16-bit "HL" ops */
 
-    /* (IX+d)/(IY+d) displacement preamble: fetch d, then a 5T address calc.
-       Shifts the memory op by two M-cycles and routes it through WZ = idx+d. */
+    /* (IX+d)/(IY+d) displacement preamble: fetch d (M2), then a 5T address calc
+       cycle (M3) for most ops; LD (IX+d),n folds the 2T IX+d compute into its
+       N immediate read instead, saving one M-cycle (spec timing 19T not 22T). */
     uint8_t  mm = m;
     uint16_t memaddr = c->rf[hlp];
     if (ctl->idx && ctl->use_disp) {
         if (m == 1) { z80_start_mcycle(c, BUSOP_MRD, z80_pc_inc(c), 0, 0); return; }
-        if (m == 2) { int8_t d = (int8_t)c->tmp8;
-                      c->rf[RFP_WZ] = (uint16_t)(c->rf[hlp] + d);
-                      z80_start_mcycle(c, BUSOP_INTERNAL, c->rf[RFP_WZ], 0, 5); return; }
-        mm = (uint8_t)(m - 2);
-        memaddr = c->rf[RFP_WZ];
+        if (m == 2) {
+            int8_t d = (int8_t)c->tmp8;
+            c->rf[RFP_WZ] = (uint16_t)(c->rf[hlp] + d);
+        }
+        if (ctl->exec == EXEC_LD_M_N) {
+            mm = (uint8_t)(m - 1);          /* no separate internal cycle */
+            memaddr = c->rf[RFP_WZ];
+        } else {
+            if (m == 2) {
+                z80_start_mcycle(c, BUSOP_INTERNAL, c->rf[RFP_WZ], 0, 5);
+                return;
+            }
+            mm = (uint8_t)(m - 2);
+            memaddr = c->rf[RFP_WZ];
+        }
     }
 
     switch (ctl->exec) {
@@ -309,7 +320,12 @@ void z80_exec_step(z80_t *c)
         else finish(c);
         break;
     case EXEC_LD_M_N:
-        if (mm == 1) z80_start_mcycle(c, BUSOP_MRD, z80_pc_inc(c), 0, 0);
+        if (mm == 1) {
+            /* For LD (IX+d),n we skipped the preamble's internal 5T cycle and
+               fold the 2T IX+d compute into this N read (becomes 5T). */
+            uint8_t extra = (ctl->idx && ctl->use_disp) ? 2u : 0u;
+            z80_start_mcycle(c, BUSOP_MRD, z80_pc_inc(c), 0, extra);
+        }
         else if (mm == 2) z80_start_mcycle(c, BUSOP_MWR, memaddr, RB, 0);
         else finish(c);
         break;
