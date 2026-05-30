@@ -10,13 +10,24 @@ Living record of the verification state. Updated at each checkpoint.
 3. **Compatibility suites** (`tests/zex/`): ZEXDOC then ZEXALL via `make zexdoc/zexall`.
 4. **Timing traces** (`tests/traces/`): shared-format bus-cycle traces for fetch, mem
    r/w, I/O r/w, refresh, INTA, WAIT, HALT, BUSREQ/BUSACK, NMI, IM0/1/2.
-5. **C ↔ RTL comparison** (`make compare`): same programs through the C model and the
-   Verilog RTL (Verilator + iverilog); traces diffed phase-by-phase and classified.
+5. **C ↔ RTL comparison** (`make compare`): same programs through the C model, iverilog
+   sim, AND Verilator sim; traces diffed phase-by-phase across all three.
+6. **FUSE / Frank D. Cringle suite** (`make fuse`): 1356 per-opcode tests with
+   register / flag / IFF / IM / HALTED / cycle-count / memory diff per case.
+7. **Multi-oracle lockstep** (`scripts/lockstep_quad.c`): our C model vs the
+   superzazu, chips/z80, and suzukiplan/z80 industry references, comparing register
+   state after every instruction on a CP/M `.com`.
+8. **Gate-level signal trace** (`scripts/perfectz80_runner.c` + `scripts/compare_signal_timing.py`):
+   our C model vs the Brian Silverman / Visual Z80 netlist port (perfectz80), pin
+   trace at every clock half-cycle.
 
 ## Acceptance gates
-- C model: all unit + generated tests pass; ZEXDOC passes; ZEXALL passes.
-- RTL: `make rtl` elaborates clean (no latches/initial in synth RTL); Verilator and
-  iverilog agree; RTL traces match the C model phase-by-phase on the trace corpus.
+- C model: all unit + generated tests pass; ZEXDOC + ZEXALL pass; FUSE pass rate ≥ 99%;
+  per-instruction state matches superzazu, chips/z80, suzukiplan/z80 on a representative
+  CP/M workload.
+- RTL: `make rtl` elaborates clean (no latches/initial in synth RTL); iverilog and
+  Verilator both produce traces identical to the C model phase-by-phase on the trace
+  corpus.
 
 ## Current status
 
@@ -67,21 +78,27 @@ only rebuilt the library, leaving stale runner binaries on disk).
   flags, exec (functional + exact T-state timing), PLA, CB/ED/DDCB/DD-FD prefixes, ED
   block ops, and the interrupt subsystem (NMI/INT IM0·1·2/HALT/EI-delay). All pass
   (`make ctest`).
-- **ZEXDOC / ZEXALL**: 67/67 each (see ZEX-harness section above).
-- **RTL elaboration**: clean under `iverilog -g2001` (`make rtl`), no latches/initial
-  in synthesizable RTL.
-- **C ↔ RTL parity**: `make compare` runs `prog1.hex` and `prog2.hex` through the C
-  model (`tracegen`) and the Verilog RTL (Icarus Verilog) and confirms the shared
-  bus-cycle traces are **identical phase-by-phase over 400 phases each**. Programs
-  cover: LD r/rp, immediate, (HL) read/write/RMW, ALU, INC/DEC, ADD HL,rp, PUSH/POP,
-  CALL/RET, JR/DJNZ, RLCA/CPL, HALT.
+- **ZEXDOC / ZEXALL**: 67/67 each.
+- **C ↔ iverilog ↔ Verilator parity** (`make compare`): all 8 trace programs (prog1,
+  prog2, prog3_cb, prog4_ed, prog5_ddfd, prog6_block, prog7_ddcb, prog8_nmi) produce
+  identical phase-by-phase traces across all three (400 phases each).
+- **FUSE / Cringle** (`make fuse`): **1354/1356 PASS (99.85%)**. Remaining two are the
+  SCF/CCF NMOS Q-variant (known-differences row #2); the previously-failing DD/FD `36`
+  cycle counts and HALT-PC convention were real bugs fixed during integration.
+- **4-oracle lockstep** (`scripts/lockstep_quad.c`): our C model + superzazu C + chips/z80
+  + suzukiplan/z80 all report identical PC/AF/BC/DE/HL/IX/IY/SP after every one of
+  **7,022,691 instructions** of ZEXDOC3 (chips's PC is overlap-adjusted).
+- **Gate-level signal trace** (`scripts/compare_signal_timing.py`): perfectz80 (pure-C
+  Visual Z80 netlist port, no Qt) vs C model on 200 phases of prog1/prog2/prog3_cb:
+  93-96% control-pin-perfect; remaining diffs are MREQ/RD deassertion at T3.P (gate)
+  vs T3.N (us), a sub-cycle convention.
+- **Speed**: C model 6.56 Minstr/s, Verilator 0.31 Minstr/s, perfectz80 ~10 kphases/s.
 
 ### Verilator
 The Verilator testbench (`tests/verilator/sim_main.cpp`, top `z80_core`) is complete
-and mirrors the iverilog/C trace exactly. On the current host it cannot be built: the
-installed Apple clang 14 cannot parse the newer macOS SDK's C++17 libc++ headers (a
-toolchain/SDK mismatch, unrelated to the RTL). `make verilator` detects this and skips
-with a message; it builds and runs on a healthy C++17 toolchain. iverilog provides the
-RTL verification in the meantime. See `docs/known-differences.md`.
+and `make verilator` now builds it cleanly under Apple clang 21 (post-Xcode-update) +
+Verilator 5.042 from Homebrew. The earlier toolchain block (Apple clang 14 / libc++17
+SDK mismatch) is resolved. `make compare` runs both iverilog and Verilator and confirms
+all three (C, iverilog, Verilator) agree on every phase.
 
 (Updated as work proceeds. See git log for per-checkpoint detail.)
