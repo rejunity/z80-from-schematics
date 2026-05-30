@@ -95,8 +95,8 @@ uint8_t z80_flags_rot_a(uint8_t op, uint8_t a_in, uint8_t oldF, uint8_t *res); /
 uint8_t z80_flags_rot(uint8_t op, uint8_t in, uint8_t oldF, uint8_t *res);     /* CB rot[y] 0..7 */
 uint8_t z80_flags_bit(uint8_t b, uint8_t src, uint8_t xy_src, uint8_t oldF);   /* xy_src supplies bits 5/3 */
 uint8_t z80_flags_daa(uint8_t a, uint8_t oldF, uint8_t *res);
-uint8_t z80_flags_scf(uint8_t a, uint8_t oldF);
-uint8_t z80_flags_ccf(uint8_t a, uint8_t oldF);
+uint8_t z80_flags_scf(uint8_t a, uint8_t oldF, uint8_t q);
+uint8_t z80_flags_ccf(uint8_t a, uint8_t oldF, uint8_t q);
 uint8_t z80_flags_cpl(uint8_t a, uint8_t oldF, uint8_t *res);
 
 /* ---------------------------------------------------------------------------
@@ -261,6 +261,13 @@ typedef struct {
 
     uint64_t     cycle;         /* global half-step (phase) counter          */
     uint64_t     instr_count;   /* completed-instruction counter             */
+
+    /* Q register: holds F if the previous instruction wrote F, else 0. Used
+       by SCF/CCF X/Y derivation on NMOS silicon. f_modified tracks whether
+       z80_setF has been called during the currently-executing instruction;
+       at the instruction boundary it commits to q. */
+    uint8_t      q;
+    bool         f_modified;
 } z80_t;
 
 typedef enum {

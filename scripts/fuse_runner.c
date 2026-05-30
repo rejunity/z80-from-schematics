@@ -137,6 +137,10 @@ int main(int argc, char** argv) {
         s->cpu.reg_i=tin.i; s->cpu.reg_r=tin.r;
         s->cpu.iff1=tin.iff1; s->cpu.iff2=tin.iff2;
         s->cpu.im=tin.im; s->cpu.halted=tin.halted;
+        /* FUSE convention: Q (the F value left by the "previous" instruction
+           used by SCF/CCF X/Y) is taken to be the initial F. */
+        s->cpu.q = (uint8_t)(tin.af & 0xFF);
+        s->cpu.f_modified = false;
         s->cpu.cycle = 0;
         for (int i=0; i<tin.nmem; i++)
             for (int j=0; j<tin.mem[i].n; j++)

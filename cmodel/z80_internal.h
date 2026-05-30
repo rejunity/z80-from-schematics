@@ -11,7 +11,7 @@
 static inline uint8_t  z80_A(const z80_t *c) { return (uint8_t)(c->rf[RFP_AF] >> 8); }
 static inline uint8_t  z80_F(const z80_t *c) { return (uint8_t)(c->rf[RFP_AF] & 0xFF); }
 static inline void z80_setA(z80_t *c, uint8_t v){ c->rf[RFP_AF] = (uint16_t)((c->rf[RFP_AF] & 0x00FF) | ((uint16_t)v << 8)); }
-static inline void z80_setF(z80_t *c, uint8_t v){ c->rf[RFP_AF] = (uint16_t)((c->rf[RFP_AF] & 0xFF00) | v); }
+static inline void z80_setF(z80_t *c, uint8_t v){ c->rf[RFP_AF] = (uint16_t)((c->rf[RFP_AF] & 0xFF00) | v); c->f_modified = true; }
 static inline uint16_t z80_HL(const z80_t *c){ return c->rf[RFP_HL]; }
 static inline uint16_t z80_PC(const z80_t *c){ return c->rf[RFP_PC]; }
 static inline uint16_t z80_SP(const z80_t *c){ return c->rf[RFP_SP]; }

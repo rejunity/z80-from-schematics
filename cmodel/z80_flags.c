@@ -155,21 +155,21 @@ uint8_t z80_flags_daa(uint8_t a, uint8_t oldF, uint8_t *res)
     return f;
 }
 
-uint8_t z80_flags_scf(uint8_t a, uint8_t oldF)
+uint8_t z80_flags_scf(uint8_t a, uint8_t oldF, uint8_t q)
 {
     uint8_t f = oldF & (Z80_SF | Z80_ZF | Z80_PF);
-    f |= Z80_CF;            /* HF=0, NF=0 */
-    f |= a & XY;            /* NMOS A-based variant (docs/known-differences.md) */
+    f |= Z80_CF;                /* HF=0, NF=0 */
+    f |= (uint8_t)((a | q) & XY); /* NMOS Q-variant: X/Y from (A | Q) */
     return f;
 }
 
-uint8_t z80_flags_ccf(uint8_t a, uint8_t oldF)
+uint8_t z80_flags_ccf(uint8_t a, uint8_t oldF, uint8_t q)
 {
     bool oldc = (oldF & Z80_CF) != 0;
     uint8_t f = oldF & (Z80_SF | Z80_ZF | Z80_PF);
-    if (oldc) f |= Z80_HF;  /* HF = old CF */
-    else      f |= Z80_CF;  /* CF = ~old CF */
-    f |= a & XY;
+    if (oldc) f |= Z80_HF;      /* HF = old CF */
+    else      f |= Z80_CF;      /* CF = ~old CF */
+    f |= (uint8_t)((a | q) & XY); /* NMOS Q-variant: X/Y from (A | Q) */
     return f;
 }
 

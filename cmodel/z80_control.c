@@ -259,8 +259,8 @@ void z80_exec_step(z80_t *c)
         z80_setA(c, res); z80_setF(c, f); finish(c); break; }
     case EXEC_CPL: { uint8_t res, f = z80_flags_cpl(z80_A(c), z80_F(c), &res);
         z80_setA(c, res); z80_setF(c, f); finish(c); break; }
-    case EXEC_SCF: z80_setF(c, z80_flags_scf(z80_A(c), z80_F(c))); finish(c); break;
-    case EXEC_CCF: z80_setF(c, z80_flags_ccf(z80_A(c), z80_F(c))); finish(c); break;
+    case EXEC_SCF: z80_setF(c, z80_flags_scf(z80_A(c), z80_F(c), c->q)); finish(c); break;
+    case EXEC_CCF: z80_setF(c, z80_flags_ccf(z80_A(c), z80_F(c), c->q)); finish(c); break;
 
     case EXEC_EX_DE_HL: { uint16_t t = c->rf[RFP_DE]; c->rf[RFP_DE] = c->rf[RFP_HL]; c->rf[RFP_HL] = t; finish(c); break; }
     case EXEC_EX_AF:    { uint16_t t = c->rf[RFP_AF]; c->rf[RFP_AF] = c->rf[RFP_AF2]; c->rf[RFP_AF2] = t; finish(c); break; }

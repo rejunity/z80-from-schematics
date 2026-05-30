@@ -7,7 +7,7 @@ bug / reference ambiguity).
 | # | Area | Class | Difference | Status |
 |---|---|---|---|---|
 | 1 | Reset register init | reference ambiguity | Real Z80 leaves SP/AF/main regs undefined at power-up; we force `SP=FFFF, AF=FFFF`, alternates/IX/IY=FFFF for deterministic C↔RTL compare. | accepted |
-| 2 | SCF/CCF X/Y flags | undocumented / flag | NMOS chips vary; some derive X/Y from `A`, some from `A|F`, some via the "Q" register. We implement the `A`-based variant. May need the Q variant to pass a given ZEXALL build. | watching |
+| 2 | SCF/CCF X/Y flags | undocumented / flag | NMOS Q-register variant implemented: X/Y derived from `(A | Q)`, where Q holds the F value left by the previous F-modifying instruction (else 0). Brings FUSE to **1356/1356 (100%)**. Mirrored to the RTL (Q committed at instruction-done by comparing rf_n[AF][7:0] vs rf[AF][7:0]). | resolved |
 | 3 | `OUT (C),0` (ED71) | undocumented | NMOS outputs `0x00`; CMOS outputs `0xFF`. We implement NMOS (`0x00`). | accepted |
 | 4 | M1 deassert phase | timing | We deassert `m1_n` at T3.P; some references show it late in T2. Externally M1 is low T1–T2, high by T3 in both. | accepted |
 | 5 | `LD A,I/R` PF interrupt race | undocumented / interrupt | The documented race that clears PF if INT arrives during the instruction is modeled only at the sequencer's INT sample point; corner timing may differ from silicon. | watching |
@@ -29,7 +29,7 @@ gain a test that pins the chosen behavior or escalates it.
 | superzazu C Z80 (`scripts/lockstep.c`) | 7.0 M instr (ZEXDOC3) | identical regs + memory | per-instruction lockstep |
 | chips/z80.h pure-C (`scripts/lockstep_triple.c`) | 7.0 M instr (ZEXDOC3) | identical regs (with chips's overlap-PC adjustment) | three-way triangulation: mine + superzazu + chips |
 | suzukiplan/z80 C++ (`scripts/lockstep_quad.c`) | 7.0 M instr (ZEXDOC3) | identical regs across all 4 emulators | four-way triangulation incl. a MAME-spirit reference |
-| FUSE / Frank D. Cringle (`make fuse`) | 1356 cases | **1354/1356 (99.85%)** | 2 SCF/CCF Q-variant (row 2) |
+| FUSE / Frank D. Cringle (`make fuse`) | 1356 cases | **1356/1356 (100%)** | Q-register variant for SCF/CCF closes the last 2 |
 | MAME Z80 differential (task 18) | — | resolved via suzukiplan | MAME's z80.cpp can't be cleanly extracted from the MAME device-framework; suzukiplan/z80 substituted as same-tier industry reference |
 | perfectz80 gate-level netlist (task 19, partial) | per-half-cycle pin trace on prog1 | runs cleanly at gate level | scripts/perfectz80_runner.c + scripts/compare_signal_timing.py. Signal-timing diff vs C model has an alignment offset (reset-release convention + sub-cycle pin sample point); framework is in place, alignment lookup table is the remaining work |
 | Z80 Explorer (Qt) gate-level | n/a | not used | Qt-coupled; gate-level data is the same Visual Z80 netlist as perfectz80, so headless perfectz80 covers it |

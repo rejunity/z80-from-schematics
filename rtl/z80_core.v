@@ -40,6 +40,8 @@ module z80_core (
     // ---- registered state ----
     reg [15:0] rf [0:12];
     reg [7:0]  reg_i, reg_r, ir;
+    reg [7:0]  reg_q;       // F left by previous F-modifying instruction, else 0
+    reg        f_modified;  // set this cycle if any instruction wrote F
     reg        phi;
     reg [3:0]  t_state;
     reg [2:0]  m_cycle;
@@ -72,6 +74,8 @@ module z80_core (
     reg        halted_n;
     reg [7:0]  tmp8_n, tmpl_n, tmph_n;
     reg [15:0] tmp16_n;
+    reg [7:0]  reg_q_n;
+    reg        f_modified_n;
     reg [31:0] cycle_n, instr_count_n;
     reg        decoded_n;
     reg        nmi_pending_n, prev_nmi_n_n, ei_delay_n, suppress_decode_n, bus_granted_n;
@@ -206,7 +210,7 @@ module z80_core (
     z80_alu u_alu (
         .mode(alu_md), .alu_op(alu_op_w), .rot_op(alu_rot),
         .bit_idx(alu_bit), .xy_src(alu_xy),
-        .a(alu_a), .b(alu_b), .oldf(F_cur),
+        .a(alu_a), .b(alu_b), .oldf(F_cur), .q(reg_q),
         .res(alu_res), .fout(alu_fout)
     );
 
@@ -268,6 +272,7 @@ module z80_core (
         bus_op_n = bus_op; m_len_n = m_len; m_addr_n = m_addr; m_wdata_n = m_wdata;
         prefix_n = prefix; iff1_n = iff1; iff2_n = iff2; im_n = im; halted_n = halted;
         tmp8_n = tmp8; tmpl_n = tmpl; tmph_n = tmph; tmp16_n = tmp16;
+        reg_q_n = reg_q; f_modified_n = f_modified;
         cycle_n = cycle + 32'd1; instr_count_n = instr_count; decoded_n = decoded;
         fin = 1'b0;
         add16 = 17'd0; f16 = 8'd0;
@@ -961,6 +966,14 @@ module z80_core (
                 if (fin) begin
                     instr_count_n = instr_count + 32'd1;
                     prefix_n = `PFX_NONE;
+                    // Commit Q: F if THIS instruction wrote F, else 0. Detect
+                    // F-modification by comparing rf_n[AF][7:0] vs rf[AF][7:0]
+                    // at instruction end.
+                    if (rf_n[`RFP_AF][7:0] != rf[`RFP_AF][7:0])
+                        reg_q_n = rf_n[`RFP_AF][7:0];
+                    else
+                        reg_q_n = 8'h0;
+                    f_modified_n = 1'b0;
                     // begin_next: decide bus grant / NMI / INT / HALT / next opcode
                     if (!busreq_n) begin
                         bus_granted_n = 1'b1;            // DMA owns the bus next cycle
@@ -1016,6 +1029,7 @@ module z80_core (
             cycle <= 32'd0; instr_count <= 32'd0; decoded <= 1'b0;
             nmi_pending <= 1'b0; prev_nmi_n <= 1'b1; ei_delay <= 1'b0;
             suppress_decode <= 1'b0; bus_granted <= 1'b0; irq_seq <= 2'd0;
+            reg_q <= 8'h00; f_modified <= 1'b0;
         end else begin
             for (i = 0; i < 13; i = i + 1) rf[i] <= rf_n[i];
             reg_i <= reg_i_n; reg_r <= reg_r_n; ir <= ir_n;
@@ -1026,6 +1040,7 @@ module z80_core (
             cycle <= cycle_n; instr_count <= instr_count_n; decoded <= decoded_n;
             nmi_pending <= nmi_pending_n; prev_nmi_n <= prev_nmi_n_n; ei_delay <= ei_delay_n;
             suppress_decode <= suppress_decode_n; bus_granted <= bus_granted_n; irq_seq <= irq_seq_n;
+            reg_q <= reg_q_n; f_modified <= f_modified_n;
         end
     end
 

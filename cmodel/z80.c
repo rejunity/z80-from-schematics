@@ -125,6 +125,10 @@ static void advance(z80_t *c)
     if (c->t_state > c->m_len) {
         z80_exec_step(c);                    /* set up next M-cycle / finish */
         if (c->instr_done) {
+            /* Commit Q: holds F if THIS instruction wrote F, else 0. SCF/CCF
+               in the NEXT instruction read it to derive X/Y from (A | Q). */
+            c->q = c->f_modified ? z80_F(c) : 0;
+            c->f_modified = false;
             c->instr_count++;
             c->prefix = PFX_NONE;
             begin_next(c);
@@ -152,6 +156,7 @@ static void reset_state(z80_t *c)
     c->bus_op = BUSOP_M1; c->m_len = 4; c->m_addr = 0x0000;
     c->decoded = false; c->instr_done = false; c->ucode = 0;
     c->phase_primed = false; c->stalled = false;
+    c->q = 0; c->f_modified = false;
 
     c->pins.m1_n = c->pins.mreq_n = c->pins.iorq_n = 1;
     c->pins.rd_n = c->pins.wr_n = c->pins.rfsh_n = 1;

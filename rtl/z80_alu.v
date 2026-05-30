@@ -14,6 +14,7 @@ module z80_alu (
     input  wire [7:0] a,         // accumulator / source
     input  wire [7:0] b,         // operand
     input  wire [7:0] oldf,
+    input  wire [7:0] q,         // Q register: F left by prev F-modifying instr (else 0)
     output reg  [7:0] res,
     output reg  [7:0] fout
 );
@@ -102,9 +103,9 @@ module z80_alu (
     wire [7:0] cpl_r = ~a;
     wire [7:0] f_cpl = (oldf & (`FB_S | `FB_Z | `FB_P | `FB_C)) | `FB_H | `FB_N
                      | (cpl_r & (`FB_Y | `FB_X));
-    wire [7:0] f_scf = (oldf & (`FB_S | `FB_Z | `FB_P)) | `FB_C | (a & (`FB_Y | `FB_X));
+    wire [7:0] f_scf = (oldf & (`FB_S | `FB_Z | `FB_P)) | `FB_C | ((a | q) & (`FB_Y | `FB_X));
     wire [7:0] f_ccf = (oldf & (`FB_S | `FB_Z | `FB_P)) | (oldf[0] ? `FB_H : 8'h0)
-                     | (oldf[0] ? 8'h0 : `FB_C) | (a & (`FB_Y | `FB_X));
+                     | (oldf[0] ? 8'h0 : `FB_C) | ((a | q) & (`FB_Y | `FB_X));
 
     // ---- CB rotates/shifts (operate on b) ----
     reg  [7:0] cbr; reg cbcf;

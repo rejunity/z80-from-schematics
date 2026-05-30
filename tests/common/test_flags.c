@@ -97,10 +97,10 @@ int main(void)
     CHECK_EQ_U(res, 0x25, "DAA 1F+H res");
 
     /* ---- SCF / CCF / CPL ---- */
-    f = z80_flags_scf(0x28, 0);  /* X/Y from A=0x28 -> both bit5 and bit3 set */
+    f = z80_flags_scf(0x28, 0, 0);  /* X/Y from (A|Q)=0x28: both bit5 and bit3 */
     CHECK_EQ_U(f & Z80_CF, Z80_CF, "SCF sets C");
-    CHECK_EQ_U(f & (Z80_YF | Z80_XF), (Z80_YF | Z80_XF), "SCF X/Y from A");
-    f = z80_flags_ccf(0x00, Z80_CF); /* C=1 -> C=0, H=old C=1 */
+    CHECK_EQ_U(f & (Z80_YF | Z80_XF), (Z80_YF | Z80_XF), "SCF X/Y from (A|Q)");
+    f = z80_flags_ccf(0x00, Z80_CF, 0); /* C=1 -> C=0, H=old C=1 */
     CHECK_EQ_U(f & Z80_CF, 0, "CCF clears C");
     CHECK_EQ_U(f & Z80_HF, Z80_HF, "CCF H = old C");
     f = z80_flags_cpl(0x0F, 0, &res);
