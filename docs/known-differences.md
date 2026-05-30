@@ -14,6 +14,18 @@ bug / reference ambiguity).
 | 6 | Verilator build on host | environment (not a core diff) | Apple clang 14 cannot compile the newer macOS SDK's C++17 libc++ headers, so Verilator cannot build here. RTL is verified via iverilog (C↔RTL traces identical). `make verilator` skips gracefully; the TB builds on a healthy C++17 toolchain. | env-blocked |
 | 7 | DDCB/FDCB `(IX+d)` zexdoc subtests | tooling (stale binary) | Earlier we reported 64/67 ZEXDOC with the 3 DDCB/FDCB `(IX+d)` subtests failing. Investigation showed this was a **stale `build/bin/zexrunner` binary** linked against an older `libz80.a` from before the DDCB completion commit. Rebuilding zexrunner against the current library passes 67/67 ZEXDOC and 67/67 ZEXALL. Cross-checked by lockstep diff against the superzazu C Z80 reference (`/tmp/z80ref/`): identical registers and memory at every instruction across the full 5.76 B-instruction run. **Root cause for the stale binary:** `make cmodel` rebuilt `libz80.a` but did not relink dependent binaries — see Makefile fix (`make cmodel` now also rebuilds `$(BIN)/zexrunner` and `$(BIN)/tracegen`). | resolved |
 | 8 | Interrupt/HALT subsystem in RTL | resolved | The RTL now mirrors the C interrupt engine (NMI, INT IM0/1/2, EI-delay, HALT loop, WAIT, BUSREQ/BUSACK). Full-run C↔RTL parity restored (no HALT truncation); NMI acceptance verified phase-by-phase via prog8_nmi. | resolved |
+| 9 | HALT PC convention | undocumented / convention | FUSE test `76` expects PC unchanged after HALT (the real Z80 re-fetches the HALT byte until interrupt). Our C model advances PC past HALT and tracks the loop separately; externally indistinguishable except in single-step tests that snapshot PC. Real fix: leave PC at the HALT opcode in the C model. | to fix |
+| 10 | `IN A,(n)` / `IN r,(C)` port-input value | reference ambiguity / harness | FUSE expects port reads to return data derived from the address bus on the IN cycle (high byte = A for `IN A,(n)`; B for `IN r,(C)`); our default `port_read` returns `0x00`. Affects FUSE: `db`, `db_1..3`, `ed40/48/50/58/60/68/70/78`, INI/IND/INIR/INDR (`eda2*`, `edaa*`, `edb2*`, `edba*`). Need a configurable port-read shim that matches the FUSE convention for the harness; the core port-read path is correct. | to fix (harness shim) |
+| 11 | `DD 36` / `FD 36` cycle count | timing | FUSE expects 19 T-states for `LD (IX+d),n`/`LD (IY+d),n`; we count 22. Real Z80 collapses the prefix M1 into the next M-cycle's R-counter increment and merges the displacement/immediate fetches; our sequencer issues an extra 3-T M-cycle. Localized to DD/FD-prefixed `LD (idx+d),n`. | to fix |
 
 Add rows as differences are discovered during verification. Each "watching" row should
 gain a test that pins the chosen behavior or escalates it.
+
+## Multi-oracle harness status
+
+| Oracle | Tests | Pass | Note |
+|---|---|---|---|
+| superzazu C Z80 (`scripts/lockstep.c`) | 7.0 M instr | identical regs+mem | lockstep diff on ZEXDOC3 |
+| FUSE / Frank D. Cringle (`make fuse`) | 1356 | 1327 (97.86%) | 29 failures grouped under rows 2, 9, 10, 11 above |
+| MAME Z80 differential | — | — | TODO (task 18) |
+| Z80 Explorer (gate level + timing) | — | — | TODO (task 19) |

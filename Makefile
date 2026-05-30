@@ -44,7 +44,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
-.PHONY: all cmodel ctest rtl iverilog verilator traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim
+.PHONY: all cmodel ctest rtl iverilog verilator traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner
 
 all: cmodel ctest
 
@@ -57,7 +57,7 @@ dirs:
 # ----------------------------------------------------------------------------
 # C model
 # ----------------------------------------------------------------------------
-cmodel: dirs $(CMODEL_LIB) $(BIN)/zexrunner $(BIN)/tracegen
+cmodel: dirs $(CMODEL_LIB) $(BIN)/zexrunner $(BIN)/tracegen $(BIN)/fuse_runner
 
 $(BUILD)/cmodel/%.o: $(CMODEL)/%.c $(CMODEL_HDRS)
 	@mkdir -p $(dir $@)
@@ -92,6 +92,15 @@ zexrunner: cmodel $(BIN)/zexrunner
 $(BIN)/zexrunner: $(SCRIPTS)/zexrunner.c $(CMODEL_LIB) $(CMODEL_HDRS)
 	@mkdir -p $(BIN)
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(CMODEL_LIB) -o $@
+
+# FUSE z80-test harness (Frank D. Cringle test corpus, 1356 cases)
+fuse_runner: cmodel $(BIN)/fuse_runner
+$(BIN)/fuse_runner: $(SCRIPTS)/fuse_runner.c $(CMODEL_LIB) $(CMODEL_HDRS)
+	@mkdir -p $(BIN)
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(CMODEL_LIB) -o $@
+
+fuse: fuse_runner
+	@$(BIN)/fuse_runner tests/fuse/tests.in tests/fuse/tests.expected
 
 # ----------------------------------------------------------------------------
 # RTL elaboration / sims
