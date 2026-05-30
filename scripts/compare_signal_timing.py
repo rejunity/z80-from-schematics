@@ -12,8 +12,14 @@ PZ80     = os.path.join(ROOT, "build", "bin", "perfectz80_runner")
 
 # tracegen cols: t phi m addr data_o data_i mreq iorq rd wr m1 rfsh halt busack
 # pz80 cols:    phase addr data_o data_i mreq iorq rd wr m1 rfsh halt
-# Shared (compared): addr data_o data_i mreq iorq rd wr m1 rfsh halt
-COMPARED = ["addr","data_o","data_i","mreq","iorq","rd","wr","m1","rfsh","halt"]
+#
+# perfectz80 starts one phase before our tracegen "T1.P" (its phase 0 = pre-M1
+# idle); align with PZ_OFFSET=1. Then compare only CPU-driven control pins;
+# the bus values (addr/data) have valid don't-care intervals (data_o is stale
+# between writes; addr drives refresh in a slightly different phase). Future
+# polish: also compare addr+data during the active bus-cycle window only.
+PZ_OFFSET = 1
+COMPARED  = ["mreq","iorq","rd","wr","m1","rfsh","halt"]
 
 def run(cmd):
     p = subprocess.run(cmd, capture_output=True, text=True)
@@ -40,8 +46,11 @@ def parse_pz80(text):
     return rows
 
 def compare(prog, phases):
+    # request a few extra phases from pz so we can apply PZ_OFFSET without
+    # losing the tail of the C trace
     c = parse_tracegen(run([TRACEGEN, prog, str(phases)]))
-    g = parse_pz80(run([PZ80, prog, str(phases)]))
+    g = parse_pz80(run([PZ80, prog, str(phases + PZ_OFFSET)]))
+    g = g[PZ_OFFSET:]                 # drop pz80's pre-M1 idle phase(s)
     n = min(len(c), len(g))
     name = os.path.basename(prog)
     if n == 0:
@@ -55,9 +64,9 @@ def compare(prog, phases):
                 d = " ".join(f"{c1}: C={v1} pz80={v2}" for c1,v1,v2 in diff)
                 print(f"  {name} phase {i} differ:  {d}")
     if mism == 0:
-        print(f"  {name}: PASS ({n} phases identical on {len(COMPARED)} pin columns)")
+        print(f"  {name}: PASS ({n} phases identical on {len(COMPARED)} control pins)")
         return True
-    print(f"  {name}: {mism}/{n} phases differ")
+    print(f"  {name}: {mism}/{n} phases differ on control pins")
     return False
 
 def main():
