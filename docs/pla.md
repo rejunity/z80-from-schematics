@@ -50,27 +50,25 @@ decode. Using them keeps the table small and faithful instead of 256+ ad-hoc row
   and the CB opcode are read as operand reads; the operation targets `(IX+d)` and,
   for `z != 6`, *also* copies the result into register r[z] (undocumented).
 
-## Control-word named lines
+## Decoded control word
 
-Conceptual field groups (see `z80.h` for exact widths/encoding):
+The PLA produces a `z80_control_t` (see `cmodel/z80.h` for the exact struct; the RTL
+inlines an equivalent bundle of named signals into `rtl/z80_core.v`). Conceptual
+field groups:
 
-| Group | Lines | Purpose |
+| Group | Field(s) (C names) | Purpose |
 |---|---|---|
-| Sequencer | `ctl_seq` | M-cycle template selector (see below) |
-| Reg read | `ctl_rf_src` | which reg/pair drives the read port → `bus_db`/ALU-B |
-| Reg write | `ctl_rf_dst`, `ctl_rf_we` | destination reg/pair + write enable |
-| ALU | `ctl_alu_op`, `ctl_alu_cin_sel` | ALU operation + carry-in source |
-| Flags | `ctl_flag_mode` | which flag-update rule fires (`docs/flags.md`) |
-| Address | `ctl_addr_src` | 16-bit source for `pin_addr` (PC/HL/SP/WZ/BC/DE/IR…) |
-| Inc/Dec | `ctl_idu_op`, `ctl_idu_sel` | +1/-1 on the address path; which pair is updated |
-| Memory/IO | `ctl_mem_rd`, `ctl_mem_wr`, `ctl_io` | bus-cycle kind for data M-cycles |
-| Bus mux | `ctl_bus_src`, `ctl_bus_dst` | what drives/consumes `bus_db` this phase |
-| WZ | `ctl_wz_op` | MEMPTR update rule for this instruction (`docs/undocumented.md`) |
-| Prefix | `ctl_prefix_set` | set/clear prefix_state (CB/ED/DD/FD/…); chained M1 |
-| Interrupt | `ctl_int_op` | EI/DI/RETI/RETN/IM/HALT effects on IFF/IM |
-| Special | `ctl_special` | undocumented/edge case hooks (DDCB copy, OUT(C),0, NEG…) |
+| Execution kind | `exec` (`EXEC_*`) | which executor handler runs (LD\_R\_R, ALU\_R, JP, etc.) |
+| Sequencer | `seq` (`SEQ_*`) | M-cycle template selector (see below) |
+| Reg select | `rf_src`, `rf_dst` | source / destination reg or pair (`y`, `z`, `rp_sel`, …) |
+| ALU | `alu_op` (`ALU_*`) | ALU operation; carry-in is selected per `flag_mode` |
+| Flags | `flag_mode` (`FM_*`) | which flag-update rule fires (`docs/flags.md`) |
+| Addressing | `addr_src`, `wz_op` | 16-bit source for the bus + MEMPTR/WZ update rule |
+| Prefix/idx | `idx`, `use_disp` | DD/FD index map (IX/IY) + need-displacement flag |
+| Condition | `cc` (`CC_*`) | condition-code selector for JR cc / JP cc / RET cc / CALL cc |
+| Special | `special` (`SPC_*`) | undocumented/edge-case hooks (DDCB copy, OUT(C),0, NEG, …) |
 
-### Sequence templates (`ctl_seq`)
+### Sequence templates (`seq`)
 
 The sequencer expands a template into M-cycles. Core templates (extended as coverage
 grows), each starting after the M1 fetch of the opcode:
