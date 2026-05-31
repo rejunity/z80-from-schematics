@@ -46,7 +46,10 @@ def emit_test(t):
     # reset, then per-test setup
     body.append(f'        // ===== test {t["name"]} =====')
     body.append('        do_reset();')
-    # clear test region in memory (don\'t need full wipe each time; we only set what tests.in sets)
+    # set test memory (the post-reset in-flight M1 will already have started
+    # fetching from mem[0] = previous test's leftover; for the 14 known-fail
+    # tests this affects state, but the cleaner per-test memory zero-fill
+    # approach caused more failures than it fixed — see git history)
     for addr, bytes_ in t["mem"]:
         for i, b in enumerate(bytes_):
             body.append(f'        mem[16\'h{(addr+i)&0xFFFF:04x}] = 8\'h{b:02x};')
