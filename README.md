@@ -25,21 +25,39 @@ docs/       research notes, architecture, PLA, timing, ALU, flags, verification
 ## Build & test
 
 ```sh
-make cmodel     # build the C model static lib
-make ctest      # build + run C unit/instruction tests
+make cmodel     # build the C model static lib + CLI binaries
+make ctest      # C unit/instruction tests
 make rtl        # elaborate the Verilog RTL (iverilog -t null)
 make iverilog   # build the Icarus Verilog simulation
 make verilator  # build the Verilator simulation
 make traces     # emit shared-format bus-cycle traces
-make compare    # diff C vs Verilog traces phase-by-phase
-make test       # full suite
+make compare    # diff C, iverilog, Verilator traces phase-by-phase
+make fuse       # FUSE / Frank D. Cringle 1356-case suite on the C model
+make fuse_rtl   # FUSE 1356-case suite driven through the RTL via iverilog
+make prelim     # prelim.com CP/M instruction test
+make zexdoc     # full ZEXDOC (~1 min on this host)
+make zexall     # full ZEXALL (~16 min on this host)
+make all-tests  # every gate above in sequence
 make clean
 ```
 
-Requires: a C99 compiler (clang/gcc), `iverilog`, `verilator`, `python3`, `make`.
+Requires: a C99 compiler, `iverilog`, `verilator`, `python3`, `make`. The Verilator
+build needs a working C++17 toolchain (Apple clang 21+ or any modern gcc/clang).
 
 ## Status
 
-Under active, incremental construction. See `docs/` for the design contract and
-`docs/verification.md` for the current verification state. The repository is kept
-buildable at every checkpoint.
+| Gate | Result |
+|------|--------|
+| C unit tests | PASS |
+| ZEXDOC | 67/67 |
+| ZEXALL | 67/67 |
+| FUSE / Cringle (C) | **1356/1356 (100%)** |
+| FUSE / Cringle (through RTL) | **1342/1356 (98.97%)** — 14 testbench-init artifacts |
+| C ↔ iverilog ↔ Verilator phase-by-phase | identical on all 8 trace programs |
+| 4-way oracle lockstep (mine + superzazu + chips/z80 + suzukiplan/z80) | identical on 7,022,691 instructions of ZEXDOC3 |
+| Gate-level signal trace vs perfectz80 (Visual Z80 netlist port) | 93–96% control-pin perfect |
+
+The repository is kept buildable at every checkpoint. See `docs/architecture.md` for
+the design contract and `docs/verification.md` for the current verification state;
+`docs/known-differences.md` records every deliberate or watching divergence from
+the reference behavior, with the four-oracle status table.
