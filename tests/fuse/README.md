@@ -1,0 +1,97 @@
+# FUSE / Frank D. Cringle Z80 instruction tests
+
+The canonical per-opcode test corpus for the Z80 — **1356 cases**, one (or two
+for the conditional variants) per opcode and per relevant flag / operand class.
+Originally written by Frank D. Cringle for his z80 instruction-set exerciser;
+shipped with the FUSE Spectrum emulator for years and treated by the Z80
+community as the de-facto opcode-level reference.
+
+We run it two ways:
+
+  - `make fuse`     — through our C model    → **1356 / 1356 (100 %)**
+  - `make fuse_rtl` — through the Verilog RTL via iverilog → **1342 / 1356
+                       (98.97 %)**  ¹
+
+¹ The 14 RTL-side fails are testbench-init artifacts (post-reset M1 overhead
+  affecting the `RST 00..38` and `DD/FD 9x` single-byte opcodes), not RTL
+  bugs — the C harness, which has no such overhead window, passes those same
+  14. See `docs/known-differences.md`.
+
+
+## Files
+
+| File              | Lines | What it is                                                                   |
+|-------------------|------:|------------------------------------------------------------------------------|
+| `tests.in`        |  9153 | one record per test case: name, registers, IFF / IM / HALTED / target tstates, initial memory |
+| `tests.expected`  | 18913 | one record per test case: per-cycle bus-event list, final registers, final state, final memory diff |
+
+Source: vendored from the jscrane / emul8 mirror of Cringle's exerciser; the
+files are widely redistributed unchanged in many Z80 emulator test corpora.
+
+
+## File format
+
+Records are blank-line-separated. Each record begins with a lowercase opcode
+name (e.g. `dd cb 01 46` flavours are named `ddcb01_46`).
+
+`tests.in` record:
+
+    name
+    af bc de hl af' bc' de' hl' ix iy sp pc memptr     (13 × 4-hex)
+    i r iff1 iff2 im halted target_tstates             (initial state line)
+    addr  byte byte byte ...  -1                       (zero or more memory blocks)
+    -1                                                  (record terminator)
+
+`tests.expected` record:
+
+    name
+    «cycle» «op» «addr» [«data»]                       (per-cycle events: MC=mem contend, MR=mem read,
+                                                        MW=mem write, PC=port contend, PR=port read,
+                                                        PW=port write)
+    af bc de hl af' bc' de' hl' ix iy sp pc memptr     (final registers)
+    i r iff1 iff2 im halted final_tstates              (final state)
+    addr  byte byte byte ...  -1                       (zero or more memory diffs)
+    (blank line)
+
+
+## Runners
+
+  - `scripts/fuse_runner.c` is the C-model harness. It compares final
+    registers, IFFs, IM, HALTED, t-state count and memory diffs against
+    `tests.expected`. It pre-fills `s->io[a] = a >> 8` so port reads return
+    the high byte of the I/O address bus (FUSE convention).
+  - `scripts/gen_fuse_tb.py` + `scripts/compare_fuse_rtl.py` build a single
+    ~70 k-line `tests/iverilog/tb_fuse.v` with every test inlined as a
+    procedural block, compile it with iverilog, run `vvp`, and diff against
+    `tests.expected` from Python.
+
+Both runners report fail / pass counts and the first dozen failures with diff
+details. Both treat the 14 known-fail tests (RST + DD/FD 9x) on the RTL side
+as expected failures so `make fuse_rtl` exits 0.
+
+
+## What FUSE catches that ZEXDOC / ZEXALL don't
+
+  - **Per-opcode T-state count** (ZEXALL only checks final state).
+  - **Per-cycle bus event sequence** in `tests.expected` (we currently
+    compare final state + cycle count; per-cycle event verification is
+    deferred — we use the sigrok KC85 captures for real-silicon T-state
+    cross-checks instead).
+  - **Memory diff per case** (ZEXALL CRCs the result; FUSE itemises the
+    affected bytes, which makes it much easier to localise a bug).
+
+
+## See also
+
+  - [../../README.md](../../README.md) — top-level project overview.
+  - [../../docs/verification.md](../../docs/verification.md) — layers 6 and
+    7 of the verification stack.
+  - [../../docs/known-differences.md](../../docs/known-differences.md) —
+    documents the 14 known RTL-side fails and the historical bugs that
+    FUSE found (SCF / CCF Q variant row 2, HALT-PC convention row 9,
+    DD / FD 36 timing row 11).
+  - [`../../scripts/fuse_runner.c`](../../scripts/fuse_runner.c) — C-side
+    runner.
+  - [`../../scripts/gen_fuse_tb.py`](../../scripts/gen_fuse_tb.py) and
+    [`../../scripts/compare_fuse_rtl.py`](../../scripts/compare_fuse_rtl.py)
+    — RTL-side runner.

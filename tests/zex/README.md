@@ -1,0 +1,90 @@
+# ZEX — Frank D. Cringle's instruction-set exercisers
+
+The classic Z80 acceptance test. Self-contained CP/M `.com` programs that
+generate billions of random register / flag / memory inputs, run a single
+Z80 instruction on each input, and accumulate a **CRC** over the resulting
+machine state. The final CRC for each subtest is compared against a known
+good value baked into the binary — if the CRC matches, the instruction
+class is verified across an exhaustive input distribution.
+
+We run all three:
+
+| Target            | Coverage                                              | Result on this core      |
+|-------------------|-------------------------------------------------------|--------------------------|
+| `make prelim`     | basic instruction sanity (loads, branches, IX / IY)   | **PASS** ("prelim tests complete") |
+| `make zexdoc`     | documented behaviour — masks X / Y flags out          | **67 / 67** (5.76 B instr, ~1 min) |
+| `make zexall`     | full behaviour — including the undocumented X / Y     | **67 / 67** (5.76 B instr, ~16 min) |
+
+Both ZEXDOC and ZEXALL are the **acceptance gate** for the C model.
+A flag-exact pass means our undocumented behaviour matches a real NMOS Z80.
+
+
+## Files
+
+| File             | Size      | What it is                                                                 |
+|------------------|----------:|----------------------------------------------------------------------------|
+| `prelim.com`     |  1280 B   | preliminary instruction sanity test, prints "prelim tests complete"        |
+| `zexdoc.com`     |  8704 B   | documented-flag exerciser (XF / YF masked); 67 subtests                    |
+| `zexall.com`     |  8704 B   | full exerciser including undocumented XF / YF; 67 subtests                 |
+| `zexdoc.z80`     | 38737 B   | M80-style assembly source for ZEXDOC (reference / regeneration only)       |
+| `zexdoc3.com`    |  8457 B   | **3-test isolated build** of `zexdoc` — only the three DDCB / FDCB `(IX+d)` subtests. Used to debug what was, briefly, a "DDCB / FDCB failing" report and turned out to be a stale-binary tooling issue. Now kept as a fast (~1 s) smoke test and as the workload for `scripts/lockstep_quad.c`. |
+
+`zexdoc.z80` was converted to pyz80 syntax by `scripts/m80_to_pyz80.py` and
+assembled to produce a known-good `zexdoc.com` that was verified byte-identical
+to the canonical binary, which is what made it a usable starting point for
+the isolated 3-test build.
+
+
+## Runner
+
+`scripts/zexrunner.c` is a minimal CP/M harness:
+
+  - load the `.com` at address `0x0100`
+  - place a `JP 0x0000` at the warm-boot vector (program exit detected by PC
+    returning to `0x0000`)
+  - place a `RET` at the BDOS entry `0x0005`; trap reads to that address and
+    service console functions 2 (putchar from `E`) and 9 (print
+    `$`-terminated string from `DE`)
+  - on exit, print the instruction count, elapsed wall time, and
+    Minstr / s rate
+
+Both the full ZEXDOC and ZEXALL CRCs are computed in-program by the
+exerciser itself; the runner only provides the BDOS-shim console.
+
+
+## Cross-check
+
+Beyond the in-program CRC self-check, we cross-validate with three
+independent C / C++ Z80 emulators in instruction-level lockstep on the
+same `zexdoc3.com` workload (`scripts/lockstep_quad.c`):
+
+    our C model + superzazu/z80 + chips/z80 + suzukiplan/z80
+    -> identical PC, AF, BC, DE, HL, IX, IY, SP after every one of
+       7,022,691 instructions executed in the run.
+
+That confirms architectural correctness independent of Cringle's CRCs.
+
+
+## Provenance
+
+  - ZEXDOC / ZEXALL: Copyright (C) 1994 Frank D. Cringle, freely
+    redistributable. The CRC reference values in the binaries were derived
+    from real Z80 hardware.
+  - `prelim.com`: same provenance.
+  - `zexdoc.z80`: vendored from the agn453 / ZEXALL mirror, lightly massaged
+    by `scripts/m80_to_pyz80.py` for re-assembly with pyz80.
+
+
+## See also
+
+  - [../../README.md](../../README.md) — top-level project overview.
+  - [../../docs/verification.md](../../docs/verification.md) — layer 3 of
+    the verification stack.
+  - [../../docs/known-differences.md](../../docs/known-differences.md) —
+    historic ZEXDOC investigation (row 7 — the "DDCB stale-binary" episode
+    that produced `zexdoc3.com`).
+  - [`../../scripts/zexrunner.c`](../../scripts/zexrunner.c) — the runner.
+  - [`../../scripts/lockstep_quad.c`](../../scripts/lockstep_quad.c) —
+    4-way instruction-level lockstep on `zexdoc3.com`.
+  - [`../../scripts/m80_to_pyz80.py`](../../scripts/m80_to_pyz80.py) — the
+    M80 → pyz80 source converter used to regenerate `zexdoc.com`.
