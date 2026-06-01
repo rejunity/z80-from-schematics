@@ -40,6 +40,24 @@ alternative BREAK key for users who'd rather keep their shell-level
 Ctrl-C habits or whose terminal has Ctrl-C bound to something else.
 To leave the emulator, press **Ctrl-\\**.
 
+#### Caveat: BREAK in Tiny BASIC during `RUN`
+
+The 1K Tiny BASIC ROM has no interrupt-driven RX path and the BASIC
+bytecode loop never checks stdin between statements — so Ctrl-C is
+only seen when Tiny BASIC's `NextCharLoop` is actively running (i.e.
+when the interpreter is waiting at a `>` prompt for the next program
+line). **A running Tiny BASIC program cannot be interrupted with
+Ctrl-C; use Ctrl-\\ to exit the runner.**
+
+NASCOM BASIC does have an interrupt-driven RX (the runner wires
+ACIA RX-ready to the Z80 /INT pin), so Ctrl-C will BREAK a running
+program at the next statement boundary.
+
+The runner itself stays responsive to Ctrl-\\ in either case: every
+phase it drains all currently-readable bytes from the kernel into a
+256-byte ring buffer, intercepting Ctrl-\\ at that boundary. So even
+mid-`RUN` of a tight Tiny BASIC loop, Ctrl-\\ exits immediately.
+
 ### About the "Memory top?" prompt
 
 On cold power-up, NASCOM BASIC's init code at `0x0148` checks the

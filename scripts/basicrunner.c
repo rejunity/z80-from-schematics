@@ -57,39 +57,61 @@ static void enable_raw_stdin(void) {
     signal(SIGTERM, on_signal);
 }
 
-/* one-byte lookahead so RDRF reports accurately even when stdin is a pipe
-   that's been closed (select() returns readable + read() returns 0 = EOF).
-   prefeed_buf holds bytes queued by --prefeed before real stdin is consulted. */
-static int stdin_pending = -1;
-static int stdin_eof     = 0;
+/* Small ring buffer (was a single-byte lookahead). A ring is needed because
+   BASIC may not drain stdin promptly - e.g. while a Tiny BASIC `RUN`
+   executes a tight loop, no IN port reads happen and our single-byte
+   lookahead would fill on the first keystroke and then block all further
+   reads from the kernel, dropping the user's Ctrl-\ on the floor. With
+   a ring we keep pulling bytes from the kernel every phase, so Ctrl-\
+   gets intercepted the moment it's typed and other bytes queue up for
+   BASIC to read when it's ready. */
+#define RING_CAP 256
+static unsigned char ring[RING_CAP];
+static int ring_head = 0;   /* read position */
+static int ring_tail = 0;   /* write position */
+static int stdin_eof = 0;
 static const char* prefeed_buf = NULL;
 static int         prefeed_idx = 0;
 
+static int ring_empty(void) { return ring_head == ring_tail; }
+static int ring_full(void)  { return ((ring_tail + 1) % RING_CAP) == ring_head; }
+static void ring_push(unsigned char b) {
+    if (ring_full()) return;
+    ring[ring_tail] = b; ring_tail = (ring_tail + 1) % RING_CAP;
+}
+static int ring_pop(void) {
+    int b = ring[ring_head]; ring_head = (ring_head + 1) % RING_CAP; return b;
+}
 static int prefeed_has(void) { return prefeed_buf && prefeed_buf[prefeed_idx] != 0; }
 static int prefeed_pop(void) { return prefeed_buf[prefeed_idx++] & 0xFF; }
 
 /* forward decl: translate_in handles the Ctrl-\ exit hotkey */
 static int translate_in(int b);
 
+/* Drain everything currently readable from the kernel into our ring,
+   intercepting Ctrl-\ at the boundary so it works even while BASIC
+   isn't polling. Called every phase. */
+static void drain_stdin(void) {
+    if (stdin_eof) return;
+    for (int i = 0; i < 32; i++) {     /* small cap so we never spin */
+        if (ring_full()) break;
+        fd_set fds; FD_ZERO(&fds); FD_SET(STDIN_FILENO, &fds);
+        struct timeval tv = { 0, 0 };
+        if (select(STDIN_FILENO + 1, &fds, NULL, NULL, &tv) <= 0) break;
+        unsigned char ch;
+        ssize_t r = read(STDIN_FILENO, &ch, 1);
+        if (r == 0) { stdin_eof = 1; break; }
+        if (r < 0) break;
+        if (ch == 0x1C) translate_in(ch);     /* exits the process */
+        if (ch == 0x00) ch = 0x03;             /* Ctrl-Space -> Ctrl-C (BREAK) */
+        ring_push(ch);
+    }
+}
+
 static int stdin_byte_available(void) {
-    if (prefeed_has())      return 1;
-    if (stdin_pending >= 0) return 1;
-    if (stdin_eof) return 0;
-    fd_set fds; FD_ZERO(&fds); FD_SET(STDIN_FILENO, &fds);
-    struct timeval tv = { 0, 0 };
-    if (select(STDIN_FILENO + 1, &fds, NULL, NULL, &tv) <= 0) return 0;
-    unsigned char ch;
-    ssize_t r = read(STDIN_FILENO, &ch, 1);
-    if (r == 0) { stdin_eof = 1; return 0; }
-    if (r < 0)  return 0;
-    /* Intercept Ctrl-\ immediately so it never sits in the lookahead and
-       never reaches BASIC. translate_in() exits the runner. */
-    if (ch == 0x1C) translate_in(ch);
-    /* Translate Ctrl-Space (NUL) -> Ctrl-C in the lookahead so the
-       byte that gets parked is the BREAK code BASIC expects. */
-    if (ch == 0x00) ch = 0x03;
-    stdin_pending = ch;
-    return 1;
+    if (prefeed_has())   return 1;
+    drain_stdin();
+    return !ring_empty();
 }
 
 /* macOS Terminal's BACKSPACE/DELETE key sends 0x7F (DEL). NASCOM BASIC's
@@ -115,14 +137,11 @@ static int translate_in(int b) {
 
 static int stdin_consume_byte(void) {
     int b;
-    if (prefeed_has())               b = prefeed_pop();
-    else if (stdin_pending >= 0)   { b = stdin_pending; stdin_pending = -1; }
-    else if (stdin_eof)              return 0;
+    if (prefeed_has())     b = prefeed_pop();
     else {
-        unsigned char ch;
-        ssize_t r = read(STDIN_FILENO, &ch, 1);
-        if (r <= 0) { stdin_eof = 1; return 0; }
-        b = ch;
+        drain_stdin();
+        if (ring_empty()) return 0;
+        b = ring_pop();
     }
     return translate_in(b);
 }
@@ -218,6 +237,10 @@ int main(int argc, char** argv) {
         z80_phase_step(&s->cpu);
         z80_t* c = &s->cpu;
         /* /INT mirrors ACIA RDRF: drop it while a stdin byte is queued */
+        /* stdin_byte_available() drains the kernel into our ring buffer
+           every phase, intercepting Ctrl-\ as it goes; this works even
+           when BASIC is in a tight loop and never reads a port itself
+           (e.g. Tiny BASIC `10 GOTO 10` after RUN). */
         c->pins.int_n = stdin_byte_available() ? 0 : 1;
         int mreq = !c->pins.mreq_n, iorq = !c->pins.iorq_n;
         int rd   = !c->pins.rd_n,    wr   = !c->pins.wr_n;
