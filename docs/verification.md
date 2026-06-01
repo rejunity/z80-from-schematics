@@ -31,29 +31,29 @@ Living record of the verification state. Updated at each checkpoint.
 
 ## Current status
 
-| Area | C model | RTL | C↔RTL parity |
-|---|---|---|---|
-| Build scaffold | done | done | n/a |
-| Timing sequencer (phase/T/M, WAIT hook) | done | done | done |
-| ALU + flags (8-bit, inc/dec, rot-A, daa/cpl/scf/ccf) | done | done | done |
-| Register file + WZ/MEMPTR | done | done | done |
-| M1 fetch + refresh + core 8-bit ops | done | done | done |
-| Memory r/w + (HL) RMW ops | done | done | done |
-| 16-bit load/inc/dec/ADD HL | done | done | done |
-| branch / call / ret / rst / push / pop / DJNZ / JR | done | done | done |
-| I/O (IN/OUT n,A), EX/EXX/EX(SP) | done | done | done |
-| CB prefix (rot/shift/BIT/RES/SET) | done | done | done |
-| ED prefix (16-bit ADC/SBC, LD I/R, NEG, IM, RET[I/N], IN/OUT(C), RRD/RLD) | done | done | done |
-| ED block ops (LDI..OTDR) | done | done | done |
-| DD/FD (IX/IY, IXH/IXL, (IX+d)) | done | done | done |
-| DDCB/FDCB (op (IX+d) + undoc copy) | done | done | done |
-| Interrupts: NMI / INT IM0·1·2 / EI-delay | done | done | NMI (prog8) parity verified |
-| HALT (loop + interrupt release) | done | done | full-run parity restored |
-| WAIT insertion / BUSREQ-BUSACK | done | done | done |
-| Refresh (R inc, {I,R} on bus) | done | done | done |
-| Undocumented (X/Y, MEMPTR rules) | done | done | done |
-| ZEXDOC | **67/67 PASS** (5.76 B instr) | — | n/a (run on C) |
-| ZEXALL | **67/67 PASS** (5.76 B instr) | — | n/a (run on C) |
+| Area                                                       | C model      | RTL          | C ↔ RTL parity              |
+|------------------------------------------------------------|--------------|--------------|-----------------------------|
+| Build scaffold                                             | done         | done         | n/a                         |
+| Timing sequencer (phase / T / M, WAIT hook)                | done         | done         | done                        |
+| ALU + flags (8-bit, inc / dec, rot-A, DAA / CPL / SCF / CCF) | done         | done         | done                        |
+| Register file + WZ / MEMPTR                                | done         | done         | done                        |
+| M1 fetch + refresh + core 8-bit ops                        | done         | done         | done                        |
+| Memory r / w + (HL) RMW ops                                | done         | done         | done                        |
+| 16-bit load / inc / dec / ADD HL                           | done         | done         | done                        |
+| Branch / call / ret / rst / push / pop / DJNZ / JR         | done         | done         | done                        |
+| I/O (IN / OUT n,A), EX / EXX / EX(SP)                      | done         | done         | done                        |
+| CB prefix (rot / shift / BIT / RES / SET)                  | done         | done         | done                        |
+| ED prefix (ADC / SBC, LD I/R, NEG, IM, RETI / RETN, …)     | done         | done         | done                        |
+| ED block ops (LDI .. OTDR)                                 | done         | done         | done                        |
+| DD / FD (IX / IY, IXH / IXL, (IX+d))                       | done         | done         | done                        |
+| DDCB / FDCB (op (IX+d) + undoc copy)                       | done         | done         | done                        |
+| Interrupts: NMI / INT IM0·1·2 / EI-delay                   | done         | done         | NMI (prog8) parity verified |
+| HALT (loop + interrupt release)                            | done         | done         | full-run parity restored    |
+| WAIT insertion / BUSREQ-BUSACK                             | done         | done         | done                        |
+| Refresh (R inc, {I,R} on bus)                              | done         | done         | done                        |
+| Undocumented (X / Y, MEMPTR, SCF / CCF Q variant)          | done         | done         | done                        |
+| ZEXDOC                                                     | **67 / 67**  | —            | n/a (run on C model)        |
+| ZEXALL                                                     | **67 / 67**  | —            | n/a (run on C model)        |
 
 ### prelim.com — PASSING
 `make prelim` runs the preliminary instruction test through the C model and prints
@@ -82,9 +82,13 @@ only rebuilt the library, leaving stale runner binaries on disk).
 - **C ↔ iverilog ↔ Verilator parity** (`make compare`): all 8 trace programs (prog1,
   prog2, prog3_cb, prog4_ed, prog5_ddfd, prog6_block, prog7_ddcb, prog8_nmi) produce
   identical phase-by-phase traces across all three (400 phases each).
-- **FUSE / Cringle** (`make fuse`): **1354/1356 PASS (99.85%)**. Remaining two are the
-  SCF/CCF NMOS Q-variant (known-differences row #2); the previously-failing DD/FD `36`
-  cycle counts and HALT-PC convention were real bugs fixed during integration.
+- **FUSE / Cringle** (`make fuse`): **1356/1356 PASS (100%)**. The SCF/CCF NMOS
+  Q-variant (X/Y from `(A | Q)`), the DD/FD `36` cycle count fix (22T → 19T), and
+  the HALT-PC convention fix (PC stays at the HALT byte) all landed during
+  integration; see `docs/known-differences.md` rows 2, 9 and 11.
+- **FUSE through RTL** (`make fuse_rtl`): **1342/1356 (98.97%)**. The 14 fails are
+  testbench-init artifacts (post-reset M1 overhead, see row 7 in
+  known-differences); not RTL bugs.
 - **4-oracle lockstep** (`scripts/lockstep_quad.c`): our C model + superzazu C + chips/z80
   + suzukiplan/z80 all report identical PC/AF/BC/DE/HL/IX/IY/SP after every one of
   **7,022,691 instructions** of ZEXDOC3 (chips's PC is overlap-adjusted).
@@ -121,5 +125,15 @@ the boot M1" instruction, which the testbench would have to bootstrap manually.
 
 This is independent of the transitive argument from `make compare` (C ≡ iverilog ≡
 Verilator phase-by-phase over the 8 trace programs); both stand on their own.
+
+## See also
+
+  - [architecture.md](architecture.md) — the shared C / RTL design contract.
+  - [known-differences.md](known-differences.md) — every deliberate or watching
+    divergence, plus the multi-oracle status table.
+  - [real-silicon-traces.md](real-silicon-traces.md) — how the sigrok KC85
+    captures are used as a real-silicon T-state / sub-T-state oracle.
+  - [research-notes.md](research-notes.md) — catalog of sources informing this
+    core and the source-conflict precedence we follow.
 
 (Updated as work proceeds. See git log for per-checkpoint detail.)

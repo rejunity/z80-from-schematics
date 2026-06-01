@@ -1,8 +1,10 @@
 # Z80 BASIC ROMs run on our emulator
 
 Two ROMs vendored here for the `basic` branch. Driven by
-`scripts/basicrunner.c` via `make basic` (NASCOM) and (TODO) `make
-tinybasic`.
+[`scripts/basicrunner.c`](../../scripts/basicrunner.c):
+
+  - `make basic`     — runs NASCOM BASIC 4.7
+  - `make tinybasic` — runs the 1 KiB Tiny BASIC
 
 ## NASCOM BASIC 4.7 (RC2014 build)
 File: `nascom_basic_4_7_rc2014.hex`  (Intel HEX, 8154 bytes of ROM 0x0000-0x1FD9)
@@ -26,13 +28,13 @@ Use CR (\r, 0x0D) as line terminator. LF alone is ignored.
 
 ### Interactive controls
 
-| Key | Byte after translation | Effect |
-|---|---|---|
-| Enter | CR (0x0D) | submit line to BASIC |
-| Backspace / Delete | 0x7F → 0x08 (BS) | erase last character |
-| **Ctrl-C** | 0x03 | BREAK / interrupt a running BASIC program |
-| **Ctrl-Space** | 0x00 → 0x03 | equivalent to Ctrl-C (BREAK), translated by the runner |
-| **Ctrl-\\** | 0x1C | **exit the runner cleanly** (restores tty, returns to shell) |
+| Key                 | Byte after translation | Effect                                                  |
+|---------------------|------------------------|---------------------------------------------------------|
+| Enter               | CR (0x0D)              | submit line to BASIC                                    |
+| Backspace / Delete  | 0x7F → 0x08 (BS)       | erase last character                                    |
+| **Ctrl-C**          | 0x03                   | BREAK / interrupt a running BASIC program               |
+| **Ctrl-Space**      | 0x00 → 0x03            | equivalent to Ctrl-C (BREAK), translated by the runner  |
+| **Ctrl-\\**         | 0x1C                   | **exit the runner cleanly** (restores tty)             |
 
 `ISIG` is off in the tty setup so Ctrl-C reaches BASIC instead of being
 captured by the kernel as SIGINT. Ctrl-Space is provided as an
@@ -91,5 +93,14 @@ I/O conventions:
   - `IN  (1)`     -> consume one stdin byte
   - `OUT (1),A`   -> write byte to stdout
 
-Both port mappings (NASCOM 0x80/0x81 and Tiny BASIC 0/1) are recognised
+Both port mappings (NASCOM 0x80 / 0x81 and Tiny BASIC 0 / 1) are recognised
 simultaneously by `basicrunner`, so the same binary handles both ROMs.
+
+
+## See also
+
+  - [scripts/basicrunner.c](../../scripts/basicrunner.c) — the runner source
+    (Intel HEX loader, ACIA emulation, ring-buffered stdin, termios setup).
+  - [../../README.md](../../README.md) — top-level project overview.
+  - [../../docs/architecture.md](../../docs/architecture.md) — the design
+    contract for the Z80 core these ROMs run on.
