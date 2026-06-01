@@ -46,26 +46,26 @@ edge in RTL). Two phase-steps advance one T-state. Traces are emitted once per p
 
 Active-low signals carry the `_n` suffix (asserted = 0).
 
-| Pin | Dir | Meaning |
-|-----|-----|---------|
-| `pin_clk` | in | 2× modeled clock |
-| `pin_reset_n` | in | async-assert/sync-deassert reset (active low) |
-| `pin_addr[15:0]` | out | address bus |
-| `pin_data_in[7:0]` | in | data bus, sampled side |
-| `pin_data_out[7:0]` | out | data bus, driven side |
-| `pin_data_drive` | out | 1 ⇒ core is driving the data bus (mux, not tri-state in RTL) |
-| `pin_m1_n` | out | opcode fetch / interrupt ack |
-| `pin_mreq_n` | out | memory request |
-| `pin_iorq_n` | out | I/O request (and, with m1, interrupt ack) |
-| `pin_rd_n` | out | read strobe |
-| `pin_wr_n` | out | write strobe |
-| `pin_rfsh_n` | out | refresh address valid |
-| `pin_halt_n` | out | CPU halted |
-| `pin_wait_n` | in | insert wait states (sampled on falling edge) |
-| `pin_int_n` | in | maskable interrupt request |
-| `pin_nmi_n` | in | non-maskable interrupt (edge) |
-| `pin_busreq_n` | in | bus request |
-| `pin_busack_n` | out | bus acknowledge |
+| Pin                  | Dir | Meaning                                                         |
+|----------------------|-----|-----------------------------------------------------------------|
+| `pin_clk`            | in  | 2× modeled clock                                                |
+| `pin_reset_n`        | in  | async-assert / sync-deassert reset (active low)                 |
+| `pin_addr[15:0]`     | out | address bus                                                     |
+| `pin_data_in[7:0]`   | in  | data bus, sampled side                                          |
+| `pin_data_out[7:0]`  | out | data bus, driven side                                           |
+| `pin_data_drive`     | out | 1 ⇒ core is driving the data bus (mux, not tri-state in RTL)    |
+| `pin_m1_n`           | out | opcode fetch / interrupt ack                                    |
+| `pin_mreq_n`         | out | memory request                                                  |
+| `pin_iorq_n`         | out | I/O request (and, with m1, interrupt ack)                       |
+| `pin_rd_n`           | out | read strobe                                                     |
+| `pin_wr_n`           | out | write strobe                                                    |
+| `pin_rfsh_n`         | out | refresh address valid                                           |
+| `pin_halt_n`         | out | CPU halted                                                      |
+| `pin_wait_n`         | in  | insert wait states (sampled on falling edge)                    |
+| `pin_int_n`          | in  | maskable interrupt request                                      |
+| `pin_nmi_n`          | in  | non-maskable interrupt (edge)                                   |
+| `pin_busreq_n`       | in  | bus request                                                     |
+| `pin_busack_n`       | out | bus acknowledge                                                 |
 
 The data bus is modeled as separate `pin_data_in`/`pin_data_out` + `pin_data_drive`
 instead of a tri-state, matching "no internal tri-states; use explicit muxes."
@@ -130,18 +130,18 @@ giant behavioral function per opcode.
 
 ## 5. Module mapping (C ↔ Verilog, identical concepts)
 
-| Concept | C file | Verilog file |
-|---|---|---|
-| Public types, pins, top step | `cmodel/z80.h`, `z80.c` | `rtl/z80_core.v` |
-| Timing sequencer | `z80_timing.c` | `z80_timing.v` |
-| PLA decode table | `z80_pla.c` | `z80_pla.v` |
-| Control / micro-sequencer + prefix state | `z80_control.c`, `z80_internal.h` | `rtl/z80_core.v` (inlined) |
-| Register file + IDU / WZ | `z80_regfile.c` | `rtl/z80_core.v` (inlined) |
-| ALU | `z80_alu.c` | `z80_alu.v` |
-| Flags | `z80_flags.c` | `rtl/z80_core.v` (inlined) |
-| Bus muxing | `z80_bus.c` | `rtl/z80_core.v` (inlined) |
-| Interrupts / refresh / HALT / WAIT / BUSREQ | inlined in `z80.c` top step | `rtl/z80_core.v` (inlined) |
-| Trace | `z80_trace.c` | `rtl/z80_core.v` `$display` hooks |
+| Concept                                       | C file                              | Verilog file                       |
+|-----------------------------------------------|-------------------------------------|------------------------------------|
+| Public types, pins, top step                  | `cmodel/z80.h`, `z80.c`             | `rtl/z80_core.v`                   |
+| Timing sequencer                              | `z80_timing.c`                      | `z80_timing.v`                     |
+| PLA decode table                              | `z80_pla.c`                         | `z80_pla.v`                        |
+| Control / micro-sequencer + prefix state      | `z80_control.c`, `z80_internal.h`   | `rtl/z80_core.v` (inlined)         |
+| Register file + IDU / WZ                      | `z80_regfile.c`                     | `rtl/z80_core.v` (inlined)         |
+| ALU                                           | `z80_alu.c`                         | `z80_alu.v`                        |
+| Flags                                         | `z80_flags.c`                       | `rtl/z80_core.v` (inlined)         |
+| Bus muxing                                    | `z80_bus.c`                         | `rtl/z80_core.v` (inlined)         |
+| Interrupts / refresh / HALT / WAIT / BUSREQ   | inlined in `z80.c` top step         | `rtl/z80_core.v` (inlined)         |
+| Trace                                         | `z80_trace.c`                       | `rtl/z80_core.v` `$display` hooks  |
 
 The RTL is intentionally consolidated into `z80_core.v` plus four leaf files
 (`z80_alu.v`, `z80_pla.v`, `z80_timing.v`, `z80_defs.vh`); concepts that have separate

@@ -56,39 +56,39 @@ The PLA produces a `z80_control_t` (see `cmodel/z80.h` for the exact struct; the
 inlines an equivalent bundle of named signals into `rtl/z80_core.v`). Conceptual
 field groups:
 
-| Group | Field(s) (C names) | Purpose |
-|---|---|---|
-| Execution kind | `exec` (`EXEC_*`) | which executor handler runs (LD\_R\_R, ALU\_R, JP, etc.) |
-| Sequencer | `seq` (`SEQ_*`) | M-cycle template selector (see below) |
-| Reg select | `rf_src`, `rf_dst` | source / destination reg or pair (`y`, `z`, `rp_sel`, …) |
-| ALU | `alu_op` (`ALU_*`) | ALU operation; carry-in is selected per `flag_mode` |
-| Flags | `flag_mode` (`FM_*`) | which flag-update rule fires (`docs/flags.md`) |
-| Addressing | `addr_src`, `wz_op` | 16-bit source for the bus + MEMPTR/WZ update rule |
-| Prefix/idx | `idx`, `use_disp` | DD/FD index map (IX/IY) + need-displacement flag |
-| Condition | `cc` (`CC_*`) | condition-code selector for JR cc / JP cc / RET cc / CALL cc |
-| Special | `special` (`SPC_*`) | undocumented/edge-case hooks (DDCB copy, OUT(C),0, NEG, …) |
+| Group           | Field(s) (C names)                  | Purpose                                                          |
+|-----------------|-------------------------------------|------------------------------------------------------------------|
+| Execution kind  | `exec` (`EXEC_*`)                   | which executor handler runs (LD_R_R, ALU_R, JP, etc.)            |
+| Sequencer       | `seq` (`SEQ_*`)                     | M-cycle template selector (see below)                            |
+| Reg select      | `rf_src`, `rf_dst`                  | source / destination reg or pair (`y`, `z`, `rp_sel`, …)         |
+| ALU             | `alu_op` (`ALU_*`)                  | ALU operation; carry-in is selected per `flag_mode`              |
+| Flags           | `flag_mode` (`FM_*`)                | which flag-update rule fires (`docs/flags.md`)                   |
+| Addressing      | `addr_src`, `wz_op`                 | 16-bit source for the bus + MEMPTR / WZ update rule              |
+| Prefix / idx    | `idx`, `use_disp`                   | DD / FD index map (IX / IY) + need-displacement flag             |
+| Condition       | `cc` (`CC_*`)                       | condition-code selector for JR cc / JP cc / RET cc / CALL cc     |
+| Special         | `special` (`SPC_*`)                 | undocumented / edge-case hooks (DDCB copy, OUT (C),0, NEG, …)    |
 
 ### Sequence templates (`seq`)
 
 The sequencer expands a template into M-cycles. Core templates (extended as coverage
 grows), each starting after the M1 fetch of the opcode:
 
-| Template | M-cycles after fetch | Example opcodes |
-|---|---|---|
-| `SEQ_NONE` | (none) | `NOP`, `LD r,r'`, `ALU A,r`, `INC r` (reg), `EX`, `DI/EI` |
-| `SEQ_IMM8` | MRD(n) | `LD r,n`, `ALU A,n` |
-| `SEQ_IMM16` | MRD(lo),MRD(hi) | `LD rp,nn`, `JP nn` (+exec) |
-| `SEQ_MRD_HL` | MRD(HL) | `LD r,(HL)`, `ALU A,(HL)` |
-| `SEQ_MWR_HL` | MWR(HL) | `LD (HL),r`, `LD (HL),n` (+IMM8) |
-| `SEQ_RMW_HL` | MRD(HL),MWR(HL) | `INC/DEC (HL)`, CB ops on `(HL)` |
-| `SEQ_JR` | MRD(d)[+5T if taken] | `JR`, `DJNZ`, `JR cc` |
-| `SEQ_CALL` | MRD(lo),MRD(hi),[MWR,MWR] | `CALL`, `CALL cc`, `RST` |
-| `SEQ_RET` | MRD(lo),MRD(hi) | `RET`, `RET cc`, `RETI/RETN` |
-| `SEQ_PUSH` | MWR(hi),MWR(lo) | `PUSH rp` |
-| `SEQ_POP` | MRD(lo),MRD(hi) | `POP rp` |
-| `SEQ_IO` | IORD/IOWR | `IN A,(n)`, `OUT (n),A`, `IN/OUT (C)` |
-| `SEQ_IDX_D` | MRD(d) then base template on `(IX+d)` | DD/FD memory forms |
-| `SEQ_BLOCK` | per block-instruction microflow | `LDIR`/`CPIR`/`INIR`/`OTIR`… |
+| Template      | M-cycles after fetch                       | Example opcodes                                              |
+|---------------|--------------------------------------------|--------------------------------------------------------------|
+| `SEQ_NONE`    | (none)                                     | `NOP`, `LD r,r'`, `ALU A,r`, `INC r` (reg), `EX`, `DI` / `EI`|
+| `SEQ_IMM8`    | MRD (n)                                    | `LD r,n`, `ALU A,n`                                          |
+| `SEQ_IMM16`   | MRD (lo), MRD (hi)                         | `LD rp,nn`, `JP nn` (+ exec)                                 |
+| `SEQ_MRD_HL`  | MRD (HL)                                   | `LD r,(HL)`, `ALU A,(HL)`                                    |
+| `SEQ_MWR_HL`  | MWR (HL)                                   | `LD (HL),r`, `LD (HL),n` (+ IMM8)                            |
+| `SEQ_RMW_HL`  | MRD (HL), MWR (HL)                         | `INC` / `DEC (HL)`, CB ops on `(HL)`                         |
+| `SEQ_JR`      | MRD (d) [+ 5T if taken]                    | `JR`, `DJNZ`, `JR cc`                                        |
+| `SEQ_CALL`    | MRD (lo), MRD (hi), [MWR, MWR]             | `CALL`, `CALL cc`, `RST`                                     |
+| `SEQ_RET`     | MRD (lo), MRD (hi)                         | `RET`, `RET cc`, `RETI` / `RETN`                             |
+| `SEQ_PUSH`    | MWR (hi), MWR (lo)                         | `PUSH rp`                                                    |
+| `SEQ_POP`     | MRD (lo), MRD (hi)                         | `POP rp`                                                     |
+| `SEQ_IO`      | IORD / IOWR                                | `IN A,(n)`, `OUT (n),A`, `IN` / `OUT (C)`                    |
+| `SEQ_IDX_D`   | MRD (d) then base template on `(IX+d)`     | DD / FD memory forms                                         |
+| `SEQ_BLOCK`   | per block-instruction microflow            | `LDIR` / `CPIR` / `INIR` / `OTIR` …                          |
 
 Internal-only extra T-states (e.g. the 5 padding T-states added to `IX+d` address
 formation, or the 7-T-state `(HL)`-RMW write delay) are represented as `INTERNAL`

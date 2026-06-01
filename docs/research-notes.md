@@ -143,14 +143,14 @@ because Zilog never specified it. ZEXALL + die analysis are the practical arbite
 
 #### Real-silicon timing observations (from `kc85-20mhz.sr`)
 
-| Measurement | Real KC85 silicon | Z80 spec | Emulator |
-|---|---|---|---|
-| CPU clock period | avg **565.8 ns** (550–800 ns range, **0 WAIT samples** in this capture) | — | n/a (host-clocked) |
-| Implied CPU frequency | **~1.767 MHz** | matches KC85/4 1.75–1.77 MHz spec | — |
-| M1n deassert offset | **64%** into T-state | end-of-T2 → T3 | T2.N → T3.P ✓ |
-| MREQn assert / deassert | **9% / 64%** into T-state | T1.N / T2.N | matches our PHI_N model ✓ |
-| RDn assert / deassert | **9% / 64%** | T1.N / T2.N | ✓ |
-| WRn assert | **9%** (only on writes) | T2.N | ✓ |
+| Measurement              | Real KC85 silicon                                                | Z80 spec                              | Emulator                          |
+|--------------------------|------------------------------------------------------------------|---------------------------------------|-----------------------------------|
+| CPU clock period         | avg **565.8 ns** (550–800 ns range, **0 WAIT samples**)          | —                                     | n/a (host-clocked)                |
+| Implied CPU frequency    | **~1.767 MHz**                                                   | matches KC85/4 1.75–1.77 MHz spec     | —                                 |
+| M1n deassert offset      | **64 %** into T-state                                            | end-of-T2 → T3                        | T2.N → T3.P ✓                     |
+| MREQn assert / deassert  | **9 % / 64 %** into T-state                                      | T1.N / T2.N                           | matches our PHI_N model ✓         |
+| RDn  assert / deassert   | **9 % / 64 %**                                                   | T1.N / T2.N                           | ✓                                 |
+| WRn  assert              | **9 %** (only on writes)                                         | T2.N                                  | ✓                                 |
 
 **Where each row comes from:**
 
