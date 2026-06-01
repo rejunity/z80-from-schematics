@@ -72,6 +72,39 @@ Conditional opcodes show consistent timing both branches: `JR C,d`
 not-taken (7T). Both within spec; our emulator's reset-state selections
 (12T for 0x38 taken, 7T for 0x20 not-taken) are also spec-compliant.
 
+### `make silicon_async` — 20 MHz async capture: CPU clock + sub-T-state pin timing
+
+`scripts/sigrok_async_timing.py` parses the asynchronous 20 MHz capture
+(`tests/sigrok/kc85-20mhz.sr`, ~11 samples per T-state). Two things
+fall out that the synchronous capture can't show:
+
+  1. **Real CPU clock period**: the CLK pin is captured directly, so we
+     can measure period between consecutive falling edges. On the kc85
+     dump:
+     - avg period **565.8 ns** ⇒ **CPU ≈ 1.767 MHz** (canonical KC85/4
+       spec is 1.75–1.77 MHz — match);
+     - min/max 550–800 ns shows a small jitter window (one captured
+       T-state ran 250 ns longer than nominal: looks like a WAIT
+       insertion);
+     - 441 falling edges + 442 rising edges over the 5000 samples.
+  2. **Sub-T-state pin transition offsets** (period ≈ 11 samples):
+     - **M1n**: most transitions at offset 7 (64% into the T-state)
+       — that's the T2→T3 boundary where M1 deasserts after the M1
+       fetch finishes. ✓ spec.
+     - **MREQn**: at offsets 1 and 7 (9% and 64%) — asserts shortly
+       after T1's falling edge, deasserts at T2→T3. ✓ spec.
+     - **RDn**: same offsets 1 and 7. ✓ spec.
+     - **WRn**: offset 1 (9%) — asserts shortly after the falling
+       edge of T2 for a write. ✓ spec.
+
+After measuring the clock period, the script **re-samples at every
+CLK falling edge** to produce a synthetic cpuclk-sync trace (exactly
+what the LWLA's external-clock mode does in hardware) and runs the
+same per-opcode T-state cross-check on it: 9 classified opcodes in
+the captured window, 8 OK, **0 emulator mismatches**, 1 system-WAIT
+artifact (`0b` again, same as the sync capture). The two captures
+are independent capture modes of the same hardware and they agree.
+
 ### Other usable cross-checks
 
   - **Pin-pattern shape**: real silicon shows M1 asserted for 2 cycles,

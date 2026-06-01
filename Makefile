@@ -44,7 +44,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
-.PHONY: all cmodel ctest rtl iverilog verilator traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles
+.PHONY: all cmodel ctest rtl iverilog verilator traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async
 
 all: cmodel ctest
 
@@ -113,6 +113,13 @@ fuse_rtl:
 # conditionals).
 silicon_cycles: tracegen
 	@$(PYTHON) $(SCRIPTS)/sigrok_opcode_cycles.py tests/sigrok/kc85-cpuclk.sr
+
+# Same idea on the asynchronous 20 MHz capture: derives the real CPU clock
+# period and pin sub-T-state transition offsets, then re-samples at CLK
+# falling edges to cross-check the per-opcode T-state counts independently
+# from the cpuclk synchronous capture.
+silicon_async: tracegen
+	@$(PYTHON) $(SCRIPTS)/sigrok_async_timing.py tests/sigrok/kc85-20mhz.sr --silicon-check
 
 # ----------------------------------------------------------------------------
 # RTL elaboration / sims
