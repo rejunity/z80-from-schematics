@@ -169,13 +169,20 @@ int main(int argc, char** argv) {
             s->mem[c->pins.addr] = c->pins.data_out;
         if (io_wr_active  && !prev_io_wr) {
             uint8_t port = c->pins.addr & 0xFF;
-            if (port == ACIA_DATA) { putchar((int)c->pins.data_out); fflush(stdout); }
+            /* Data ports: NASCOM ACIA at 0x81, Tiny BASIC at 0x01 */
+            if (port == ACIA_DATA || port == 0x01) { putchar((int)c->pins.data_out); fflush(stdout); }
+            /* Status writes (control reg): port 0x80 NASCOM, port 0x00 Tiny BASIC - both ignored */
         }
         if (io_rd_active && !prev_io_rd) {
             uint8_t port = c->pins.addr & 0xFF;
+            int has = stdin_byte_available();
             if (port == ACIA_STATUS) {
-                latched_data_byte = STATUS_TDRE | (stdin_byte_available() ? STATUS_RDRF : 0);
-            } else if (port == ACIA_DATA) {
+                /* NASCOM BASIC: bit 0 = RDRF, bit 1 = TDRE */
+                latched_data_byte = STATUS_TDRE | (has ? STATUS_RDRF : 0);
+            } else if (port == 0x00) {
+                /* Tiny BASIC: any non-zero = ready (it does ANA A; JZ) */
+                latched_data_byte = has ? 0xFF : 0x00;
+            } else if (port == ACIA_DATA || port == 0x01) {
                 latched_data_byte = stdin_consume_byte();
                 if (getenv("BASIC_DEBUG"))
                     fprintf(stderr, "[in:%02x@PC=%04x]", latched_data_byte, c->rf[RFP_PC]);

@@ -23,3 +23,19 @@ I/O conventions the runner emulates:
     interrupt-driven, so this is required, not just an optimisation.
 
 Use CR (\r, 0x0D) as line terminator. LF alone is ignored.
+
+## 1K Tiny BASIC (Will Stevens' basic1K)
+File: `tinybasic_1k.hex`  (Intel HEX, **1018 bytes** of ROM 0x0000-0x03F9 — fits in 1 K)
+Source: https://github.com/WillStevens/basic1K  (1K Tiny BASIC for 8080/Z80,
+runs unmodified on Z80 too).
+Provenance: Will Stevens, 2023, MIT license. About 60% the size of Palo
+Alto Tiny BASIC; supports GOSUB/RETURN, FOR/NEXT, RND, ABS, USR, and a
+single array `@`.
+
+I/O conventions:
+  - `IN  (0)`     -> 0x00 if no byte queued, 0xFF if a byte is ready
+  - `IN  (1)`     -> consume one stdin byte
+  - `OUT (1),A`   -> write byte to stdout
+
+Both port mappings (NASCOM 0x80/0x81 and Tiny BASIC 0/1) are recognised
+simultaneously by `basicrunner`, so the same binary handles both ROMs.

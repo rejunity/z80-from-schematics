@@ -44,7 +44,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
-.PHONY: all cmodel ctest rtl iverilog verilator traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async
+.PHONY: all cmodel ctest rtl iverilog verilator traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async basicrunner basic tinybasic
 
 all: cmodel ctest
 
@@ -120,6 +120,21 @@ silicon_cycles: tracegen
 # from the cpuclk synchronous capture.
 silicon_async: tracegen
 	@$(PYTHON) $(SCRIPTS)/sigrok_async_timing.py tests/sigrok/kc85-20mhz.sr --silicon-check
+
+# Z80 BASIC runner: emulates a 68B50 ACIA at ports 0x80/0x81 (NASCOM
+# convention) and ports 0/1 (1K Tiny BASIC convention) wired to host
+# stdin/stdout. Asserts /INT while a stdin byte is queued for ROMs
+# whose RX path is interrupt-driven.
+basicrunner: cmodel $(BIN)/basicrunner
+$(BIN)/basicrunner: $(SCRIPTS)/basicrunner.c $(CMODEL_LIB) $(CMODEL_HDRS)
+	@mkdir -p $(BIN)
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(CMODEL_LIB) -o $@
+
+basic: basicrunner
+	@$(BIN)/basicrunner tests/basic/nascom_basic_4_7_rc2014.hex
+
+tinybasic: basicrunner
+	@$(BIN)/basicrunner tests/basic/tinybasic_1k.hex
 
 # ----------------------------------------------------------------------------
 # RTL elaboration / sims
