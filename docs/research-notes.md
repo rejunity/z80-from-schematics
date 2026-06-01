@@ -120,6 +120,66 @@ because Zilog never specified it. ZEXALL + die analysis are the practical arbite
 - **Type:** Reverse-engineering + tests.
 - **Use here:** `docs/flags.md`; flagged as a known variant in `docs/known-differences.md`.
 
+### sigrok-dumps Z80 logic-analyzer captures (real KC85/4 silicon)
+- **URL:** https://github.com/sigrokproject/sigrok-dumps/tree/master/z80/kc85
+- **Contributes:** Two SysClk LWLA-1034 logic-analyzer captures of a running
+  KC85/4 (Z80-based, VEB Mikroelektronik Mühlhausen) executing its RAM-resident
+  OS main loop. Files: `kc85-20mhz.sr` (asynchronous, 20 MHz sampling),
+  `kc85-cpuclk.sr` (synchronous on the Z80 CLK falling edge). Both capture 34
+  channels: CLK, /M1, /INT, /WAIT, /IORQ, /MREQ, /RD, /WR, A0..A15, D0..D7.
+- **Trust:** Very high — actual silicon, captured with a calibrated commercial
+  logic analyzer by the open-source sigrok community. Rule (3).
+- **Type:** Real-hardware capture, replayable offline.
+- **Use here:**
+  - `scripts/sigrok_z80_decode.py` parses the .sr zip (metadata + 5-byte packed
+    samples) into per-cycle CSV + a reconstructed memory image.
+  - `scripts/sigrok_opcode_cycles.py` (`make silicon_cycles`) measures
+    per-opcode T-state count between consecutive M1 fetches on the synchronous
+    capture and cross-checks against the spec table and our emulator.
+  - `scripts/sigrok_async_timing.py` (`make silicon_async`) measures CPU
+    clock period and sub-T-state pin transition offsets from the 20 MHz
+    asynchronous capture, then re-samples it at CLK falling edges to
+    independently validate the per-opcode T-state counts. Results below.
+
+#### Real-silicon timing observations (from `kc85-20mhz.sr`)
+
+| Measurement | Real KC85 silicon | Z80 spec | Emulator |
+|---|---|---|---|
+| CPU clock period | avg **565.8 ns** (550–800 ns range) | — | n/a (host-clocked) |
+| Implied CPU frequency | **~1.767 MHz** | matches KC85/4 1.75–1.77 MHz spec | — |
+| M1n deassert offset | **64%** into T-state | end-of-T2 → T3 | T2.N → T3.P ✓ |
+| MREQn assert / deassert | **9% / 64%** into T-state | T1.N / T2.N | matches our PHI_N model ✓ |
+| RDn assert / deassert | **9% / 64%** | T1.N / T2.N | ✓ |
+| WRn assert | **9%** (only on writes) | T2.N | ✓ |
+
+**Where each row comes from:**
+
+- *CPU clock period*: `scripts/sigrok_async_timing.py` parses the `.sr` zip
+  (sigrok metadata says 20 MHz sample rate ⇒ 50 ns/sample), decodes each
+  5-byte sample into the 34 named channels, and walks the **CLK** channel
+  looking for 1→0 transitions. The script reports
+  `mean(clk_falls[i+1] - clk_falls[i]) * 50 ns` over **441 falling edges**
+  observed in the 5000-sample capture (`min 11 samples, max 16 samples`
+  between edges, average **11.3 samples** ⇒ 565.8 ns period).
+- *Implied CPU frequency*: `1 / period`. The KC85/4 spec lists the system
+  clock as 1.75–1.77 MHz (PCK = 1.7734 MHz on most boards); we land within
+  that tolerance. The 250 ns variance in period (550–800 ns range) is
+  consistent with a /WAIT-state insertion observed by the synchronous
+  capture on opcode `0x0b` (DEC BC, 6 T-states real vs 4 T-states spec).
+- *Pin transition offsets*: for every CLK falling-edge window
+  `[clk_falls[i], clk_falls[i+1]]` the script scans the M1/MREQ/RD/WR
+  channels for 1↔0 transitions and bins their sample-offset inside the
+  window. Across the 441 windows the modes line up at offsets 1 and 7 of
+  the 11-sample period — 9 % and 64 % of a T-state — matching the
+  Z80-spec sub-T-state landmark times (MREQ/RD assert just after T1.N;
+  M1, MREQ, RD all deassert at end of T2 / start of T3 during an opcode
+  fetch). WRn is observed only at offset 1 (writes assert WR at T2.N).
+- *"Emulator" column*: cross-references our two-phase `PHI_P / PHI_N`
+  model in `cmodel/z80.c` and `cmodel/z80_timing.c`. PHI_N is the
+  T-state's second half (Z80 clock falling-edge region), where MREQ/RD
+  assert during an MRD cycle and M1 deasserts at the T2.N edge — exactly
+  the offsets the LWLA observed.
+
 ---
 
 ## Emulator / core references (behavioral, secondary)

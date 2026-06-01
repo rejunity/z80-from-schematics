@@ -75,35 +75,69 @@ not-taken (7T). Both within spec; our emulator's reset-state selections
 ### `make silicon_async` — 20 MHz async capture: CPU clock + sub-T-state pin timing
 
 `scripts/sigrok_async_timing.py` parses the asynchronous 20 MHz capture
-(`tests/sigrok/kc85-20mhz.sr`, ~11 samples per T-state). Two things
-fall out that the synchronous capture can't show:
+(`tests/sigrok/kc85-20mhz.sr`, ~11 samples per T-state). It extracts
+three things the cpuclk-synchronous capture can't show, and
+independently re-validates the per-opcode T-state count.
 
-  1. **Real CPU clock period**: the CLK pin is captured directly, so we
-     can measure period between consecutive falling edges. On the kc85
-     dump:
-     - avg period **565.8 ns** ⇒ **CPU ≈ 1.767 MHz** (canonical KC85/4
-       spec is 1.75–1.77 MHz — match);
-     - min/max 550–800 ns shows a small jitter window (one captured
-       T-state ran 250 ns longer than nominal: looks like a WAIT
-       insertion);
-     - 441 falling edges + 442 rising edges over the 5000 samples.
-  2. **Sub-T-state pin transition offsets** (period ≈ 11 samples):
-     - **M1n**: most transitions at offset 7 (64% into the T-state)
-       — that's the T2→T3 boundary where M1 deasserts after the M1
-       fetch finishes. ✓ spec.
-     - **MREQn**: at offsets 1 and 7 (9% and 64%) — asserts shortly
-       after T1's falling edge, deasserts at T2→T3. ✓ spec.
-     - **RDn**: same offsets 1 and 7. ✓ spec.
-     - **WRn**: offset 1 (9%) — asserts shortly after the falling
-       edge of T2 for a write. ✓ spec.
+#### Headline timing measurements
 
-After measuring the clock period, the script **re-samples at every
-CLK falling edge** to produce a synthetic cpuclk-sync trace (exactly
-what the LWLA's external-clock mode does in hardware) and runs the
-same per-opcode T-state cross-check on it: 9 classified opcodes in
-the captured window, 8 OK, **0 emulator mismatches**, 1 system-WAIT
-artifact (`0b` again, same as the sync capture). The two captures
-are independent capture modes of the same hardware and they agree.
+| Measurement | Real KC85 silicon | Z80 spec | Emulator |
+|---|---|---|---|
+| CPU clock period | avg **565.8 ns** (550–800 ns range) | — | n/a (host-clocked) |
+| Implied CPU frequency | **~1.767 MHz** | matches KC85/4 1.75–1.77 MHz spec | — |
+| M1n deassert offset | **64%** into T-state | end-of-T2 → T3 | T2.N → T3.P ✓ |
+| MREQn assert / deassert | **9% / 64%** into T-state | T1.N / T2.N | matches our PHI_N model ✓ |
+| RDn assert / deassert | **9% / 64%** | T1.N / T2.N | ✓ |
+| WRn assert | **9%** (only on writes) | T2.N | ✓ |
+
+#### Where each measurement comes from
+
+- **CPU clock period.** The .sr file's metadata declares a 20 MHz sample
+  rate (= 50 ns / sample). The script decodes every 5-byte (40-bit)
+  sample into the 34 named channels, then walks the **CLK** channel
+  collecting 1→0 transitions. Over the 5000-sample capture we observe
+  **441 falling edges** with an inter-edge delta of **11.3 samples
+  on average** (min 11, max 16), so the period is
+  `11.3 × 50 ns = 565.8 ns`. Frequency = 1 / period.
+- **Implied CPU frequency.** Published KC85/4 spec is PCK = 1.7734 MHz
+  (sometimes quoted as 1.75 MHz nominal); our measured 1.767 MHz lands
+  inside that tolerance. The 250 ns excursion at the max end of the
+  period range is consistent with the system /WAIT insertion already
+  observed by the synchronous capture on opcode `0x0b` (DEC BC, 6 T
+  on real silicon vs 4 T per spec).
+- **Pin transition offsets.** For each consecutive pair of CLK falling
+  edges `[clk_falls[i], clk_falls[i+1]]` (one T-state window) the
+  script scans the **M1n**, **MREQn**, **RDn**, **WRn** channels for
+  1↔0 transitions and bins their sample-offset within the window. The
+  modes across all 441 windows fall at sample offsets 1 and 7 of the
+  11-sample period (≈ 9 % and 64 % of a T-state). MREQn / RDn assert
+  shortly after T1's falling edge (offset 1) and all three control
+  pins (M1n, MREQn, RDn) deassert near the T2/T3 boundary (offset 7).
+  WRn is observed at offset 1 only (it asserts on T2.N for memory
+  writes; there's no symmetric deassert in the captured window
+  because the capture caught very few WRs).
+- **"Emulator" column.** Cross-references our two-phase `PHI_P` /
+  `PHI_N` model (`cmodel/z80.c`, `cmodel/z80_timing.c`). PHI_N is the
+  T-state's second half — the Z80 clock falling-edge region — where
+  MREQ/RD assert during an MRD cycle and M1 deasserts at the T2.N
+  edge. Those are exactly the offsets the LWLA observed on real silicon.
+
+#### Async-derived per-opcode T-state cross-check
+
+After measuring the clock period, the script **re-samples the
+async stream at every CLK falling edge** — exactly what the LWLA's
+external-clock mode does in hardware — to produce a synthetic
+cpuclk-sync trace. It then runs the same per-opcode T-state check
+on it:
+
+```
+Classified: 9 opcodes, 8 OK, 0 emulator mismatches,
+            1 silicon out-of-spec (the same 0x0b WAIT artifact)
+```
+
+Two independent capture modes (true async + on-CLK-edge sync) of the
+same KC85, two independent extractors (`sigrok_opcode_cycles.py`,
+`sigrok_async_timing.py`), and they reach the same verdict.
 
 ### Other usable cross-checks
 
