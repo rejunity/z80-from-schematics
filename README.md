@@ -24,7 +24,7 @@ docs/       research notes, architecture, PLA, timing, ALU, flags, verification
 
 ## Run BASIC!
 
-The very first thing you can do on this faithul Z80 reconstruction is to run classical BASIC.
+The very first thing you can do on this faithul Z80 reconstruction is to run classical BASIC:
 
 ```sh
 make basic
@@ -54,6 +54,15 @@ HELLO Z80
 Break in 10
 Ok
 ```
+
+And now you are ready to run BASIC in RTL (Verilog):
+
+```sh
+make basic_rtl
+```
+
+Requires: `verilator`.
+
 
 ## Build & test
 
