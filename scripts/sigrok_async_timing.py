@@ -47,31 +47,49 @@ def main():
     print(f"# {os.path.basename(args.sr)}: {n_samples} samples @ {sr_hz/1e6:.1f} MHz "
           f"= {sample_ns:.1f} ns / sample", file=sys.stderr)
 
-    # First pass: find CLK transitions, measure period.
+    # First pass: find CLK transitions + WAIT activity, measure period.
+    # The Z80 inserts a Tw if /WAIT is sampled active at the falling edge of
+    # T2 of an MREQ/IORQ-active M-cycle - that EXTENDS one period of the
+    # clock signal. To get a clean intrinsic clock period we exclude any
+    # T-state window that overlaps a /WAIT-asserted sample.
     decoded = [decode_sample(raw[i*unit:(i+1)*unit]) for i in range(n_samples)]
-    clk_falls = []
-    clk_rises = []
+    clk_falls, clk_rises, wait_samples = [], [], 0
     prev_clk = decoded[0]["CLK"]
     for i in range(1, n_samples):
         c = decoded[i]["CLK"]
         if prev_clk == 1 and c == 0: clk_falls.append(i)
         elif prev_clk == 0 and c == 1: clk_rises.append(i)
         prev_clk = c
+        if decoded[i]["WAITn"] == 0: wait_samples += 1
 
     if len(clk_falls) < 2:
         print("not enough CLK falling edges in capture", file=sys.stderr); return 2
 
-    # period = average sample-delta between consecutive falling edges
-    deltas = [clk_falls[i+1] - clk_falls[i] for i in range(len(clk_falls) - 1)]
-    avg = sum(deltas) / len(deltas)
-    period_ns = avg * sample_ns
-    cpu_mhz = 1000.0 / period_ns
-    minv, maxv = min(deltas), max(deltas)
-    print(f"# CLK falling edges: {len(clk_falls)}  rising edges: {len(clk_rises)}",
-          file=sys.stderr)
-    print(f"# CPU clock period: avg {period_ns:.1f} ns "
-          f"(min {minv*sample_ns:.0f} max {maxv*sample_ns:.0f}) "
-          f"-> CPU freq ~{cpu_mhz:.3f} MHz", file=sys.stderr)
+    # Partition windows into "clean" and "WAIT-touched" buckets and report both
+    deltas_all = []
+    deltas_clean = []
+    for k in range(len(clk_falls) - 1):
+        i0, i1 = clk_falls[k], clk_falls[k+1]
+        delta = i1 - i0
+        deltas_all.append(delta)
+        had_wait = any(decoded[j]["WAITn"] == 0 for j in range(i0, i1))
+        if not had_wait: deltas_clean.append(delta)
+
+    def stats(label, ds):
+        if not ds:
+            print(f"# {label}: (no samples)", file=sys.stderr); return
+        avg = sum(ds) / len(ds)
+        period_ns = avg * sample_ns
+        cpu_mhz = 1000.0 / period_ns
+        print(f"# {label}: n={len(ds)}  avg {period_ns:.1f} ns "
+              f"(min {min(ds)*sample_ns:.0f} max {max(ds)*sample_ns:.0f}) "
+              f"-> ~{cpu_mhz:.3f} MHz", file=sys.stderr)
+        return avg
+
+    print(f"# CLK falling edges: {len(clk_falls)}  rising edges: {len(clk_rises)}  "
+          f"WAITn=0 samples: {wait_samples}", file=sys.stderr)
+    stats("CPU clock period (all windows)         ", deltas_all)
+    avg = stats("CPU clock period (WAIT-free windows)   ", deltas_clean) or sum(deltas_all)/len(deltas_all)
 
     # Second pass: re-sample at every CLK falling edge to mimic the cpuclk
     # synchronous capture. This is exactly what the SysClk LWLA's external-

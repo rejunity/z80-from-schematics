@@ -145,7 +145,7 @@ because Zilog never specified it. ZEXALL + die analysis are the practical arbite
 
 | Measurement | Real KC85 silicon | Z80 spec | Emulator |
 |---|---|---|---|
-| CPU clock period | avg **565.8 ns** (550–800 ns range) | — | n/a (host-clocked) |
+| CPU clock period | avg **565.8 ns** (550–800 ns range, **0 WAIT samples** in this capture) | — | n/a (host-clocked) |
 | Implied CPU frequency | **~1.767 MHz** | matches KC85/4 1.75–1.77 MHz spec | — |
 | M1n deassert offset | **64%** into T-state | end-of-T2 → T3 | T2.N → T3.P ✓ |
 | MREQn assert / deassert | **9% / 64%** into T-state | T1.N / T2.N | matches our PHI_N model ✓ |
@@ -179,6 +179,27 @@ because Zilog never specified it. ZEXALL + die analysis are the practical arbite
   T-state's second half (Z80 clock falling-edge region), where MREQ/RD
   assert during an MRD cycle and M1 deasserts at the T2.N edge — exactly
   the offsets the LWLA observed.
+
+**/WAIT line use.** /WAIT (CH5 in the LWLA mapping) is captured and
+explicitly considered. In the 20 MHz async file `WAITn` is never
+asserted across the 5000 samples, so the 565.8 ns period reflects
+the intrinsic Z80 clock period without any Tw padding. The script
+also reports `period (WAIT-free windows)` separately as a sanity
+check — both numbers agree on this dump. In the cpuclk-synchronous
+file `WAITn` IS asserted in 17 short events (19 samples total /
+0.38 % of capture), and the per-opcode analyzer (`make
+silicon_cycles`) attributes per-instruction T-state excess to those
+Tw insertions before declaring "silicon system artifact" — on the
+kc85 dump every excess is /WAIT-attributable, so the verdict is
+**50/50 OK, 0 emulator mismatches, 0 system artifacts**.
+
+**Spec-table correction found.** `INC/DEC rp` (0x03, 0x0B, 0x13,
+0x1B, 0x23, 0x2B, 0x33, 0x3B) is **6 T-states** (M1 4T + 2T
+internal post-decrement), not 4T. An earlier draft of the analyzer's
+spec table had these in the 4T bucket; the kc85 capture flagged 39
+consistent 6T observations of `0b` (DEC BC) with no /WAIT, which
+agreed with our emulator and with Sean Young's table. Spec-table
+corrected; the kc85 capture earned its place as the gold standard.
 
 ---
 

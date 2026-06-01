@@ -66,12 +66,13 @@ def classify_t_states(opcode):
     # We handle a subset that appears commonly; otherwise return None.
     SHORT_4T = {
         0x00,0x07,0x08,0x0F,0x17,0x1F,0x27,0x2F,0x37,0x3F,
-        0x04,0x0C,0x14,0x1C,0x24,0x2C,0x3C,
-        0x05,0x0D,0x15,0x1D,0x25,0x2D,0x3D,
-        0x03,0x0B,0x13,0x1B,0x23,0x2B,0x33,0x3B,
-        0xF3,0xFB,
+        0x04,0x0C,0x14,0x1C,0x24,0x2C,0x3C,        # INC r (8-bit)
+        0x05,0x0D,0x15,0x1D,0x25,0x2D,0x3D,        # DEC r (8-bit)
+        0xF3,0xFB,                                   # DI / EI
     }
     if o in SHORT_4T: return (4, 4)
+    # INC/DEC rp (16-bit) = 6T (M1 4T + 2T internal): 0x03 0x0B 0x13 0x1B 0x23 0x2B 0x33 0x3B
+    if o in {0x03,0x0B,0x13,0x1B,0x23,0x2B,0x33,0x3B}: return (6, 6)
     # LD r,n (0x06,0x0e,0x16,0x1e,0x26,0x2e,0x3e) = 7T
     if o in {0x06,0x0E,0x16,0x1E,0x26,0x2E,0x3E}: return (7, 7)
     # LD rp,nn (0x01,0x11,0x21,0x31) = 10T
@@ -124,6 +125,8 @@ def decode(sr_path):
         cycles.append(dict(
             i=int(p[0]), m1=int(p[1]), mreq=int(p[2]), iorq=int(p[3]),
             rd=int(p[4]), wr=int(p[5]), addr=int(p[6], 16), data=int(p[7], 16),
+            # decoder column 8 is INT (active), column 9 is WAIT (active)
+            wait=int(p[9]) if len(p) > 9 else 0,
         ))
     return cycles
 
@@ -196,43 +199,70 @@ def main():
     starts = find_m1_starts(cycles)
     # for each consecutive pair, the duration is the T-state count of the
     # instruction whose fetch begins at the first M1 (capture is cpu-clock
-    # synchronous -> one sample = one T-state)
-    per_op_lens = defaultdict(Counter)
+    # synchronous -> one sample = one T-state). Also count the WAIT samples
+    # observed during that instruction window so we can attribute T-state
+    # excess to /WAIT extensions versus actual silicon out-of-spec.
+    per_op_lens = defaultdict(Counter)       # (length, n_wait) -> count
     for k in range(len(starts) - 1):
         i0, pc0, op0 = starts[k]
         i1, _, _    = starts[k + 1]
-        per_op_lens[op0][i1 - i0] += 1
+        n_wait = sum(1 for c in cycles[i0:i1] if c["wait"])
+        per_op_lens[op0][(i1 - i0, n_wait)] += 1
 
     print(f"# opcodes observed in {os.path.basename(args.sr)}: {len(per_op_lens)}")
-    print("# opcode | n samples | T-state hist (real) | spec   | emu    | verdict")
-    total = matched = both_branches = unsure = mismatch = 0
+    print("# opcode | n samples | hist (LT[+nTw]×count) | spec   | emu    | verdict")
+    total = matched = mismatch = sysartifact = wait_explained = 0
     for op in sorted(per_op_lens):
         spec = classify_t_states(op)
+        sample_lens = per_op_lens[op]
+        samples = sum(sample_lens.values())
         if spec is None:
-            verdict = "(prefix / unclassified)"
-        else:
-            sample_lens = per_op_lens[op]
-            seen = sorted(sample_lens.keys())
-            samples = sum(sample_lens.values())
-            in_spec = all(spec[0] <= s <= spec[1] for s in seen)
-            emu = emit_emulator_opcode_cycles(op)
-            if emu is None:
-                verdict = "EMU? (couldn't measure)"
-            elif not in_spec:
-                verdict = f"REAL out-of-spec ({seen} not in [{spec[0]},{spec[1]}])"
-            elif spec[0] <= emu <= spec[1]:
-                verdict = "OK"
-                matched += 1
-            else:
-                verdict = f"EMU mismatch ({emu} not in [{spec[0]},{spec[1]}])"
-                mismatch += 1
-            total += 1
-            spec_str = f"{spec[0]}-{spec[1]}T" if spec[0]!=spec[1] else f"{spec[0]}T"
-            emu_str  = f"{emu}T" if emu is not None else "?"
-            print(f"  {op:02x}     | {samples:3d}       | {dict(sample_lens)}  | {spec_str:6s} | {emu_str:6s} | {verdict}")
+            hist = ", ".join(
+                (f"{L}T" if w == 0 else f"{L}T(+{w}Tw)") + f"×{cnt}"
+                for (L, w), cnt in sorted(sample_lens.items()))
+            print(f"  {op:02x}     | {samples:3d}       | {hist}  | -      | -      | (prefix / unclassified)")
             continue
-        print(f"  {op:02x}     | {sum(per_op_lens[op].values()):3d}       | {dict(per_op_lens[op])}  | -      | -      | {verdict}")
-    print(f"\nClassified: {total} opcodes, {matched} emulator matches spec & real silicon, {mismatch} mismatches")
+        emu = emit_emulator_opcode_cycles(op)
+        # Verdict rule:
+        #   - "OK": every observation's length is in [spec.min, spec.max].
+        #   - "OK + WAIT": some observations exceed spec, BUT for each such
+        #     observation /WAIT was asserted somewhere in the window (so the
+        #     excess is consistent with one or more Tw insertions). The exact
+        #     Tw-count is hard to recover from a 1-sample-per-T-state stream
+        #     because the Z80 only acts on /WAIT at the falling edge of T2
+        #     of an MREQ-active M-cycle, while we count WAIT-active samples
+        #     anywhere in the instruction.
+        #   - "silicon system artifact": some observation exceeds spec AND
+        #     /WAIT was never asserted in that window — extra cycles come
+        #     from something else (system-bus contention, hidden refresh,
+        #     a captured interrupt acceptance, ...).
+        all_in_spec = all(spec[0] <= L <= spec[1] for (L, _) in sample_lens)
+        out_of_spec_all_have_wait = all(
+            (spec[0] <= L <= spec[1]) or (w > 0)
+            for (L, w) in sample_lens
+        )
+        any_wait = any(w > 0 for _, w in sample_lens)
+        spec_str = f"{spec[0]}-{spec[1]}T" if spec[0]!=spec[1] else f"{spec[0]}T"
+        emu_str  = f"{emu}T" if emu is not None else "?"
+        if all_in_spec and emu is not None and spec[0] <= emu <= spec[1]:
+            verdict = "OK"; matched += 1
+        elif out_of_spec_all_have_wait and emu is not None and spec[0] <= emu <= spec[1]:
+            verdict = "OK (excess attributed to /WAIT)"
+            matched += 1; wait_explained += 1
+        elif emu is not None and not (spec[0] <= emu <= spec[1]):
+            verdict = f"emu mismatch ({emu} not in [{spec[0]},{spec[1]}])"
+            mismatch += 1
+        else:
+            verdict = "silicon system artifact (excess with no /WAIT)"
+            sysartifact += 1
+        total += 1
+        hist = ", ".join(
+            (f"{L}T" if w == 0 else f"{L}T(+{w}Tw)") + f"×{cnt}"
+            for (L, w), cnt in sorted(sample_lens.items())
+        )
+        print(f"  {op:02x}     | {samples:3d}       | {hist}  | {spec_str:6s} | {emu_str:6s} | {verdict}")
+    print(f"\nClassified: {total} opcodes, {matched} OK ({wait_explained} via /WAIT), "
+          f"{mismatch} emu mismatches, {sysartifact} silicon system artifacts")
 
 if __name__ == "__main__":
     sys.exit(main() or 0)

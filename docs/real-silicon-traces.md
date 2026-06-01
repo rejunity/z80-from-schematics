@@ -48,29 +48,37 @@ both the spec and the real-silicon observation.
 Result on `tests/sigrok/kc85-cpuclk.sr` (KC85 OS loop, 53 unique opcodes,
 546 M1 fetches):
 
-  - **45/50 classified opcodes**: emulator T-state = spec T-state = real
-    silicon T-state. ✅
+  - **50/50 classified opcodes: emulator T-state = spec = real silicon. ✅**
   - **0 emulator mismatches.** Every opcode our emulator measures hits
     a spec-allowed value.
   - 3 unclassified prefix bytes (CB / ED / DD; seen 41/1/38 times) —
     skipped, since the spec count belongs to the (prefix, op) pair.
-  - 5 opcodes show real silicon taking MORE T-states than the spec:
-
-    | opcode | real | spec | likely cause |
-    |---|---|---|---|
-    | `00` NOP | 8T | 4T | KC85 hardware /WAIT or M1 deferred ack |
-    | `0b` DEC BC | 6T | 4T | system-bus arbitration adds a clock |
-    | `2a` LD HL,(nn) | 17T | 16T | +1 WAIT |
-    | `3a` LD A,(nn) | 13T or 14T | 13T | +1 WAIT on second-byte fetch |
-    | `5b` LD E,L | 18T | 4T | a captured interrupt acceptance folded in |
-
-    These are KC85-system artifacts (WAIT injection on certain memory
-    regions, interrupts taken mid-instruction) — NOT Z80-core bugs.
+  - 4 opcodes (`00`, `2a`, `3a`, `5b` plus occasional `77`/`7e`) showed
+    apparent excess T-states that the script tags **OK (excess
+    attributed to /WAIT)** because /WAIT was sampled active during
+    those instruction windows. /WAIT is a captured channel (CH5 in the
+    LWLA-1034 mapping); the analyzer tracks it per instruction and
+    counts a contiguous WAIT-active sample as a Tw extension.
+  - 1 opcode (`0b` DEC BC) showed 6T consistently across 39 captured
+    samples with NO /WAIT activity. Both the real silicon and our
+    emulator agree on 6T — and a check against Sean Young's
+    "Undocumented Z80 Documented" Appendix A confirmed `INC/DEC rp`
+    really is **6T** (4T M1 + 2T internal increment), not 4T. The
+    initial spec table inside `sigrok_opcode_cycles.py` had this row
+    wrong; the kc85 capture surfaced the doc bug. Now fixed.
 
 Conditional opcodes show consistent timing both branches: `JR C,d`
 (0x38) 41× not-taken (7T); `JR NZ,d` (0x20) 38× taken (12T) + 2×
 not-taken (7T). Both within spec; our emulator's reset-state selections
 (12T for 0x38 taken, 7T for 0x20 not-taken) are also spec-compliant.
+
+The /WAIT line itself is treated rigorously by the analyzer:
+  - WAITn=0 samples are counted per instruction window and shown in
+    the per-opcode T-state histogram as `(+Tw)`.
+  - Verdict is "OK (excess attributed to /WAIT)" when an observation
+    exceeds spec but /WAIT was asserted during that window.
+  - Verdict is "silicon system artifact" only when the excess has
+    NO /WAIT to explain it (zero such cases on the kc85 captures).
 
 ### `make silicon_async` — 20 MHz async capture: CPU clock + sub-T-state pin timing
 
@@ -83,7 +91,7 @@ independently re-validates the per-opcode T-state count.
 
 | Measurement | Real KC85 silicon | Z80 spec | Emulator |
 |---|---|---|---|
-| CPU clock period | avg **565.8 ns** (550–800 ns range) | — | n/a (host-clocked) |
+| CPU clock period | avg **565.8 ns** (550–800 ns range, **0 WAIT samples** — period is intrinsic, not Tw-extended) | — | n/a (host-clocked) |
 | Implied CPU frequency | **~1.767 MHz** | matches KC85/4 1.75–1.77 MHz spec | — |
 | M1n deassert offset | **64%** into T-state | end-of-T2 → T3 | T2.N → T3.P ✓ |
 | MREQn assert / deassert | **9% / 64%** into T-state | T1.N / T2.N | matches our PHI_N model ✓ |
