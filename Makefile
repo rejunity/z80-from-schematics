@@ -44,7 +44,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
-.PHONY: all cmodel ctest rtl iverilog verilator traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async basicrunner basic tinybasic
+.PHONY: all cmodel ctest rtl iverilog verilator traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async basicrunner basic tinybasic basic_rtl tinybasic_rtl
 
 all: cmodel ctest
 
@@ -135,6 +135,22 @@ basic: basicrunner
 
 tinybasic: basicrunner
 	@$(BIN)/basicrunner tests/basic/tinybasic_1k.hex
+
+# Same BASIC ROMs driven through the synthesisable Verilog RTL via Verilator
+# (~21x slower than the C model, otherwise bit-identical behaviour).
+$(BIN)/sim_basic: tests/verilator/basic_main.cpp $(RTL_SRCS)
+	@mkdir -p $(BIN) $(BUILD)/obj_basic_rtl
+	$(VERILATOR) --cc --exe --build -j 0 -Wno-fatal -Wno-WIDTH -Wno-CASEINCOMPLETE \
+	  -O3 -CFLAGS "-O3" \
+	  --Mdir $(BUILD)/obj_basic_rtl --top-module z80_core \
+	  -I$(RTL) $(RTL_SRCS) tests/verilator/basic_main.cpp -o sim_basic
+	@cp $(BUILD)/obj_basic_rtl/sim_basic $@
+
+basic_rtl: $(BIN)/sim_basic
+	@$(BIN)/sim_basic --autostart tests/basic/nascom_basic_4_7_rc2014.hex
+
+tinybasic_rtl: $(BIN)/sim_basic
+	@$(BIN)/sim_basic tests/basic/tinybasic_1k.hex
 
 # ----------------------------------------------------------------------------
 # RTL elaboration / sims

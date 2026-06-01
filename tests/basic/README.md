@@ -14,7 +14,16 @@ License: MS Basic 4.7 has been freely redistributable since the late
 1970s "give-it-away" letter; the RC2014 wrapper code is Phillip Stevens'
 non-commercial license.
 
-I/O conventions the runner emulates:
+Two runners are provided that share these ROMs:
+  * `make basic` / `make tinybasic` — drive the ROM through the C model
+    (`scripts/basicrunner.c`). Fast (~6.5 Minstr/s).
+  * `make basic_rtl` / `make tinybasic_rtl` — drive the ROM through the
+    synthesisable Verilog core via Verilator (`tests/verilator/basic_main.cpp`).
+    ~21× slower than the C model but architecturally identical;
+    proves the same BASIC programs run on the real RTL the same way.
+    NASCOM BASIC boots in a couple of seconds and then runs interactively.
+
+I/O conventions both runners emulate:
   - `IN  (0x80)` -> ACIA status: bit 0 RDRF, bit 1 TDRE (always 1 here)
   - `IN  (0x81)` -> read pending stdin byte (consumed)
   - `OUT (0x81),A` -> write byte to stdout
