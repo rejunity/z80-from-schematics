@@ -38,7 +38,17 @@ static void enable_raw_stdin(void) {
         termios_saved = 1;
         atexit(restore_termios);
         struct termios t = saved_termios;
-        t.c_lflag &= (tcflag_t)~(ICANON | ECHO);
+        /* Full "raw" input: in particular, clear ICRNL so the Mac Terminal's
+           Enter key (which sends CR / 0x0D) reaches us as 0x0D and not as
+           the kernel-translated LF / 0x0A that NASCOM BASIC's CR-detector
+           would silently drop. IXON off so Ctrl-S / Ctrl-Q don't freeze the
+           terminal. IEXTEN off so Ctrl-V doesn't quote the next character.
+           ISIG off so Ctrl-C / Ctrl-Z aren't intercepted by the kernel - we
+           still trap them via signal() to restore termios on exit. */
+        t.c_iflag &= (tcflag_t)~(BRKINT | ICRNL | INLCR | IGNCR | INPCK
+                                  | ISTRIP | IXON | IXOFF | PARMRK);
+        t.c_lflag &= (tcflag_t)~(ICANON | ECHO | ECHONL | IEXTEN | ISIG);
+        t.c_cflag |= CS8;
         t.c_cc[VMIN]  = 0;
         t.c_cc[VTIME] = 0;
         tcsetattr(STDIN_FILENO, TCSANOW, &t);
@@ -73,16 +83,22 @@ static int stdin_byte_available(void) {
     return 1;
 }
 
+/* macOS Terminal's BACKSPACE/DELETE key sends 0x7F (DEL). NASCOM BASIC's
+   line editor compares against 0x08 (BS); without translation, BACKSPACE
+   silently does nothing. Translate at the boundary so both ROMs see what
+   they expect. */
+static int translate_in(int b) { return (b == 0x7F) ? 0x08 : b; }
+
 static int stdin_consume_byte(void) {
-    if (prefeed_has())        return prefeed_pop();
+    if (prefeed_has())        return translate_in(prefeed_pop());
     if (stdin_pending >= 0) {
-        int b = stdin_pending; stdin_pending = -1; return b;
+        int b = stdin_pending; stdin_pending = -1; return translate_in(b);
     }
     if (stdin_eof) return 0;
     unsigned char ch;
     ssize_t r = read(STDIN_FILENO, &ch, 1);
     if (r <= 0) { stdin_eof = 1; return 0; }
-    return ch;
+    return translate_in(ch);
 }
 
 /* Intel HEX loader: ignores end-of-file marker, treats checksum errors as fatal */
