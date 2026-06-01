@@ -68,6 +68,9 @@ static int         prefeed_idx = 0;
 static int prefeed_has(void) { return prefeed_buf && prefeed_buf[prefeed_idx] != 0; }
 static int prefeed_pop(void) { return prefeed_buf[prefeed_idx++] & 0xFF; }
 
+/* forward decl: translate_in handles the Ctrl-\ exit hotkey */
+static int translate_in(int b);
+
 static int stdin_byte_available(void) {
     if (prefeed_has())      return 1;
     if (stdin_pending >= 0) return 1;
@@ -79,6 +82,9 @@ static int stdin_byte_available(void) {
     ssize_t r = read(STDIN_FILENO, &ch, 1);
     if (r == 0) { stdin_eof = 1; return 0; }
     if (r < 0)  return 0;
+    /* Intercept Ctrl-\ immediately so it never sits in the lookahead and
+       never reaches BASIC. translate_in() exits the runner. */
+    if (ch == 0x1C) translate_in(ch);
     stdin_pending = ch;
     return 1;
 }
@@ -86,19 +92,34 @@ static int stdin_byte_available(void) {
 /* macOS Terminal's BACKSPACE/DELETE key sends 0x7F (DEL). NASCOM BASIC's
    line editor compares against 0x08 (BS); without translation, BACKSPACE
    silently does nothing. Translate at the boundary so both ROMs see what
-   they expect. */
-static int translate_in(int b) { return (b == 0x7F) ? 0x08 : b; }
+   they expect.
+
+   We also intercept Ctrl-\\ (0x1C, the traditional Unix SIGQUIT key) as
+   an "exit the emulator" hotkey. ISIG is off so Ctrl-C / Ctrl-Z stay
+   inside BASIC (Ctrl-C = BREAK), and pressing Ctrl-\\ is the only way
+   to leave the runner cleanly without killing the terminal. The byte
+   is never delivered to BASIC. */
+static int translate_in(int b) {
+    if (b == 0x1C) {                     /* Ctrl-\: exit the runner */
+        fprintf(stderr, "\r\n[basicrunner] Ctrl-\\ pressed - exiting\r\n");
+        restore_termios();
+        _exit(0);
+    }
+    return (b == 0x7F) ? 0x08 : b;
+}
 
 static int stdin_consume_byte(void) {
-    if (prefeed_has())        return translate_in(prefeed_pop());
-    if (stdin_pending >= 0) {
-        int b = stdin_pending; stdin_pending = -1; return translate_in(b);
+    int b;
+    if (prefeed_has())               b = prefeed_pop();
+    else if (stdin_pending >= 0)   { b = stdin_pending; stdin_pending = -1; }
+    else if (stdin_eof)              return 0;
+    else {
+        unsigned char ch;
+        ssize_t r = read(STDIN_FILENO, &ch, 1);
+        if (r <= 0) { stdin_eof = 1; return 0; }
+        b = ch;
     }
-    if (stdin_eof) return 0;
-    unsigned char ch;
-    ssize_t r = read(STDIN_FILENO, &ch, 1);
-    if (r <= 0) { stdin_eof = 1; return 0; }
-    return translate_in(ch);
+    return translate_in(b);
 }
 
 /* Intel HEX loader: ignores end-of-file marker, treats checksum errors as fatal */
@@ -165,6 +186,9 @@ int main(int argc, char** argv) {
     else        loaded = load_intel_hex(rom, s->mem);
     fprintf(stderr, "[basicrunner] loaded %zu bytes from %s%s\n",
             loaded, rom, is_bin ? " (binary)" : " (intel hex)");
+    if (isatty(STDIN_FILENO))
+        fprintf(stderr, "[basicrunner] press Ctrl-\\ to exit "
+                "(Ctrl-C is passed through to BASIC for BREAK)\n");
 
     z80_set_pc(&s->cpu, 0x0000);
     s->cpu.rf[RFP_SP] = 0xFFFF;

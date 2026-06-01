@@ -24,6 +24,18 @@ I/O conventions the runner emulates:
 
 Use CR (\r, 0x0D) as line terminator. LF alone is ignored.
 
+### Interactive controls
+
+| Key | Sends | Effect |
+|---|---|---|
+| Enter | CR (0x0D) | submit line to BASIC |
+| Backspace / Delete | 0x7F → 0x08 (BS) | erase last character (translated by the runner) |
+| Ctrl-C | 0x03 | passed through to BASIC for BREAK / interrupt a running program |
+| **Ctrl-\\** | 0x1C | **exit the runner cleanly** (restores tty, returns to shell) |
+
+Ctrl-C is *not* intercepted at the OS level (ISIG is off in the tty
+setup) so it reaches BASIC. To leave the emulator, press **Ctrl-\\**.
+
 ### About the "Memory top?" prompt
 
 On cold power-up, NASCOM BASIC's init code at `0x0148` checks the
