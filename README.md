@@ -128,5 +128,12 @@ Tests and ROMs:
 
   - [tests/basic/README.md](tests/basic/README.md) — the BASIC ROMs and their I/O
     conventions.
+  - [tests/traces/README.md](tests/traces/README.md) — the 8 hand-assembled bus-cycle
+    trace programs and the 14-column shared trace format used by `make compare`.
+  - [tests/fuse/README.md](tests/fuse/README.md) — the 1356-case Frank D. Cringle
+    opcode corpus (`tests.in` / `tests.expected`) driven by `make fuse` and
+    `make fuse_rtl`.
+  - [tests/zex/README.md](tests/zex/README.md) — the CP/M `.com` exercisers
+    (`prelim`, `zexdoc`, `zexall`, `zexdoc3`) and the M80 source `zexdoc.z80`.
 
 The brief that this project follows: [z80_core_project_BRIEF.md](z80_core_project_BRIEF.md).
