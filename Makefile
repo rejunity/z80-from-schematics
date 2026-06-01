@@ -191,6 +191,10 @@ all-tests: ctest rtl compare fuse fuse_rtl
 	@echo "== running 4-way lockstep on zexdoc3 (~2 s) =="
 	@c++ -std=gnu++17 -O2 -w -Iscripts -Icmodel scripts/lockstep_quad.c $(CMODEL_LIB) -o $(BIN)/lockstep_quad
 	@$(BIN)/lockstep_quad tests/zex/zexdoc3.com 20000000
+	@echo "== real-silicon T-state oracle (sigrok kc85 cpuclk capture) =="
+	@$(PYTHON) $(SCRIPTS)/sigrok_opcode_cycles.py tests/sigrok/kc85-cpuclk.sr | tail -3
+	@echo "== real-silicon clock + sub-T-state (sigrok kc85 20 MHz async) =="
+	@$(PYTHON) $(SCRIPTS)/sigrok_async_timing.py tests/sigrok/kc85-20mhz.sr --silicon-check 2>&1 | tail -6
 	@echo "== all-tests complete =="
 
 clean:

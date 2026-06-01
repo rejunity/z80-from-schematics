@@ -37,6 +37,8 @@ make fuse_rtl   # FUSE 1356-case suite driven through the RTL via iverilog
 make prelim     # prelim.com CP/M instruction test
 make zexdoc     # full ZEXDOC (~1 min on this host)
 make zexall     # full ZEXALL (~16 min on this host)
+make silicon_cycles # per-opcode T-state check vs real KC85 silicon (sigrok)
+make silicon_async  # real CPU clock + sub-T-state pin offsets from 20 MHz capture
 make all-tests  # every gate above in sequence
 make clean
 ```
