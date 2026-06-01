@@ -26,15 +26,19 @@ Use CR (\r, 0x0D) as line terminator. LF alone is ignored.
 
 ### Interactive controls
 
-| Key | Sends | Effect |
+| Key | Byte after translation | Effect |
 |---|---|---|
 | Enter | CR (0x0D) | submit line to BASIC |
-| Backspace / Delete | 0x7F → 0x08 (BS) | erase last character (translated by the runner) |
-| Ctrl-C | 0x03 | passed through to BASIC for BREAK / interrupt a running program |
+| Backspace / Delete | 0x7F → 0x08 (BS) | erase last character |
+| **Ctrl-C** | 0x03 | BREAK / interrupt a running BASIC program |
+| **Ctrl-Space** | 0x00 → 0x03 | equivalent to Ctrl-C (BREAK), translated by the runner |
 | **Ctrl-\\** | 0x1C | **exit the runner cleanly** (restores tty, returns to shell) |
 
-Ctrl-C is *not* intercepted at the OS level (ISIG is off in the tty
-setup) so it reaches BASIC. To leave the emulator, press **Ctrl-\\**.
+`ISIG` is off in the tty setup so Ctrl-C reaches BASIC instead of being
+captured by the kernel as SIGINT. Ctrl-Space is provided as an
+alternative BREAK key for users who'd rather keep their shell-level
+Ctrl-C habits or whose terminal has Ctrl-C bound to something else.
+To leave the emulator, press **Ctrl-\\**.
 
 ### About the "Memory top?" prompt
 

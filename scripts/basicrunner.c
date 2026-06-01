@@ -85,6 +85,9 @@ static int stdin_byte_available(void) {
     /* Intercept Ctrl-\ immediately so it never sits in the lookahead and
        never reaches BASIC. translate_in() exits the runner. */
     if (ch == 0x1C) translate_in(ch);
+    /* Translate Ctrl-Space (NUL) -> Ctrl-C in the lookahead so the
+       byte that gets parked is the BREAK code BASIC expects. */
+    if (ch == 0x00) ch = 0x03;
     stdin_pending = ch;
     return 1;
 }
@@ -105,7 +108,9 @@ static int translate_in(int b) {
         restore_termios();
         _exit(0);
     }
-    return (b == 0x7F) ? 0x08 : b;
+    if (b == 0x00) b = 0x03;             /* Ctrl-Space (NUL) -> Ctrl-C (BREAK) */
+    if (b == 0x7F) b = 0x08;             /* DEL -> BS */
+    return b;
 }
 
 static int stdin_consume_byte(void) {
@@ -187,8 +192,8 @@ int main(int argc, char** argv) {
     fprintf(stderr, "[basicrunner] loaded %zu bytes from %s%s\n",
             loaded, rom, is_bin ? " (binary)" : " (intel hex)");
     if (isatty(STDIN_FILENO))
-        fprintf(stderr, "[basicrunner] press Ctrl-\\ to exit "
-                "(Ctrl-C is passed through to BASIC for BREAK)\n");
+        fprintf(stderr, "[basicrunner] Ctrl-\\ exits the runner; "
+                "Ctrl-C or Ctrl-Space => BREAK in BASIC\n");
 
     z80_set_pc(&s->cpu, 0x0000);
     s->cpu.rf[RFP_SP] = 0xFFFF;
