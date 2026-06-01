@@ -48,11 +48,18 @@ static void enable_raw_stdin(void) {
 }
 
 /* one-byte lookahead so RDRF reports accurately even when stdin is a pipe
-   that's been closed (select() returns readable + read() returns 0 = EOF) */
+   that's been closed (select() returns readable + read() returns 0 = EOF).
+   prefeed_buf holds bytes queued by --prefeed before real stdin is consulted. */
 static int stdin_pending = -1;
 static int stdin_eof     = 0;
+static const char* prefeed_buf = NULL;
+static int         prefeed_idx = 0;
+
+static int prefeed_has(void) { return prefeed_buf && prefeed_buf[prefeed_idx] != 0; }
+static int prefeed_pop(void) { return prefeed_buf[prefeed_idx++] & 0xFF; }
 
 static int stdin_byte_available(void) {
+    if (prefeed_has())      return 1;
     if (stdin_pending >= 0) return 1;
     if (stdin_eof) return 0;
     fd_set fds; FD_ZERO(&fds); FD_SET(STDIN_FILENO, &fds);
@@ -67,6 +74,7 @@ static int stdin_byte_available(void) {
 }
 
 static int stdin_consume_byte(void) {
+    if (prefeed_has())        return prefeed_pop();
     if (stdin_pending >= 0) {
         int b = stdin_pending; stdin_pending = -1; return b;
     }
@@ -118,14 +126,21 @@ int main(int argc, char** argv) {
     int is_bin = 0;
     uint16_t load_at = 0x0000;
     long long max_instr = 5000000000LL;
+    int autostart = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--bin"))                  is_bin = 1;
         else if (!strcmp(argv[i], "--start") && i+1<argc) load_at = (uint16_t)strtoul(argv[++i], 0, 0);
         else if (!strcmp(argv[i], "--max-instr") && i+1<argc) max_instr = atoll(argv[++i]);
+        else if (!strcmp(argv[i], "--prefeed") && i+1<argc) prefeed_buf = argv[++i];
+        else if (!strcmp(argv[i], "--autostart"))       autostart = 1;
         else if (!rom)                                  rom = argv[i];
         else { fprintf(stderr, "unknown arg %s\n", argv[i]); return 2; }
     }
-    if (!rom) { fprintf(stderr, "usage: %s [--bin] <rom> [--start ADDR] [--max-instr N]\n", argv[0]); return 2; }
+    if (!rom) { fprintf(stderr, "usage: %s [--bin] <rom> [--start ADDR] [--max-instr N] [--prefeed STR] [--autostart]\n", argv[0]); return 2; }
+    /* --autostart sends a CR to satisfy NASCOM BASIC's "Memory top?"
+       cold-start prompt (default = max free RAM). Combine with --prefeed
+       to send arbitrary additional bytes before stdin. */
+    if (autostart && !prefeed_buf) prefeed_buf = "\r";
 
     z80_system_t* s = malloc(sizeof *s);
     z80_sys_init(s);

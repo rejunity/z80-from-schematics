@@ -131,7 +131,7 @@ $(BIN)/basicrunner: $(SCRIPTS)/basicrunner.c $(CMODEL_LIB) $(CMODEL_HDRS)
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(CMODEL_LIB) -o $@
 
 basic: basicrunner
-	@$(BIN)/basicrunner tests/basic/nascom_basic_4_7_rc2014.hex
+	@$(BIN)/basicrunner --autostart tests/basic/nascom_basic_4_7_rc2014.hex
 
 tinybasic: basicrunner
 	@$(BIN)/basicrunner tests/basic/tinybasic_1k.hex

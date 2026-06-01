@@ -24,6 +24,26 @@ I/O conventions the runner emulates:
 
 Use CR (\r, 0x0D) as line terminator. LF alone is ignored.
 
+### About the "Memory top?" prompt
+
+On cold power-up, NASCOM BASIC's init code at `0x0148` checks the
+`basicStarted` byte at RAM `0x802F`. If it's NOT `'Y'` (which is the
+case in our emulator since `z80_sys_init` zeros all RAM), the loader
+**skips** its own `Cold | Warm start (C|W) ?` prompt and goes directly
+to BASIC's cold-start path. BASIC then prints `Memory top?` to ask the
+user for the top of usable RAM; a blank reply (just CR) accepts the
+default (top-of-RAM minus work-space, about 32 KB free here).
+
+For interactive use, just press Enter at the prompt. For non-interactive
+runs, pass `--autostart` to `basicrunner` (the default for `make
+basic`); it injects one CR before stdin is consulted so BASIC starts
+straight at the `Ok` prompt. You can also use `--prefeed "STRING"` to
+queue arbitrary bytes ahead of stdin.
+
+On a subsequent reset of the same in-memory emulator (warm restart),
+the `basicStarted` flag will already be `'Y'` and the loader's
+`Cold | Warm start (C|W) ?` prompt will appear instead.
+
 ## 1K Tiny BASIC (Will Stevens' basic1K)
 File: `tinybasic_1k.hex`  (Intel HEX, **1018 bytes** of ROM 0x0000-0x03F9 — fits in 1 K)
 Source: https://github.com/WillStevens/basic1K  (1K Tiny BASIC for 8080/Z80,
