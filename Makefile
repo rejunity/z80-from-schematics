@@ -44,7 +44,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
-.PHONY: all cmodel ctest rtl iverilog verilator traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests
+.PHONY: all cmodel ctest rtl iverilog verilator traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles
 
 all: cmodel ctest
 
@@ -106,6 +106,13 @@ fuse: fuse_runner
 # with iverilog, runs vvp, diffs results against tests.expected.
 fuse_rtl:
 	@$(PYTHON) $(SCRIPTS)/compare_fuse_rtl.py
+
+# Real-silicon T-state validation against the sigrok KC85/4 logic-analyzer
+# captures: per opcode observed in the kc85 OS loop, check that our emulator
+# produces the same T-state count (or one of the spec-allowed branches for
+# conditionals).
+silicon_cycles: tracegen
+	@$(PYTHON) $(SCRIPTS)/sigrok_opcode_cycles.py tests/sigrok/kc85-cpuclk.sr
 
 # ----------------------------------------------------------------------------
 # RTL elaboration / sims

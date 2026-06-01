@@ -30,27 +30,58 @@ reconstructed. The captured program is the KC85's RAM-resident OS loop
 at PCs around `0xf40a`.
 
 `scripts/sigrok_replay.py` runs that reconstructed memory through our C
-model and compares M1 fetch sequences. **For the kc85 captures it cannot
-reach exact-prefix match**, because the capture starts mid-execution with
-unknown register / flag state — our emulator's reset-state (AF=FFFF, C=1)
-takes branches the real silicon (at unknown C) did not. This is a property
-of the capture, not the emulator; pattern-level validation still works
-(M1 / refresh / MREQ / RD assertion shapes).
+model and compares M1 fetch sequences. **Exact replay** can't reach
+prefix match (capture starts mid-execution; reset-state flags differ
+from the silicon's actual flag state in the middle of the OS loop), but
+two derived tests that DON'T need initial register state still extract
+real value:
 
-### Useful as ground truth for ...
+### `make silicon_cycles` — per-opcode T-state oracle
 
-  - **Pin-pattern shape**: real silicon shows M1 asserted for 2 cycles, MREQ
-    asserted starting at end-of-T1, refresh address driven at T3, etc. Our
-    cpuclk-aligned decoder lines up with our `tracegen` per-T-state view
-    (one sample per T-state) — useful for catching gross timing regressions
-    by visual diff.
-  - **Channel set**: confirms our 14-column trace format matches the actual
-    pins captured by the open community (M1, MREQ, IORQ, RD, WR, RFSH,
-    HALT, addr, data).
-  - **Memory observation**: the 161 reconstructed bytes of the OS loop are
-    exercised on our emulator too via the bootstrap-JP trick in
-    `sigrok_replay.py`; we observe the same bus patterns inside the
-    captured code region.
+`scripts/sigrok_opcode_cycles.py` walks the cpuclk capture, finds every
+M1 fetch (`/M1` 0→1 transition), measures the T-state count from that
+M1 to the next M1 (one sample-per-T-state synchronous capture), and
+buckets the result per opcode. Then it runs each opcode through
+`tracegen` in a clean PC=0x0100 sandbox and compares the count against
+both the spec and the real-silicon observation.
+
+Result on `tests/sigrok/kc85-cpuclk.sr` (KC85 OS loop, 53 unique opcodes,
+546 M1 fetches):
+
+  - **45/50 classified opcodes**: emulator T-state = spec T-state = real
+    silicon T-state. ✅
+  - **0 emulator mismatches.** Every opcode our emulator measures hits
+    a spec-allowed value.
+  - 3 unclassified prefix bytes (CB / ED / DD; seen 41/1/38 times) —
+    skipped, since the spec count belongs to the (prefix, op) pair.
+  - 5 opcodes show real silicon taking MORE T-states than the spec:
+
+    | opcode | real | spec | likely cause |
+    |---|---|---|---|
+    | `00` NOP | 8T | 4T | KC85 hardware /WAIT or M1 deferred ack |
+    | `0b` DEC BC | 6T | 4T | system-bus arbitration adds a clock |
+    | `2a` LD HL,(nn) | 17T | 16T | +1 WAIT |
+    | `3a` LD A,(nn) | 13T or 14T | 13T | +1 WAIT on second-byte fetch |
+    | `5b` LD E,L | 18T | 4T | a captured interrupt acceptance folded in |
+
+    These are KC85-system artifacts (WAIT injection on certain memory
+    regions, interrupts taken mid-instruction) — NOT Z80-core bugs.
+
+Conditional opcodes show consistent timing both branches: `JR C,d`
+(0x38) 41× not-taken (7T); `JR NZ,d` (0x20) 38× taken (12T) + 2×
+not-taken (7T). Both within spec; our emulator's reset-state selections
+(12T for 0x38 taken, 7T for 0x20 not-taken) are also spec-compliant.
+
+### Other usable cross-checks
+
+  - **Pin-pattern shape**: real silicon shows M1 asserted for 2 cycles,
+    MREQ asserted from end-of-T1, refresh address driven at T3 — our
+    cpuclk-aligned decoder lines up with our `tracegen` per-T-state
+    view, useful for catching gross timing regressions.
+  - **Channel set**: confirms our 14-column trace format matches the
+    actual pins captured by the open community.
+  - **Memory observation**: 161 OS-loop bytes reconstructed; the opcodes
+    at those PCs cross-check against our emulator's fetch behaviour.
 
 ## What's noted for follow-up
 
