@@ -11,8 +11,8 @@ Every opcode byte is split as:
 
 ```
   bit:  7 6 5 4 3 2 1 0
-        [ x ] [  y  ] [ z ]
-              [ p ][q]
+        [x] [ y ] [ z ]
+            [p] q
   x = opcode[7:6]
   y = opcode[5:3]      p = y >> 1   (opcode[5:4])
   z = opcode[2:0]      q = y & 1    (opcode[3])
