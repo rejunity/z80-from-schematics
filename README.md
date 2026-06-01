@@ -78,18 +78,20 @@ build needs a working C++17 toolchain (Apple clang 21+ or any modern gcc / clang
 
 ## Status
 
-| Gate                                                            | Result                              |
-|-----------------------------------------------------------------|-------------------------------------|
-| C unit tests                                                    | PASS                                |
-| ZEXDOC                                                          | 67 / 67                             |
-| ZEXALL                                                          | 67 / 67                             |
-| FUSE / Cringle (C)                                              | **1356 / 1356**  (100 %)            |
-| FUSE / Cringle (through RTL via iverilog)                       | **1342 / 1356**  (98.97 %) \*       |
-| C ↔ iverilog ↔ Verilator, phase-by-phase                        | identical, 8 trace programs         |
-| 4-way oracle lockstep (mine + superzazu + chips + suzukiplan)   | identical, 7,022,691 instr.         |
-| Real KC85 silicon — sync   capture (`make silicon_cycles`)      | 50 / 50 OK,  0 emu mismatches       |
-| Real KC85 silicon — 20 MHz capture (`make silicon_async`)       | CPU ≈ 1.767 MHz, pins ✓             |
-| Gate-level signal trace vs perfectz80 (Visual Z80 netlist)      | 93 – 96 % control-pin perfect       |
+|     | Gate                                                            | Result                              |
+|:---:|-----------------------------------------------------------------|-------------------------------------|
+| ✅  | C unit tests                                                    | PASS                                |
+| ✅  | ZEXDOC                                                          | 67 / 67                             |
+| ✅  | ZEXALL                                                          | 67 / 67                             |
+| ✅  | FUSE / Cringle (C)                                              | **1356 / 1356**  (100 %)            |
+| 🟡  | FUSE / Cringle (through RTL via iverilog)                       | **1342 / 1356**  (98.97 %) \*       |
+| ✅  | C ↔ iverilog ↔ Verilator, phase-by-phase                        | identical, 8 trace programs         |
+| ✅  | 4-way oracle lockstep (mine + superzazu + chips + suzukiplan)   | identical, 7,022,691 instr.         |
+| ✅  | Real KC85 silicon — sync   capture (`make silicon_cycles`)      | 50 / 50 OK,  0 emu mismatches       |
+| ✅  | Real KC85 silicon — 20 MHz capture (`make silicon_async`)       | CPU ≈ 1.767 MHz, pins ✓             |
+| 🚧  | Gate-level signal trace vs perfectz80 (Visual Z80 netlist)      | 93 – 96 % control-pin perfect       |
+
+Legend: ✅ pass / 100 % &nbsp; 🟡 ≥ 95 % (close, known artifacts) &nbsp; 🚧 < 95 % (work in progress).
 
 \* 14 testbench-init artifacts (post-reset M1 overhead), NOT RTL bugs.
 
