@@ -32,13 +32,6 @@ make basic
 
 This will take you back in time to the BASIC prompt:
 ```
-[basicrunner] loaded 8154 bytes from tests/basic/nascom_basic_4_7_rc2014.hex (intel hex)
-[basicrunner] Ctrl-\ exits the runner; Ctrl-C or Ctrl-Space => BREAK in BASIC
-
-RC2014 - MS Basic Loader
-z88dk - feilipu
-
-Memory top? 
 Z80 BASIC Ver 4.7c
 Copyright (C) 1978 by Microsoft
 31948 Bytes free
