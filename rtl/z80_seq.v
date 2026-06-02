@@ -125,6 +125,8 @@ module z80_seq (
     wire M3 = (m_cycle == 3'd3);
     wire M4 = (m_cycle == 3'd4);
     wire M5 = (m_cycle == 3'd5);
+    wire M6 = (m_cycle == 3'd6);
+    wire M7 = (m_cycle == 3'd7);
     wire T1 = (t_state == 4'd1);
     wire T2 = (t_state == 4'd2);
     wire T3 = (t_state == 4'd3);
@@ -135,7 +137,7 @@ module z80_seq (
     wire phi_unused = phi;
     wire t1_unused  = T1;
     wire t2_unused  = T2;
-    wire m5_unused  = M5;
+    wire m7_unused  = M7;
     wire t6_unused  = T6;
     /* verilator lint_on UNUSEDSIGNAL */
 
@@ -433,6 +435,48 @@ module z80_seq (
             if (M3 & T3) begin ctl_tmp16_we=1'b1; ctl_wz_op=`WZ_NN_INC; ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MRD; ctl_mc_addr_src=`ADDR_NN; end
             if (M4 & T3) begin ctl_tmpl_we=1'b1; ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MRD; ctl_mc_addr_src=`ADDR_TMP16_INC; end
             if (M5 & T3) begin ctl_rp_set_nn=1'b1; fin=1'b1; end
+        end
+
+        // CALL nn / CALL cc,nn — 6 M-cycles when taken; 3 when not.
+        //   M1 fetch, M2/M3 fetch nn, M3.T3 check cc and start INTERNAL pad
+        //   (or fin if not taken); M4.T1 push PC_HI, M5.T3 push PC_LO,
+        //   M6.T3 PC = tmp16 + fin.
+        `EXEC_CALL, `EXEC_CALL_CC: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MRD; ctl_mc_addr_src=`ADDR_PC; ctl_pc_inc=1'b1; end
+            if (M2 & T3) begin ctl_tmpl_we=1'b1; ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MRD; ctl_mc_addr_src=`ADDR_PC; ctl_pc_inc=1'b1; end
+            if (M3 & T3) begin
+                ctl_tmp16_we = 1'b1;
+                ctl_wz_op    = `WZ_SET_NN;
+                if (cc_taken || (eff_exec == `EXEC_CALL)) begin
+                    ctl_start_mc    = 1'b1;
+                    ctl_mc_bus_op   = `BUSOP_INTERNAL;
+                    ctl_mc_addr_src = `ADDR_PC;
+                    ctl_mc_extra_t  = 4'd1;
+                end else begin
+                    fin = 1'b1;
+                end
+            end
+            if (M4 & T1) begin ctl_sp_dec=1'b1; ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MWR; ctl_mc_addr_src=`ADDR_SP_DEC; ctl_mc_wdata_src=`WDATA_PC_HI; end
+            if (M5 & T3) begin ctl_sp_dec=1'b1; ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MWR; ctl_mc_addr_src=`ADDR_SP_DEC; ctl_mc_wdata_src=`WDATA_PC_LO; end
+            if (M6 & T3) begin ctl_pc_set_tmp16=1'b1; fin=1'b1; end
+        end
+
+        // RET cc — 1 M-cycle internal pad, then if cc_taken: same shape as RET.
+        `EXEC_RET_CC: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_INTERNAL; ctl_mc_addr_src=`ADDR_PC; ctl_mc_extra_t=4'd1; end
+            if (M2 & T1) begin
+                if (cc_taken) begin
+                    ctl_start_mc    = 1'b1;
+                    ctl_mc_bus_op   = `BUSOP_MRD;
+                    ctl_mc_addr_src = `ADDR_SP;
+                end else begin
+                    fin = 1'b1;
+                end
+            end
+            if (M3 & T3) begin ctl_tmpl_we=1'b1; ctl_sp_inc=1'b1; ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MRD; ctl_mc_addr_src=`ADDR_SP_INC; end
+            if (M4 & T3) begin ctl_sp_inc=1'b1; ctl_pc_set_nn=1'b1; ctl_wz_op=`WZ_SET_NN; fin=1'b1; end
         end
 
         // PUSH rp — 4 M-cycles: M1=5T (extra IDU pad), M2 push hi, M3 push lo,

@@ -570,35 +570,7 @@ module z80_core (
 
                 `EXEC_JR, `EXEC_JR_CC, `EXEC_DJNZ: ;  /* migrated to z80_seq */
 
-                `EXEC_CALL, `EXEC_CALL_CC: begin
-                    if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd2) begin tmpl_n = rbyte;
-                        startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0); rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd3) begin
-                        tmp16_n = {rbyte, tmpl}; rf_n[`RFP_WZ] = {rbyte, tmpl};
-                        if ((exec_w == `EXEC_CALL) || cc_true(F_cur, cc_w))
-                            startm(`BUSOP_INTERNAL, rf[`RFP_PC], 8'h0, 4'd1);
-                        else fin = 1'b1;
-                    end
-                    else if (m_cycle == 3'd4) begin rf_n[`RFP_SP] = rf[`RFP_SP] - 16'd1;
-                        startm(`BUSOP_MWR, rf[`RFP_SP] - 16'd1, rf[`RFP_PC][15:8], 4'd0); end
-                    else if (m_cycle == 3'd5) begin rf_n[`RFP_SP] = rf[`RFP_SP] - 16'd1;
-                        startm(`BUSOP_MWR, rf[`RFP_SP] - 16'd1, rf[`RFP_PC][7:0], 4'd0); end
-                    else begin rf_n[`RFP_PC] = tmp16; fin = 1'b1; end
-                end
-                `EXEC_RET: ;  /* migrated to z80_seq */
-                `EXEC_RET_CC: begin
-                    if (m_cycle == 3'd1) startm(`BUSOP_INTERNAL, rf[`RFP_PC], 8'h0, 4'd1);
-                    else if (m_cycle == 3'd2) begin
-                        if (cc_true(F_cur, cc_w)) startm(`BUSOP_MRD, rf[`RFP_SP], 8'h0, 4'd0);
-                        else fin = 1'b1;
-                    end
-                    else if (m_cycle == 3'd3) begin tmpl_n = rbyte; rf_n[`RFP_SP] = rf[`RFP_SP] + 16'd1;
-                        startm(`BUSOP_MRD, rf[`RFP_SP] + 16'd1, 8'h0, 4'd0); end
-                    else begin rf_n[`RFP_SP] = rf[`RFP_SP] + 16'd1;
-                        rf_n[`RFP_PC] = {rbyte, tmpl}; rf_n[`RFP_WZ] = {rbyte, tmpl}; fin = 1'b1; end
-                end
+                `EXEC_CALL, `EXEC_CALL_CC, `EXEC_RET, `EXEC_RET_CC: ;  /* migrated to z80_seq */
                 `EXEC_RST, `EXEC_PUSH, `EXEC_POP: ;  /* migrated to z80_seq */
 
                 `EXEC_LD_A_RP, `EXEC_LD_RP_A: ;  /* migrated to z80_seq (ADDR_RP + ctl_wz_op) */
