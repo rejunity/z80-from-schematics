@@ -181,11 +181,12 @@ module z80_core (
     endfunction
 
     // ---- ALU operand selection + instance ----
-    reg  [7:0] alu_a, alu_b, alu_xy;
-    reg  [4:0] alu_md;
-    reg  [2:0] alu_rot, alu_bit;
-    wire [7:0] A_cur = rf[`RFP_AF][15:8];
-    wire [7:0] F_cur = rf[`RFP_AF][7:0];
+    reg  [7:0]  alu_a, alu_b, alu_xy;
+    reg  [4:0]  alu_md;
+    reg  [2:0]  alu_rot, alu_bit;
+    reg  [15:0] alu_a16, alu_b16;
+    wire [7:0]  A_cur = rf[`RFP_AF][15:8];
+    wire [7:0]  F_cur = rf[`RFP_AF][7:0];
     always @* begin
         alu_a = A_cur;
         alu_b = 8'h00;
@@ -193,6 +194,8 @@ module z80_core (
         alu_xy = 8'h00;
         alu_rot = rot_op_w;
         alu_bit = bit_index_w;
+        alu_a16 = 16'h0000;
+        alu_b16 = 16'h0000;
         case (exec_w)
             `EXEC_ALU_R:           alu_b = getri(rf_src_w);
             `EXEC_ALU_N, `EXEC_ALU_M:alu_b = rbyte;
@@ -203,6 +206,9 @@ module z80_core (
             `EXEC_DDCB: begin alu_b = rbyte;           alu_xy = rf[`RFP_WZ][15:8];
                             alu_md = (tmph[7:6] == `CB_BIT) ? `FLAG_BIT : `FLAG_ROT;
                             alu_rot = tmph[5:3]; alu_bit = tmph[5:3]; end
+            `EXEC_ADD_HL_RP: begin alu_md = `FLAG_ADD16; alu_a16 = rf[hlp]; alu_b16 = rf[rp_sel_w]; end
+            `EXEC_ADC16:     begin alu_md = `FLAG_ADC16; alu_a16 = rf[`RFP_HL]; alu_b16 = rf[rp_sel_w]; end
+            `EXEC_SBC16:     begin alu_md = `FLAG_SBC16; alu_a16 = rf[`RFP_HL]; alu_b16 = rf[rp_sel_w]; end
             default:             alu_b = 8'h00;
         endcase
     end
@@ -213,7 +219,7 @@ module z80_core (
         .mode(alu_md), .alu_op(alu_op_w), .rot_op(alu_rot),
         .bit_idx(alu_bit), .xy_src(alu_xy),
         .a(alu_a), .b(alu_b), .oldf(F_cur), .q(reg_q),
-        .a16(16'h0000), .b16(16'h0000), .iff2_in(1'b0),
+        .a16(alu_a16), .b16(alu_b16), .iff2_in(1'b0),
         .res(alu_res), .fout(alu_fout),
         .res16(alu_res16), .mem_byte(alu_mem_byte)
     );
@@ -243,6 +249,7 @@ module z80_core (
     wire       seq_hlp_lo_we, seq_hlp_hi_we;
     wire       seq_sp_inc, seq_sp_dec, seq_pc_set_rst, seq_pc_set_tmp16;
     wire       seq_ireg_we, seq_rreg_we, seq_load_a_ir;
+    wire       seq_hlp_set_res16, seq_hl_set_res16;
     wire       cc_taken    = cc_true(F_cur, cc_w);
     wire       djnz_taken  = (rf[`RFP_BC][15:8] - 8'd1) != 8'd0;
     z80_seq u_seq (
@@ -295,7 +302,9 @@ module z80_core (
         .ctl_pc_set_tmp16(seq_pc_set_tmp16),
         .ctl_ireg_we(seq_ireg_we),
         .ctl_rreg_we(seq_rreg_we),
-        .ctl_load_a_ir(seq_load_a_ir)
+        .ctl_load_a_ir(seq_load_a_ir),
+        .ctl_hlp_set_res16(seq_hlp_set_res16),
+        .ctl_hl_set_res16(seq_hl_set_res16)
     );
 
     // ---- mux helpers for seq's address / wdata source selectors ----
@@ -321,6 +330,7 @@ module z80_core (
             `ADDR_SP_DEC:  seq_addr_val = rf[`RFP_SP] - 16'd1;
             `ADDR_SP_INC:  seq_addr_val = rf[`RFP_SP] + 16'd1;
             `ADDR_A_RBYTE: seq_addr_val = {A_cur, rbyte};
+            `ADDR_ALU_RES16: seq_addr_val = alu_res16;
             default:       seq_addr_val = rf[`RFP_PC];
         endcase
         case (seq_mc_wdata_src)
@@ -523,20 +533,7 @@ module z80_core (
                 `EXEC_JP_HL: ;  /* migrated to z80_seq (ctl_reg_ex_* / ctl_pc_set_hl) */
 
                 `EXEC_INC_RP, `EXEC_DEC_RP, `EXEC_LD_SP_HL: ;  /* migrated to z80_seq */
-                `EXEC_ADD_HL_RP: begin
-                    if (m_cycle == 3'd1) begin
-                        add16 = {1'b0, rf[hlp]} + {1'b0, rf[rp_sel_w]};
-                        add12 = {1'b0, rf[hlp][11:0]} + {1'b0, rf[rp_sel_w][11:0]};
-                        f16 = (F_cur & (`Z80_SF | `Z80_ZF | `Z80_PF));
-                        if (add12[12]) f16 = f16 | `Z80_HF;
-                        if (add16[16]) f16 = f16 | `Z80_CF;
-                        f16 = f16 | (add16[15:8] & (`Z80_YF | `Z80_XF));
-                        rf_n[`RFP_WZ] = rf[hlp] + 16'd1;
-                        rf_n[hlp] = add16[15:0];
-                        rf_n[`RFP_AF][7:0] = f16;
-                        startm(`BUSOP_INTERNAL, add16[15:0], 8'h0, 4'd7);
-                    end else fin = 1'b1;
-                end
+                `EXEC_ADD_HL_RP: ;  /* migrated to z80_seq (FLAG_ADD16 via ALU) */
 
                 `EXEC_LD_R_N: ;  /* migrated to z80_seq (ctl_start_mc / ctl_pc_inc / setri RBYTE) */
                 `EXEC_ALU_N: ;  /* migrated to z80_seq */
@@ -617,33 +614,7 @@ module z80_core (
                 end
 
                 /* ---------- ED page (non-block) ---------- */
-                `EXEC_ADC16, `EXEC_SBC16: begin
-                    if (m_cycle == 3'd1) startm(`BUSOP_INTERNAL, rf[`RFP_HL], 8'h0, 4'd7);
-                    else begin
-                        rf_n[`RFP_WZ] = rf[`RFP_HL] + 16'd1;
-                        if (exec_w == `EXEC_ADC16) begin
-                            r17 = {1'b0, rf[`RFP_HL]} + {1'b0, rf[rp_sel_w]} + {16'b0, F_cur[0]};
-                            r13 = {1'b0, rf[`RFP_HL][11:0]} + {1'b0, rf[rp_sel_w][11:0]} + {12'b0, F_cur[0]};
-                            edf = 8'h0;
-                            if (r13[12]) edf = edf | `Z80_HF;
-                            if ((~(rf[`RFP_HL] ^ rf[rp_sel_w]) & (rf[`RFP_HL] ^ r17[15:0]) & 16'h8000) != 16'h0) edf = edf | `Z80_PF;
-                            if (r17[16]) edf = edf | `Z80_CF;
-                        end else begin
-                            r17 = {1'b0, rf[`RFP_HL]} - {1'b0, rf[rp_sel_w]} - {16'b0, F_cur[0]};
-                            r13 = {1'b0, rf[`RFP_HL][11:0]} - {1'b0, rf[rp_sel_w][11:0]} - {12'b0, F_cur[0]};
-                            edf = `Z80_NF;
-                            if (r13[12]) edf = edf | `Z80_HF;
-                            if (((rf[`RFP_HL] ^ rf[rp_sel_w]) & (rf[`RFP_HL] ^ r17[15:0]) & 16'h8000) != 16'h0) edf = edf | `Z80_PF;
-                            if (r17[16]) edf = edf | `Z80_CF;
-                        end
-                        if (r17[15]) edf = edf | `Z80_SF;
-                        if (r17[15:0] == 16'h0) edf = edf | `Z80_ZF;
-                        edf = edf | (r17[15:8] & (`Z80_YF | `Z80_XF));
-                        rf_n[`RFP_HL] = r17[15:0];
-                        rf_n[`RFP_AF][7:0] = edf;
-                        fin = 1'b1;
-                    end
-                end
+                `EXEC_ADC16, `EXEC_SBC16: ;  /* migrated to z80_seq (FLAG_ADC16/SBC16 via ALU) */
                 `EXEC_NEG: ;  /* migrated to z80_seq: alu mode FLAG_NEG (set by PLA), writes A+F */
                 `EXEC_IM: ;  /* migrated to z80_seq (ctl_im_we; val from aux_w) */
                 `EXEC_RETN: ;  /* migrated to z80_seq */
@@ -894,6 +865,8 @@ module z80_core (
                     if (seq_sp_dec)    rf_n[`RFP_SP] = rf[`RFP_SP] - 16'd1;
                     if (seq_pc_set_rst) rf_n[`RFP_PC] = {8'h00, rst_addr_w};
                     if (seq_pc_set_tmp16) rf_n[`RFP_PC] = tmp16;
+                    if (seq_hlp_set_res16) rf_n[hlp]      = alu_res16;
+                    if (seq_hl_set_res16)  rf_n[`RFP_HL]  = alu_res16;
                     if (seq_ireg_we) reg_i_n = A_cur;
                     if (seq_rreg_we) reg_r_n = A_cur;
                     if (seq_load_a_ir) begin

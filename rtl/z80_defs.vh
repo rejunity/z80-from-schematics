@@ -201,6 +201,7 @@
 `define ADDR_SP_DEC    5'd15  // rf[SP] - 1 (PUSH / CALL / RST write addr)
 `define ADDR_SP_INC    5'd16  // rf[SP] + 1 (POP / RET second-byte read)
 `define ADDR_A_RBYTE   5'd17  // {A_cur, rbyte}        (IN A,(n) / OUT (n),A port)
+`define ADDR_ALU_RES16 5'd18  // alu_res16             (ADD HL,rp / ADC16 / SBC16 internal)
 
 // ---- WZ (MEMPTR) update operations for ctl_wz_op (4 bits) ----
 `define WZ_NONE      4'd0

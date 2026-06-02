@@ -121,7 +121,11 @@ module z80_seq (
     // ---- I / R register and LD A,I/R combined load+flag ----
     output reg          ctl_ireg_we,       // reg_i = A_cur
     output reg          ctl_rreg_we,       // reg_r = A_cur
-    output reg          ctl_load_a_ir      // A = aux[0] ? R : I; F per LD_A_I formula
+    output reg          ctl_load_a_ir,     // A = aux[0] ? R : I; F per LD_A_I formula
+
+    // ---- 16-bit ALU result writeback ----
+    output reg          ctl_hlp_set_res16, // rf[hlp] = alu_res16  (ADD HL,rp)
+    output reg          ctl_hl_set_res16   // rf[HL]  = alu_res16  (ADC16 / SBC16)
 );
 
     // Convenience M/T equality wires keep the case branches readable.
@@ -138,6 +142,7 @@ module z80_seq (
     wire T4 = (t_state == 4'd4);
     wire T5 = (t_state == 4'd5);
     wire T6 = (t_state == 4'd6);
+    wire T7 = (t_state == 4'd7);
     /* verilator lint_off UNUSEDSIGNAL */
     wire phi_unused = phi;
     wire t1_unused  = T1;
@@ -190,6 +195,8 @@ module z80_seq (
         ctl_ireg_we       = 1'b0;
         ctl_rreg_we       = 1'b0;
         ctl_load_a_ir     = 1'b0;
+        ctl_hlp_set_res16 = 1'b0;
+        ctl_hl_set_res16  = 1'b0;
 
         case (eff_exec)
         `EXEC_NOP, `EXEC_ILLEGAL: begin
@@ -443,6 +450,41 @@ module z80_seq (
             if (M3 & T3) begin ctl_tmp16_we=1'b1; ctl_wz_op=`WZ_NN_INC; ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MRD; ctl_mc_addr_src=`ADDR_NN; end
             if (M4 & T3) begin ctl_tmpl_we=1'b1; ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MRD; ctl_mc_addr_src=`ADDR_TMP16_INC; end
             if (M5 & T3) begin ctl_rp_set_nn=1'b1; fin=1'b1; end
+        end
+
+        // ADD HL,rp — 16-bit ALU op (FLAG_ADD16 mode wired in core's operand
+        //   mux). M1 fetch then 7T INTERNAL with addr = the new HL value.
+        `EXEC_ADD_HL_RP: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin
+                ctl_hlp_set_res16 = 1'b1;
+                ctl_reg_f_we      = 1'b1;
+                ctl_wz_op         = `WZ_HL_INC;
+                ctl_start_mc      = 1'b1;
+                ctl_mc_bus_op     = `BUSOP_INTERNAL;
+                ctl_mc_addr_src   = `ADDR_ALU_RES16;
+                ctl_mc_extra_t    = 4'd7;
+            end
+            if (M2 & T7) fin = 1'b1;
+        end
+
+        // ADC HL,rp / SBC HL,rp — like ADD HL,rp but for ED-page versions
+        //   that always write HL (no hlp) and use ALU's FLAG_ADC16 / FLAG_SBC16
+        //   mode (PLA already sets flag_mode).
+        `EXEC_ADC16, `EXEC_SBC16: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin
+                ctl_start_mc      = 1'b1;
+                ctl_mc_bus_op     = `BUSOP_INTERNAL;
+                ctl_mc_addr_src   = `ADDR_HL;
+                ctl_mc_extra_t    = 4'd7;
+            end
+            if (M2 & T7) begin
+                ctl_hl_set_res16 = 1'b1;
+                ctl_reg_f_we     = 1'b1;
+                ctl_wz_op        = `WZ_HL_INC;
+                fin              = 1'b1;
+            end
         end
 
         // LD I,A / LD R,A / LD A,I / LD A,R — M1 fetch, M2 1T INTERNAL pad,
