@@ -245,8 +245,12 @@ static z80_control_t decode_ed(uint8_t op)
     return c;
 }
 
-z80_control_t z80_pla_decode(z80_prefix_t prefix, uint8_t opcode)
+/* Top-level z80_pla module entry point (mirrors rtl/z80_pla.v). Pure
+   combinational: decodes (prefix, op) into the control word returned by
+   value. */
+z80_control_t z80_pla(z80_prefix_t prefix, uint8_t op)
 {
+    uint8_t opcode = op;
     if (prefix == PFX_NONE)
         return decode_unprefixed(opcode);
     if (prefix == PFX_CB)
@@ -275,4 +279,12 @@ z80_control_t z80_pla_decode(z80_prefix_t prefix, uint8_t opcode)
     c.valid = false;
     c.exec = EXEC_ILLEGAL;
     return c;
+}
+
+/* Public wrapper retained for the unit tests and any out-of-tree callers
+   that still spell the entry point z80_pla_decode. New code should call
+   z80_pla() directly to match the RTL module name. */
+z80_control_t z80_pla_decode(z80_prefix_t prefix, uint8_t opcode)
+{
+    return z80_pla(prefix, opcode);
 }

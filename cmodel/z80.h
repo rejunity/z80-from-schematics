@@ -307,8 +307,12 @@ void     z80_set_r8(z80_t *cpu, z80_reg8_t r, uint8_t v);
 uint16_t z80_pair_hi_lo(uint8_t hi, uint8_t lo);
 
 /* ---------------------------------------------------------------------------
- * PLA decode entry point.
+ * PLA decode — top-level module entry point (mirrors rtl/z80_pla.v).
+ * Pure combinational; same shape as the Verilog module's port list.
  * ------------------------------------------------------------------------- */
+z80_control_t z80_pla(z80_prefix_t prefix, uint8_t op);
+
+/* Back-compat wrapper for callers still spelling it z80_pla_decode. */
 z80_control_t z80_pla_decode(z80_prefix_t prefix, uint8_t opcode);
 
 /* ---------------------------------------------------------------------------

@@ -51,7 +51,7 @@ static void do_latch(z80_t *c)
             c->suppress_decode = false;      /* ack M1: discard opcode, no PC++/decode */
         } else {
             (void)z80_pc_inc(c);             /* PC advances past opcode */
-            c->ctl = z80_pla_decode(c->prefix, c->ir);
+            c->ctl = z80_pla(c->prefix, c->ir);
             c->decoded = true;
         }
         break;
