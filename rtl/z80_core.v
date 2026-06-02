@@ -242,6 +242,7 @@ module z80_core (
     wire       seq_pc_add_disp, seq_b_dec;
     wire       seq_hlp_lo_we, seq_hlp_hi_we;
     wire       seq_sp_inc, seq_sp_dec, seq_pc_set_rst, seq_pc_set_tmp16;
+    wire       seq_ireg_we, seq_rreg_we, seq_load_a_ir;
     wire       cc_taken    = cc_true(F_cur, cc_w);
     wire       djnz_taken  = (rf[`RFP_BC][15:8] - 8'd1) != 8'd0;
     z80_seq u_seq (
@@ -291,7 +292,10 @@ module z80_core (
         .ctl_sp_inc(seq_sp_inc),
         .ctl_sp_dec(seq_sp_dec),
         .ctl_pc_set_rst(seq_pc_set_rst),
-        .ctl_pc_set_tmp16(seq_pc_set_tmp16)
+        .ctl_pc_set_tmp16(seq_pc_set_tmp16),
+        .ctl_ireg_we(seq_ireg_we),
+        .ctl_rreg_we(seq_rreg_we),
+        .ctl_load_a_ir(seq_load_a_ir)
     );
 
     // ---- mux helpers for seq's address / wdata source selectors ----
@@ -643,27 +647,7 @@ module z80_core (
                 `EXEC_NEG: ;  /* migrated to z80_seq: alu mode FLAG_NEG (set by PLA), writes A+F */
                 `EXEC_IM: ;  /* migrated to z80_seq (ctl_im_we; val from aux_w) */
                 `EXEC_RETN: ;  /* migrated to z80_seq */
-                `EXEC_LD_I_A: begin
-                    if (m_cycle == 3'd1) startm(`BUSOP_INTERNAL, rf[`RFP_PC], 8'h0, 4'd1);
-                    else begin reg_i_n = A_cur; fin = 1'b1; end
-                end
-                `EXEC_LD_R_A: begin
-                    if (m_cycle == 3'd1) startm(`BUSOP_INTERNAL, rf[`RFP_PC], 8'h0, 4'd1);
-                    else begin reg_r_n = A_cur; fin = 1'b1; end
-                end
-                `EXEC_LD_A_IR: begin
-                    if (m_cycle == 3'd1) startm(`BUSOP_INTERNAL, rf[`RFP_PC], 8'h0, 4'd1);
-                    else begin
-                        edv = aux_w[0] ? reg_r : reg_i;
-                        rf_n[`RFP_AF][15:8] = edv;
-                        edf = F_cur & `Z80_CF;
-                        if (edv[7]) edf = edf | `Z80_SF;
-                        if (edv == 8'h0) edf = edf | `Z80_ZF;
-                        edf = edf | (edv & (`Z80_YF | `Z80_XF));
-                        if (iff2) edf = edf | `Z80_PF;
-                        rf_n[`RFP_AF][7:0] = edf; fin = 1'b1;
-                    end
-                end
+                `EXEC_LD_I_A, `EXEC_LD_R_A, `EXEC_LD_A_IR: ;  /* migrated to z80_seq */
                 `EXEC_LD_NNA_RP, `EXEC_LD_RP_NNA: ;  /* migrated to z80_seq */
                 `EXEC_IN_C: begin
                     if (m_cycle == 3'd1) begin rf_n[`RFP_WZ] = rf[`RFP_BC] + 16'd1;
@@ -910,6 +894,17 @@ module z80_core (
                     if (seq_sp_dec)    rf_n[`RFP_SP] = rf[`RFP_SP] - 16'd1;
                     if (seq_pc_set_rst) rf_n[`RFP_PC] = {8'h00, rst_addr_w};
                     if (seq_pc_set_tmp16) rf_n[`RFP_PC] = tmp16;
+                    if (seq_ireg_we) reg_i_n = A_cur;
+                    if (seq_rreg_we) reg_r_n = A_cur;
+                    if (seq_load_a_ir) begin
+                        // A = aux[0] ? R : I; F per LD A,I/R formula
+                        rf_n[`RFP_AF][15:8] = aux_w[0] ? reg_r : reg_i;
+                        rf_n[`RFP_AF][7:0]  = (F_cur & `Z80_CF)
+                                            | ((aux_w[0] ? reg_r[7]      : reg_i[7])      ? `Z80_SF : 8'h0)
+                                            | (((aux_w[0] ? reg_r        : reg_i) == 8'h0)? `Z80_ZF : 8'h0)
+                                            | ((aux_w[0] ? reg_r         : reg_i) & (`Z80_YF | `Z80_XF))
+                                            | (iff2                                      ? `Z80_PF : 8'h0);
+                    end
                     if (seq_pc_set_nn) begin
                         if (!seq_use_cc || cc_true(F_cur, cc_w))
                             rf_n[`RFP_PC] = {rbyte, tmpl};

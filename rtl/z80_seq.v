@@ -116,7 +116,12 @@ module z80_seq (
     output reg          ctl_sp_inc,        // SP = SP + 1
     output reg          ctl_sp_dec,        // SP = SP - 1
     output reg          ctl_pc_set_rst,    // PC = {8'h00, rst_addr_w}
-    output reg          ctl_pc_set_tmp16   // PC = tmp16 (CALL)
+    output reg          ctl_pc_set_tmp16,  // PC = tmp16 (CALL)
+
+    // ---- I / R register and LD A,I/R combined load+flag ----
+    output reg          ctl_ireg_we,       // reg_i = A_cur
+    output reg          ctl_rreg_we,       // reg_r = A_cur
+    output reg          ctl_load_a_ir      // A = aux[0] ? R : I; F per LD_A_I formula
 );
 
     // Convenience M/T equality wires keep the case branches readable.
@@ -182,6 +187,9 @@ module z80_seq (
         ctl_sp_dec        = 1'b0;
         ctl_pc_set_rst    = 1'b0;
         ctl_pc_set_tmp16  = 1'b0;
+        ctl_ireg_we       = 1'b0;
+        ctl_rreg_we       = 1'b0;
+        ctl_load_a_ir     = 1'b0;
 
         case (eff_exec)
         `EXEC_NOP, `EXEC_ILLEGAL: begin
@@ -435,6 +443,24 @@ module z80_seq (
             if (M3 & T3) begin ctl_tmp16_we=1'b1; ctl_wz_op=`WZ_NN_INC; ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MRD; ctl_mc_addr_src=`ADDR_NN; end
             if (M4 & T3) begin ctl_tmpl_we=1'b1; ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MRD; ctl_mc_addr_src=`ADDR_TMP16_INC; end
             if (M5 & T3) begin ctl_rp_set_nn=1'b1; fin=1'b1; end
+        end
+
+        // LD I,A / LD R,A / LD A,I / LD A,R — M1 fetch, M2 1T INTERNAL pad,
+        //   M2.T1 register write or A-load.
+        `EXEC_LD_I_A: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_INTERNAL; ctl_mc_addr_src=`ADDR_PC; ctl_mc_extra_t=4'd1; end
+            if (M2 & T1) begin ctl_ireg_we=1'b1; fin=1'b1; end
+        end
+        `EXEC_LD_R_A: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_INTERNAL; ctl_mc_addr_src=`ADDR_PC; ctl_mc_extra_t=4'd1; end
+            if (M2 & T1) begin ctl_rreg_we=1'b1; fin=1'b1; end
+        end
+        `EXEC_LD_A_IR: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_INTERNAL; ctl_mc_addr_src=`ADDR_PC; ctl_mc_extra_t=4'd1; end
+            if (M2 & T1) begin ctl_load_a_ir=1'b1; fin=1'b1; end
         end
 
         // IN A,(n) — M1 fetch, M2 fetches port#, M3 IORD from {A,n} into A;
