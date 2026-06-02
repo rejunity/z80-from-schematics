@@ -234,6 +234,8 @@ module z80_core (
     wire [3:0] seq_mc_addr_src;
     wire [2:0] seq_mc_wdata_src;
     wire [3:0] seq_mc_extra_t;
+    wire       seq_tmpl_we, seq_tmph_we, seq_tmp16_we;
+    wire       seq_pc_set_nn, seq_wz_set_nn, seq_use_cc;
     z80_seq u_seq (
         .eff_exec(eff_exec),
         .m_cycle(m_cycle),
@@ -260,7 +262,13 @@ module z80_core (
         .ctl_mc_addr_src(seq_mc_addr_src),
         .ctl_mc_wdata_src(seq_mc_wdata_src),
         .ctl_mc_extra_t(seq_mc_extra_t),
-        .ctl_pc_inc(seq_pc_inc)
+        .ctl_pc_inc(seq_pc_inc),
+        .ctl_tmpl_we(seq_tmpl_we),
+        .ctl_tmph_we(seq_tmph_we),
+        .ctl_tmp16_we(seq_tmp16_we),
+        .ctl_pc_set_nn(seq_pc_set_nn),
+        .ctl_wz_set_nn(seq_wz_set_nn),
+        .ctl_use_cc(seq_use_cc)
     );
 
     // ---- mux helpers for seq's address / wdata source selectors ----
@@ -540,17 +548,7 @@ module z80_core (
                         startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0); rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
                     else begin rf_n[rp_sel_w] = {rbyte, tmpl}; fin = 1'b1; end
                 end
-                `EXEC_JP, `EXEC_JP_CC: begin
-                    if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd2) begin tmpl_n = rbyte;
-                        startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0); rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else begin
-                        rf_n[`RFP_WZ] = {rbyte, tmpl};
-                        if ((exec_w == `EXEC_JP) || cc_true(F_cur, cc_w)) rf_n[`RFP_PC] = {rbyte, tmpl};
-                        fin = 1'b1;
-                    end
-                end
+                `EXEC_JP, `EXEC_JP_CC: ;  /* migrated to z80_seq (tmpl_we / pc_set_nn / wz_set_nn / use_cc) */
 
                 `EXEC_JR: begin
                     if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
@@ -1043,7 +1041,15 @@ module z80_core (
                     if (seq_start_mc) begin
                         startm(seq_mc_bus_op, seq_addr_val, seq_wdata_val, seq_mc_extra_t);
                     end
-                    if (seq_pc_inc) rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1;
+                    if (seq_pc_inc)   rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1;
+                    if (seq_tmpl_we)  tmpl_n  = rbyte;
+                    if (seq_tmph_we)  tmph_n  = rbyte;
+                    if (seq_tmp16_we) tmp16_n = {rbyte, tmpl};
+                    if (seq_wz_set_nn) rf_n[`RFP_WZ] = {rbyte, tmpl};
+                    if (seq_pc_set_nn) begin
+                        if (!seq_use_cc || cc_true(F_cur, cc_w))
+                            rf_n[`RFP_PC] = {rbyte, tmpl};
+                    end
                 end
 
                 if (fin) begin

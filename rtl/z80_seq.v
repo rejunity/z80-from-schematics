@@ -77,12 +77,25 @@ module z80_seq (
     output reg  [3:0]   ctl_mc_addr_src,   // ADDR_*
     output reg  [2:0]   ctl_mc_wdata_src,  // WDATA_*
     output reg  [3:0]   ctl_mc_extra_t,    // extra wait T-states
-    output reg          ctl_pc_inc         // PC = PC + 1 (post-fetch IDU)
+    output reg          ctl_pc_inc,        // PC = PC + 1 (post-fetch IDU)
+
+    // ---- multi-byte assembly (tmpl/tmph/tmp16 latches) ----
+    output reg          ctl_tmpl_we,       // tmpl = rbyte
+    output reg          ctl_tmph_we,       // tmph = rbyte
+    output reg          ctl_tmp16_we,      // tmp16 = {rbyte, tmpl}
+
+    // ---- PC / WZ updates from {rbyte, tmpl} ----
+    output reg          ctl_pc_set_nn,     // PC = {rbyte, tmpl}  (gated by use_cc)
+    output reg          ctl_wz_set_nn,     // WZ = {rbyte, tmpl}
+    output reg          ctl_use_cc         // if 1, gate ctl_pc_set_nn on cc_true(F, cc_w)
 );
 
     // Convenience M/T equality wires keep the case branches readable.
     wire M1 = (m_cycle == 3'd1);
     wire M2 = (m_cycle == 3'd2);
+    wire M3 = (m_cycle == 3'd3);
+    wire M4 = (m_cycle == 3'd4);
+    wire M5 = (m_cycle == 3'd5);
     wire T1 = (t_state == 4'd1);
     wire T2 = (t_state == 4'd2);
     wire T3 = (t_state == 4'd3);
@@ -91,6 +104,8 @@ module z80_seq (
     wire phi_unused = phi;
     wire t1_unused  = T1;
     wire t2_unused  = T2;
+    wire m4_unused  = M4;
+    wire m5_unused  = M5;
     /* verilator lint_on UNUSEDSIGNAL */
 
     always @* begin
@@ -115,6 +130,12 @@ module z80_seq (
         ctl_mc_wdata_src  = `WDATA_ZERO;
         ctl_mc_extra_t    = 4'd0;
         ctl_pc_inc        = 1'b0;
+        ctl_tmpl_we       = 1'b0;
+        ctl_tmph_we       = 1'b0;
+        ctl_tmp16_we      = 1'b0;
+        ctl_pc_set_nn     = 1'b0;
+        ctl_wz_set_nn     = 1'b0;
+        ctl_use_cc        = 1'b0;
 
         case (eff_exec)
         `EXEC_NOP, `EXEC_ILLEGAL: begin
@@ -266,6 +287,33 @@ module z80_seq (
                 ctl_reg_a_we = (alu_op_w != `ALU_CP);
                 ctl_reg_f_we = 1'b1;
                 fin          = 1'b1;
+            end
+        end
+
+        // JP nn / JP cc,nn — three M-cycles: M1 fetch opcode, M2 read low
+        // byte of nn into tmpl, M3 read high byte (rbyte) and assemble
+        // PC and WZ. JP_CC gates the PC update on cc_true; WZ is set
+        // unconditionally.
+        `EXEC_JP, `EXEC_JP_CC: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin
+                ctl_start_mc    = 1'b1;
+                ctl_mc_bus_op   = `BUSOP_MRD;
+                ctl_mc_addr_src = `ADDR_PC;
+                ctl_pc_inc      = 1'b1;
+            end
+            if (M2 & T3) begin
+                ctl_tmpl_we     = 1'b1;
+                ctl_start_mc    = 1'b1;
+                ctl_mc_bus_op   = `BUSOP_MRD;
+                ctl_mc_addr_src = `ADDR_PC;
+                ctl_pc_inc      = 1'b1;
+            end
+            if (M3 & T3) begin
+                ctl_wz_set_nn = 1'b1;
+                ctl_pc_set_nn = 1'b1;
+                ctl_use_cc    = (eff_exec == `EXEC_JP_CC);
+                fin           = 1'b1;
             end
         end
 
