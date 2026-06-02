@@ -69,21 +69,28 @@ module z80_seq (
     output reg          ctl_reg_a_we,      // write A from alu_res
     output reg          ctl_reg_f_we,      // write F from alu_fout
     output reg          ctl_reg_setri_we,  // setri(rf_dst_w, <src>)
-    output reg          ctl_reg_setri_src  // 0 = alu_res, 1 = getri(rf_src_w)
+    output reg  [1:0]   ctl_reg_setri_src, // SETRI_SRC_*
+
+    // ---- M-cycle scheduling (multi-M-cycle ops) ----
+    output reg          ctl_start_mc,      // start a new M-cycle this T
+    output reg  [2:0]   ctl_mc_bus_op,     // BUSOP_*
+    output reg  [3:0]   ctl_mc_addr_src,   // ADDR_*
+    output reg  [2:0]   ctl_mc_wdata_src,  // WDATA_*
+    output reg  [3:0]   ctl_mc_extra_t,    // extra wait T-states
+    output reg          ctl_pc_inc         // PC = PC + 1 (post-fetch IDU)
 );
 
     // Convenience M/T equality wires keep the case branches readable.
     wire M1 = (m_cycle == 3'd1);
-    wire M2 = (m_cycle == 3'd2);  // (unused until non-trivial opcodes migrate)
+    wire M2 = (m_cycle == 3'd2);
     wire T1 = (t_state == 4'd1);
-    wire T2 = (t_state == 4'd2);  // (unused until non-trivial opcodes migrate)
-    wire T3 = (t_state == 4'd3);  // (unused until non-trivial opcodes migrate)
+    wire T2 = (t_state == 4'd2);
+    wire T3 = (t_state == 4'd3);
     wire T4 = (t_state == 4'd4);
     /* verilator lint_off UNUSEDSIGNAL */
     wire phi_unused = phi;
-    wire m2_unused  = M2;
+    wire t1_unused  = T1;
     wire t2_unused  = T2;
-    wire t3_unused  = T3;
     /* verilator lint_on UNUSEDSIGNAL */
 
     always @* begin
@@ -101,7 +108,13 @@ module z80_seq (
         ctl_reg_a_we     = 1'b0;
         ctl_reg_f_we     = 1'b0;
         ctl_reg_setri_we  = 1'b0;
-        ctl_reg_setri_src = 1'b0;
+        ctl_reg_setri_src = `SETRI_SRC_ALU_RES;
+        ctl_start_mc      = 1'b0;
+        ctl_mc_bus_op     = `BUSOP_NONE;
+        ctl_mc_addr_src   = `ADDR_PC;
+        ctl_mc_wdata_src  = `WDATA_ZERO;
+        ctl_mc_extra_t    = 4'd0;
+        ctl_pc_inc        = 1'b0;
 
         case (eff_exec)
         `EXEC_NOP, `EXEC_ILLEGAL: begin
@@ -215,7 +228,25 @@ module z80_seq (
             seq_active = 1'b1;
             if (M1 & T4) begin
                 ctl_reg_setri_we  = 1'b1;
-                ctl_reg_setri_src = 1'b1;     /* source = getri(rf_src_w) */
+                ctl_reg_setri_src = `SETRI_SRC_GETRI_SRC;
+                fin               = 1'b1;
+            end
+        end
+
+        // LD r, n — two M-cycles: M1 fetches the opcode (already done by
+        // the time we dispatch here); M2 reads the immediate byte from PC
+        // and writes it to rf_dst.
+        `EXEC_LD_R_N: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin
+                ctl_start_mc    = 1'b1;
+                ctl_mc_bus_op   = `BUSOP_MRD;
+                ctl_mc_addr_src = `ADDR_PC;
+                ctl_pc_inc      = 1'b1;
+            end
+            if (M2 & T3) begin
+                ctl_reg_setri_we  = 1'b1;
+                ctl_reg_setri_src = `SETRI_SRC_RBYTE;
                 fin               = 1'b1;
             end
         end

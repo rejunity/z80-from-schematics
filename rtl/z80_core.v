@@ -227,7 +227,13 @@ module z80_core (
     wire       seq_ei_delay_set;
     wire       seq_im_we, seq_halt_set, seq_pc_dec1;
     wire       seq_ex_de_hl, seq_ex_af, seq_exx, seq_pc_set_hl;
-    wire       seq_reg_a_we, seq_reg_f_we, seq_reg_setri_we, seq_reg_setri_src;
+    wire       seq_reg_a_we, seq_reg_f_we, seq_reg_setri_we;
+    wire [1:0] seq_reg_setri_src;
+    wire       seq_start_mc, seq_pc_inc;
+    wire [2:0] seq_mc_bus_op;
+    wire [3:0] seq_mc_addr_src;
+    wire [2:0] seq_mc_wdata_src;
+    wire [3:0] seq_mc_extra_t;
     z80_seq u_seq (
         .eff_exec(eff_exec),
         .m_cycle(m_cycle),
@@ -248,8 +254,37 @@ module z80_core (
         .ctl_reg_a_we(seq_reg_a_we),
         .ctl_reg_f_we(seq_reg_f_we),
         .ctl_reg_setri_we(seq_reg_setri_we),
-        .ctl_reg_setri_src(seq_reg_setri_src)
+        .ctl_reg_setri_src(seq_reg_setri_src),
+        .ctl_start_mc(seq_start_mc),
+        .ctl_mc_bus_op(seq_mc_bus_op),
+        .ctl_mc_addr_src(seq_mc_addr_src),
+        .ctl_mc_wdata_src(seq_mc_wdata_src),
+        .ctl_mc_extra_t(seq_mc_extra_t),
+        .ctl_pc_inc(seq_pc_inc)
     );
+
+    // ---- mux helpers for seq's address / wdata source selectors ----
+    reg  [15:0] seq_addr_val;
+    reg  [7:0]  seq_wdata_val;
+    always @* begin
+        case (seq_mc_addr_src)
+            `ADDR_PC:      seq_addr_val = rf[`RFP_PC];
+            `ADDR_HL:      seq_addr_val = rf[hlp];
+            `ADDR_BC:      seq_addr_val = rf[`RFP_BC];
+            `ADDR_DE:      seq_addr_val = rf[`RFP_DE];
+            `ADDR_SP:      seq_addr_val = rf[`RFP_SP];
+            `ADDR_WZ:      seq_addr_val = rf[`RFP_WZ];
+            `ADDR_MEMADDR: seq_addr_val = memaddr;
+            `ADDR_TMP16:   seq_addr_val = tmp16;
+            default:       seq_addr_val = rf[`RFP_PC];
+        endcase
+        case (seq_mc_wdata_src)
+            `WDATA_A:         seq_wdata_val = A_cur;
+            `WDATA_GETRI_SRC: seq_wdata_val = getri(rf_src_w);
+            `WDATA_RBYTE:     seq_wdata_val = rbyte;
+            default:          seq_wdata_val = 8'h00;
+        endcase
+    end
 
     // ---- 8-bit register write into rf_n ----
     task setr8; input [2:0] sel; input [7:0] val;
@@ -466,11 +501,7 @@ module z80_core (
                     end else fin = 1'b1;
                 end
 
-                `EXEC_LD_R_N: begin
-                    if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else begin setri(rf_dst_w, rbyte); fin = 1'b1; end
-                end
+                `EXEC_LD_R_N: ;  /* migrated to z80_seq (ctl_start_mc / ctl_pc_inc / setri RBYTE) */
                 `EXEC_ALU_N: begin
                     if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
                         rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
@@ -1008,9 +1039,16 @@ module z80_core (
                     if (seq_reg_a_we)     rf_n[`RFP_AF][15:8] = alu_res;
                     if (seq_reg_f_we)     rf_n[`RFP_AF][7:0]  = alu_fout;
                     if (seq_reg_setri_we) begin
-                        if (seq_reg_setri_src) setri(rf_dst_w, getri(rf_src_w));
-                        else                   setri(rf_dst_w, alu_res);
+                        case (seq_reg_setri_src)
+                            `SETRI_SRC_GETRI_SRC: setri(rf_dst_w, getri(rf_src_w));
+                            `SETRI_SRC_RBYTE:     setri(rf_dst_w, rbyte);
+                            default:              setri(rf_dst_w, alu_res);
+                        endcase
                     end
+                    if (seq_start_mc) begin
+                        startm(seq_mc_bus_op, seq_addr_val, seq_wdata_val, seq_mc_extra_t);
+                    end
+                    if (seq_pc_inc) rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1;
                 end
 
                 if (fin) begin

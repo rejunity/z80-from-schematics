@@ -181,4 +181,26 @@
 `define IFF_SET   2'd2    // EI: iff1=1, iff2=1
 `define IFF_RETN  2'd3    // RETN: iff1=iff2
 
+// ---- Address-source enum for ctl_mc_addr_src (selects which register
+//      drives the address bus when seq starts a new M-cycle). ----
+`define ADDR_PC      4'd0
+`define ADDR_HL      4'd1   // rf[hlp] (HL, or IX/IY under DD/FD)
+`define ADDR_BC      4'd2
+`define ADDR_DE      4'd3
+`define ADDR_SP      4'd4
+`define ADDR_WZ      4'd5
+`define ADDR_MEMADDR 4'd6   // preamble-adjusted memory address (IX+d)
+`define ADDR_TMP16   4'd7
+
+// ---- Write-data source enum for ctl_mc_wdata_src ----
+`define WDATA_ZERO     3'd0
+`define WDATA_A        3'd1
+`define WDATA_GETRI_SRC 3'd2
+`define WDATA_RBYTE    3'd3
+
+// ---- setri source selector for ctl_reg_setri_src (2 bits) ----
+`define SETRI_SRC_ALU_RES   2'd0
+`define SETRI_SRC_GETRI_SRC 2'd1
+`define SETRI_SRC_RBYTE     2'd2
+
 `endif
