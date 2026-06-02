@@ -78,8 +78,8 @@ module z80_seq (
     // ---- M-cycle scheduling (multi-M-cycle ops) ----
     output reg          ctl_start_mc,      // start a new M-cycle this T
     output reg  [2:0]   ctl_mc_bus_op,     // BUSOP_*
-    output reg  [3:0]   ctl_mc_addr_src,   // ADDR_*
-    output reg  [2:0]   ctl_mc_wdata_src,  // WDATA_*
+    output reg  [4:0]   ctl_mc_addr_src,   // ADDR_*
+    output reg  [3:0]   ctl_mc_wdata_src,  // WDATA_*
     output reg  [3:0]   ctl_mc_extra_t,    // extra wait T-states
     output reg          ctl_pc_inc,        // PC = PC + 1 (post-fetch IDU)
 
@@ -110,7 +110,13 @@ module z80_seq (
 
     // ---- rf[hlp] bytewise writes from rbyte (LD HL,(nn)) ----
     output reg          ctl_hlp_lo_we,     // rf[hlp][7:0]  = rbyte
-    output reg          ctl_hlp_hi_we      // rf[hlp][15:8] = rbyte
+    output reg          ctl_hlp_hi_we,     // rf[hlp][15:8] = rbyte
+
+    // ---- SP / PC mutations for stack ops ----
+    output reg          ctl_sp_inc,        // SP = SP + 1
+    output reg          ctl_sp_dec,        // SP = SP - 1
+    output reg          ctl_pc_set_rst,    // PC = {8'h00, rst_addr_w}
+    output reg          ctl_pc_set_tmp16   // PC = tmp16 (CALL)
 );
 
     // Convenience M/T equality wires keep the case branches readable.
@@ -170,6 +176,10 @@ module z80_seq (
         ctl_b_dec         = 1'b0;
         ctl_hlp_lo_we     = 1'b0;
         ctl_hlp_hi_we     = 1'b0;
+        ctl_sp_inc        = 1'b0;
+        ctl_sp_dec        = 1'b0;
+        ctl_pc_set_rst    = 1'b0;
+        ctl_pc_set_tmp16  = 1'b0;
 
         case (eff_exec)
         `EXEC_NOP, `EXEC_ILLEGAL: begin
@@ -423,6 +433,49 @@ module z80_seq (
             if (M3 & T3) begin ctl_tmp16_we=1'b1; ctl_wz_op=`WZ_NN_INC; ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MRD; ctl_mc_addr_src=`ADDR_NN; end
             if (M4 & T3) begin ctl_tmpl_we=1'b1; ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MRD; ctl_mc_addr_src=`ADDR_TMP16_INC; end
             if (M5 & T3) begin ctl_rp_set_nn=1'b1; fin=1'b1; end
+        end
+
+        // PUSH rp — 4 M-cycles: M1=5T (extra IDU pad), M2 push hi, M3 push lo,
+        //   M4 wrap.
+        `EXEC_PUSH: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_INTERNAL; ctl_mc_addr_src=`ADDR_PC; ctl_mc_extra_t=4'd1; end
+            if (M2 & T1) begin ctl_sp_dec=1'b1; ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MWR; ctl_mc_addr_src=`ADDR_SP_DEC; ctl_mc_wdata_src=`WDATA_RP_HI; end
+            if (M3 & T3) begin ctl_sp_dec=1'b1; ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MWR; ctl_mc_addr_src=`ADDR_SP_DEC; ctl_mc_wdata_src=`WDATA_RP_LO; end
+            if (M4 & T3) fin = 1'b1;
+        end
+
+        // POP rp — 3 M-cycles: M1 fetch, M2 reads low from SP, M3 reads high.
+        `EXEC_POP: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MRD; ctl_mc_addr_src=`ADDR_SP; end
+            if (M2 & T3) begin ctl_tmpl_we=1'b1; ctl_sp_inc=1'b1; ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MRD; ctl_mc_addr_src=`ADDR_SP_INC; end
+            if (M3 & T3) begin ctl_sp_inc=1'b1; ctl_rp_set_nn=1'b1; fin=1'b1; end
+        end
+
+        // RST — like PUSH but writes PC (not rp_sel_w) and jumps to rst_addr.
+        `EXEC_RST: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_INTERNAL; ctl_mc_addr_src=`ADDR_PC; ctl_mc_extra_t=4'd1; end
+            if (M2 & T1) begin ctl_sp_dec=1'b1; ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MWR; ctl_mc_addr_src=`ADDR_SP_DEC; ctl_mc_wdata_src=`WDATA_PC_HI; end
+            if (M3 & T3) begin ctl_sp_dec=1'b1; ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MWR; ctl_mc_addr_src=`ADDR_SP_DEC; ctl_mc_wdata_src=`WDATA_PC_LO; end
+            if (M4 & T3) begin ctl_pc_set_rst=1'b1; ctl_wz_op=`WZ_RST_ADDR; fin=1'b1; end
+        end
+
+        // RET — like POP but writes PC and WZ.
+        `EXEC_RET: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MRD; ctl_mc_addr_src=`ADDR_SP; end
+            if (M2 & T3) begin ctl_tmpl_we=1'b1; ctl_sp_inc=1'b1; ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MRD; ctl_mc_addr_src=`ADDR_SP_INC; end
+            if (M3 & T3) begin ctl_sp_inc=1'b1; ctl_pc_set_nn=1'b1; ctl_wz_op=`WZ_SET_NN; fin=1'b1; end
+        end
+
+        // RETN — same as RET plus iff1 = iff2.
+        `EXEC_RETN: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MRD; ctl_mc_addr_src=`ADDR_SP; end
+            if (M2 & T3) begin ctl_tmpl_we=1'b1; ctl_sp_inc=1'b1; ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MRD; ctl_mc_addr_src=`ADDR_SP_INC; end
+            if (M3 & T3) begin ctl_sp_inc=1'b1; ctl_pc_set_nn=1'b1; ctl_wz_op=`WZ_SET_NN; ctl_iff_op=`IFF_RETN; fin=1'b1; end
         end
 
         // LD A,(BC) / LD A,(DE) — M1 fetch, M2 reads byte from rp into A;

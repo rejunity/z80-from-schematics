@@ -181,23 +181,25 @@
 `define IFF_SET   2'd2    // EI: iff1=1, iff2=1
 `define IFF_RETN  2'd3    // RETN: iff1=iff2
 
-// ---- Address-source enum for ctl_mc_addr_src (selects which register
-//      drives the address bus when seq starts a new M-cycle). ----
-`define ADDR_PC      4'd0
-`define ADDR_HL      4'd1   // rf[hlp] (HL, or IX/IY under DD/FD)
-`define ADDR_BC      4'd2
-`define ADDR_DE      4'd3
-`define ADDR_SP      4'd4
-`define ADDR_WZ      4'd5
-`define ADDR_MEMADDR 4'd6   // preamble-adjusted memory address (IX+d)
-`define ADDR_TMP16   4'd7
-`define ADDR_RP_INC  4'd8   // rf[rp_sel_w] + 1  (INC rp internal cycle)
-`define ADDR_RP_DEC  4'd9   // rf[rp_sel_w] - 1  (DEC rp internal cycle)
-`define ADDR_RP      4'd10  // rf[rp_sel_w]      (LD A,(BC) / LD (BC),A / etc.)
-`define ADDR_NN      4'd11  // {rbyte, tmpl}     (LD A,(nn) / LD (nn),A / LD HL,(nn) etc.)
-`define ADDR_NN_INC  4'd12  // {rbyte, tmpl} + 1 (LD HL,(nn) second-byte address)
-`define ADDR_PC_DISP 4'd13  // rf[PC] + sign_ext(rbyte)  (JR / DJNZ internal)
-`define ADDR_TMP16_INC 4'd14  // tmp16 + 1  (LD HL,(nn) high byte fetch)
+// ---- Address-source enum for ctl_mc_addr_src (5 bits) — selects which
+//      register drives the address bus when seq starts a new M-cycle. ----
+`define ADDR_PC        5'd0
+`define ADDR_HL        5'd1   // rf[hlp] (HL, or IX/IY under DD/FD)
+`define ADDR_BC        5'd2
+`define ADDR_DE        5'd3
+`define ADDR_SP        5'd4
+`define ADDR_WZ        5'd5
+`define ADDR_MEMADDR   5'd6   // preamble-adjusted memory address (IX+d)
+`define ADDR_TMP16     5'd7
+`define ADDR_RP_INC    5'd8   // rf[rp_sel_w] + 1  (INC rp internal cycle)
+`define ADDR_RP_DEC    5'd9   // rf[rp_sel_w] - 1  (DEC rp internal cycle)
+`define ADDR_RP        5'd10  // rf[rp_sel_w]      (LD A,(BC) / LD (BC),A / etc.)
+`define ADDR_NN        5'd11  // {rbyte, tmpl}     (LD A,(nn) / LD (nn),A / LD HL,(nn) etc.)
+`define ADDR_NN_INC    5'd12  // {rbyte, tmpl} + 1 (LD HL,(nn) second-byte address)
+`define ADDR_PC_DISP   5'd13  // rf[PC] + sign_ext(rbyte)  (JR / DJNZ internal)
+`define ADDR_TMP16_INC 5'd14  // tmp16 + 1  (LD HL,(nn) high byte fetch)
+`define ADDR_SP_DEC    5'd15  // rf[SP] - 1 (PUSH / CALL / RST write addr)
+`define ADDR_SP_INC    5'd16  // rf[SP] + 1 (POP / RET second-byte read)
 
 // ---- WZ (MEMPTR) update operations for ctl_wz_op (4 bits) ----
 `define WZ_NONE      4'd0
@@ -211,15 +213,17 @@
 `define WZ_PC_DISP   4'd8  // WZ = rf[PC] + sign_ext(rbyte)  (JR / DJNZ)
 `define WZ_RST_ADDR  4'd9  // WZ = {8'h00, rst_addr_w}       (RST)
 
-// ---- Write-data source enum for ctl_mc_wdata_src ----
-`define WDATA_ZERO     3'd0
-`define WDATA_A        3'd1
-`define WDATA_GETRI_SRC 3'd2
-`define WDATA_RBYTE    3'd3
-`define WDATA_HLP_LO   3'd4  // rf[hlp][7:0]   (LD (nn),HL)
-`define WDATA_HLP_HI   3'd5  // rf[hlp][15:8]  (LD (nn),HL second byte)
-`define WDATA_RP_LO    3'd6  // rf[rp_sel_w][7:0]   (LD (nn),rp ED)
-`define WDATA_RP_HI    3'd7  // rf[rp_sel_w][15:8]  (LD (nn),rp ED second byte)
+// ---- Write-data source enum for ctl_mc_wdata_src (4 bits) ----
+`define WDATA_ZERO       4'd0
+`define WDATA_A          4'd1
+`define WDATA_GETRI_SRC  4'd2
+`define WDATA_RBYTE      4'd3
+`define WDATA_HLP_LO     4'd4  // rf[hlp][7:0]
+`define WDATA_HLP_HI     4'd5  // rf[hlp][15:8]
+`define WDATA_RP_LO      4'd6  // rf[rp_sel_w][7:0]
+`define WDATA_RP_HI      4'd7  // rf[rp_sel_w][15:8]
+`define WDATA_PC_LO      4'd8  // rf[PC][7:0]   (CALL / RST push)
+`define WDATA_PC_HI      4'd9  // rf[PC][15:8]
 
 // ---- setri source selector for ctl_reg_setri_src (2 bits) ----
 `define SETRI_SRC_ALU_RES   2'd0
