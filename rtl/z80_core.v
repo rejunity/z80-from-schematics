@@ -206,12 +206,16 @@ module z80_core (
             default:             alu_b = 8'h00;
         endcase
     end
-    wire [7:0] alu_res, alu_fout;
+    wire [7:0]  alu_res, alu_fout;
+    wire [15:0] alu_res16;
+    wire [7:0]  alu_mem_byte;
     z80_alu u_alu (
         .mode(alu_md), .alu_op(alu_op_w), .rot_op(alu_rot),
         .bit_idx(alu_bit), .xy_src(alu_xy),
         .a(alu_a), .b(alu_b), .oldf(F_cur), .q(reg_q),
-        .res(alu_res), .fout(alu_fout)
+        .a16(16'h0000), .b16(16'h0000), .iff2_in(1'b0),
+        .res(alu_res), .fout(alu_fout),
+        .res16(alu_res16), .mem_byte(alu_mem_byte)
     );
 
     // ---- 8-bit register write into rf_n ----

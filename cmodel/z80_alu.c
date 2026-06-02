@@ -296,11 +296,18 @@ void z80_alu(uint8_t mode,      /* FLAG_*                                  */
              uint8_t b,         /* operand b                                */
              uint8_t oldf,      /* incoming F                              */
              uint8_t q,         /* NMOS Q register (SCF/CCF X/Y source)    */
+             uint16_t a16,      /* 16-bit operand a (ADD16/ADC16/SBC16)    */
+             uint16_t b16,      /* 16-bit operand b OR block-aux value      */
+             bool iff2_in,      /* IFF2 (LD_A_I)                            */
              uint8_t *res,
-             uint8_t *fout)
+             uint8_t *fout,
+             uint16_t *res16,   /* 16-bit result; NULL ok                   */
+             uint8_t *mem_byte) /* RRD/RLD second result; NULL ok           */
 {
     uint8_t r = b, f = oldf;
     uint8_t cin = (oldf & Z80_CF) ? 1u : 0u;
+    uint16_t r16 = 0;
+    uint8_t  mb  = 0;
 
     switch (mode) {
     case FLAG_ADD8: {
@@ -349,9 +356,151 @@ void z80_alu(uint8_t mode,      /* FLAG_*                                  */
         f = z80_flags_ccf(a, oldf, q);
         r = a;
         break;
+
+    /* ---- 16-bit ADD/ADC/SBC HL,rp ---- (byte-at-a-time on real silicon;
+       implementation is one combinational add here for simplicity) ---- */
+    case FLAG_ADD16: {
+        uint32_t s = (uint32_t)a16 + (uint32_t)b16;
+        r16 = (uint16_t)s;
+        f = oldf & (Z80_SF | Z80_ZF | Z80_PF);
+        if (((a16 & 0x0FFF) + (b16 & 0x0FFF)) & 0x1000) f |= Z80_HF;
+        if (s & 0x10000) f |= Z80_CF;
+        f |= (uint8_t)(r16 >> 8) & (Z80_YF | Z80_XF);
+        break;
+    }
+    case FLAG_ADC16: {
+        uint32_t s = (uint32_t)a16 + b16 + cin;
+        r16 = (uint16_t)s;
+        f = 0;
+        if (((a16 & 0x0FFF) + (b16 & 0x0FFF) + cin) & 0x1000) f |= Z80_HF;
+        if ((~(a16 ^ b16) & (a16 ^ r16) & 0x8000)) f |= Z80_PF;
+        if (s & 0x10000) f |= Z80_CF;
+        if (r16 & 0x8000) f |= Z80_SF;
+        if (r16 == 0)     f |= Z80_ZF;
+        f |= (uint8_t)(r16 >> 8) & (Z80_YF | Z80_XF);
+        break;
+    }
+    case FLAG_SBC16: {
+        int hc = (int)(a16 & 0x0FFF) - (int)(b16 & 0x0FFF) - (int)cin;
+        uint32_t s = (uint32_t)a16 - b16 - cin;
+        r16 = (uint16_t)s;
+        f = Z80_NF;
+        if (hc < 0) f |= Z80_HF;
+        if ((a16 ^ b16) & (a16 ^ r16) & 0x8000) f |= Z80_PF;
+        if (s & 0x10000) f |= Z80_CF;
+        if (r16 & 0x8000) f |= Z80_SF;
+        if (r16 == 0)     f |= Z80_ZF;
+        f |= (uint8_t)(r16 >> 8) & (Z80_YF | Z80_XF);
+        break;
+    }
+
+    /* ---- NEG: 0 - A ---- */
+    case FLAG_NEG: {
+        r = (uint8_t)(0u - a);
+        f = Z80_NF;
+        if (r & 0x80) f |= Z80_SF;
+        if (r == 0)   f |= Z80_ZF;
+        if (a & 0x0F) f |= Z80_HF;
+        if (a == 0x80) f |= Z80_PF;
+        if (a != 0)    f |= Z80_CF;
+        f |= r & XY;
+        break;
+    }
+
+    /* ---- LD A,I / LD A,R: PF = IFF2 ---- (a is the loaded byte) */
+    case FLAG_LD_A_I: {
+        r = a;
+        f = oldf & Z80_CF;
+        if (a & 0x80) f |= Z80_SF;
+        if (a == 0)   f |= Z80_ZF;
+        f |= a & XY;
+        if (iff2_in)  f |= Z80_PF;
+        break;
+    }
+
+    /* ---- IN r,(C): standard S/Z/P/X/Y from data, HF=0, NF=0 ---- */
+    case FLAG_IN: {
+        r = b;                            /* the byte from the port    */
+        f = oldf & Z80_CF;
+        if (b & 0x80) f |= Z80_SF;
+        if (b == 0)   f |= Z80_ZF;
+        f |= b & XY;
+        if (z80_parity(b)) f |= Z80_PF;
+        break;
+    }
+
+    /* ---- RRD: A = {A[7:4], (HL)[3:0]}; (HL) = {A[3:0], (HL)[7:4]} ---- */
+    case FLAG_RRD: {
+        uint8_t mem = b;
+        uint8_t newA = (uint8_t)((a & 0xF0) | (mem & 0x0F));
+        mb = (uint8_t)((mem >> 4) | ((a & 0x0F) << 4));
+        r = newA;
+        f = oldf & Z80_CF;
+        if (newA & 0x80) f |= Z80_SF;
+        if (newA == 0)   f |= Z80_ZF;
+        f |= newA & XY;
+        if (z80_parity(newA)) f |= Z80_PF;
+        break;
+    }
+    case FLAG_RLD: {
+        uint8_t mem = b;
+        uint8_t newA = (uint8_t)((a & 0xF0) | ((mem >> 4) & 0x0F));
+        mb = (uint8_t)(((mem << 4) & 0xF0) | (a & 0x0F));
+        r = newA;
+        f = oldf & Z80_CF;
+        if (newA & 0x80) f |= Z80_SF;
+        if (newA == 0)   f |= Z80_ZF;
+        f |= newA & XY;
+        if (z80_parity(newA)) f |= Z80_PF;
+        break;
+    }
+
+    /* ---- Block-op flag formulas. b16 carries the block-specific aux:
+           BLOCK_LD: bc_after.   BLOCK_CP: bc_after.   BLOCK_IO: k (9 bits in low). */
+    case FLAG_BLOCK_LD: {
+        /* a = A reg; b = transferred byte; b16 = BC after decrement. */
+        uint8_t n = (uint8_t)(a + b);
+        f = oldf & (Z80_SF | Z80_ZF | Z80_CF);
+        if (n & 0x02) f |= Z80_YF;
+        if (n & 0x08) f |= Z80_XF;
+        if (b16) f |= Z80_PF;
+        r = a;
+        break;
+    }
+    case FLAG_BLOCK_CP: {
+        /* a = A reg; b = (HL) byte; b16 = BC after decrement. */
+        uint8_t sub = (uint8_t)(a - b);
+        uint8_t hf = (((int)(a & 0xF) - (int)(b & 0xF)) < 0) ? Z80_HF : 0;
+        uint8_t n  = (uint8_t)(sub - (hf ? 1u : 0u));
+        f = (oldf & Z80_CF) | Z80_NF;
+        if (sub & 0x80) f |= Z80_SF;
+        if (sub == 0)   f |= Z80_ZF;
+        f |= hf;
+        if (n & 0x02) f |= Z80_YF;
+        if (n & 0x08) f |= Z80_XF;
+        if (b16) f |= Z80_PF;
+        r = a;
+        break;
+    }
+    case FLAG_BLOCK_IO: {
+        /* a = port-data byte; b = new B value (B after decrement);
+           b16 = k (low 9 bits matter: bk = data + (C +/- 1) or + L). */
+        uint8_t data = a;
+        uint8_t newB = b;
+        uint16_t bk  = b16;
+        f = 0;
+        if (data & 0x80)        f |= Z80_NF;
+        if (bk & 0x100)         f |= (Z80_HF | Z80_CF);
+        if (z80_parity((uint8_t)((bk & 7) ^ newB))) f |= Z80_PF;
+        if (newB & 0x80)        f |= Z80_SF;
+        if (newB == 0)          f |= Z80_ZF;
+        f |= newB & XY;
+        r = newB;
+        break;
+    }
+
     default:
-        /* FLAG_NONE / 16-bit / block modes are sequencer-internal; the ALU
-           top-level passes through. */
+        /* FLAG_NONE: pass through. */
         r = b;
         f = oldf;
         break;
@@ -359,4 +508,6 @@ void z80_alu(uint8_t mode,      /* FLAG_*                                  */
 
     *res  = r;
     *fout = f;
+    if (res16)    *res16    = r16;
+    if (mem_byte) *mem_byte = mb;
 }

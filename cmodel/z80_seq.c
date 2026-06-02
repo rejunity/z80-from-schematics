@@ -14,6 +14,7 @@
  * live in z80_core.c and are declared in z80_internal.h. The inline
  * accessors (z80_A, z80_F, z80_pc_inc, ...) also live in z80_internal.h.
  * ==========================================================================*/
+#include <stddef.h>  /* NULL */
 #include "z80_internal.h"
 
 
@@ -61,8 +62,7 @@ static void do_alu(z80_t *c, uint8_t b)
         case ALU_AND: case ALU_XOR: case ALU_OR:  mode = FLAG_LOGIC; break;
         default: /* ALU_CP */                     mode = FLAG_CP8;   break;
     }
-    z80_alu(mode, (uint8_t)c->ctl.alu_op, 0, 0, 0,
-            a, b, z80_F(c), c->q, &res, &f);
+    z80_alu(mode, (uint8_t)c->ctl.alu_op, 0, 0, 0, a, b, z80_F(c), c->q, 0, 0, false, &res, &f, NULL, NULL);
     if (c->ctl.alu_op != ALU_CP) z80_setA(c, res);
     z80_setF(c, f);
 }
@@ -226,12 +226,12 @@ void z80_exec_step(z80_t *c)
             if (x == CB_BIT) {
                 uint8_t xy = (uint8_t)(c->rf[RFP_WZ] >> 8);
                 uint8_t r, f;
-                z80_alu(FLAG_BIT, 0, 0, yy, xy, 0, val, z80_F(c), 0, &r, &f);
+                z80_alu(FLAG_BIT, 0, 0, yy, xy, 0, val, z80_F(c), 0, 0, 0, false, &r, &f, NULL, NULL);
                 z80_setF(c, f);
                 finish(c);
             } else {
                 if (x == CB_ROT) { uint8_t f;
-                                   z80_alu(FLAG_ROT, 0, yy, 0, 0, 0, val, z80_F(c), 0, &res, &f);
+                                   z80_alu(FLAG_ROT, 0, yy, 0, 0, 0, val, z80_F(c), 0, 0, 0, false, &res, &f, NULL, NULL);
                                    z80_setF(c, f); }
                 else if (x == CB_RES) res = (uint8_t)(val & ~(1u << yy));
                 else                  res = (uint8_t)(val | (1u << yy));
@@ -257,30 +257,30 @@ void z80_exec_step(z80_t *c)
     case EXEC_ALU_R:  do_alu(c, getri(c, ctl->rf_src)); finish(c); break;
     case EXEC_INC_R: {
         uint8_t res, f;
-        z80_alu(FLAG_INC8, 0, 0, 0, 0, 0, getri(c, ctl->rf_dst), z80_F(c), 0, &res, &f);
+        z80_alu(FLAG_INC8, 0, 0, 0, 0, 0, getri(c, ctl->rf_dst), z80_F(c), 0, 0, 0, false, &res, &f, NULL, NULL);
         setri(c, ctl->rf_dst, res); z80_setF(c, f); finish(c); break;
     }
     case EXEC_DEC_R: {
         uint8_t res, f;
-        z80_alu(FLAG_DEC8, 0, 0, 0, 0, 0, getri(c, ctl->rf_dst), z80_F(c), 0, &res, &f);
+        z80_alu(FLAG_DEC8, 0, 0, 0, 0, 0, getri(c, ctl->rf_dst), z80_F(c), 0, 0, 0, false, &res, &f, NULL, NULL);
         setri(c, ctl->rf_dst, res); z80_setF(c, f); finish(c); break;
     }
     case EXEC_ROT_A: {
         uint8_t res, f;
-        z80_alu(FLAG_ROT_A, 0, ctl->rot_op, 0, 0, z80_A(c), 0, z80_F(c), 0, &res, &f);
+        z80_alu(FLAG_ROT_A, 0, ctl->rot_op, 0, 0, z80_A(c), 0, z80_F(c), 0, 0, 0, false, &res, &f, NULL, NULL);
         z80_setA(c, res); z80_setF(c, f); finish(c); break;
     }
     case EXEC_DAA: { uint8_t res, f;
-        z80_alu(FLAG_DAA, 0, 0, 0, 0, z80_A(c), 0, z80_F(c), 0, &res, &f);
+        z80_alu(FLAG_DAA, 0, 0, 0, 0, z80_A(c), 0, z80_F(c), 0, 0, 0, false, &res, &f, NULL, NULL);
         z80_setA(c, res); z80_setF(c, f); finish(c); break; }
     case EXEC_CPL: { uint8_t res, f;
-        z80_alu(FLAG_CPL, 0, 0, 0, 0, z80_A(c), 0, z80_F(c), 0, &res, &f);
+        z80_alu(FLAG_CPL, 0, 0, 0, 0, z80_A(c), 0, z80_F(c), 0, 0, 0, false, &res, &f, NULL, NULL);
         z80_setA(c, res); z80_setF(c, f); finish(c); break; }
     case EXEC_SCF: { uint8_t res, f;
-        z80_alu(FLAG_SCF, 0, 0, 0, 0, z80_A(c), 0, z80_F(c), c->q, &res, &f);
+        z80_alu(FLAG_SCF, 0, 0, 0, 0, z80_A(c), 0, z80_F(c), c->q, 0, 0, false, &res, &f, NULL, NULL);
         z80_setF(c, f); finish(c); break; }
     case EXEC_CCF: { uint8_t res, f;
-        z80_alu(FLAG_CCF, 0, 0, 0, 0, z80_A(c), 0, z80_F(c), c->q, &res, &f);
+        z80_alu(FLAG_CCF, 0, 0, 0, 0, z80_A(c), 0, z80_F(c), c->q, 0, 0, false, &res, &f, NULL, NULL);
         z80_setF(c, f); finish(c); break; }
 
     case EXEC_EX_DE_HL: { uint16_t t = c->rf[RFP_DE]; c->rf[RFP_DE] = c->rf[RFP_HL]; c->rf[RFP_HL] = t; finish(c); break; }
@@ -355,14 +355,14 @@ void z80_exec_step(z80_t *c)
     case EXEC_INC_M:
         if (mm == 1) z80_start_mcycle(c, BUSOP_MRD, memaddr, 0, 1); /* 4T read */
         else if (mm == 2) { uint8_t res, f;
-                           z80_alu(FLAG_INC8, 0, 0, 0, 0, 0, RB, z80_F(c), 0, &res, &f);
+                           z80_alu(FLAG_INC8, 0, 0, 0, 0, 0, RB, z80_F(c), 0, 0, 0, false, &res, &f, NULL, NULL);
                            z80_setF(c, f); z80_start_mcycle(c, BUSOP_MWR, memaddr, res, 0); }
         else finish(c);
         break;
     case EXEC_DEC_M:
         if (mm == 1) z80_start_mcycle(c, BUSOP_MRD, memaddr, 0, 1);
         else if (mm == 2) { uint8_t res, f;
-                           z80_alu(FLAG_DEC8, 0, 0, 0, 0, 0, RB, z80_F(c), 0, &res, &f);
+                           z80_alu(FLAG_DEC8, 0, 0, 0, 0, 0, RB, z80_F(c), 0, 0, 0, false, &res, &f, NULL, NULL);
                            z80_setF(c, f); z80_start_mcycle(c, BUSOP_MWR, memaddr, res, 0); }
         else finish(c);
         break;
@@ -553,9 +553,9 @@ void z80_exec_step(z80_t *c)
     case EXEC_CB_R: {
         uint8_t val = getr(c, ctl->rf_src), res, f;
         switch (ctl->cb_kind) {
-            case CB_ROT: z80_alu(FLAG_ROT, 0, ctl->rot_op, 0, 0, 0, val, z80_F(c), 0, &res, &f);
+            case CB_ROT: z80_alu(FLAG_ROT, 0, ctl->rot_op, 0, 0, 0, val, z80_F(c), 0, 0, 0, false, &res, &f, NULL, NULL);
                          setr(c, ctl->rf_dst, res); z80_setF(c, f); break;
-            case CB_BIT: z80_alu(FLAG_BIT, 0, 0, ctl->bit_index, val, 0, val, z80_F(c), 0, &res, &f);
+            case CB_BIT: z80_alu(FLAG_BIT, 0, 0, ctl->bit_index, val, 0, val, z80_F(c), 0, 0, 0, false, &res, &f, NULL, NULL);
                          z80_setF(c, f); break;
             case CB_RES: setr(c, ctl->rf_dst, (uint8_t)(val & ~(1u << ctl->bit_index))); break;
             case CB_SET: setr(c, ctl->rf_dst, (uint8_t)(val | (1u << ctl->bit_index))); break;
@@ -567,13 +567,13 @@ void z80_exec_step(z80_t *c)
         else if (ctl->cb_kind == CB_BIT) {
             uint8_t xy = (uint8_t)(c->rf[RFP_WZ] >> 8);   /* MEMPTR high byte */
             uint8_t r, f;
-            z80_alu(FLAG_BIT, 0, 0, ctl->bit_index, xy, 0, RB, z80_F(c), 0, &r, &f);
+            z80_alu(FLAG_BIT, 0, 0, ctl->bit_index, xy, 0, RB, z80_F(c), 0, 0, 0, false, &r, &f, NULL, NULL);
             z80_setF(c, f);
             finish(c);
         } else if (m == 2) {
             uint8_t val = RB, res = val, f;
             switch (ctl->cb_kind) {
-                case CB_ROT: z80_alu(FLAG_ROT, 0, ctl->rot_op, 0, 0, 0, val, z80_F(c), 0, &res, &f);
+                case CB_ROT: z80_alu(FLAG_ROT, 0, ctl->rot_op, 0, 0, 0, val, z80_F(c), 0, 0, 0, false, &res, &f, NULL, NULL);
                              z80_setF(c, f); break;
                 case CB_RES: res = (uint8_t)(val & ~(1u << ctl->bit_index)); break;
                 case CB_SET: res = (uint8_t)(val | (1u << ctl->bit_index)); break;
@@ -594,7 +594,7 @@ void z80_exec_step(z80_t *c)
         break;
     case EXEC_NEG: {
         uint8_t res, f;
-        z80_alu(FLAG_SUB8, ALU_SUB, 0, 0, 0, 0, z80_A(c), z80_F(c), 0, &res, &f);
+        z80_alu(FLAG_SUB8, ALU_SUB, 0, 0, 0, 0, z80_A(c), z80_F(c), 0, 0, 0, false, &res, &f, NULL, NULL);
         z80_setA(c, res); z80_setF(c, f); finish(c); break;
     }
     case EXEC_IM: c->im = ctl->aux; finish(c); break;

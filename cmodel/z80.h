@@ -102,10 +102,22 @@ uint8_t z80_flags_cpl(uint8_t a, uint8_t oldF, uint8_t *res);
 /* Top-level ALU module entry point (mirrors rtl/z80_alu.v). One C
    parameter per Verilog port; by-value inputs, by-pointer outputs.
    The z80_alu_* and z80_flags_* helpers above are its internal building
-   blocks. Sequencer calls go through this. */
+   blocks. Sequencer calls go through this.
+
+   Extra inputs / outputs are for the silicon-faithful modes added in
+   Phase 5 of the c-like-verilog refactor:
+     a16, b16     — 16-bit operands for FLAG_ADD16/ADC16/SBC16 and the
+                    block-op auxiliary value (BC-after or k).
+     iff2_in      — IFF2 for FLAG_LD_A_I (PF source).
+     res16        — 16-bit result for FLAG_ADD16/ADC16/SBC16 (NULL ok
+                    when caller doesn't need it).
+     mem_byte     — second result for FLAG_RRD / FLAG_RLD (new (HL)
+                    byte) (NULL ok). */
 void z80_alu(uint8_t mode, uint8_t alu_op, uint8_t rot_op, uint8_t bit_idx,
              uint8_t xy_src, uint8_t a, uint8_t b, uint8_t oldf, uint8_t q,
-             uint8_t *res, uint8_t *fout);
+             uint16_t a16, uint16_t b16, bool iff2_in,
+             uint8_t *res, uint8_t *fout,
+             uint16_t *res16, uint8_t *mem_byte);
 
 /* Top-level timing module entry point (mirrors rtl/z80_timing.v). Pure
    combinational: drives the external bus pins as a function of (bus_op,
@@ -143,7 +155,8 @@ typedef enum {
     FLAG_NONE = 0, FLAG_ADD8, FLAG_SUB8, FLAG_CP8, FLAG_LOGIC,
     FLAG_INC8, FLAG_DEC8, FLAG_ROT_A, FLAG_ROT, FLAG_BIT,
     FLAG_ADD16, FLAG_ADC16, FLAG_SBC16, FLAG_DAA, FLAG_SCF, FLAG_CCF,
-    FLAG_CPL, FLAG_NEG, FLAG_BLOCK_LD, FLAG_BLOCK_CP, FLAG_BLOCK_IO
+    FLAG_CPL, FLAG_NEG, FLAG_BLOCK_LD, FLAG_BLOCK_CP, FLAG_BLOCK_IO,
+    FLAG_LD_A_I, FLAG_IN, FLAG_RRD, FLAG_RLD
 } z80_flag_mode_t;
 
 /* Address-bus source for the current data M-cycle. */

@@ -78,6 +78,14 @@
 `define FLAG_SCF    5'd14
 `define FLAG_CCF    5'd15
 `define FLAG_CPL    5'd16
+`define FLAG_NEG       5'd17
+`define FLAG_BLOCK_LD  5'd18
+`define FLAG_BLOCK_CP  5'd19
+`define FLAG_BLOCK_IO  5'd20
+`define FLAG_LD_A_I    5'd21
+`define FLAG_IN        5'd22
+`define FLAG_RRD       5'd23
+`define FLAG_RLD       5'd24
 
 // ---- exec (datapath action) codes, mirroring z80_exec_t order ----
 `define EXEC_NOP        6'd0
