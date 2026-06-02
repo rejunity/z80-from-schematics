@@ -240,6 +240,7 @@ module z80_core (
     wire       seq_reg_a_src_rbyte;
     wire [3:0] seq_wz_op;
     wire       seq_pc_add_disp, seq_b_dec;
+    wire       seq_hlp_lo_we, seq_hlp_hi_we;
     wire       cc_taken    = cc_true(F_cur, cc_w);
     wire       djnz_taken  = (rf[`RFP_BC][15:8] - 8'd1) != 8'd0;
     z80_seq u_seq (
@@ -283,7 +284,9 @@ module z80_core (
         .ctl_reg_a_src_rbyte(seq_reg_a_src_rbyte),
         .ctl_wz_op(seq_wz_op),
         .ctl_pc_add_disp(seq_pc_add_disp),
-        .ctl_b_dec(seq_b_dec)
+        .ctl_b_dec(seq_b_dec),
+        .ctl_hlp_lo_we(seq_hlp_lo_we),
+        .ctl_hlp_hi_we(seq_hlp_hi_we)
     );
 
     // ---- mux helpers for seq's address / wdata source selectors ----
@@ -305,12 +308,17 @@ module z80_core (
             `ADDR_NN:      seq_addr_val = {rbyte, tmpl};
             `ADDR_NN_INC:  seq_addr_val = {rbyte, tmpl} + 16'd1;
             `ADDR_PC_DISP: seq_addr_val = rf[`RFP_PC] + {{8{rbyte[7]}}, rbyte};
+            `ADDR_TMP16_INC: seq_addr_val = tmp16 + 16'd1;
             default:       seq_addr_val = rf[`RFP_PC];
         endcase
         case (seq_mc_wdata_src)
             `WDATA_A:         seq_wdata_val = A_cur;
             `WDATA_GETRI_SRC: seq_wdata_val = getri(rf_src_w);
             `WDATA_RBYTE:     seq_wdata_val = rbyte;
+            `WDATA_HLP_LO:    seq_wdata_val = rf[hlp][7:0];
+            `WDATA_HLP_HI:    seq_wdata_val = rf[hlp][15:8];
+            `WDATA_RP_LO:     seq_wdata_val = rf[rp_sel_w][7:0];
+            `WDATA_RP_HI:     seq_wdata_val = rf[rp_sel_w][15:8];
             default:          seq_wdata_val = 8'h00;
         endcase
     end
@@ -615,28 +623,7 @@ module z80_core (
 
                 `EXEC_LD_A_RP, `EXEC_LD_RP_A: ;  /* migrated to z80_seq (ADDR_RP + ctl_wz_op) */
                 `EXEC_LD_A_NN, `EXEC_LD_NN_A: ;  /* migrated to z80_seq (ADDR_NN + WZ_NN_INC / WZ_A_NN_INC) */
-                `EXEC_LD_HL_NN: begin
-                    if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd2) begin tmpl_n = rbyte;
-                        startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0); rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd3) begin tmp16_n = {rbyte, tmpl};
-                        rf_n[`RFP_WZ] = {rbyte, tmpl} + 16'd1; startm(`BUSOP_MRD, {rbyte, tmpl}, 8'h0, 4'd0); end
-                    else if (m_cycle == 3'd4) begin rf_n[hlp][7:0] = rbyte;
-                        startm(`BUSOP_MRD, tmp16 + 16'd1, 8'h0, 4'd0); end
-                    else begin rf_n[hlp][15:8] = rbyte; fin = 1'b1; end
-                end
-                `EXEC_LD_NN_HL: begin
-                    if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd2) begin tmpl_n = rbyte;
-                        startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0); rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd3) begin tmp16_n = {rbyte, tmpl};
-                        rf_n[`RFP_WZ] = {rbyte, tmpl} + 16'd1;
-                        startm(`BUSOP_MWR, {rbyte, tmpl}, rf[hlp][7:0], 4'd0); end
-                    else if (m_cycle == 3'd4) startm(`BUSOP_MWR, tmp16 + 16'd1, rf[hlp][15:8], 4'd0);
-                    else fin = 1'b1;
-                end
+                `EXEC_LD_HL_NN, `EXEC_LD_NN_HL: ;  /* migrated to z80_seq */
 
                 `EXEC_IN_A_N: begin
                     if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
@@ -744,29 +731,7 @@ module z80_core (
                         rf_n[`RFP_AF][7:0] = edf; fin = 1'b1;
                     end
                 end
-                `EXEC_LD_NNA_RP: begin
-                    if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd2) begin tmpl_n = rbyte;
-                        startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0); rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd3) begin tmp16_n = {rbyte, tmpl};
-                        rf_n[`RFP_WZ] = {rbyte, tmpl} + 16'd1;
-                        startm(`BUSOP_MWR, {rbyte, tmpl}, rf[rp_sel_w][7:0], 4'd0); end
-                    else if (m_cycle == 3'd4) startm(`BUSOP_MWR, tmp16 + 16'd1, rf[rp_sel_w][15:8], 4'd0);
-                    else fin = 1'b1;
-                end
-                `EXEC_LD_RP_NNA: begin
-                    if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd2) begin tmpl_n = rbyte;
-                        startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0); rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd3) begin tmp16_n = {rbyte, tmpl};
-                        rf_n[`RFP_WZ] = {rbyte, tmpl} + 16'd1;
-                        startm(`BUSOP_MRD, {rbyte, tmpl}, 8'h0, 4'd0); end
-                    else if (m_cycle == 3'd4) begin tmpl_n = rbyte;
-                        startm(`BUSOP_MRD, tmp16 + 16'd1, 8'h0, 4'd0); end
-                    else begin rf_n[rp_sel_w] = {rbyte, tmpl}; fin = 1'b1; end
-                end
+                `EXEC_LD_NNA_RP, `EXEC_LD_RP_NNA: ;  /* migrated to z80_seq */
                 `EXEC_IN_C: begin
                     if (m_cycle == 3'd1) begin rf_n[`RFP_WZ] = rf[`RFP_BC] + 16'd1;
                         startm(`BUSOP_IORD, rf[`RFP_BC], 8'h0, 4'd0); end
@@ -1004,6 +969,8 @@ module z80_core (
                         rf_n[`RFP_PC] = rf[`RFP_PC] + {{8{rbyte[7]}}, rbyte};
                     if (seq_b_dec)
                         rf_n[`RFP_BC][15:8] = rf[`RFP_BC][15:8] - 8'd1;
+                    if (seq_hlp_lo_we) rf_n[hlp][7:0]  = rbyte;
+                    if (seq_hlp_hi_we) rf_n[hlp][15:8] = rbyte;
                     if (seq_pc_set_nn) begin
                         if (!seq_use_cc || cc_true(F_cur, cc_w))
                             rf_n[`RFP_PC] = {rbyte, tmpl};

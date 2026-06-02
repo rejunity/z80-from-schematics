@@ -197,6 +197,7 @@
 `define ADDR_NN      4'd11  // {rbyte, tmpl}     (LD A,(nn) / LD (nn),A / LD HL,(nn) etc.)
 `define ADDR_NN_INC  4'd12  // {rbyte, tmpl} + 1 (LD HL,(nn) second-byte address)
 `define ADDR_PC_DISP 4'd13  // rf[PC] + sign_ext(rbyte)  (JR / DJNZ internal)
+`define ADDR_TMP16_INC 4'd14  // tmp16 + 1  (LD HL,(nn) high byte fetch)
 
 // ---- WZ (MEMPTR) update operations for ctl_wz_op (4 bits) ----
 `define WZ_NONE      4'd0
@@ -215,6 +216,10 @@
 `define WDATA_A        3'd1
 `define WDATA_GETRI_SRC 3'd2
 `define WDATA_RBYTE    3'd3
+`define WDATA_HLP_LO   3'd4  // rf[hlp][7:0]   (LD (nn),HL)
+`define WDATA_HLP_HI   3'd5  // rf[hlp][15:8]  (LD (nn),HL second byte)
+`define WDATA_RP_LO    3'd6  // rf[rp_sel_w][7:0]   (LD (nn),rp ED)
+`define WDATA_RP_HI    3'd7  // rf[rp_sel_w][15:8]  (LD (nn),rp ED second byte)
 
 // ---- setri source selector for ctl_reg_setri_src (2 bits) ----
 `define SETRI_SRC_ALU_RES   2'd0

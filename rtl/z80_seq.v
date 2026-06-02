@@ -106,7 +106,11 @@ module z80_seq (
 
     // ---- PC mutation (multi-op) ----
     output reg          ctl_pc_add_disp,   // PC = rf[PC] + sign_ext(rbyte)  (JR/DJNZ)
-    output reg          ctl_b_dec          // B = B - 1  (DJNZ)
+    output reg          ctl_b_dec,         // B = B - 1  (DJNZ)
+
+    // ---- rf[hlp] bytewise writes from rbyte (LD HL,(nn)) ----
+    output reg          ctl_hlp_lo_we,     // rf[hlp][7:0]  = rbyte
+    output reg          ctl_hlp_hi_we      // rf[hlp][15:8] = rbyte
 );
 
     // Convenience M/T equality wires keep the case branches readable.
@@ -164,6 +168,8 @@ module z80_seq (
         ctl_wz_op         = `WZ_NONE;
         ctl_pc_add_disp   = 1'b0;
         ctl_b_dec         = 1'b0;
+        ctl_hlp_lo_we     = 1'b0;
+        ctl_hlp_hi_we     = 1'b0;
 
         case (eff_exec)
         `EXEC_NOP, `EXEC_ILLEGAL: begin
@@ -374,6 +380,49 @@ module z80_seq (
                 ctl_mc_wdata_src = `WDATA_A;
             end
             if (M4 & T3) fin = 1'b1;
+        end
+
+        // LD HL,(nn) — 5 M-cycles. Same nn fetch as LD A,(nn), then two
+        //   byte reads to rf[hlp] (HL/IX/IY).
+        `EXEC_LD_HL_NN: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MRD; ctl_mc_addr_src=`ADDR_PC; ctl_pc_inc=1'b1; end
+            if (M2 & T3) begin ctl_tmpl_we=1'b1; ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MRD; ctl_mc_addr_src=`ADDR_PC; ctl_pc_inc=1'b1; end
+            if (M3 & T3) begin ctl_tmp16_we=1'b1; ctl_wz_op=`WZ_NN_INC; ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MRD; ctl_mc_addr_src=`ADDR_NN; end
+            if (M4 & T3) begin ctl_hlp_lo_we=1'b1; ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MRD; ctl_mc_addr_src=`ADDR_TMP16_INC; end
+            if (M5 & T3) begin ctl_hlp_hi_we=1'b1; fin=1'b1; end
+        end
+
+        // LD (nn),HL — mirror: writes low then high byte of rf[hlp].
+        `EXEC_LD_NN_HL: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MRD; ctl_mc_addr_src=`ADDR_PC; ctl_pc_inc=1'b1; end
+            if (M2 & T3) begin ctl_tmpl_we=1'b1; ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MRD; ctl_mc_addr_src=`ADDR_PC; ctl_pc_inc=1'b1; end
+            if (M3 & T3) begin ctl_tmp16_we=1'b1; ctl_wz_op=`WZ_NN_INC; ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MWR; ctl_mc_addr_src=`ADDR_NN; ctl_mc_wdata_src=`WDATA_HLP_LO; end
+            if (M4 & T3) begin ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MWR; ctl_mc_addr_src=`ADDR_TMP16_INC; ctl_mc_wdata_src=`WDATA_HLP_HI; end
+            if (M5 & T3) fin = 1'b1;
+        end
+
+        // LD (nn),rp (ED page) — same pattern with rp_sel_w bytes.
+        `EXEC_LD_NNA_RP: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MRD; ctl_mc_addr_src=`ADDR_PC; ctl_pc_inc=1'b1; end
+            if (M2 & T3) begin ctl_tmpl_we=1'b1; ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MRD; ctl_mc_addr_src=`ADDR_PC; ctl_pc_inc=1'b1; end
+            if (M3 & T3) begin ctl_tmp16_we=1'b1; ctl_wz_op=`WZ_NN_INC; ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MWR; ctl_mc_addr_src=`ADDR_NN; ctl_mc_wdata_src=`WDATA_RP_LO; end
+            if (M4 & T3) begin ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MWR; ctl_mc_addr_src=`ADDR_TMP16_INC; ctl_mc_wdata_src=`WDATA_RP_HI; end
+            if (M5 & T3) fin = 1'b1;
+        end
+
+        // LD rp,(nn) (ED page) — read two bytes from nn / nn+1; assemble
+        //   into rf[rp_sel_w]. Uses tmpl as a 1-byte scratch (overwritten
+        //   between nn-low fetch and rp-low fetch).
+        `EXEC_LD_RP_NNA: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MRD; ctl_mc_addr_src=`ADDR_PC; ctl_pc_inc=1'b1; end
+            if (M2 & T3) begin ctl_tmpl_we=1'b1; ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MRD; ctl_mc_addr_src=`ADDR_PC; ctl_pc_inc=1'b1; end
+            if (M3 & T3) begin ctl_tmp16_we=1'b1; ctl_wz_op=`WZ_NN_INC; ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MRD; ctl_mc_addr_src=`ADDR_NN; end
+            if (M4 & T3) begin ctl_tmpl_we=1'b1; ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MRD; ctl_mc_addr_src=`ADDR_TMP16_INC; end
+            if (M5 & T3) begin ctl_rp_set_nn=1'b1; fin=1'b1; end
         end
 
         // LD A,(BC) / LD A,(DE) — M1 fetch, M2 reads byte from rp into A;
