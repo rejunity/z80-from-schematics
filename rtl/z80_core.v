@@ -226,6 +226,7 @@ module z80_core (
     wire [1:0] seq_iff_op;
     wire       seq_ei_delay_set;
     wire       seq_im_we, seq_halt_set, seq_pc_dec1;
+    wire       seq_ex_de_hl, seq_ex_af, seq_exx, seq_pc_set_hl;
     z80_seq u_seq (
         .eff_exec(eff_exec),
         .m_cycle(m_cycle),
@@ -237,7 +238,11 @@ module z80_core (
         .ctl_ei_delay_set(seq_ei_delay_set),
         .ctl_im_we(seq_im_we),
         .ctl_halt_set(seq_halt_set),
-        .ctl_pc_dec1(seq_pc_dec1)
+        .ctl_pc_dec1(seq_pc_dec1),
+        .ctl_reg_ex_de_hl(seq_ex_de_hl),
+        .ctl_reg_ex_af(seq_ex_af),
+        .ctl_reg_exx(seq_exx),
+        .ctl_pc_set_hl(seq_pc_set_hl)
     );
 
     // ---- 8-bit register write into rf_n ----
@@ -420,15 +425,10 @@ module z80_core (
                                   rf_n[`RFP_AF][7:0] = alu_fout; fin = 1'b1; end
                 `EXEC_SCF, `EXEC_CCF: begin rf_n[`RFP_AF][7:0] = alu_fout; fin = 1'b1; end
 
-                `EXEC_EX_DE_HL: begin rf_n[`RFP_DE] = rf[`RFP_HL]; rf_n[`RFP_HL] = rf[`RFP_DE]; fin = 1'b1; end
-                `EXEC_EX_AF:    begin rf_n[`RFP_AF] = rf[`RFP_AF2]; rf_n[`RFP_AF2] = rf[`RFP_AF]; fin = 1'b1; end
-                `EXEC_EXX: begin
-                    rf_n[`RFP_BC] = rf[`RFP_BC2]; rf_n[`RFP_BC2] = rf[`RFP_BC];
-                    rf_n[`RFP_DE] = rf[`RFP_DE2]; rf_n[`RFP_DE2] = rf[`RFP_DE];
-                    rf_n[`RFP_HL] = rf[`RFP_HL2]; rf_n[`RFP_HL2] = rf[`RFP_HL];
-                    fin = 1'b1;
-                end
-                `EXEC_JP_HL: begin rf_n[`RFP_PC] = rf[hlp]; fin = 1'b1; end
+                `EXEC_EX_DE_HL,
+                `EXEC_EX_AF,
+                `EXEC_EXX,
+                `EXEC_JP_HL: ;  /* migrated to z80_seq (ctl_reg_ex_* / ctl_pc_set_hl) */
 
                 `EXEC_INC_RP: begin
                     if (m_cycle == 3'd1) begin rf_n[rp_sel_w] = rf[rp_sel_w] + 16'd1;
@@ -997,6 +997,20 @@ module z80_core (
                     if (seq_im_we)        im_n     = aux_w[1:0];
                     if (seq_halt_set)     halted_n = 1'b1;
                     if (seq_pc_dec1)      rf_n[`RFP_PC] = rf_n[`RFP_PC] - 16'd1;
+                    if (seq_ex_de_hl) begin
+                        rf_n[`RFP_DE] = rf[`RFP_HL];
+                        rf_n[`RFP_HL] = rf[`RFP_DE];
+                    end
+                    if (seq_ex_af) begin
+                        rf_n[`RFP_AF]  = rf[`RFP_AF2];
+                        rf_n[`RFP_AF2] = rf[`RFP_AF];
+                    end
+                    if (seq_exx) begin
+                        rf_n[`RFP_BC]  = rf[`RFP_BC2]; rf_n[`RFP_BC2] = rf[`RFP_BC];
+                        rf_n[`RFP_DE]  = rf[`RFP_DE2]; rf_n[`RFP_DE2] = rf[`RFP_DE];
+                        rf_n[`RFP_HL]  = rf[`RFP_HL2]; rf_n[`RFP_HL2] = rf[`RFP_HL];
+                    end
+                    if (seq_pc_set_hl) rf_n[`RFP_PC] = rf[hlp];
                 end
 
                 if (fin) begin

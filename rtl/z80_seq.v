@@ -58,7 +58,11 @@ module z80_seq (
     output reg          ctl_ei_delay_set,
     output reg          ctl_im_we,         // load IM register from aux_w
     output reg          ctl_halt_set,      // set halted flip-flop
-    output reg          ctl_pc_dec1        // PC = PC - 1 (HALT back-up)
+    output reg          ctl_pc_dec1,       // PC = PC - 1 (HALT back-up)
+    output reg          ctl_reg_ex_de_hl,  // swap DE <-> HL
+    output reg          ctl_reg_ex_af,     // swap AF <-> AF'
+    output reg          ctl_reg_exx,       // swap BC/DE/HL <-> primes
+    output reg          ctl_pc_set_hl      // PC = rf[hlp]  (JP HL / JP IX / JP IY)
 );
 
     // Convenience M/T equality wires keep the case branches readable.
@@ -83,6 +87,10 @@ module z80_seq (
         ctl_im_we        = 1'b0;
         ctl_halt_set     = 1'b0;
         ctl_pc_dec1      = 1'b0;
+        ctl_reg_ex_de_hl = 1'b0;
+        ctl_reg_ex_af    = 1'b0;
+        ctl_reg_exx      = 1'b0;
+        ctl_pc_set_hl    = 1'b0;
 
         case (eff_exec)
         `EXEC_NOP, `EXEC_ILLEGAL: begin
@@ -128,6 +136,28 @@ module z80_seq (
                 ctl_pc_dec1  = 1'b1;
                 fin          = 1'b1;
             end
+        end
+
+        `EXEC_EX_DE_HL: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin ctl_reg_ex_de_hl = 1'b1; fin = 1'b1; end
+        end
+
+        `EXEC_EX_AF: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin ctl_reg_ex_af = 1'b1; fin = 1'b1; end
+        end
+
+        `EXEC_EXX: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin ctl_reg_exx = 1'b1; fin = 1'b1; end
+        end
+
+        `EXEC_JP_HL: begin
+            seq_active = 1'b1;
+            // JP (HL) / JP (IX) / JP (IY): PC = rf[hlp]. The hlp index is
+            // resolved in core (depends on idx_w from the PLA).
+            if (M1 & T4) begin ctl_pc_set_hl = 1'b1; fin = 1'b1; end
         end
 
         default: seq_active = 1'b0;
