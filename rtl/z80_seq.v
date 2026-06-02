@@ -45,6 +45,9 @@ module z80_seq (
     input  wire [3:0]   t_state,     // 1-based T-state counter
     input  wire         phi,         // 0 = PHI_P, 1 = PHI_N
 
+    // ---- PLA pass-through used by a few cases (alu_op selects CP) ----
+    input  wire [2:0]   alu_op_w,
+
     // ---- "do anything?" output for cross-checking against the legacy
     //      case dispatch in z80_core.v during migration. When the migrated
     //      set covers an opcode, seq_active[<exec>] is 1 and core skips
@@ -62,7 +65,9 @@ module z80_seq (
     output reg          ctl_reg_ex_de_hl,  // swap DE <-> HL
     output reg          ctl_reg_ex_af,     // swap AF <-> AF'
     output reg          ctl_reg_exx,       // swap BC/DE/HL <-> primes
-    output reg          ctl_pc_set_hl      // PC = rf[hlp]  (JP HL / JP IX / JP IY)
+    output reg          ctl_pc_set_hl,     // PC = rf[hlp]  (JP HL / JP IX / JP IY)
+    output reg          ctl_reg_a_we,      // write A from alu_res
+    output reg          ctl_reg_f_we       // write F from alu_fout
 );
 
     // Convenience M/T equality wires keep the case branches readable.
@@ -91,6 +96,8 @@ module z80_seq (
         ctl_reg_ex_af    = 1'b0;
         ctl_reg_exx      = 1'b0;
         ctl_pc_set_hl    = 1'b0;
+        ctl_reg_a_we     = 1'b0;
+        ctl_reg_f_we     = 1'b0;
 
         case (eff_exec)
         `EXEC_NOP, `EXEC_ILLEGAL: begin
@@ -158,6 +165,34 @@ module z80_seq (
             // JP (HL) / JP (IX) / JP (IY): PC = rf[hlp]. The hlp index is
             // resolved in core (depends on idx_w from the PLA).
             if (M1 & T4) begin ctl_pc_set_hl = 1'b1; fin = 1'b1; end
+        end
+
+        // ---- ALU instructions that write A and F (or just F) ----
+        // The ALU operand mux + z80_alu instance live in core; here we
+        // just decide when to commit alu_res to A and alu_fout to F.
+        `EXEC_ROT_A, `EXEC_DAA, `EXEC_CPL: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin
+                ctl_reg_a_we = 1'b1;
+                ctl_reg_f_we = 1'b1;
+                fin          = 1'b1;
+            end
+        end
+        `EXEC_SCF, `EXEC_CCF: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin
+                ctl_reg_f_we = 1'b1;   /* A unchanged */
+                fin          = 1'b1;
+            end
+        end
+        `EXEC_ALU_R: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin
+                // CP doesn't write A back; everything else does.
+                ctl_reg_a_we = (alu_op_w != `ALU_CP);
+                ctl_reg_f_we = 1'b1;
+                fin          = 1'b1;
+            end
         end
 
         default: seq_active = 1'b0;
