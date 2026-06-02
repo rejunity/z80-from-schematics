@@ -68,7 +68,8 @@ module z80_seq (
     output reg          ctl_pc_set_hl,     // PC = rf[hlp]  (JP HL / JP IX / JP IY)
     output reg          ctl_reg_a_we,      // write A from alu_res
     output reg          ctl_reg_f_we,      // write F from alu_fout
-    output reg          ctl_reg_setri_we   // setri(rf_dst_w, alu_res)
+    output reg          ctl_reg_setri_we,  // setri(rf_dst_w, <src>)
+    output reg          ctl_reg_setri_src  // 0 = alu_res, 1 = getri(rf_src_w)
 );
 
     // Convenience M/T equality wires keep the case branches readable.
@@ -99,7 +100,8 @@ module z80_seq (
         ctl_pc_set_hl    = 1'b0;
         ctl_reg_a_we     = 1'b0;
         ctl_reg_f_we     = 1'b0;
-        ctl_reg_setri_we = 1'b0;
+        ctl_reg_setri_we  = 1'b0;
+        ctl_reg_setri_src = 1'b0;
 
         case (eff_exec)
         `EXEC_NOP, `EXEC_ILLEGAL: begin
@@ -202,9 +204,19 @@ module z80_seq (
         `EXEC_INC_R, `EXEC_DEC_R: begin
             seq_active = 1'b1;
             if (M1 & T4) begin
-                ctl_reg_setri_we = 1'b1;
+                ctl_reg_setri_we = 1'b1;       /* source = alu_res    */
                 ctl_reg_f_we     = 1'b1;
                 fin              = 1'b1;
+            end
+        end
+
+        // LD r, r' — copy rf_src_w byte to rf_dst_w byte. No ALU usage.
+        `EXEC_LD_R_R: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin
+                ctl_reg_setri_we  = 1'b1;
+                ctl_reg_setri_src = 1'b1;     /* source = getri(rf_src_w) */
+                fin               = 1'b1;
             end
         end
 

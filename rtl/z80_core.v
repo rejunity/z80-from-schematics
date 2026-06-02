@@ -227,7 +227,7 @@ module z80_core (
     wire       seq_ei_delay_set;
     wire       seq_im_we, seq_halt_set, seq_pc_dec1;
     wire       seq_ex_de_hl, seq_ex_af, seq_exx, seq_pc_set_hl;
-    wire       seq_reg_a_we, seq_reg_f_we, seq_reg_setri_we;
+    wire       seq_reg_a_we, seq_reg_f_we, seq_reg_setri_we, seq_reg_setri_src;
     z80_seq u_seq (
         .eff_exec(eff_exec),
         .m_cycle(m_cycle),
@@ -247,7 +247,8 @@ module z80_core (
         .ctl_pc_set_hl(seq_pc_set_hl),
         .ctl_reg_a_we(seq_reg_a_we),
         .ctl_reg_f_we(seq_reg_f_we),
-        .ctl_reg_setri_we(seq_reg_setri_we)
+        .ctl_reg_setri_we(seq_reg_setri_we),
+        .ctl_reg_setri_src(seq_reg_setri_src)
     );
 
     // ---- 8-bit register write into rf_n ----
@@ -421,7 +422,7 @@ module z80_core (
                 `EXEC_DI, `EXEC_EI: ;  /* migrated to z80_seq (ctl_iff_op / ctl_ei_delay_set) */
                 `EXEC_HALT: ;          /* migrated to z80_seq (ctl_halt_set + ctl_pc_dec1)   */
 
-                `EXEC_LD_R_R: begin setri(rf_dst_w, getri(rf_src_w)); fin = 1'b1; end
+                `EXEC_LD_R_R: ;  /* migrated to z80_seq (ctl_reg_setri_we + ctl_reg_setri_src=1) */
                 `EXEC_ALU_R,
                 `EXEC_ROT_A,
                 `EXEC_DAA,
@@ -1018,7 +1019,10 @@ module z80_core (
                     if (seq_pc_set_hl) rf_n[`RFP_PC] = rf[hlp];
                     if (seq_reg_a_we)     rf_n[`RFP_AF][15:8] = alu_res;
                     if (seq_reg_f_we)     rf_n[`RFP_AF][7:0]  = alu_fout;
-                    if (seq_reg_setri_we) setri(rf_dst_w, alu_res);
+                    if (seq_reg_setri_we) begin
+                        if (seq_reg_setri_src) setri(rf_dst_w, getri(rf_src_w));
+                        else                   setri(rf_dst_w, alu_res);
+                    end
                 end
 
                 if (fin) begin
