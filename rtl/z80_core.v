@@ -220,15 +220,20 @@ module z80_core (
 
     // ---- per-(M,T) micro-sequencer (incremental migration target).
     // When seq_active is high for the current eff_exec, the legacy case
-    // dispatch's branch for that opcode is gone and seq drives fin. ----
-    wire seq_active, seq_fin;
+    // dispatch's branch for that opcode is gone and seq drives the
+    // corresponding ctl_* signals. ----
+    wire       seq_active, seq_fin;
+    wire [1:0] seq_iff_op;
+    wire       seq_ei_delay_set;
     z80_seq u_seq (
         .eff_exec(eff_exec),
         .m_cycle(m_cycle),
         .t_state(t_state),
         .phi(phi),
         .seq_active(seq_active),
-        .fin(seq_fin)
+        .fin(seq_fin),
+        .ctl_iff_op(seq_iff_op),
+        .ctl_ei_delay_set(seq_ei_delay_set)
     );
 
     // ---- 8-bit register write into rf_n ----
@@ -399,8 +404,7 @@ module z80_core (
                     end
                     else fin = 1'b1;
                 end
-                `EXEC_DI: begin iff1_n = 1'b0; iff2_n = 1'b0; fin = 1'b1; end
-                `EXEC_EI: begin iff1_n = 1'b1; iff2_n = 1'b1; ei_delay_n = 1'b1; fin = 1'b1; end
+                `EXEC_DI, `EXEC_EI: ;  /* migrated to z80_seq (ctl_iff_op / ctl_ei_delay_set) */
                 `EXEC_HALT: begin
                     halted_n = 1'b1;
                     // back PC up to the HALT opcode (mirrors cmodel/z80_control.c)
@@ -981,8 +985,17 @@ module z80_core (
                 endcase
 
                 // Per-(M, T) sequencer override: when seq covers the opcode,
-                // its fin replaces the legacy branch's fin.
-                if (seq_active) fin = seq_fin;
+                // its outputs replace the legacy branch's effects.
+                if (seq_active) begin
+                    fin = seq_fin;
+                    case (seq_iff_op)
+                        `IFF_CLEAR: begin iff1_n = 1'b0;     iff2_n = 1'b0;     end
+                        `IFF_SET:   begin iff1_n = 1'b1;     iff2_n = 1'b1;     end
+                        `IFF_RETN:  begin iff1_n = iff2_n;                      end
+                        default:    ;
+                    endcase
+                    if (seq_ei_delay_set) ei_delay_n = 1'b1;
+                end
 
                 if (fin) begin
                     instr_count_n = instr_count + 32'd1;

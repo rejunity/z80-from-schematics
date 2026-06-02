@@ -175,4 +175,10 @@
 `define IDU_DEC      2'd2
 `define IDU_ADD_DISP 2'd3
 
+// ---- IFF mutation encoding for ctl_iff_op (z80_seq -> z80_core) ----
+`define IFF_NONE  2'd0    // no change
+`define IFF_CLEAR 2'd1    // DI: iff1=0, iff2=0
+`define IFF_SET   2'd2    // EI: iff1=1, iff2=1
+`define IFF_RETN  2'd3    // RETN: iff1=iff2
+
 `endif

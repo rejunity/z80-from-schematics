@@ -52,10 +52,10 @@ module z80_seq (
     output reg          seq_active,
 
     // ---- control signals (drive the legacy datapath unchanged for now) ----
-    //      Only `fin` is wired for the initial NOP / HALT migration.
-    //      The rest of the ctl_* bundle (regfile/ALU/IDU/bus) gets
-    //      added as more opcode families migrate. ----
-    output reg          fin
+    //      The ctl_* bundle grows as more opcode families migrate.
+    output reg          fin,
+    output reg  [1:0]   ctl_iff_op,        // IFF_NONE / _CLEAR / _SET / _RETN
+    output reg          ctl_ei_delay_set
 );
 
     // Convenience M/T equality wires keep the case branches readable.
@@ -73,8 +73,10 @@ module z80_seq (
     /* verilator lint_on UNUSEDSIGNAL */
 
     always @* begin
-        seq_active = 1'b0;
-        fin        = 1'b0;
+        seq_active       = 1'b0;
+        fin              = 1'b0;
+        ctl_iff_op       = `IFF_NONE;
+        ctl_ei_delay_set = 1'b0;
 
         case (eff_exec)
         `EXEC_NOP, `EXEC_ILLEGAL: begin
@@ -82,6 +84,23 @@ module z80_seq (
             // NOP finishes at the end of M1 (T4) — the M1 fetch already
             // happened, and there's nothing else to do.
             if (M1 & T4) fin = 1'b1;
+        end
+
+        `EXEC_DI: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin
+                ctl_iff_op = `IFF_CLEAR;
+                fin = 1'b1;
+            end
+        end
+
+        `EXEC_EI: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin
+                ctl_iff_op       = `IFF_SET;
+                ctl_ei_delay_set = 1'b1;
+                fin              = 1'b1;
+            end
         end
 
         `EXEC_HALT: begin
