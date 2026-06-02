@@ -437,6 +437,24 @@ module z80_seq (
             if (M5 & T3) begin ctl_rp_set_nn=1'b1; fin=1'b1; end
         end
 
+        // IN A,(n) — M1 fetch, M2 fetches port#, M3 IORD from {A,n} into A;
+        //   WZ = {A, n} + 1.
+        `EXEC_IN_A_N: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MRD; ctl_mc_addr_src=`ADDR_PC; ctl_pc_inc=1'b1; end
+            if (M2 & T3) begin ctl_wz_op=`WZ_A_RBYTE_INC; ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_IORD; ctl_mc_addr_src=`ADDR_A_RBYTE; end
+            if (M3 & T4) begin ctl_reg_a_we=1'b1; ctl_reg_a_src_rbyte=1'b1; fin=1'b1; end
+        end
+
+        // OUT (n),A — M1 fetch, M2 fetches port#, M3 IOWR to {A,n} of A.
+        //   WZ = {A, (n+1) & 0xFF}.
+        `EXEC_OUT_N_A: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MRD; ctl_mc_addr_src=`ADDR_PC; ctl_pc_inc=1'b1; end
+            if (M2 & T3) begin ctl_wz_op=`WZ_A_RBYTE_NEXT; ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_IOWR; ctl_mc_addr_src=`ADDR_A_RBYTE; ctl_mc_wdata_src=`WDATA_A; end
+            if (M3 & T4) fin = 1'b1;
+        end
+
         // CALL nn / CALL cc,nn — 6 M-cycles when taken; 3 when not.
         //   M1 fetch, M2/M3 fetch nn, M3.T3 check cc and start INTERNAL pad
         //   (or fin if not taken); M4.T1 push PC_HI, M5.T3 push PC_LO,

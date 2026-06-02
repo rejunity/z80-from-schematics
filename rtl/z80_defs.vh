@@ -200,6 +200,7 @@
 `define ADDR_TMP16_INC 5'd14  // tmp16 + 1  (LD HL,(nn) high byte fetch)
 `define ADDR_SP_DEC    5'd15  // rf[SP] - 1 (PUSH / CALL / RST write addr)
 `define ADDR_SP_INC    5'd16  // rf[SP] + 1 (POP / RET second-byte read)
+`define ADDR_A_RBYTE   5'd17  // {A_cur, rbyte}        (IN A,(n) / OUT (n),A port)
 
 // ---- WZ (MEMPTR) update operations for ctl_wz_op (4 bits) ----
 `define WZ_NONE      4'd0
@@ -210,8 +211,10 @@
 `define WZ_BC_INC    4'd5  // WZ = rf[`RFP_BC] + 1  (IN/OUT (C))
 `define WZ_NN_INC    4'd6  // WZ = {rbyte, tmpl} + 1
 `define WZ_A_NN_INC  4'd7  // WZ = {A_cur, tmpl + 1} (LD (nn),A)
-`define WZ_PC_DISP   4'd8  // WZ = rf[PC] + sign_ext(rbyte)  (JR / DJNZ)
-`define WZ_RST_ADDR  4'd9  // WZ = {8'h00, rst_addr_w}       (RST)
+`define WZ_PC_DISP        4'd8   // WZ = rf[PC] + sign_ext(rbyte)  (JR / DJNZ)
+`define WZ_RST_ADDR       4'd9   // WZ = {8'h00, rst_addr_w}       (RST)
+`define WZ_A_RBYTE_INC    4'd10  // WZ = {A_cur, rbyte} + 1        (IN A,(n))
+`define WZ_A_RBYTE_NEXT   4'd11  // WZ = {A_cur, (rbyte + 1) & 0xFF} (OUT (n),A)
 
 // ---- Write-data source enum for ctl_mc_wdata_src (4 bits) ----
 `define WDATA_ZERO       4'd0

@@ -316,6 +316,7 @@ module z80_core (
             `ADDR_TMP16_INC: seq_addr_val = tmp16 + 16'd1;
             `ADDR_SP_DEC:  seq_addr_val = rf[`RFP_SP] - 16'd1;
             `ADDR_SP_INC:  seq_addr_val = rf[`RFP_SP] + 16'd1;
+            `ADDR_A_RBYTE: seq_addr_val = {A_cur, rbyte};
             default:       seq_addr_val = rf[`RFP_PC];
         endcase
         case (seq_mc_wdata_src)
@@ -577,20 +578,7 @@ module z80_core (
                 `EXEC_LD_A_NN, `EXEC_LD_NN_A: ;  /* migrated to z80_seq (ADDR_NN + WZ_NN_INC / WZ_A_NN_INC) */
                 `EXEC_LD_HL_NN, `EXEC_LD_NN_HL: ;  /* migrated to z80_seq */
 
-                `EXEC_IN_A_N: begin
-                    if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd2) begin rf_n[`RFP_WZ] = {A_cur, rbyte} + 16'd1;
-                        startm(`BUSOP_IORD, {A_cur, rbyte}, 8'h0, 4'd0); end
-                    else begin setr8(3'd7, rbyte); fin = 1'b1; end
-                end
-                `EXEC_OUT_N_A: begin
-                    if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd2) begin rf_n[`RFP_WZ] = {A_cur, (rbyte + 8'd1)};
-                        startm(`BUSOP_IOWR, {A_cur, rbyte}, A_cur, 4'd0); end
-                    else fin = 1'b1;
-                end
+                `EXEC_IN_A_N, `EXEC_OUT_N_A: ;  /* migrated to z80_seq */
                 `EXEC_EX_SP_HL: begin
                     if (m_cycle == 3'd1) startm(`BUSOP_MRD, rf[`RFP_SP], 8'h0, 4'd0);
                     else if (m_cycle == 3'd2) begin tmpl_n = rbyte;
@@ -908,6 +896,8 @@ module z80_core (
                         `WZ_A_NN_INC:  rf_n[`RFP_WZ] = {A_cur, tmpl + 8'd1};
                         `WZ_PC_DISP:   rf_n[`RFP_WZ] = rf[`RFP_PC] + {{8{rbyte[7]}}, rbyte};
                         `WZ_RST_ADDR:  rf_n[`RFP_WZ] = {8'h00, rst_addr_w};
+                        `WZ_A_RBYTE_INC:  rf_n[`RFP_WZ] = {A_cur, rbyte} + 16'd1;
+                        `WZ_A_RBYTE_NEXT: rf_n[`RFP_WZ] = {A_cur, rbyte + 8'd1};
                         default: ;
                     endcase
                     if (seq_pc_add_disp)
