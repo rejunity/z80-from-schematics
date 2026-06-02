@@ -55,7 +55,10 @@ module z80_seq (
     //      The ctl_* bundle grows as more opcode families migrate.
     output reg          fin,
     output reg  [1:0]   ctl_iff_op,        // IFF_NONE / _CLEAR / _SET / _RETN
-    output reg          ctl_ei_delay_set
+    output reg          ctl_ei_delay_set,
+    output reg          ctl_im_we,         // load IM register from aux_w
+    output reg          ctl_halt_set,      // set halted flip-flop
+    output reg          ctl_pc_dec1        // PC = PC - 1 (HALT back-up)
 );
 
     // Convenience M/T equality wires keep the case branches readable.
@@ -77,6 +80,9 @@ module z80_seq (
         fin              = 1'b0;
         ctl_iff_op       = `IFF_NONE;
         ctl_ei_delay_set = 1'b0;
+        ctl_im_we        = 1'b0;
+        ctl_halt_set     = 1'b0;
+        ctl_pc_dec1      = 1'b0;
 
         case (eff_exec)
         `EXEC_NOP, `EXEC_ILLEGAL: begin
@@ -103,12 +109,25 @@ module z80_seq (
             end
         end
 
+        `EXEC_IM: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin
+                ctl_im_we = 1'b1;             // IM val taken from aux_w in core
+                fin = 1'b1;
+            end
+        end
+
         `EXEC_HALT: begin
-            // HALT is *almost* trivial — z80_core.v also has to back up PC
-            // by 1 so external observers see PC at the HALT opcode. That
-            // bit stays in the legacy dispatch for now (HALT touches PC,
-            // and the PC datapath wiring will land with later phases).
-            seq_active = 1'b0;
+            seq_active = 1'b1;
+            // PC was already incremented by the M1 fetch. Back it up so
+            // external observers see PC pointing at the HALT opcode; the
+            // next M1 will re-fetch (suppressed-decode) until an interrupt
+            // wakes us.
+            if (M1 & T4) begin
+                ctl_halt_set = 1'b1;
+                ctl_pc_dec1  = 1'b1;
+                fin          = 1'b1;
+            end
         end
 
         default: seq_active = 1'b0;

@@ -225,6 +225,7 @@ module z80_core (
     wire       seq_active, seq_fin;
     wire [1:0] seq_iff_op;
     wire       seq_ei_delay_set;
+    wire       seq_im_we, seq_halt_set, seq_pc_dec1;
     z80_seq u_seq (
         .eff_exec(eff_exec),
         .m_cycle(m_cycle),
@@ -233,7 +234,10 @@ module z80_core (
         .seq_active(seq_active),
         .fin(seq_fin),
         .ctl_iff_op(seq_iff_op),
-        .ctl_ei_delay_set(seq_ei_delay_set)
+        .ctl_ei_delay_set(seq_ei_delay_set),
+        .ctl_im_we(seq_im_we),
+        .ctl_halt_set(seq_halt_set),
+        .ctl_pc_dec1(seq_pc_dec1)
     );
 
     // ---- 8-bit register write into rf_n ----
@@ -405,12 +409,7 @@ module z80_core (
                     else fin = 1'b1;
                 end
                 `EXEC_DI, `EXEC_EI: ;  /* migrated to z80_seq (ctl_iff_op / ctl_ei_delay_set) */
-                `EXEC_HALT: begin
-                    halted_n = 1'b1;
-                    // back PC up to the HALT opcode (mirrors cmodel/z80_control.c)
-                    rf_n[`RFP_PC] = rf_n[`RFP_PC] - 16'd1;
-                    fin = 1'b1;
-                end
+                `EXEC_HALT: ;          /* migrated to z80_seq (ctl_halt_set + ctl_pc_dec1)   */
 
                 `EXEC_LD_R_R: begin setri(rf_dst_w, getri(rf_src_w)); fin = 1'b1; end
                 `EXEC_ALU_R:  begin if (alu_op_w != `ALU_CP) setr8(3'd7, alu_res);
@@ -756,7 +755,7 @@ module z80_core (
                     rf_n[`RFP_AF][7:0]  = edf;
                     fin = 1'b1;
                 end
-                `EXEC_IM: begin im_n = aux_w[1:0]; fin = 1'b1; end
+                `EXEC_IM: ;  /* migrated to z80_seq (ctl_im_we; val from aux_w) */
                 `EXEC_RETN: begin
                     if (m_cycle == 3'd1) startm(`BUSOP_MRD, rf[`RFP_SP], 8'h0, 4'd0);
                     else if (m_cycle == 3'd2) begin tmpl_n = rbyte; rf_n[`RFP_SP] = rf[`RFP_SP] + 16'd1;
@@ -995,6 +994,9 @@ module z80_core (
                         default:    ;
                     endcase
                     if (seq_ei_delay_set) ei_delay_n = 1'b1;
+                    if (seq_im_we)        im_n     = aux_w[1:0];
+                    if (seq_halt_set)     halted_n = 1'b1;
+                    if (seq_pc_dec1)      rf_n[`RFP_PC] = rf_n[`RFP_PC] - 16'd1;
                 end
 
                 if (fin) begin
