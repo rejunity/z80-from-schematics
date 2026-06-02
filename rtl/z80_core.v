@@ -209,6 +209,9 @@ module z80_core (
             `EXEC_ADD_HL_RP: begin alu_md = `FLAG_ADD16; alu_a16 = rf[hlp]; alu_b16 = rf[rp_sel_w]; end
             `EXEC_ADC16:     begin alu_md = `FLAG_ADC16; alu_a16 = rf[`RFP_HL]; alu_b16 = rf[rp_sel_w]; end
             `EXEC_SBC16:     begin alu_md = `FLAG_SBC16; alu_a16 = rf[`RFP_HL]; alu_b16 = rf[rp_sel_w]; end
+            `EXEC_IN_C:      begin alu_md = `FLAG_IN;  alu_b = rbyte; end
+            `EXEC_RRD:       begin alu_md = `FLAG_RRD; alu_b = rbyte; end
+            `EXEC_RLD:       begin alu_md = `FLAG_RLD; alu_b = rbyte; end
             default:             alu_b = 8'h00;
         endcase
     end
@@ -250,6 +253,7 @@ module z80_core (
     wire       seq_sp_inc, seq_sp_dec, seq_pc_set_rst, seq_pc_set_tmp16;
     wire       seq_ireg_we, seq_rreg_we, seq_load_a_ir;
     wire       seq_hlp_set_res16, seq_hl_set_res16;
+    wire       seq_tmpl_we_alu_mem;
     wire       cc_taken    = cc_true(F_cur, cc_w);
     wire       djnz_taken  = (rf[`RFP_BC][15:8] - 8'd1) != 8'd0;
     z80_seq u_seq (
@@ -304,7 +308,8 @@ module z80_core (
         .ctl_rreg_we(seq_rreg_we),
         .ctl_load_a_ir(seq_load_a_ir),
         .ctl_hlp_set_res16(seq_hlp_set_res16),
-        .ctl_hl_set_res16(seq_hl_set_res16)
+        .ctl_hl_set_res16(seq_hl_set_res16),
+        .ctl_tmpl_we_alu_mem(seq_tmpl_we_alu_mem)
     );
 
     // ---- mux helpers for seq's address / wdata source selectors ----
@@ -343,6 +348,7 @@ module z80_core (
             `WDATA_RP_HI:     seq_wdata_val = rf[rp_sel_w][15:8];
             `WDATA_PC_LO:     seq_wdata_val = rf[`RFP_PC][7:0];
             `WDATA_PC_HI:     seq_wdata_val = rf[`RFP_PC][15:8];
+            `WDATA_TMPL:      seq_wdata_val = tmpl;
             default:          seq_wdata_val = 8'h00;
         endcase
     end
@@ -620,48 +626,7 @@ module z80_core (
                 `EXEC_RETN: ;  /* migrated to z80_seq */
                 `EXEC_LD_I_A, `EXEC_LD_R_A, `EXEC_LD_A_IR: ;  /* migrated to z80_seq */
                 `EXEC_LD_NNA_RP, `EXEC_LD_RP_NNA: ;  /* migrated to z80_seq */
-                `EXEC_IN_C: begin
-                    if (m_cycle == 3'd1) begin rf_n[`RFP_WZ] = rf[`RFP_BC] + 16'd1;
-                        startm(`BUSOP_IORD, rf[`RFP_BC], 8'h0, 4'd0); end
-                    else begin
-                        if (rf_dst_w != 3'd6) setr8(rf_dst_w, rbyte);
-                        edf = F_cur & `Z80_CF;
-                        if (rbyte[7]) edf = edf | `Z80_SF;
-                        if (rbyte == 8'h0) edf = edf | `Z80_ZF;
-                        edf = edf | (rbyte & (`Z80_YF | `Z80_XF));
-                        if (~(^rbyte)) edf = edf | `Z80_PF;
-                        rf_n[`RFP_AF][7:0] = edf; fin = 1'b1;
-                    end
-                end
-                `EXEC_OUT_C: begin
-                    if (m_cycle == 3'd1) begin rf_n[`RFP_WZ] = rf[`RFP_BC] + 16'd1;
-                        startm(`BUSOP_IOWR, rf[`RFP_BC], (rf_src_w == 3'd6) ? 8'h0 : getr8(rf_src_w), 4'd0); end
-                    else fin = 1'b1;
-                end
-                `EXEC_RRD, `EXEC_RLD: begin
-                    if (m_cycle == 3'd1) startm(`BUSOP_MRD, rf[`RFP_HL], 8'h0, 4'd0);
-                    else if (m_cycle == 3'd2) begin
-                        if (exec_w == `EXEC_RRD) begin
-                            edv   = {A_cur[7:4], rbyte[3:0]};   // new A
-                            cbres = {A_cur[3:0], rbyte[7:4]};   // new (HL)
-                        end else begin
-                            edv   = {A_cur[7:4], rbyte[7:4]};   // new A
-                            cbres = {rbyte[3:0], A_cur[3:0]};   // new (HL)
-                        end
-                        rf_n[`RFP_AF][15:8] = edv;
-                        edf = F_cur & `Z80_CF;
-                        if (edv[7]) edf = edf | `Z80_SF;
-                        if (edv == 8'h0) edf = edf | `Z80_ZF;
-                        edf = edf | (edv & (`Z80_YF | `Z80_XF));
-                        if (~(^edv)) edf = edf | `Z80_PF;
-                        rf_n[`RFP_AF][7:0] = edf;
-                        rf_n[`RFP_WZ] = rf[`RFP_HL] + 16'd1;
-                        tmpl_n = cbres;
-                        startm(`BUSOP_INTERNAL, rf[`RFP_HL], 8'h0, 4'd4);
-                    end
-                    else if (m_cycle == 3'd3) startm(`BUSOP_MWR, rf[`RFP_HL], tmpl, 4'd0);
-                    else fin = 1'b1;
-                end
+                `EXEC_IN_C, `EXEC_OUT_C, `EXEC_RRD, `EXEC_RLD: ;  /* migrated to z80_seq via ALU FLAG_IN/RRD/RLD */
 
                 /* ---------- ED block instructions ----------
                    aux: [0]=dec  [2:1]=cat(0 LD,1 CP,2 IN,3 OUT)  [3]=repeat */
@@ -838,7 +803,8 @@ module z80_core (
                         startm(seq_mc_bus_op, seq_addr_val, seq_wdata_val, seq_mc_extra_t);
                     end
                     if (seq_pc_inc)   rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1;
-                    if (seq_tmpl_we)  tmpl_n  = rbyte;
+                    if (seq_tmpl_we)         tmpl_n  = rbyte;
+                    if (seq_tmpl_we_alu_mem) tmpl_n  = alu_mem_byte;
                     if (seq_tmph_we)  tmph_n  = rbyte;
                     if (seq_tmp16_we) tmp16_n = {rbyte, tmpl};
                     case (seq_wz_op)

@@ -125,7 +125,10 @@ module z80_seq (
 
     // ---- 16-bit ALU result writeback ----
     output reg          ctl_hlp_set_res16, // rf[hlp] = alu_res16  (ADD HL,rp)
-    output reg          ctl_hl_set_res16   // rf[HL]  = alu_res16  (ADC16 / SBC16)
+    output reg          ctl_hl_set_res16,  // rf[HL]  = alu_res16  (ADC16 / SBC16)
+
+    // ---- tmpl source variant: alu_mem_byte (for RRD / RLD) ----
+    output reg          ctl_tmpl_we_alu_mem  // tmpl = alu_mem_byte
 );
 
     // Convenience M/T equality wires keep the case branches readable.
@@ -197,6 +200,7 @@ module z80_seq (
         ctl_load_a_ir     = 1'b0;
         ctl_hlp_set_res16 = 1'b0;
         ctl_hl_set_res16  = 1'b0;
+        ctl_tmpl_we_alu_mem = 1'b0;
 
         case (eff_exec)
         `EXEC_NOP, `EXEC_ILLEGAL: begin
@@ -450,6 +454,47 @@ module z80_seq (
             if (M3 & T3) begin ctl_tmp16_we=1'b1; ctl_wz_op=`WZ_NN_INC; ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MRD; ctl_mc_addr_src=`ADDR_NN; end
             if (M4 & T3) begin ctl_tmpl_we=1'b1; ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MRD; ctl_mc_addr_src=`ADDR_TMP16_INC; end
             if (M5 & T3) begin ctl_rp_set_nn=1'b1; fin=1'b1; end
+        end
+
+        // IN r,(C) — M1 fetch, M2 IORD from BC into rf_dst with FLAG_IN.
+        //   WZ = BC + 1.
+        `EXEC_IN_C: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin ctl_wz_op=`WZ_BC_INC; ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_IORD; ctl_mc_addr_src=`ADDR_BC; end
+            if (M2 & T4) begin
+                ctl_reg_setri_we  = 1'b1;
+                ctl_reg_setri_src = `SETRI_SRC_RBYTE;   /* note: setri skips rf_dst=6 */
+                ctl_reg_f_we      = 1'b1;
+                fin               = 1'b1;
+            end
+        end
+
+        // OUT (C),r — M1 fetch, M2 IOWR to BC with getri(rf_src) wdata.
+        //   WZ = BC + 1.
+        `EXEC_OUT_C: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin ctl_wz_op=`WZ_BC_INC; ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_IOWR; ctl_mc_addr_src=`ADDR_BC; ctl_mc_wdata_src=`WDATA_GETRI_SRC; end
+            if (M2 & T4) fin = 1'b1;
+        end
+
+        // RRD / RLD — 4 M-cycles. M2 reads (HL), M3 internal 4T (ALU swap),
+        //   M4 writes new (HL) byte (stored in tmpl from alu_mem_byte).
+        //   WZ = HL + 1.
+        `EXEC_RRD, `EXEC_RLD: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MRD; ctl_mc_addr_src=`ADDR_HL; end
+            if (M2 & T3) begin
+                ctl_reg_a_we        = 1'b1;     /* alu_res = new A */
+                ctl_reg_f_we        = 1'b1;
+                ctl_wz_op           = `WZ_HL_INC;
+                ctl_tmpl_we_alu_mem = 1'b1;     /* tmpl = alu_mem_byte = new (HL) */
+                ctl_start_mc        = 1'b1;
+                ctl_mc_bus_op       = `BUSOP_INTERNAL;
+                ctl_mc_addr_src     = `ADDR_HL;
+                ctl_mc_extra_t      = 4'd4;
+            end
+            if (M3 & T4) begin ctl_start_mc=1'b1; ctl_mc_bus_op=`BUSOP_MWR; ctl_mc_addr_src=`ADDR_HL; ctl_mc_wdata_src=`WDATA_TMPL; end
+            if (M4 & T3) fin = 1'b1;
         end
 
         // ADD HL,rp — 16-bit ALU op (FLAG_ADD16 mode wired in core's operand

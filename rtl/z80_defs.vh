@@ -228,6 +228,7 @@
 `define WDATA_RP_HI      4'd7  // rf[rp_sel_w][15:8]
 `define WDATA_PC_LO      4'd8  // rf[PC][7:0]   (CALL / RST push)
 `define WDATA_PC_HI      4'd9  // rf[PC][15:8]
+`define WDATA_TMPL       4'd10 // tmpl          (RRD/RLD second-cycle write)
 
 // ---- setri source selector for ctl_reg_setri_src (2 bits) ----
 `define SETRI_SRC_ALU_RES   2'd0
