@@ -1,8 +1,10 @@
 # Flags subsystem
 
-The F register bit layout and per-operation update rules. Implemented as an explicit,
-independently testable unit (`cmodel/z80_flags.c`, `rtl/z80_flags.v`). Documented
-behavior follows Zilog UM0080; undocumented X/Y behavior follows die analysis + ZEXALL.
+The F register bit layout and per-operation update rules. Lives inside the ALU
+module (`cmodel/z80_alu.c` and `rtl/z80_alu.v`) — the per-class flag computers
+stay exposed as helpers in C so they remain independently unit-testable.
+Documented behavior follows Zilog UM0080; undocumented X/Y behavior follows die
+analysis + ZEXALL.
 
 ## F register layout
 
@@ -98,7 +100,7 @@ YF=res.13  XF=res.11
 ```
 
 ### `FLAG_DAA`
-Decimal adjust of A using HF/CF/NF; see algorithm in `z80_flags.c`. Sets SF/ZF/YF/XF
+Decimal adjust of A using HF/CF/NF; see algorithm in `z80_alu.c`. Sets SF/ZF/YF/XF
 from the adjusted A, PF=parity, CF per correction, HF per nibble carry/borrow, NF
 unchanged. Pinned by DAA vectors + ZEXALL `<daa>`.
 
@@ -135,7 +137,7 @@ YF = n.1   XF = n.3
 
 ### `FLAG_BLOCK_IO` — INI/IND/OUTI/OUTD/…
 Per documented block-IO flag rules (involve a temp sum with C±1 / B); pinned by
-ZEXALL. Implemented in `z80_flags.c` and detailed there.
+ZEXALL. Implemented in `z80_alu.c` and detailed there.
 
 ## Parity helper
 `parity(x)` = 1 when the number of set bits in `x` is even (PF=1 means even parity).

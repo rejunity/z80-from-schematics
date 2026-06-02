@@ -24,7 +24,7 @@ WZ is an internal 16-bit temp, observable only via `BIT n,(HL)` X/Y. Update poin
 - `IN A,(n)`: WZ = (A<<8 | n)+1. `OUT (n),A`: WZ_low = (n+1)&0xFF, WZ_high = A.
 - `IN/OUT (C)`: WZ = BC+1.
 - block `LDxR/CPxR/INxR/OTxR` and `LDI/…`: per-instruction WZ adjustments (table in
-  `z80_control.c`).
+  `z80_core.c`).
 - 16-bit `ADD/ADC/SBC HL,rp`: WZ = HL+1 (before the add).
 
 ## Undocumented opcodes

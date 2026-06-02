@@ -35,7 +35,7 @@ the low-nibble pass naturally.
 ## Decimal / rotate helpers
 
 - **DAA** uses the nibble carries plus current `HF/CF/NF` to choose the `0x06`/`0x60`
-  correction (algorithm in `z80_flags.c`/`z80_alu.c`), keeping the BCD adjust within
+  correction (algorithm in `z80_alu.c`), keeping the BCD adjust within
   the same flag-producing path.
 - **Rotates/shifts** (`RLC/RRC/RL/RR/SLA/SRA/SLL/SRL` and the A-register fast forms)
   are a separate shifter feeding the same flag logic; the carry comes from the bit

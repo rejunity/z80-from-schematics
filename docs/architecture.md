@@ -108,10 +108,11 @@ result `alu_res`, and the flag-source outputs. Logic ops, add/sub, DAA, and the
 rotate/shift helpers share the unit.
 
 ### Flags (`alu_*`/`ctl_flag_*`)
-Explicit, independently testable flags subsystem (`cmodel/z80_flags.c`,
-`rtl/z80_flags.v`). Computes SF ZF YF HF XF PF NF CF including undocumented
-X(bit5)/Y(bit3) behavior, DAA, SCF/CCF, BIT, and block-instruction flags. See
-`docs/flags.md`.
+Computes SF ZF YF HF XF PF NF CF including undocumented X(bit5)/Y(bit3)
+behavior, DAA, SCF/CCF, BIT, and block-instruction flags. Lives inside the ALU
+module on both sides (`cmodel/z80_alu.c` and `rtl/z80_alu.v`) — the per-class
+flag computers are exposed as helpers so they remain independently unit-testable.
+See `docs/flags.md`.
 
 ## 4. Control word & decode
 
@@ -123,32 +124,34 @@ register source/dest, ALU op, flag mode, bus source/dest, address source, memory
 control, the **M-cycle sequence template** (`seq_*`), prefix handling, interrupt and
 refresh handling, and undocumented special-cases.
 
-The **micro-sequencer** (`cmodel/z80_control.c`, `rtl/z80_control.v`) consumes the
-control word + `m_cycle`/`t_state`/`phi` and drives the datapath and pins per phase. It
-is a structured state machine keyed off the control word's sequence template — *not* a
-giant behavioral function per opcode.
+The **micro-sequencer** lives inside `cmodel/z80_core.c` (mirroring the sequencer
+block of `rtl/z80_core.v`). It consumes the control word + `m_cycle`/`t_state`/`phi`
+and drives the datapath and pins per phase — a structured state machine keyed off the
+control word's `exec` line + step index, *not* a giant behavioral function per opcode.
 
-## 5. Module mapping (C ↔ Verilog, identical concepts)
+## 5. Module mapping (C ↔ Verilog, one C file per Verilog module)
 
-| Concept                                       | C file                              | Verilog file                       |
-|-----------------------------------------------|-------------------------------------|------------------------------------|
-| Public types, pins, top step                  | `cmodel/z80.h`, `z80.c`             | `rtl/z80_core.v`                   |
-| Timing sequencer                              | `z80_timing.c`                      | `z80_timing.v`                     |
-| PLA decode table                              | `z80_pla.c`                         | `z80_pla.v`                        |
-| Control / micro-sequencer + prefix state      | `z80_control.c`, `z80_internal.h`   | `rtl/z80_core.v` (inlined)         |
-| Register file + IDU / WZ                      | `z80_regfile.c`                     | `rtl/z80_core.v` (inlined)         |
-| ALU                                           | `z80_alu.c`                         | `z80_alu.v`                        |
-| Flags                                         | `z80_flags.c`                       | `rtl/z80_core.v` (inlined)         |
-| Bus muxing                                    | `z80_bus.c`                         | `rtl/z80_core.v` (inlined)         |
-| Interrupts / refresh / HALT / WAIT / BUSREQ   | inlined in `z80.c` top step         | `rtl/z80_core.v` (inlined)         |
-| Trace                                         | `z80_trace.c`                       | `rtl/z80_core.v` `$display` hooks  |
+| Concept                                                                                                                       | C file                  | Verilog file        |
+|-------------------------------------------------------------------------------------------------------------------------------|-------------------------|---------------------|
+| Public types, pins, constants, module entry-point decls                                                                       | `cmodel/z80.h`          | `rtl/z80_defs.vh`   |
+| Top-level core: phase engine, micro-sequencer, bus-cycle setup, register file, interrupts / refresh / HALT / WAIT / BUSREQ    | `cmodel/z80_core.c`     | `rtl/z80_core.v`    |
+| PLA decode (pure combinational)                                                                                               | `cmodel/z80_pla.c`      | `rtl/z80_pla.v`     |
+| ALU + flag assembly (pure combinational)                                                                                      | `cmodel/z80_alu.c`      | `rtl/z80_alu.v`     |
+| External pin timing (pure combinational)                                                                                      | `cmodel/z80_timing.c`   | `rtl/z80_timing.v`  |
+| 8-bit register accessors                                                                                                      | `cmodel/z80_regfile.c`  | inlined in core     |
+| Trace capture / emit                                                                                                          | `cmodel/z80_trace.c`    | core `$display` hooks |
+| System wrapper (CPU + 64 K RAM/IO for runners)                                                                                | `cmodel/z80_sim.c/h`    | (test-bench only)   |
 
-The RTL is intentionally consolidated into `z80_core.v` plus four leaf files
-(`z80_alu.v`, `z80_pla.v`, `z80_timing.v`, `z80_defs.vh`); concepts that have separate
-files in the C model (regfile, bus, prefix, interrupts, refresh, flags) are inlined into
-`z80_core.v` to keep cross-module wiring tractable in Verilog-2001. The C model is the
-fast reference; the RTL implements the identical machine and is verified against it
-phase-by-phase (`make compare`; see `docs/verification.md`).
+Both sides have **one .c per .v module**. The three combinational submodules
+(`z80_pla`, `z80_alu`, `z80_timing`) are pure functions in C with one parameter per
+Verilog port — by-value inputs first, by-pointer outputs after — so a C call site
+reads like a Verilog instantiation. The stateful `z80_core` holds the registered
+state (the `z80_t` struct = the Verilog module's internal regs) and is the only
+file that mutates it; its public functions (`z80_init`, `z80_reset`,
+`z80_phase_step`, `z80_set_pc`) are the only external entry points.
+
+The C model is the fast reference; the RTL implements the identical machine and is
+verified against it phase-by-phase (`make compare`; see `docs/verification.md`).
 
 ### Building
 `make cmodel` builds the static library and relinks the dependent CLI binaries
