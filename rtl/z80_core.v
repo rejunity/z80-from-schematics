@@ -295,6 +295,8 @@ module z80_core (
             `ADDR_RP_INC:  seq_addr_val = rf[rp_sel_w] + 16'd1;
             `ADDR_RP_DEC:  seq_addr_val = rf[rp_sel_w] - 16'd1;
             `ADDR_RP:      seq_addr_val = rf[rp_sel_w];
+            `ADDR_NN:      seq_addr_val = {rbyte, tmpl};
+            `ADDR_NN_INC:  seq_addr_val = {rbyte, tmpl} + 16'd1;
             default:       seq_addr_val = rf[`RFP_PC];
         endcase
         case (seq_mc_wdata_src)
@@ -636,25 +638,7 @@ module z80_core (
                 end
 
                 `EXEC_LD_A_RP, `EXEC_LD_RP_A: ;  /* migrated to z80_seq (ADDR_RP + ctl_wz_op) */
-                `EXEC_LD_A_NN: begin
-                    if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd2) begin tmpl_n = rbyte;
-                        startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0); rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd3) begin tmp16_n = {rbyte, tmpl};
-                        rf_n[`RFP_WZ] = {rbyte, tmpl} + 16'd1; startm(`BUSOP_MRD, {rbyte, tmpl}, 8'h0, 4'd0); end
-                    else begin setr8(3'd7, rbyte); fin = 1'b1; end
-                end
-                `EXEC_LD_NN_A: begin
-                    if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd2) begin tmpl_n = rbyte;
-                        startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0); rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd3) begin
-                        rf_n[`RFP_WZ] = {A_cur, (tmpl + 8'd1)};
-                        startm(`BUSOP_MWR, {rbyte, tmpl}, A_cur, 4'd0); end
-                    else fin = 1'b1;
-                end
+                `EXEC_LD_A_NN, `EXEC_LD_NN_A: ;  /* migrated to z80_seq (ADDR_NN + WZ_NN_INC / WZ_A_NN_INC) */
                 `EXEC_LD_HL_NN: begin
                     if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
                         rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
@@ -1034,6 +1018,8 @@ module z80_core (
                         `WZ_A_RP_INC:  rf_n[`RFP_WZ] = {A_cur, rf[rp_sel_w][7:0] + 8'd1};
                         `WZ_HL_INC:    rf_n[`RFP_WZ] = rf[hlp] + 16'd1;
                         `WZ_BC_INC:    rf_n[`RFP_WZ] = rf[`RFP_BC] + 16'd1;
+                        `WZ_NN_INC:    rf_n[`RFP_WZ] = {rbyte, tmpl} + 16'd1;
+                        `WZ_A_NN_INC:  rf_n[`RFP_WZ] = {A_cur, tmpl + 8'd1};
                         default: ;
                     endcase
                     if (seq_pc_set_nn) begin

@@ -306,6 +306,64 @@ module z80_seq (
             end
         end
 
+        // LD A,(nn) — 4 M-cycles: M1 fetch, M2/M3 fetch nn low/high,
+        //   M4 read byte from {rbyte, tmpl} into A. WZ = nn + 1.
+        `EXEC_LD_A_NN: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin
+                ctl_start_mc    = 1'b1;
+                ctl_mc_bus_op   = `BUSOP_MRD;
+                ctl_mc_addr_src = `ADDR_PC;
+                ctl_pc_inc      = 1'b1;
+            end
+            if (M2 & T3) begin
+                ctl_tmpl_we     = 1'b1;
+                ctl_start_mc    = 1'b1;
+                ctl_mc_bus_op   = `BUSOP_MRD;
+                ctl_mc_addr_src = `ADDR_PC;
+                ctl_pc_inc      = 1'b1;
+            end
+            if (M3 & T3) begin
+                ctl_tmp16_we    = 1'b1;
+                ctl_wz_op       = `WZ_NN_INC;
+                ctl_start_mc    = 1'b1;
+                ctl_mc_bus_op   = `BUSOP_MRD;
+                ctl_mc_addr_src = `ADDR_NN;
+            end
+            if (M4 & T3) begin
+                ctl_reg_a_we        = 1'b1;
+                ctl_reg_a_src_rbyte = 1'b1;
+                fin                 = 1'b1;
+            end
+        end
+
+        // LD (nn),A — same fetch pattern; M3 writes A to {rbyte, tmpl}.
+        //   WZ = {A_cur, tmpl + 1}.
+        `EXEC_LD_NN_A: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin
+                ctl_start_mc    = 1'b1;
+                ctl_mc_bus_op   = `BUSOP_MRD;
+                ctl_mc_addr_src = `ADDR_PC;
+                ctl_pc_inc      = 1'b1;
+            end
+            if (M2 & T3) begin
+                ctl_tmpl_we     = 1'b1;
+                ctl_start_mc    = 1'b1;
+                ctl_mc_bus_op   = `BUSOP_MRD;
+                ctl_mc_addr_src = `ADDR_PC;
+                ctl_pc_inc      = 1'b1;
+            end
+            if (M3 & T3) begin
+                ctl_wz_op       = `WZ_A_NN_INC;
+                ctl_start_mc    = 1'b1;
+                ctl_mc_bus_op   = `BUSOP_MWR;
+                ctl_mc_addr_src = `ADDR_NN;
+                ctl_mc_wdata_src = `WDATA_A;
+            end
+            if (M4 & T3) fin = 1'b1;
+        end
+
         // LD A,(BC) / LD A,(DE) — M1 fetch, M2 reads byte from rp into A;
         //   WZ = rp + 1.
         `EXEC_LD_A_RP: begin
