@@ -236,6 +236,7 @@ module z80_core (
     wire [3:0] seq_mc_extra_t;
     wire       seq_tmpl_we, seq_tmph_we, seq_tmp16_we;
     wire       seq_pc_set_nn, seq_wz_set_nn, seq_rp_set_nn, seq_use_cc;
+    wire       seq_rp_inc, seq_rp_dec, seq_sp_set_hl;
     z80_seq u_seq (
         .eff_exec(eff_exec),
         .m_cycle(m_cycle),
@@ -269,7 +270,10 @@ module z80_core (
         .ctl_pc_set_nn(seq_pc_set_nn),
         .ctl_wz_set_nn(seq_wz_set_nn),
         .ctl_rp_set_nn(seq_rp_set_nn),
-        .ctl_use_cc(seq_use_cc)
+        .ctl_use_cc(seq_use_cc),
+        .ctl_rp_inc(seq_rp_inc),
+        .ctl_rp_dec(seq_rp_dec),
+        .ctl_sp_set_hl(seq_sp_set_hl)
     );
 
     // ---- mux helpers for seq's address / wdata source selectors ----
@@ -285,6 +289,8 @@ module z80_core (
             `ADDR_WZ:      seq_addr_val = rf[`RFP_WZ];
             `ADDR_MEMADDR: seq_addr_val = memaddr;
             `ADDR_TMP16:   seq_addr_val = tmp16;
+            `ADDR_RP_INC:  seq_addr_val = rf[rp_sel_w] + 16'd1;
+            `ADDR_RP_DEC:  seq_addr_val = rf[rp_sel_w] - 16'd1;
             default:       seq_addr_val = rf[`RFP_PC];
         endcase
         case (seq_mc_wdata_src)
@@ -480,21 +486,7 @@ module z80_core (
                 `EXEC_EXX,
                 `EXEC_JP_HL: ;  /* migrated to z80_seq (ctl_reg_ex_* / ctl_pc_set_hl) */
 
-                `EXEC_INC_RP: begin
-                    if (m_cycle == 3'd1) begin rf_n[rp_sel_w] = rf[rp_sel_w] + 16'd1;
-                        startm(`BUSOP_INTERNAL, rf[rp_sel_w] + 16'd1, 8'h0, 4'd2); end
-                    else fin = 1'b1;
-                end
-                `EXEC_DEC_RP: begin
-                    if (m_cycle == 3'd1) begin rf_n[rp_sel_w] = rf[rp_sel_w] - 16'd1;
-                        startm(`BUSOP_INTERNAL, rf[rp_sel_w] - 16'd1, 8'h0, 4'd2); end
-                    else fin = 1'b1;
-                end
-                `EXEC_LD_SP_HL: begin
-                    if (m_cycle == 3'd1) begin rf_n[`RFP_SP] = rf[hlp];
-                        startm(`BUSOP_INTERNAL, rf[hlp], 8'h0, 4'd2); end
-                    else fin = 1'b1;
-                end
+                `EXEC_INC_RP, `EXEC_DEC_RP, `EXEC_LD_SP_HL: ;  /* migrated to z80_seq */
                 `EXEC_ADD_HL_RP: begin
                     if (m_cycle == 3'd1) begin
                         add16 = {1'b0, rf[hlp]} + {1'b0, rf[rp_sel_w]};
@@ -1046,6 +1038,9 @@ module z80_core (
                             rf_n[`RFP_PC] = {rbyte, tmpl};
                     end
                     if (seq_rp_set_nn) rf_n[rp_sel_w] = {rbyte, tmpl};
+                    if (seq_rp_inc)    rf_n[rp_sel_w] = rf[rp_sel_w] + 16'd1;
+                    if (seq_rp_dec)    rf_n[rp_sel_w] = rf[rp_sel_w] - 16'd1;
+                    if (seq_sp_set_hl) rf_n[`RFP_SP]  = rf[hlp];
                 end
 
                 if (fin) begin

@@ -88,7 +88,12 @@ module z80_seq (
     output reg          ctl_pc_set_nn,     // PC = {rbyte, tmpl}  (gated by use_cc)
     output reg          ctl_wz_set_nn,     // WZ = {rbyte, tmpl}
     output reg          ctl_rp_set_nn,     // rf[rp_sel_w] = {rbyte, tmpl}
-    output reg          ctl_use_cc         // if 1, gate ctl_pc_set_nn on cc_true(F, cc_w)
+    output reg          ctl_use_cc,        // if 1, gate ctl_pc_set_nn on cc_true(F, cc_w)
+
+    // ---- IDU-style rp +/- 1 (16-bit incrementer on the address path) ----
+    output reg          ctl_rp_inc,        // rf[rp_sel_w] = rf[rp_sel_w] + 1
+    output reg          ctl_rp_dec,        // rf[rp_sel_w] = rf[rp_sel_w] - 1
+    output reg          ctl_sp_set_hl      // SP = rf[hlp]  (LD SP,HL)
 );
 
     // Convenience M/T equality wires keep the case branches readable.
@@ -138,6 +143,9 @@ module z80_seq (
         ctl_wz_set_nn     = 1'b0;
         ctl_rp_set_nn     = 1'b0;
         ctl_use_cc        = 1'b0;
+        ctl_rp_inc        = 1'b0;
+        ctl_rp_dec        = 1'b0;
+        ctl_sp_set_hl     = 1'b0;
 
         case (eff_exec)
         `EXEC_NOP, `EXEC_ILLEGAL: begin
@@ -290,6 +298,43 @@ module z80_seq (
                 ctl_reg_f_we = 1'b1;
                 fin          = 1'b1;
             end
+        end
+
+        // INC rp / DEC rp / LD SP,HL — single internal cycle after the M1
+        // fetch (2T of "incrementer compute"). The register update happens
+        // at M1.T4 dispatch; M2 is the internal cycle, finishing at M2.T2.
+        `EXEC_INC_RP: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin
+                ctl_rp_inc      = 1'b1;
+                ctl_start_mc    = 1'b1;
+                ctl_mc_bus_op   = `BUSOP_INTERNAL;
+                ctl_mc_addr_src = `ADDR_RP_INC;
+                ctl_mc_extra_t  = 4'd2;
+            end
+            if (M2 & T2) fin = 1'b1;
+        end
+        `EXEC_DEC_RP: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin
+                ctl_rp_dec      = 1'b1;
+                ctl_start_mc    = 1'b1;
+                ctl_mc_bus_op   = `BUSOP_INTERNAL;
+                ctl_mc_addr_src = `ADDR_RP_DEC;
+                ctl_mc_extra_t  = 4'd2;
+            end
+            if (M2 & T2) fin = 1'b1;
+        end
+        `EXEC_LD_SP_HL: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin
+                ctl_sp_set_hl   = 1'b1;
+                ctl_start_mc    = 1'b1;
+                ctl_mc_bus_op   = `BUSOP_INTERNAL;
+                ctl_mc_addr_src = `ADDR_HL;     /* HL or IX/IY per idx_w */
+                ctl_mc_extra_t  = 4'd2;
+            end
+            if (M2 & T2) fin = 1'b1;
         end
 
         // LD rp,nn — same fetch pattern as JP but writes rp instead of PC.

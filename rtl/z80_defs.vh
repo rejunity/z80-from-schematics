@@ -191,6 +191,8 @@
 `define ADDR_WZ      4'd5
 `define ADDR_MEMADDR 4'd6   // preamble-adjusted memory address (IX+d)
 `define ADDR_TMP16   4'd7
+`define ADDR_RP_INC  4'd8   // rf[rp_sel_w] + 1  (INC rp internal cycle)
+`define ADDR_RP_DEC  4'd9   // rf[rp_sel_w] - 1  (DEC rp internal cycle)
 
 // ---- Write-data source enum for ctl_mc_wdata_src ----
 `define WDATA_ZERO     3'd0
