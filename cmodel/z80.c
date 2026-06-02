@@ -236,7 +236,11 @@ void z80_phase_step(z80_t *c)
     if (!c->stalled && is_latch_phase(c))
         do_latch(c);
 
-    z80_drive_pins(c);
+    z80_timing(c->bus_op, c->t_state, c->phi, c->m_addr, c->m_wdata,
+               c->reg_i, c->reg_r,
+               &c->pins.addr, &c->pins.data_out, &c->pins.data_drive,
+               &c->pins.m1_n, &c->pins.mreq_n, &c->pins.iorq_n,
+               &c->pins.rd_n, &c->pins.wr_n,   &c->pins.rfsh_n);
 
     /* HALT/refresh pin level: halt_n reflects halted state. */
     c->pins.halt_n = c->halted ? 0 : 1;

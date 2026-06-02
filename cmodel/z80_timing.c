@@ -1,75 +1,89 @@
 /* ============================================================================
- * z80_timing.c - drive external pins as a function of the timing state.
+ * z80_timing.c - the Z80 timing module: drive external pins as a pure
+ * combinational function of the current timing state.
  *
- * Outputs are a pure function of (bus_op, t_state, phi, m_addr, m_wdata, I, R),
- * exactly like the registered/combinational outputs of the RTL. See
- * docs/timing.md for the phase-by-phase contract this implements.
+ * Mirrors rtl/z80_timing.v one-to-one. Inputs and outputs match the Verilog
+ * port list exactly; the function has no access to z80_t — the caller in
+ * z80.c samples cpu->* fields into positional arguments and writes the
+ * outputs back into cpu->pins.
  *
- * Convention: t.P = (phi==0), t.N = (phi==1).
+ * Convention: t.P = (phi==0), t.N = (phi==1). See docs/timing.md for the
+ * phase-by-phase contract this implements.
  * ==========================================================================*/
-#include "z80_internal.h"
+#include "z80.h"
 
-void z80_drive_pins(z80_t *cpu)
+void z80_timing(uint8_t   bus_op,     /* z80_busop_t                          */
+                uint8_t   t_state,    /* 1-based T-state within the M-cycle   */
+                uint8_t   phi,        /* 0 = PHI_P, 1 = PHI_N                  */
+                uint16_t  m_addr,     /* address being driven this M-cycle    */
+                uint8_t   m_wdata,    /* data byte for writes                 */
+                uint8_t   reg_i,      /* I register (refresh high byte)       */
+                uint8_t   reg_r,      /* R register (refresh low byte)        */
+                uint16_t *addr,
+                uint8_t  *data_out,
+                bool     *data_drive,
+                bool     *m1_n,
+                bool     *mreq_n,
+                bool     *iorq_n,
+                bool     *rd_n,
+                bool     *wr_n,
+                bool     *rfsh_n)
 {
-    z80_pins_t *p = &cpu->pins;
-    uint8_t t   = cpu->t_state;
-    uint8_t phi = cpu->phi;
-
     /* defaults: all strobes inactive (high), not driving data */
-    p->m1_n = p->mreq_n = p->iorq_n = p->rd_n = p->wr_n = p->rfsh_n = 1;
-    p->data_drive = false;
-    p->data_out = cpu->m_wdata;     /* always presented; gated by data_drive */
-    p->addr = cpu->m_addr;
-    /* halt_n / busack_n are owned by other subsystems; leave as-is here */
+    *m1_n = *mreq_n = *iorq_n = *rd_n = *wr_n = *rfsh_n = 1;
+    *data_drive = false;
+    *data_out = m_wdata;     /* always presented; gated by data_drive */
+    *addr = m_addr;
+    /* halt_n / busack_n are owned by other subsystems; not driven here */
 
-    switch (cpu->bus_op) {
+    switch (bus_op) {
     case BUSOP_M1: {
-        bool refresh = (t >= 3);
-        p->addr   = refresh ? (uint16_t)(((uint16_t)cpu->reg_i << 8) | cpu->reg_r)
-                            : cpu->m_addr;
-        p->m1_n   = (t <= 2) ? 0 : 1;
-        p->rfsh_n = refresh ? 0 : 1;
+        bool refresh = (t_state >= 3);
+        *addr   = refresh ? (uint16_t)(((uint16_t)reg_i << 8) | reg_r)
+                          : m_addr;
+        *m1_n   = (t_state <= 2) ? 0 : 1;
+        *rfsh_n = refresh ? 0 : 1;
         /* opcode fetch MREQ/RD: T1.N .. end of T2 */
-        bool fetch_lo = ((t == 1 && phi == 1) || (t == 2));
+        bool fetch_lo = ((t_state == 1 && phi == 1) || (t_state == 2));
         /* refresh MREQ: T3.N .. T4.P */
-        bool refr_lo  = ((t == 3 && phi == 1) || (t == 4 && phi == 0));
-        p->mreq_n = (fetch_lo || refr_lo) ? 0 : 1;
-        p->rd_n   = fetch_lo ? 0 : 1;
+        bool refr_lo  = ((t_state == 3 && phi == 1) || (t_state == 4 && phi == 0));
+        *mreq_n = (fetch_lo || refr_lo) ? 0 : 1;
+        *rd_n   = fetch_lo ? 0 : 1;
         break;
     }
     case BUSOP_MRD: {
-        bool active = !(t == 1 && phi == 0);   /* T1.N onward */
-        p->mreq_n = active ? 0 : 1;
-        p->rd_n   = active ? 0 : 1;
+        bool active = !(t_state == 1 && phi == 0);   /* T1.N onward */
+        *mreq_n = active ? 0 : 1;
+        *rd_n   = active ? 0 : 1;
         break;
     }
     case BUSOP_MWR: {
-        bool active = !(t == 1 && phi == 0);
-        p->mreq_n = active ? 0 : 1;
-        p->data_drive = active;
-        p->data_out = cpu->m_wdata;
+        bool active = !(t_state == 1 && phi == 0);
+        *mreq_n = active ? 0 : 1;
+        *data_drive = active;
+        *data_out = m_wdata;
         /* WR low from T2.N .. end of T3 */
-        p->wr_n = ((t == 2 && phi == 1) || (t == 3)) ? 0 : 1;
+        *wr_n = ((t_state == 2 && phi == 1) || (t_state == 3)) ? 0 : 1;
         break;
     }
     case BUSOP_IORD: {
-        bool active = (t >= 2);                 /* IORQ/RD from T2.P */
-        p->iorq_n = active ? 0 : 1;
-        p->rd_n   = active ? 0 : 1;
+        bool active = (t_state >= 2);                 /* IORQ/RD from T2.P */
+        *iorq_n = active ? 0 : 1;
+        *rd_n   = active ? 0 : 1;
         break;
     }
     case BUSOP_IOWR: {
-        bool active = (t >= 2);
-        p->iorq_n = active ? 0 : 1;
-        p->data_drive = !(t == 1 && phi == 0);
-        p->data_out = cpu->m_wdata;
-        p->wr_n = ((t == 2 && phi == 1) || (t >= 3)) ? 0 : 1;
+        bool active = (t_state >= 2);
+        *iorq_n = active ? 0 : 1;
+        *data_drive = !(t_state == 1 && phi == 0);
+        *data_out = m_wdata;
+        *wr_n = ((t_state == 2 && phi == 1) || (t_state >= 3)) ? 0 : 1;
         break;
     }
     case BUSOP_INTA: {
-        /* interrupt acknowledge: M1+IORQ, handled fully in task 9 */
-        p->m1_n = (t <= 2) ? 0 : 1;
-        p->iorq_n = (t >= 3) ? 0 : 1;
+        /* interrupt acknowledge: M1+IORQ */
+        *m1_n   = (t_state <= 2) ? 0 : 1;
+        *iorq_n = (t_state >= 3) ? 0 : 1;
         break;
     }
     default: /* BUSOP_INTERNAL / NONE: no bus activity, hold address */

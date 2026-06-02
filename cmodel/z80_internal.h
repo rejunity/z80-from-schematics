@@ -40,7 +40,6 @@ static inline bool z80_cc_true(uint8_t f, uint8_t cc){
 }
 
 /* ---- engine internals ---- */
-void    z80_drive_pins(z80_t *cpu);                  /* z80_timing.c */
 void    z80_exec_step(z80_t *cpu);                   /* z80_control.c */
 uint8_t z80_busop_base_len(uint8_t busop);           /* z80_bus.c */
 void    z80_start_mcycle(z80_t *cpu, uint8_t busop, uint16_t addr,
