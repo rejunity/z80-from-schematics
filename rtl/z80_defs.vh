@@ -196,16 +196,19 @@
 `define ADDR_RP      4'd10  // rf[rp_sel_w]      (LD A,(BC) / LD (BC),A / etc.)
 `define ADDR_NN      4'd11  // {rbyte, tmpl}     (LD A,(nn) / LD (nn),A / LD HL,(nn) etc.)
 `define ADDR_NN_INC  4'd12  // {rbyte, tmpl} + 1 (LD HL,(nn) second-byte address)
+`define ADDR_PC_DISP 4'd13  // rf[PC] + sign_ext(rbyte)  (JR / DJNZ internal)
 
-// ---- WZ (MEMPTR) update operations for ctl_wz_op ----
-`define WZ_NONE      3'd0
-`define WZ_SET_NN    3'd1  // WZ = {rbyte, tmpl}
-`define WZ_RP_INC    3'd2  // WZ = rf[rp_sel_w] + 1  (LD A,(rp))
-`define WZ_A_RP_INC  3'd3  // WZ = {A_cur, (rp_lo + 1) & 0xFF}  (LD (rp),A)
-`define WZ_HL_INC    3'd4  // WZ = rf[hlp] + 1
-`define WZ_BC_INC    3'd5  // WZ = rf[`RFP_BC] + 1  (IN/OUT (C))
-`define WZ_NN_INC    3'd6  // WZ = {rbyte, tmpl} + 1
-`define WZ_A_NN_INC  3'd7  // WZ = {A_cur, tmpl + 1} (LD (nn),A)
+// ---- WZ (MEMPTR) update operations for ctl_wz_op (4 bits) ----
+`define WZ_NONE      4'd0
+`define WZ_SET_NN    4'd1  // WZ = {rbyte, tmpl}
+`define WZ_RP_INC    4'd2  // WZ = rf[rp_sel_w] + 1  (LD A,(rp))
+`define WZ_A_RP_INC  4'd3  // WZ = {A_cur, (rp_lo + 1) & 0xFF}  (LD (rp),A)
+`define WZ_HL_INC    4'd4  // WZ = rf[hlp] + 1
+`define WZ_BC_INC    4'd5  // WZ = rf[`RFP_BC] + 1  (IN/OUT (C))
+`define WZ_NN_INC    4'd6  // WZ = {rbyte, tmpl} + 1
+`define WZ_A_NN_INC  4'd7  // WZ = {A_cur, tmpl + 1} (LD (nn),A)
+`define WZ_PC_DISP   4'd8  // WZ = rf[PC] + sign_ext(rbyte)  (JR / DJNZ)
+`define WZ_RST_ADDR  4'd9  // WZ = {8'h00, rst_addr_w}       (RST)
 
 // ---- Write-data source enum for ctl_mc_wdata_src ----
 `define WDATA_ZERO     3'd0

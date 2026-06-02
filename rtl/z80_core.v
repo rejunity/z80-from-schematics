@@ -238,13 +238,18 @@ module z80_core (
     wire       seq_pc_set_nn, seq_rp_set_nn, seq_use_cc;
     wire       seq_rp_inc, seq_rp_dec, seq_sp_set_hl;
     wire       seq_reg_a_src_rbyte;
-    wire [2:0] seq_wz_op;
+    wire [3:0] seq_wz_op;
+    wire       seq_pc_add_disp, seq_b_dec;
+    wire       cc_taken    = cc_true(F_cur, cc_w);
+    wire       djnz_taken  = (rf[`RFP_BC][15:8] - 8'd1) != 8'd0;
     z80_seq u_seq (
         .eff_exec(eff_exec),
         .m_cycle(m_cycle),
         .t_state(t_state),
         .phi(phi),
         .alu_op_w(alu_op_w),
+        .cc_taken(cc_taken),
+        .djnz_taken(djnz_taken),
         .seq_active(seq_active),
         .fin(seq_fin),
         .ctl_iff_op(seq_iff_op),
@@ -276,7 +281,9 @@ module z80_core (
         .ctl_rp_dec(seq_rp_dec),
         .ctl_sp_set_hl(seq_sp_set_hl),
         .ctl_reg_a_src_rbyte(seq_reg_a_src_rbyte),
-        .ctl_wz_op(seq_wz_op)
+        .ctl_wz_op(seq_wz_op),
+        .ctl_pc_add_disp(seq_pc_add_disp),
+        .ctl_b_dec(seq_b_dec)
     );
 
     // ---- mux helpers for seq's address / wdata source selectors ----
@@ -297,6 +304,7 @@ module z80_core (
             `ADDR_RP:      seq_addr_val = rf[rp_sel_w];
             `ADDR_NN:      seq_addr_val = {rbyte, tmpl};
             `ADDR_NN_INC:  seq_addr_val = {rbyte, tmpl} + 16'd1;
+            `ADDR_PC_DISP: seq_addr_val = rf[`RFP_PC] + {{8{rbyte[7]}}, rbyte};
             default:       seq_addr_val = rf[`RFP_PC];
         endcase
         case (seq_mc_wdata_src)
@@ -543,39 +551,7 @@ module z80_core (
                 `EXEC_LD_RP_NN: ;  /* migrated to z80_seq (ctl_rp_set_nn) */
                 `EXEC_JP, `EXEC_JP_CC: ;  /* migrated to z80_seq (tmpl_we / pc_set_nn / wz_set_nn / use_cc) */
 
-                `EXEC_JR: begin
-                    if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd2) begin
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + {{8{rbyte[7]}}, rbyte};
-                        rf_n[`RFP_WZ] = rf[`RFP_PC] + {{8{rbyte[7]}}, rbyte};
-                        startm(`BUSOP_INTERNAL, rf[`RFP_PC] + {{8{rbyte[7]}}, rbyte}, 8'h0, 4'd5);
-                    end else fin = 1'b1;
-                end
-                `EXEC_JR_CC: begin
-                    if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd2) begin
-                        if (cc_true(F_cur, cc_w)) begin
-                            rf_n[`RFP_PC] = rf[`RFP_PC] + {{8{rbyte[7]}}, rbyte};
-                            rf_n[`RFP_WZ] = rf[`RFP_PC] + {{8{rbyte[7]}}, rbyte};
-                            startm(`BUSOP_INTERNAL, rf[`RFP_PC] + {{8{rbyte[7]}}, rbyte}, 8'h0, 4'd5);
-                        end else fin = 1'b1;
-                    end else fin = 1'b1;
-                end
-                `EXEC_DJNZ: begin
-                    if (m_cycle == 3'd1) startm(`BUSOP_INTERNAL, rf[`RFP_PC], 8'h0, 4'd1);
-                    else if (m_cycle == 3'd2) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd3) begin
-                        rf_n[`RFP_BC][15:8] = rf[`RFP_BC][15:8] - 8'd1;
-                        if ((rf[`RFP_BC][15:8] - 8'd1) != 8'd0) begin
-                            rf_n[`RFP_PC] = rf[`RFP_PC] + {{8{rbyte[7]}}, rbyte};
-                            rf_n[`RFP_WZ] = rf[`RFP_PC] + {{8{rbyte[7]}}, rbyte};
-                            startm(`BUSOP_INTERNAL, rf[`RFP_PC] + {{8{rbyte[7]}}, rbyte}, 8'h0, 4'd5);
-                        end else fin = 1'b1;
-                    end else fin = 1'b1;
-                end
+                `EXEC_JR, `EXEC_JR_CC, `EXEC_DJNZ: ;  /* migrated to z80_seq */
 
                 `EXEC_CALL, `EXEC_CALL_CC: begin
                     if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
@@ -1020,8 +996,14 @@ module z80_core (
                         `WZ_BC_INC:    rf_n[`RFP_WZ] = rf[`RFP_BC] + 16'd1;
                         `WZ_NN_INC:    rf_n[`RFP_WZ] = {rbyte, tmpl} + 16'd1;
                         `WZ_A_NN_INC:  rf_n[`RFP_WZ] = {A_cur, tmpl + 8'd1};
+                        `WZ_PC_DISP:   rf_n[`RFP_WZ] = rf[`RFP_PC] + {{8{rbyte[7]}}, rbyte};
+                        `WZ_RST_ADDR:  rf_n[`RFP_WZ] = {8'h00, rst_addr_w};
                         default: ;
                     endcase
+                    if (seq_pc_add_disp)
+                        rf_n[`RFP_PC] = rf[`RFP_PC] + {{8{rbyte[7]}}, rbyte};
+                    if (seq_b_dec)
+                        rf_n[`RFP_BC][15:8] = rf[`RFP_BC][15:8] - 8'd1;
                     if (seq_pc_set_nn) begin
                         if (!seq_use_cc || cc_true(F_cur, cc_w))
                             rf_n[`RFP_PC] = {rbyte, tmpl};

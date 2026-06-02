@@ -48,6 +48,10 @@ module z80_seq (
     // ---- PLA pass-through used by a few cases (alu_op selects CP) ----
     input  wire [2:0]   alu_op_w,
 
+    // ---- precomputed conditional flags from core ----
+    input  wire         cc_taken,    // cc_true(F_cur, cc_w)
+    input  wire         djnz_taken,  // (B - 1) != 0  for DJNZ branch
+
     // ---- "do anything?" output for cross-checking against the legacy
     //      case dispatch in z80_core.v during migration. When the migrated
     //      set covers an opcode, seq_active[<exec>] is 1 and core skips
@@ -97,8 +101,12 @@ module z80_seq (
     // ---- A register write with source select ----
     output reg          ctl_reg_a_src_rbyte, // when set with ctl_reg_a_we, source = rbyte
 
-    // ---- WZ (MEMPTR) update with enum (supplants ctl_wz_set_nn) ----
-    output reg  [2:0]   ctl_wz_op          // WZ_*
+    // ---- WZ (MEMPTR) update with enum (4 bits) ----
+    output reg  [3:0]   ctl_wz_op,         // WZ_*
+
+    // ---- PC mutation (multi-op) ----
+    output reg          ctl_pc_add_disp,   // PC = rf[PC] + sign_ext(rbyte)  (JR/DJNZ)
+    output reg          ctl_b_dec          // B = B - 1  (DJNZ)
 );
 
     // Convenience M/T equality wires keep the case branches readable.
@@ -111,12 +119,14 @@ module z80_seq (
     wire T2 = (t_state == 4'd2);
     wire T3 = (t_state == 4'd3);
     wire T4 = (t_state == 4'd4);
+    wire T5 = (t_state == 4'd5);
+    wire T6 = (t_state == 4'd6);
     /* verilator lint_off UNUSEDSIGNAL */
     wire phi_unused = phi;
     wire t1_unused  = T1;
     wire t2_unused  = T2;
-    wire m4_unused  = M4;
     wire m5_unused  = M5;
+    wire t6_unused  = T6;
     /* verilator lint_on UNUSEDSIGNAL */
 
     always @* begin
@@ -152,6 +162,8 @@ module z80_seq (
         ctl_sp_set_hl     = 1'b0;
         ctl_reg_a_src_rbyte = 1'b0;
         ctl_wz_op         = `WZ_NONE;
+        ctl_pc_add_disp   = 1'b0;
+        ctl_b_dec         = 1'b0;
 
         case (eff_exec)
         `EXEC_NOP, `EXEC_ILLEGAL: begin
@@ -393,6 +405,83 @@ module z80_seq (
                 ctl_wz_op         = `WZ_A_RP_INC;
             end
             if (M2 & T3) fin = 1'b1;
+        end
+
+        // JR e — unconditional relative jump (always 12T total: M1=4T, M2=3T
+        // for displacement fetch, M3=5T internal for the +disp compute).
+        `EXEC_JR: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin
+                ctl_start_mc    = 1'b1;
+                ctl_mc_bus_op   = `BUSOP_MRD;
+                ctl_mc_addr_src = `ADDR_PC;
+                ctl_pc_inc      = 1'b1;
+            end
+            if (M2 & T3) begin
+                ctl_pc_add_disp = 1'b1;
+                ctl_wz_op       = `WZ_PC_DISP;
+                ctl_start_mc    = 1'b1;
+                ctl_mc_bus_op   = `BUSOP_INTERNAL;
+                ctl_mc_addr_src = `ADDR_PC_DISP;
+                ctl_mc_extra_t  = 4'd5;
+            end
+            if (M3 & T5) fin = 1'b1;
+        end
+
+        // JR cc,e — conditional. Branch only when cc_true(F, cc_w).
+        `EXEC_JR_CC: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin
+                ctl_start_mc    = 1'b1;
+                ctl_mc_bus_op   = `BUSOP_MRD;
+                ctl_mc_addr_src = `ADDR_PC;
+                ctl_pc_inc      = 1'b1;
+            end
+            if (M2 & T3) begin
+                if (cc_taken) begin
+                    ctl_pc_add_disp = 1'b1;
+                    ctl_wz_op       = `WZ_PC_DISP;
+                    ctl_start_mc    = 1'b1;
+                    ctl_mc_bus_op   = `BUSOP_INTERNAL;
+                    ctl_mc_addr_src = `ADDR_PC_DISP;
+                    ctl_mc_extra_t  = 4'd5;
+                end else begin
+                    fin = 1'b1;
+                end
+            end
+            if (M3 & T5) fin = 1'b1;
+        end
+
+        // DJNZ e — 4 M-cycles: M1=5T (extra IDU pad), M2=3T MRD disp,
+        // M3 decrements B; if B != 0 starts INTERNAL M4=5T for the disp add.
+        `EXEC_DJNZ: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin
+                ctl_start_mc    = 1'b1;
+                ctl_mc_bus_op   = `BUSOP_INTERNAL;
+                ctl_mc_addr_src = `ADDR_PC;
+                ctl_mc_extra_t  = 4'd1;       /* 1T internal cycle */
+            end
+            if (M2 & T1) begin
+                ctl_start_mc    = 1'b1;
+                ctl_mc_bus_op   = `BUSOP_MRD;
+                ctl_mc_addr_src = `ADDR_PC;
+                ctl_pc_inc      = 1'b1;
+            end
+            if (M3 & T3) begin
+                ctl_b_dec = 1'b1;
+                if (djnz_taken) begin
+                    ctl_pc_add_disp = 1'b1;
+                    ctl_wz_op       = `WZ_PC_DISP;
+                    ctl_start_mc    = 1'b1;
+                    ctl_mc_bus_op   = `BUSOP_INTERNAL;
+                    ctl_mc_addr_src = `ADDR_PC_DISP;
+                    ctl_mc_extra_t  = 4'd5;
+                end else begin
+                    fin = 1'b1;
+                end
+            end
+            if (M4 & T5) fin = 1'b1;
         end
 
         // INC rp / DEC rp / LD SP,HL — single internal cycle after the M1
