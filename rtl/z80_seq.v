@@ -67,7 +67,8 @@ module z80_seq (
     output reg          ctl_reg_exx,       // swap BC/DE/HL <-> primes
     output reg          ctl_pc_set_hl,     // PC = rf[hlp]  (JP HL / JP IX / JP IY)
     output reg          ctl_reg_a_we,      // write A from alu_res
-    output reg          ctl_reg_f_we       // write F from alu_fout
+    output reg          ctl_reg_f_we,      // write F from alu_fout
+    output reg          ctl_reg_setri_we   // setri(rf_dst_w, alu_res)
 );
 
     // Convenience M/T equality wires keep the case branches readable.
@@ -98,6 +99,7 @@ module z80_seq (
         ctl_pc_set_hl    = 1'b0;
         ctl_reg_a_we     = 1'b0;
         ctl_reg_f_we     = 1'b0;
+        ctl_reg_setri_we = 1'b0;
 
         case (eff_exec)
         `EXEC_NOP, `EXEC_ILLEGAL: begin
@@ -192,6 +194,17 @@ module z80_seq (
                 ctl_reg_a_we = (alu_op_w != `ALU_CP);
                 ctl_reg_f_we = 1'b1;
                 fin          = 1'b1;
+            end
+        end
+
+        // INC r / DEC r — alu_b = getri(rf_dst_w), alu_mode = INC8/DEC8;
+        // result back to rf_dst via setri, flags to F.
+        `EXEC_INC_R, `EXEC_DEC_R: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin
+                ctl_reg_setri_we = 1'b1;
+                ctl_reg_f_we     = 1'b1;
+                fin              = 1'b1;
             end
         end
 
