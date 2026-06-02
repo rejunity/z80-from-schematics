@@ -84,9 +84,10 @@ module z80_seq (
     output reg          ctl_tmph_we,       // tmph = rbyte
     output reg          ctl_tmp16_we,      // tmp16 = {rbyte, tmpl}
 
-    // ---- PC / WZ updates from {rbyte, tmpl} ----
+    // ---- PC / WZ / rp updates from {rbyte, tmpl} ----
     output reg          ctl_pc_set_nn,     // PC = {rbyte, tmpl}  (gated by use_cc)
     output reg          ctl_wz_set_nn,     // WZ = {rbyte, tmpl}
+    output reg          ctl_rp_set_nn,     // rf[rp_sel_w] = {rbyte, tmpl}
     output reg          ctl_use_cc         // if 1, gate ctl_pc_set_nn on cc_true(F, cc_w)
 );
 
@@ -135,6 +136,7 @@ module z80_seq (
         ctl_tmp16_we      = 1'b0;
         ctl_pc_set_nn     = 1'b0;
         ctl_wz_set_nn     = 1'b0;
+        ctl_rp_set_nn     = 1'b0;
         ctl_use_cc        = 1'b0;
 
         case (eff_exec)
@@ -287,6 +289,29 @@ module z80_seq (
                 ctl_reg_a_we = (alu_op_w != `ALU_CP);
                 ctl_reg_f_we = 1'b1;
                 fin          = 1'b1;
+            end
+        end
+
+        // LD rp,nn — same fetch pattern as JP but writes rp instead of PC.
+        // No WZ side effect, no condition.
+        `EXEC_LD_RP_NN: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin
+                ctl_start_mc    = 1'b1;
+                ctl_mc_bus_op   = `BUSOP_MRD;
+                ctl_mc_addr_src = `ADDR_PC;
+                ctl_pc_inc      = 1'b1;
+            end
+            if (M2 & T3) begin
+                ctl_tmpl_we     = 1'b1;
+                ctl_start_mc    = 1'b1;
+                ctl_mc_bus_op   = `BUSOP_MRD;
+                ctl_mc_addr_src = `ADDR_PC;
+                ctl_pc_inc      = 1'b1;
+            end
+            if (M3 & T3) begin
+                ctl_rp_set_nn = 1'b1;
+                fin           = 1'b1;
             end
         end
 

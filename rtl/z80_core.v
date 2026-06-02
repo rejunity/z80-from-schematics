@@ -235,7 +235,7 @@ module z80_core (
     wire [2:0] seq_mc_wdata_src;
     wire [3:0] seq_mc_extra_t;
     wire       seq_tmpl_we, seq_tmph_we, seq_tmp16_we;
-    wire       seq_pc_set_nn, seq_wz_set_nn, seq_use_cc;
+    wire       seq_pc_set_nn, seq_wz_set_nn, seq_rp_set_nn, seq_use_cc;
     z80_seq u_seq (
         .eff_exec(eff_exec),
         .m_cycle(m_cycle),
@@ -268,6 +268,7 @@ module z80_core (
         .ctl_tmp16_we(seq_tmp16_we),
         .ctl_pc_set_nn(seq_pc_set_nn),
         .ctl_wz_set_nn(seq_wz_set_nn),
+        .ctl_rp_set_nn(seq_rp_set_nn),
         .ctl_use_cc(seq_use_cc)
     );
 
@@ -541,13 +542,7 @@ module z80_core (
                     else fin = 1'b1;
                 end
 
-                `EXEC_LD_RP_NN: begin
-                    if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd2) begin tmpl_n = rbyte;
-                        startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0); rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else begin rf_n[rp_sel_w] = {rbyte, tmpl}; fin = 1'b1; end
-                end
+                `EXEC_LD_RP_NN: ;  /* migrated to z80_seq (ctl_rp_set_nn) */
                 `EXEC_JP, `EXEC_JP_CC: ;  /* migrated to z80_seq (tmpl_we / pc_set_nn / wz_set_nn / use_cc) */
 
                 `EXEC_JR: begin
@@ -1050,6 +1045,7 @@ module z80_core (
                         if (!seq_use_cc || cc_true(F_cur, cc_w))
                             rf_n[`RFP_PC] = {rbyte, tmpl};
                     end
+                    if (seq_rp_set_nn) rf_n[rp_sel_w] = {rbyte, tmpl};
                 end
 
                 if (fin) begin
