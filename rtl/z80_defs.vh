@@ -161,4 +161,10 @@
 `define CB_RES 2'd2
 `define CB_SET 2'd3
 
+// ---- IDU operation encodings (rtl/z80_idu.v / cmodel/z80_internal.h) ----
+`define IDU_NONE     2'd0
+`define IDU_INC      2'd1
+`define IDU_DEC      2'd2
+`define IDU_ADD_DISP 2'd3
+
 `endif

@@ -50,6 +50,33 @@ static inline bool z80_cc_true(uint8_t f, uint8_t cc){
     }
 }
 
+/* ---- IDU (incrementer/decrementer) — mirrors rtl/z80_idu.v ----------- */
+
+/* The 16-bit incrementer/decrementer on the address path. One of the named
+   blocks visible on the real Z80 die — handles all 16-bit address arithmetic
+   that produces no flags: PC + 1 (every fetch), SP ± 1 (push/pop/CALL/RET),
+   rp ± 1 (INC rp / DEC rp / block-op pointer updates), R-register refresh
+   (low 7 bits only), and PC + signed-displacement (JR / DJNZ).
+
+   `disp` is the signed 8-bit displacement (only used for IDU_ADD_DISP).
+   Operation encodings match rtl/z80_defs.vh `IDU_*`. */
+enum {
+    IDU_NONE     = 0,
+    IDU_INC      = 1,
+    IDU_DEC      = 2,
+    IDU_ADD_DISP = 3,
+};
+
+static inline uint16_t z80_idu(uint16_t in, uint8_t op, uint8_t disp)
+{
+    switch (op) {
+        case IDU_INC:      return (uint16_t)(in + 1);
+        case IDU_DEC:      return (uint16_t)(in - 1);
+        case IDU_ADD_DISP: return (uint16_t)(in + (int16_t)(int8_t)disp);
+        default:           return in;
+    }
+}
+
 /* ---- cross-module prototypes between z80_core.c and z80_seq.c ---- */
 
 /* In z80_seq.c: instruction micro-sequencer — called by the phase engine in
