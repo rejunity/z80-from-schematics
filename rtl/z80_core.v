@@ -502,12 +502,7 @@ module z80_core (
                 end
 
                 `EXEC_LD_R_N: ;  /* migrated to z80_seq (ctl_start_mc / ctl_pc_inc / setri RBYTE) */
-                `EXEC_ALU_N: begin
-                    if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else begin if (alu_op_w != `ALU_CP) setr8(3'd7, alu_res);
-                        rf_n[`RFP_AF][7:0] = alu_fout; fin = 1'b1; end
-                end
+                `EXEC_ALU_N: ;  /* migrated to z80_seq */
                 `EXEC_LD_R_M: begin
                     if (mm == 3'd1) startm(`BUSOP_MRD, memaddr, 8'h0, 4'd0);
                     else begin setri(rf_dst_w, rbyte); fin = 1'b1; end

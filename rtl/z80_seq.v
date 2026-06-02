@@ -251,6 +251,24 @@ module z80_seq (
             end
         end
 
+        // ALU op with immediate byte — M1 fetch, M2 fetches the byte and
+        // the ALU fires with alu_b = rbyte (mux in core). At M2.T3, write
+        // A (unless CP) and F.
+        `EXEC_ALU_N: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin
+                ctl_start_mc    = 1'b1;
+                ctl_mc_bus_op   = `BUSOP_MRD;
+                ctl_mc_addr_src = `ADDR_PC;
+                ctl_pc_inc      = 1'b1;
+            end
+            if (M2 & T3) begin
+                ctl_reg_a_we = (alu_op_w != `ALU_CP);
+                ctl_reg_f_we = 1'b1;
+                fin          = 1'b1;
+            end
+        end
+
         // NEG — alu_a = A, alu_b = 0, alu_md = FLAG_NEG (set by PLA), result
         // back to A, flags to F.
         `EXEC_NEG: begin
