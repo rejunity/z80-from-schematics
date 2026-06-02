@@ -748,19 +748,7 @@ module z80_core (
                         fin = 1'b1;
                     end
                 end
-                `EXEC_NEG: begin
-                    edv = 8'h00 - A_cur;
-                    edf = `Z80_NF;
-                    if (edv[7]) edf = edf | `Z80_SF;
-                    if (edv == 8'h0) edf = edf | `Z80_ZF;
-                    if (A_cur[3:0] != 4'h0) edf = edf | `Z80_HF;
-                    if (A_cur == 8'h80) edf = edf | `Z80_PF;
-                    if (A_cur != 8'h00) edf = edf | `Z80_CF;
-                    edf = edf | (edv & (`Z80_YF | `Z80_XF));
-                    rf_n[`RFP_AF][15:8] = edv;
-                    rf_n[`RFP_AF][7:0]  = edf;
-                    fin = 1'b1;
-                end
+                `EXEC_NEG: ;  /* migrated to z80_seq: alu mode FLAG_NEG (set by PLA), writes A+F */
                 `EXEC_IM: ;  /* migrated to z80_seq (ctl_im_we; val from aux_w) */
                 `EXEC_RETN: begin
                     if (m_cycle == 3'd1) startm(`BUSOP_MRD, rf[`RFP_SP], 8'h0, 4'd0);

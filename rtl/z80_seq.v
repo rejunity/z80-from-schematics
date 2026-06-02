@@ -220,6 +220,17 @@ module z80_seq (
             end
         end
 
+        // NEG — alu_a = A, alu_b = 0, alu_md = FLAG_NEG (set by PLA), result
+        // back to A, flags to F.
+        `EXEC_NEG: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin
+                ctl_reg_a_we = 1'b1;
+                ctl_reg_f_we = 1'b1;
+                fin          = 1'b1;
+            end
+        end
+
         default: seq_active = 1'b0;
         endcase
     end

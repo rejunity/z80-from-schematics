@@ -74,7 +74,7 @@ module z80_pla (
                             if (q == 1'b0) begin exec = `EXEC_SBC16; flag_mode = `FLAG_SBC16; end
                             else           begin exec = `EXEC_ADC16; flag_mode = `FLAG_ADC16; end end
                 3'd3: begin rp_sel = rp_of_p; exec = (q == 1'b0) ? `EXEC_LD_NNA_RP : `EXEC_LD_RP_NNA; end
-                3'd4: begin exec = `EXEC_NEG; flag_mode = `FLAG_SUB8; end
+                3'd4: begin exec = `EXEC_NEG; flag_mode = `FLAG_NEG; end
                 3'd5: exec = `EXEC_RETN;
                 3'd6: begin exec = `EXEC_IM;
                             aux = ((y == 3'd2) || (y == 3'd6)) ? 4'd1 :
