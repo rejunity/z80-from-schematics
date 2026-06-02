@@ -84,16 +84,21 @@ module z80_seq (
     output reg          ctl_tmph_we,       // tmph = rbyte
     output reg          ctl_tmp16_we,      // tmp16 = {rbyte, tmpl}
 
-    // ---- PC / WZ / rp updates from {rbyte, tmpl} ----
+    // ---- PC / rp updates from {rbyte, tmpl}; WZ via ctl_wz_op enum ----
     output reg          ctl_pc_set_nn,     // PC = {rbyte, tmpl}  (gated by use_cc)
-    output reg          ctl_wz_set_nn,     // WZ = {rbyte, tmpl}
     output reg          ctl_rp_set_nn,     // rf[rp_sel_w] = {rbyte, tmpl}
     output reg          ctl_use_cc,        // if 1, gate ctl_pc_set_nn on cc_true(F, cc_w)
 
     // ---- IDU-style rp +/- 1 (16-bit incrementer on the address path) ----
     output reg          ctl_rp_inc,        // rf[rp_sel_w] = rf[rp_sel_w] + 1
     output reg          ctl_rp_dec,        // rf[rp_sel_w] = rf[rp_sel_w] - 1
-    output reg          ctl_sp_set_hl      // SP = rf[hlp]  (LD SP,HL)
+    output reg          ctl_sp_set_hl,     // SP = rf[hlp]  (LD SP,HL)
+
+    // ---- A register write with source select ----
+    output reg          ctl_reg_a_src_rbyte, // when set with ctl_reg_a_we, source = rbyte
+
+    // ---- WZ (MEMPTR) update with enum (supplants ctl_wz_set_nn) ----
+    output reg  [2:0]   ctl_wz_op          // WZ_*
 );
 
     // Convenience M/T equality wires keep the case branches readable.
@@ -140,12 +145,13 @@ module z80_seq (
         ctl_tmph_we       = 1'b0;
         ctl_tmp16_we      = 1'b0;
         ctl_pc_set_nn     = 1'b0;
-        ctl_wz_set_nn     = 1'b0;
         ctl_rp_set_nn     = 1'b0;
         ctl_use_cc        = 1'b0;
         ctl_rp_inc        = 1'b0;
         ctl_rp_dec        = 1'b0;
         ctl_sp_set_hl     = 1'b0;
+        ctl_reg_a_src_rbyte = 1'b0;
+        ctl_wz_op         = `WZ_NONE;
 
         case (eff_exec)
         `EXEC_NOP, `EXEC_ILLEGAL: begin
@@ -300,6 +306,37 @@ module z80_seq (
             end
         end
 
+        // LD A,(BC) / LD A,(DE) — M1 fetch, M2 reads byte from rp into A;
+        //   WZ = rp + 1.
+        `EXEC_LD_A_RP: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin
+                ctl_start_mc    = 1'b1;
+                ctl_mc_bus_op   = `BUSOP_MRD;
+                ctl_mc_addr_src = `ADDR_RP;
+                ctl_wz_op       = `WZ_RP_INC;
+            end
+            if (M2 & T3) begin
+                ctl_reg_a_we        = 1'b1;
+                ctl_reg_a_src_rbyte = 1'b1;
+                fin                 = 1'b1;
+            end
+        end
+
+        // LD (BC),A / LD (DE),A — M1 fetch, M2 writes A to rp; specific WZ
+        //   formula = {A_cur, (rp_lo + 1) & 0xFF}.
+        `EXEC_LD_RP_A: begin
+            seq_active = 1'b1;
+            if (M1 & T4) begin
+                ctl_start_mc      = 1'b1;
+                ctl_mc_bus_op     = `BUSOP_MWR;
+                ctl_mc_addr_src   = `ADDR_RP;
+                ctl_mc_wdata_src  = `WDATA_A;
+                ctl_wz_op         = `WZ_A_RP_INC;
+            end
+            if (M2 & T3) fin = 1'b1;
+        end
+
         // INC rp / DEC rp / LD SP,HL — single internal cycle after the M1
         // fetch (2T of "incrementer compute"). The register update happens
         // at M1.T4 dispatch; M2 is the internal cycle, finishing at M2.T2.
@@ -380,7 +417,7 @@ module z80_seq (
                 ctl_pc_inc      = 1'b1;
             end
             if (M3 & T3) begin
-                ctl_wz_set_nn = 1'b1;
+                ctl_wz_op     = `WZ_SET_NN;
                 ctl_pc_set_nn = 1'b1;
                 ctl_use_cc    = (eff_exec == `EXEC_JP_CC);
                 fin           = 1'b1;

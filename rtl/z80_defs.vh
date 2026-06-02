@@ -193,6 +193,15 @@
 `define ADDR_TMP16   4'd7
 `define ADDR_RP_INC  4'd8   // rf[rp_sel_w] + 1  (INC rp internal cycle)
 `define ADDR_RP_DEC  4'd9   // rf[rp_sel_w] - 1  (DEC rp internal cycle)
+`define ADDR_RP      4'd10  // rf[rp_sel_w]      (LD A,(BC) / LD (BC),A / etc.)
+
+// ---- WZ (MEMPTR) update operations for ctl_wz_op ----
+`define WZ_NONE      3'd0
+`define WZ_SET_NN    3'd1  // WZ = {rbyte, tmpl}
+`define WZ_RP_INC    3'd2  // WZ = rf[rp_sel_w] + 1  (LD A,(rp))
+`define WZ_A_RP_INC  3'd3  // WZ = {A_cur, (rp_lo + 1) & 0xFF}  (LD (rp),A)
+`define WZ_HL_INC    3'd4  // WZ = rf[hlp] + 1
+`define WZ_BC_INC    3'd5  // WZ = rf[`RFP_BC] + 1  (IN/OUT (C))
 
 // ---- Write-data source enum for ctl_mc_wdata_src ----
 `define WDATA_ZERO     3'd0
