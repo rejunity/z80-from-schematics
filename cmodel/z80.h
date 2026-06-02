@@ -99,6 +99,14 @@ uint8_t z80_flags_scf(uint8_t a, uint8_t oldF, uint8_t q);
 uint8_t z80_flags_ccf(uint8_t a, uint8_t oldF, uint8_t q);
 uint8_t z80_flags_cpl(uint8_t a, uint8_t oldF, uint8_t *res);
 
+/* Top-level ALU module entry point (mirrors rtl/z80_alu.v). One C
+   parameter per Verilog port; by-value inputs, by-pointer outputs.
+   The z80_alu_* and z80_flags_* helpers above are its internal building
+   blocks. Sequencer calls go through this. */
+void z80_alu(uint8_t mode, uint8_t alu_op, uint8_t rot_op, uint8_t bit_idx,
+             uint8_t xy_src, uint8_t a, uint8_t b, uint8_t oldf, uint8_t q,
+             uint8_t *res, uint8_t *fout);
+
 /* ---------------------------------------------------------------------------
  * Control word (PLA output). Conceptual fields; see docs/pla.md.
  * ------------------------------------------------------------------------- */
