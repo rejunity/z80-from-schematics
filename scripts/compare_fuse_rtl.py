@@ -80,6 +80,8 @@ def main():
                            "-o", VVP,
                            "rtl/z80_alu.v", "rtl/z80_core.v",
                            "rtl/z80_pla.v", "rtl/z80_timing.v",
+                           "rtl/z80_idu.v", "rtl/z80_regfile.v",
+                           "rtl/z80_seq.v",
                            "tests/iverilog/tb_fuse.v"], cwd=ROOT)
     print("running iverilog vvp ...")
     proc = subprocess.run(["vvp", VVP], cwd=ROOT, capture_output=True, text=True)

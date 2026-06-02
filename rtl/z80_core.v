@@ -218,6 +218,19 @@ module z80_core (
         .res16(alu_res16), .mem_byte(alu_mem_byte)
     );
 
+    // ---- per-(M,T) micro-sequencer (incremental migration target).
+    // When seq_active is high for the current eff_exec, the legacy case
+    // dispatch's branch for that opcode is gone and seq drives fin. ----
+    wire seq_active, seq_fin;
+    z80_seq u_seq (
+        .eff_exec(eff_exec),
+        .m_cycle(m_cycle),
+        .t_state(t_state),
+        .phi(phi),
+        .seq_active(seq_active),
+        .fin(seq_fin)
+    );
+
     // ---- 8-bit register write into rf_n ----
     task setr8; input [2:0] sel; input [7:0] val;
         case (sel)
@@ -347,7 +360,7 @@ module z80_core (
                 end
                 // ===== micro-sequencer (mirror z80_control.c) =====
                 case (eff_exec)
-                `EXEC_NOP, `EXEC_ILLEGAL: fin = 1'b1;
+                `EXEC_NOP, `EXEC_ILLEGAL: ;   /* migrated to z80_seq: fin asserted via seq_fin */
                 `EXEC_PREFIX: begin
                     case (ir)
                         8'hDD: prefix_n = `PFX_DD;
@@ -966,6 +979,10 @@ module z80_core (
 
                 default: fin = 1'b1;
                 endcase
+
+                // Per-(M, T) sequencer override: when seq covers the opcode,
+                // its fin replaces the legacy branch's fin.
+                if (seq_active) fin = seq_fin;
 
                 if (fin) begin
                     instr_count_n = instr_count + 32'd1;
