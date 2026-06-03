@@ -133,6 +133,10 @@ Tests and ROMs:
   - [tests/fuse/README.md](tests/fuse/README.md) — the 1356-case Frank D. Cringle
     opcode corpus (`tests.in` / `tests.expected`) driven by `make fuse` and
     `make fuse_rtl`.
+  - [docs/silicon-microarch.md](docs/silicon-microarch.md) — Z80 silicon-faithful
+    microarchitecture reference: the ~80 internal `ctl_*` control signals, PLA bit
+    numbering, internal bus topology, and the per-(M, T) sequencer dispatch grid.
+    Source of truth: Baltazar Studios' Z80 Explorer `exec_matrix.vh`.
   - [tests/zex/README.md](tests/zex/README.md) — the CP/M `.com` exercisers
     (`prelim`, `zexdoc`, `zexall`, `zexdoc3`) and the M80 source `zexdoc.z80`.
 

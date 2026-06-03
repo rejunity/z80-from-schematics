@@ -131,24 +131,33 @@ control word's `exec` line + step index, *not* a giant behavioral function per o
 
 ## 5. Module mapping (C ↔ Verilog, one C file per Verilog module)
 
-| Concept                                                                                                                       | C file                  | Verilog file        |
-|-------------------------------------------------------------------------------------------------------------------------------|-------------------------|---------------------|
-| Public types, pins, constants, module entry-point decls                                                                       | `cmodel/z80.h`          | `rtl/z80_defs.vh`   |
-| Top-level core: phase engine, micro-sequencer, bus-cycle setup, register file, interrupts / refresh / HALT / WAIT / BUSREQ    | `cmodel/z80_core.c`     | `rtl/z80_core.v`    |
-| PLA decode (pure combinational)                                                                                               | `cmodel/z80_pla.c`      | `rtl/z80_pla.v`     |
-| ALU + flag assembly (pure combinational)                                                                                      | `cmodel/z80_alu.c`      | `rtl/z80_alu.v`     |
-| External pin timing (pure combinational)                                                                                      | `cmodel/z80_timing.c`   | `rtl/z80_timing.v`  |
-| 8-bit register accessors                                                                                                      | `cmodel/z80_regfile.c`  | inlined in core     |
-| Trace capture / emit                                                                                                          | `cmodel/z80_trace.c`    | core `$display` hooks |
-| System wrapper (CPU + 64 K RAM/IO for runners)                                                                                | `cmodel/z80_sim.c/h`    | (test-bench only)   |
+| Concept                                                                              | C file                  | Verilog file         |
+|--------------------------------------------------------------------------------------|-------------------------|----------------------|
+| Public types, pins, constants, module entry-point decls                              | `cmodel/z80.h`          | `rtl/z80_defs.vh`    |
+| Top-level core: phase engine, bus-cycle setup, register file, interrupts / HALT / WAIT / BUSREQ | `cmodel/z80_core.c`     | `rtl/z80_core.v`     |
+| Per-(M, T) micro-sequencer (silicon-faithful control matrix)                         | inlined in core         | `rtl/z80_seq.v`      |
+| PLA decode (pure combinational)                                                      | `cmodel/z80_pla.c`      | `rtl/z80_pla.v`      |
+| ALU + flag assembly (pure combinational, 8-bit + 16-bit modes)                       | `cmodel/z80_alu.c`      | `rtl/z80_alu.v`      |
+| Incrementer/Decrementer Unit — 16-bit address arithmetic                             | inlined in core         | `rtl/z80_idu.v`      |
+| Register file module (GP + system + I/R/IR)                                          | `cmodel/z80_regfile.c`  | `rtl/z80_regfile.v`  |
+| External pin timing (pure combinational)                                             | `cmodel/z80_timing.c`   | `rtl/z80_timing.v`   |
+| Trace capture / emit                                                                 | `cmodel/z80_trace.c`    | core `$display` hooks|
+| System wrapper (CPU + 64 K RAM/IO for runners)                                       | `cmodel/z80_sim.c/h`    | (test-bench only)    |
 
-Both sides have **one .c per .v module**. The three combinational submodules
-(`z80_pla`, `z80_alu`, `z80_timing`) are pure functions in C with one parameter per
-Verilog port — by-value inputs first, by-pointer outputs after — so a C call site
-reads like a Verilog instantiation. The stateful `z80_core` holds the registered
-state (the `z80_t` struct = the Verilog module's internal regs) and is the only
-file that mutates it; its public functions (`z80_init`, `z80_reset`,
-`z80_phase_step`, `z80_set_pc`) are the only external entry points.
+The combinational submodules (`z80_pla`, `z80_alu`, `z80_timing`, `z80_idu`) are pure
+functions in C with one parameter per Verilog port — by-value inputs first,
+by-pointer outputs after — so a C call site reads like a Verilog instantiation.
+
+The Verilog `z80_seq` module is the silicon-faithful **control unit**: a per-(M, T)
+dispatch matrix patterned after Baltazar Studios' Z80 Explorer `exec_matrix.vh`. It
+emits ~80 named `ctl_*` control signals that the datapath blocks (register file,
+ALU, IDU, address latch, bus muxes) consume. See `docs/silicon-microarch.md` for
+the signal vocabulary and the bus topology.
+
+The stateful `z80_core` holds the registered state (the `z80_t` struct = the
+Verilog module's internal regs) and is the only file that mutates it. Public
+functions (`z80_init`, `z80_reset`, `z80_phase_step`, `z80_set_pc`) are the only
+external entry points.
 
 The C model is the fast reference; the RTL implements the identical machine and is
 verified against it phase-by-phase (`make compare`; see `docs/verification.md`).
