@@ -75,11 +75,13 @@ def emit_test(t):
     # Q convention: F before the test was the Q value (last F-modifying instr's F).
     body.append(f'        dut.reg_q      = 8\'h{t["af"] & 0xFF:02x}; dut.reg_q_n = 8\'h{t["af"] & 0xFF:02x};')
     body.append(f'        dut.f_modified = 1\'b0; dut.f_modified_n = 1\'b0;')
-    # (bus/sequencer state left in whatever post-reset state the RTL produced;
-    # explicit pokes there broke alignment. For tests whose initial PC != the
-    # reset PC, the in-flight M1 fetches the wrong opcode and the test
-    # mis-executes; this affects the small handful of RST 00..38 tests where
-    # the in-flight M1 itself happens to execute a stray opcode at PC=0.)
+    # Minimal bus-state poke: m_addr alone, mirroring what z80_set_pc does on
+    # the C side (cmodel/z80_core.c). Without this, the in-flight post-reset
+    # M1 still has m_addr=0 (from reset) and reads mem[0] instead of mem[PC]
+    # — the source of the previously-known "testbench-init" failures
+    # (c7/cf/d7/df/e7/ef/f7/ff + dd94/dd95/dd9c/dd9d + fd94/fd95/fd9c/fd9d).
+    # Other bus / sequencer state is already at the clean reset baseline.
+    body.append(f'        dut.m_addr     = 16\'h{t["pc"]:04x}; dut.m_addr_n  = 16\'h{t["pc"]:04x};')
     # run cycles
     body.append(f'        run_phases({2 * t["tstates"]});')
     # sample and emit

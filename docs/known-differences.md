@@ -95,7 +95,7 @@ test that pins the chosen behaviour or escalates it.
 | chips/z80.h pure-C (`scripts/lockstep_triple.c`)           | 7.0 M instr (ZEXDOC3)                               | identical regs (with chips's overlap-PC adjustment)       |
 | suzukiplan/z80 C++ (`scripts/lockstep_quad.c`)             | 7.0 M instr (ZEXDOC3)                               | identical regs across all four emulators                  |
 | FUSE / Frank D. Cringle (`make fuse`)                      | 1356 cases                                          | **1356 / 1356  (100 %)**                                  |
-| FUSE through RTL via iverilog (`make fuse_rtl`)            | 1356 cases                                          | **1342 / 1356  (98.97 %)** — 14 testbench-init artifacts  |
+| FUSE through RTL via iverilog (`make fuse_rtl`)            | 1356 cases                                          | **1356 / 1356  (100 %)**                                  |
 | Real KC85 silicon — sync   (`make silicon_cycles`)         | 50 classified opcodes (kc85-cpuclk.sr)              | **50 OK** (4 with /WAIT attribution); 0 emu mismatches    |
 | Real KC85 silicon — 20 MHz (`make silicon_async`)          | CPU clock + sub-T pin offsets + 9-opcode re-sample  | **CPU ≈ 1.767 MHz**, M1 / MREQ / RD / WR at spec offsets   |
 | MAME Z80 differential                                      | —                                                   | resolved via suzukiplan (MAME's `z80.cpp` ties tightly to MAME's device framework) |

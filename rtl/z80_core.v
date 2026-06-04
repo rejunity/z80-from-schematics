@@ -186,6 +186,44 @@ module z80_core (
     reg  [2:0] alu_rot, alu_bit;
     wire [7:0] A_cur = rf[`RFP_AF][15:8];
     wire [7:0] F_cur = rf[`RFP_AF][7:0];
+    // Continuous wires for getri-style reads — iverilog 12 doesn't always
+    // propagate array-index dependencies (rf[hlp]) through function calls
+    // in always @*, so we expose them as wires to ensure correct sensitivity.
+    // The getr8 function call is still safe because all rf indices inside it
+    // are compile-time constants (RFP_BC etc.).
+    function [7:0] getr8_inline; input [2:0] sel;
+        case (sel)
+            3'd0: getr8_inline = rf[`RFP_BC][15:8];
+            3'd1: getr8_inline = rf[`RFP_BC][7:0];
+            3'd2: getr8_inline = rf[`RFP_DE][15:8];
+            3'd3: getr8_inline = rf[`RFP_DE][7:0];
+            3'd4: getr8_inline = rf[`RFP_HL][15:8];
+            3'd5: getr8_inline = rf[`RFP_HL][7:0];
+            3'd6: getr8_inline = 8'h00;
+            default: getr8_inline = rf[`RFP_AF][15:8];
+        endcase
+    endfunction
+    wire [7:0] getri_src_val =
+        (idx_w != 2'd0 && !use_disp_w && rf_src_w == 3'd4) ? rf[hlp][15:8] :
+        (idx_w != 2'd0 && !use_disp_w && rf_src_w == 3'd5) ? rf[hlp][7:0]  :
+        (rf_src_w == 3'd0) ? rf[`RFP_BC][15:8] :
+        (rf_src_w == 3'd1) ? rf[`RFP_BC][7:0]  :
+        (rf_src_w == 3'd2) ? rf[`RFP_DE][15:8] :
+        (rf_src_w == 3'd3) ? rf[`RFP_DE][7:0]  :
+        (rf_src_w == 3'd4) ? rf[`RFP_HL][15:8] :
+        (rf_src_w == 3'd5) ? rf[`RFP_HL][7:0]  :
+        (rf_src_w == 3'd7) ? rf[`RFP_AF][15:8] : 8'h00;
+    wire [7:0] getri_dst_val =
+        (idx_w != 2'd0 && !use_disp_w && rf_dst_w == 3'd4) ? rf[hlp][15:8] :
+        (idx_w != 2'd0 && !use_disp_w && rf_dst_w == 3'd5) ? rf[hlp][7:0]  :
+        (rf_dst_w == 3'd0) ? rf[`RFP_BC][15:8] :
+        (rf_dst_w == 3'd1) ? rf[`RFP_BC][7:0]  :
+        (rf_dst_w == 3'd2) ? rf[`RFP_DE][15:8] :
+        (rf_dst_w == 3'd3) ? rf[`RFP_DE][7:0]  :
+        (rf_dst_w == 3'd4) ? rf[`RFP_HL][15:8] :
+        (rf_dst_w == 3'd5) ? rf[`RFP_HL][7:0]  :
+        (rf_dst_w == 3'd7) ? rf[`RFP_AF][15:8] : 8'h00;
+
     always @* begin
         alu_a = A_cur;
         alu_b = 8'h00;
@@ -194,9 +232,9 @@ module z80_core (
         alu_rot = rot_op_w;
         alu_bit = bit_index_w;
         case (exec_w)
-            `EXEC_ALU_R:           alu_b = getri(rf_src_w);
+            `EXEC_ALU_R:           alu_b = getri_src_val;
             `EXEC_ALU_N, `EXEC_ALU_M:alu_b = rbyte;
-            `EXEC_INC_R, `EXEC_DEC_R:alu_b = getri(rf_dst_w);
+            `EXEC_INC_R, `EXEC_DEC_R:alu_b = getri_dst_val;
             `EXEC_INC_M, `EXEC_DEC_M:alu_b = rbyte;
             `EXEC_CB_R: begin alu_b = getr8(rf_src_w); alu_xy = getr8(rf_src_w); end
             `EXEC_CB_M: begin alu_b = rbyte;           alu_xy = rf[`RFP_WZ][15:8]; end
