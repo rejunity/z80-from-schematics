@@ -15,6 +15,7 @@
 void z80_timing(uint8_t   bus_op,     /* z80_busop_t                          */
                 uint8_t   t_state,    /* 1-based T-state within the M-cycle   */
                 uint8_t   phi,        /* 0 = PHI_P, 1 = PHI_N                  */
+                uint8_t   m_len,      /* total T-states this M-cycle           */
                 uint16_t  m_addr,     /* address being driven this M-cycle    */
                 uint8_t   m_wdata,    /* data byte for writes                 */
                 uint8_t   reg_i,      /* I register (refresh high byte)       */
@@ -52,32 +53,38 @@ void z80_timing(uint8_t   bus_op,     /* z80_busop_t                          */
         break;
     }
     case BUSOP_MRD: {
-        bool active = !(t_state == 1 && phi == 0);   /* T1.N onward */
+        /* MREQ/RD active T1.N .. T3.P (deassert at T3.N — falling-edge
+           transition matches gate-level / perfectz80 convention). Extra
+           T-states beyond T3 (e.g. CB (HL) reads use m_len=4) are internal
+           compute padding after the bus cycle completes; MREQ stays high. */
+        (void)m_len;
+        bool active = !(t_state == 1 && phi == 0) &&
+                      !(t_state == 3 && phi == 1) && t_state <= 3;
         *mreq_n = active ? 0 : 1;
         *rd_n   = active ? 0 : 1;
         break;
     }
     case BUSOP_MWR: {
-        bool active = !(t_state == 1 && phi == 0);
+        bool active = !(t_state == 1 && phi == 0) &&
+                      !(t_state == 3 && phi == 1) && t_state <= 3;
         *mreq_n = active ? 0 : 1;
         *data_drive = active;
         *data_out = m_wdata;
-        /* WR low from T2.N .. end of T3 */
-        *wr_n = ((t_state == 2 && phi == 1) || (t_state == 3)) ? 0 : 1;
+        *wr_n = ((t_state == 2 && phi == 1) || (t_state == 3 && phi == 0)) ? 0 : 1;
         break;
     }
     case BUSOP_IORD: {
-        bool active = (t_state >= 2);                 /* IORQ/RD from T2.P */
+        bool active = (t_state >= 2) && !(t_state == 4 && phi == 1) && t_state <= 4;
         *iorq_n = active ? 0 : 1;
         *rd_n   = active ? 0 : 1;
         break;
     }
     case BUSOP_IOWR: {
-        bool active = (t_state >= 2);
+        bool active = (t_state >= 2) && !(t_state == 4 && phi == 1) && t_state <= 4;
         *iorq_n = active ? 0 : 1;
-        *data_drive = !(t_state == 1 && phi == 0);
+        *data_drive = !(t_state == 1 && phi == 0) && t_state <= 4;
         *data_out = m_wdata;
-        *wr_n = ((t_state == 2 && phi == 1) || (t_state >= 3)) ? 0 : 1;
+        *wr_n = ((t_state == 2 && phi == 1) || (t_state == 3) || (t_state == 4 && phi == 0)) ? 0 : 1;
         break;
     }
     case BUSOP_INTA: {

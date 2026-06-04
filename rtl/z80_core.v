@@ -111,7 +111,7 @@ module z80_core (
 
     // ---- timing pin drive (combinational from registered state) ----
     z80_timing u_timing (
-        .bus_op(bus_op), .t_state(t_state[2:0]), .phi(phi),
+        .bus_op(bus_op), .t_state(t_state[2:0]), .phi(phi), .m_len(m_len),
         .m_addr(m_addr), .m_wdata(m_wdata), .reg_i(reg_i), .reg_r(reg_r),
         .addr(addr), .data_out(data_out), .data_drive(data_drive),
         .m1_n(m1_n), .mreq_n(mreq_n), .iorq_n(iorq_n),
@@ -122,11 +122,18 @@ module z80_core (
     assign dbg_t = t_state; assign dbg_phi = phi; assign dbg_m = m_cycle;
 
     // ---- timing-point predicates ----
-    wire islatch =  (phi == 1'b1) &&
-                  ( ((bus_op == `BUSOP_M1)   && (t_state == 4'd2)) ||
-                    ((bus_op == `BUSOP_INTA) && (t_state == 4'd2)) ||
-                    ((bus_op == `BUSOP_MRD)  && (t_state == 4'd3)) ||
-                    ((bus_op == `BUSOP_IORD) && (t_state == 4'd4)) );
+    // Read-data latch: captured just before MREQ/IORQ deassert at the
+    // T_last.N falling edge (matches gate-level / perfectz80 convention).
+    // M1 / INTA still latch at T2.N for backwards compatibility with the
+    // existing M1-cycle data-in window.
+    wire islatch =  ( (phi == 1'b1) && (
+                      ((bus_op == `BUSOP_M1)   && (t_state == 4'd2)) ||
+                      ((bus_op == `BUSOP_INTA) && (t_state == 4'd2))
+                    ) ) ||
+                  ( (phi == 1'b0) && (
+                      ((bus_op == `BUSOP_MRD)  && (t_state == 4'd3)) ||
+                      ((bus_op == `BUSOP_IORD) && (t_state == 4'd4))
+                    ) );
     wire iswait  =  (phi == 1'b1) &&
                   ( (((bus_op == `BUSOP_M1) || (bus_op == `BUSOP_MRD) ||
                       (bus_op == `BUSOP_MWR)) && (t_state == 4'd2)) ||

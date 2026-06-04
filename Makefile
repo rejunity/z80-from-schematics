@@ -44,7 +44,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
-.PHONY: all cmodel ctest rtl iverilog verilator traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async basicrunner basic tinybasic
+.PHONY: all cmodel ctest rtl iverilog verilator traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 basicrunner basic tinybasic
 
 all: cmodel ctest
 
@@ -120,6 +120,17 @@ silicon_cycles: tracegen
 # from the cpuclk synchronous capture.
 silicon_async: tracegen
 	@$(PYTHON) $(SCRIPTS)/sigrok_async_timing.py tests/sigrok/kc85-20mhz.sr --silicon-check
+
+# Gate-level signal-timing diff vs perfectz80 (Brian Silverman et al's
+# transistor-level netlist port of the Visual Z80 die scan). Compares
+# per-half-cycle control pins (mreq/iorq/rd/wr/m1/rfsh/halt) between our
+# C model and the gate-level simulator across the trace programs.
+perfectz80: tracegen $(BIN)/perfectz80_runner
+	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py 200
+
+$(BIN)/perfectz80_runner: $(SCRIPTS)/perfectz80_runner.c $(SCRIPTS)/refs/perfectz80/perfectz80.c $(SCRIPTS)/refs/perfectz80/netlist_sim.c
+	@mkdir -p $(BIN)
+	$(CC) -std=c99 -O2 -I$(SCRIPTS) $^ -o $@
 
 # Z80 BASIC runner: emulates a 68B50 ACIA at ports 0x80/0x81 (NASCOM
 # convention) and ports 0/1 (1K Tiny BASIC convention) wired to host
@@ -198,7 +209,7 @@ test: ctest rtl compare
 	@echo "== full test suite complete =="
 
 # Run every verification gate. Heavy: ZEXDOC + ZEXALL take ~30 min combined.
-all-tests: ctest rtl compare fuse fuse_rtl
+all-tests: ctest rtl compare fuse fuse_rtl perfectz80
 	@echo "== running ZEXDOC (~1 min) =="
 	@$(BIN)/zexrunner tests/zex/zexdoc.com 6000000000 2>&1 | tr -d '\r' | grep -E 'OK$$|ERROR|complete|elapsed' | tail -10
 	@echo "== running ZEXALL (~16 min) =="

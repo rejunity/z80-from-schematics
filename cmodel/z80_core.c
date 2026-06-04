@@ -948,12 +948,15 @@ static bool is_wait_phase(const z80_t *c)
 
 static bool is_latch_phase(const z80_t *c)
 {
-    if (c->phi != 1) return false;
+    /* Read-data latch phase: captures the input data bus AT THE FALLING EDGE
+       of the last T-state's high half (= our T_last.phi=0 sampling point,
+       just before MREQ/IORQ deassert at T_last.phi=1). This matches the
+       gate-level transition observed in perfectz80 / Visual Z80 traces. */
     switch (c->bus_op) {
-        case BUSOP_M1:   return c->t_state == 2; /* opcode latched at T2.N */
-        case BUSOP_INTA: return c->t_state == 2; /* interrupt vector byte  */
-        case BUSOP_MRD:  return c->t_state == 3; /* data at T3.N           */
-        case BUSOP_IORD: return c->t_state == 4; /* data at T3 (after Tw)  */
+        case BUSOP_M1:   return c->t_state == 2 && c->phi == 1; /* M1 opcode latched at T2.N */
+        case BUSOP_INTA: return c->t_state == 2 && c->phi == 1;
+        case BUSOP_MRD:  return c->t_state == 3 && c->phi == 0; /* MRD data at T3.P */
+        case BUSOP_IORD: return c->t_state == 4 && c->phi == 0; /* IORD data at T4.P */
         default:         return false;
     }
 }
@@ -1155,7 +1158,7 @@ void z80_phase_step(z80_t *c)
     if (!c->stalled && is_latch_phase(c))
         do_latch(c);
 
-    z80_timing(c->bus_op, c->t_state, c->phi, c->m_addr, c->m_wdata,
+    z80_timing(c->bus_op, c->t_state, c->phi, c->m_len, c->m_addr, c->m_wdata,
                c->reg_i, c->reg_r,
                &c->pins.addr, &c->pins.data_out, &c->pins.data_drive,
                &c->pins.m1_n, &c->pins.mreq_n, &c->pins.iorq_n,

@@ -110,7 +110,7 @@ void z80_alu(uint8_t mode, uint8_t alu_op, uint8_t rot_op, uint8_t bit_idx,
 /* Top-level timing module entry point (mirrors rtl/z80_timing.v). Pure
    combinational: drives the external bus pins as a function of (bus_op,
    t_state, phi) and the current M-cycle's (addr, wdata, I, R). */
-void z80_timing(uint8_t bus_op, uint8_t t_state, uint8_t phi,
+void z80_timing(uint8_t bus_op, uint8_t t_state, uint8_t phi, uint8_t m_len,
                 uint16_t m_addr, uint8_t m_wdata,
                 uint8_t reg_i, uint8_t reg_r,
                 uint16_t *addr, uint8_t *data_out, bool *data_drive,

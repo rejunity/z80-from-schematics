@@ -67,6 +67,7 @@ interactive controls (Enter, Backspace, Ctrl-C / Ctrl-Space = BREAK, Ctrl-\\ = e
     make zexall          # full ZEXALL                                 (~16 min)
     make silicon_cycles  # per-opcode T-state check vs real KC85 silicon (sigrok)
     make silicon_async   # real CPU clock + sub-T-state pin offsets from 20 MHz capture
+    make perfectz80      # gate-level signal-trace diff vs the perfectz80 Visual-Z80 netlist
     make basic           # NASCOM BASIC 4.7 on the C model
     make tinybasic       # 1 KiB Tiny BASIC on the C model
     make all-tests       # every gate above in sequence
@@ -89,7 +90,7 @@ build needs a working C++17 toolchain (Apple clang 21+ or any modern gcc / clang
 | ✅  | 4-way oracle lockstep (mine + superzazu + chips + suzukiplan)   | identical, 7,022,691 instr.         |
 | ✅  | Real KC85 silicon — sync   capture (`make silicon_cycles`)      | 50 / 50 OK,  0 emu mismatches       |
 | ✅  | Real KC85 silicon — 20 MHz capture (`make silicon_async`)       | CPU ≈ 1.767 MHz, pins ✓             |
-| 🚧  | Gate-level signal trace vs perfectz80 (Visual Z80 netlist)      | 93 – 96 % control-pin perfect       |
+| ✅  | Gate-level signal trace vs perfectz80 (Visual Z80 netlist)      | 100 % control-pin perfect, 3 programs |
 
 Legend: ✅ pass / 100 % &nbsp; 🟡 ≥ 95 % (close, known artifacts) &nbsp; 🚧 < 95 % (work in progress).
 
