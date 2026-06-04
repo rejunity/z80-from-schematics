@@ -155,12 +155,6 @@ module z80_core (
         endcase
     endfunction
 
-    // index-aware 8-bit read: H/L -> IXH/IXL only under DD/FD with no memory operand
-    function [7:0] getri; input [2:0] sel;
-        if (idx_w != 2'd0 && !use_disp_w && sel == 3'd4)      getri = rf[hlp][15:8];
-        else if (idx_w != 2'd0 && !use_disp_w && sel == 3'd5) getri = rf[hlp][7:0];
-        else getri = getr8(sel);
-    endfunction
 
     function [3:0] baselen; input [2:0] bop;
         case (bop)
@@ -193,23 +187,11 @@ module z80_core (
     reg  [2:0] alu_rot, alu_bit;
     wire [7:0] A_cur = rf[`RFP_AF][15:8];
     wire [7:0] F_cur = rf[`RFP_AF][7:0];
-    // Continuous wires for getri-style reads — iverilog 12 doesn't always
-    // propagate array-index dependencies (rf[hlp]) through function calls
-    // in always @*, so we expose them as wires to ensure correct sensitivity.
-    // The getr8 function call is still safe because all rf indices inside it
-    // are compile-time constants (RFP_BC etc.).
-    function [7:0] getr8_inline; input [2:0] sel;
-        case (sel)
-            3'd0: getr8_inline = rf[`RFP_BC][15:8];
-            3'd1: getr8_inline = rf[`RFP_BC][7:0];
-            3'd2: getr8_inline = rf[`RFP_DE][15:8];
-            3'd3: getr8_inline = rf[`RFP_DE][7:0];
-            3'd4: getr8_inline = rf[`RFP_HL][15:8];
-            3'd5: getr8_inline = rf[`RFP_HL][7:0];
-            3'd6: getr8_inline = 8'h00;
-            default: getr8_inline = rf[`RFP_AF][15:8];
-        endcase
-    endfunction
+    // Continuous wires replacing the old getri() function. iverilog 12
+    // doesn't propagate rf[hlp] (variable-index array) dependencies through
+    // function calls in always @*, so the operand mux missed mid-cycle PLA
+    // transitions from idx_w 0 -> 2 under DD/FD prefix. Expressing the
+    // index-aware byte read as a continuous wire ensures correct sensitivity.
     wire [7:0] getri_src_val =
         (idx_w != 2'd0 && !use_disp_w && rf_src_w == 3'd4) ? rf[hlp][15:8] :
         (idx_w != 2'd0 && !use_disp_w && rf_src_w == 3'd5) ? rf[hlp][7:0]  :
@@ -436,7 +418,7 @@ module z80_core (
                     fin = 1'b1;
                 end
 
-                `EXEC_LD_R_R: begin setri(rf_dst_w, getri(rf_src_w)); fin = 1'b1; end
+                `EXEC_LD_R_R: begin setri(rf_dst_w, getri_src_val); fin = 1'b1; end
                 `EXEC_ALU_R:  begin if (alu_op_w != `ALU_CP) setr8(3'd7, alu_res);
                                   rf_n[`RFP_AF][7:0] = alu_fout; fin = 1'b1; end
                 `EXEC_INC_R, `EXEC_DEC_R: begin setri(rf_dst_w, alu_res);
@@ -506,7 +488,7 @@ module z80_core (
                         rf_n[`RFP_AF][7:0] = alu_fout; fin = 1'b1; end
                 end
                 `EXEC_ST_M_R: begin
-                    if (mm == 3'd1) startm(`BUSOP_MWR, memaddr, getri(rf_src_w), 4'd0);
+                    if (mm == 3'd1) startm(`BUSOP_MWR, memaddr, getri_src_val, 4'd0);
                     else fin = 1'b1;
                 end
                 `EXEC_LD_M_N: begin
