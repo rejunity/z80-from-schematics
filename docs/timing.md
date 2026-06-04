@@ -47,7 +47,15 @@ displacement and the CB opcode as **operand reads** (not M1) after the two prefi
 - **T1.P**: `pin_addr ← <effective address>`.
 - **T1.N**: `pin_mreq_n ← 0`; `pin_rd_n ← 0`.
 - **T2.N**: sample `pin_wait_n`; insert `Tw` if asserted.
-- **T3.N**: latch `pin_data_in`; `pin_rd_n ← 1`; `pin_mreq_n ← 1`.
+- **T3.P**: latch `pin_data_in` (read window: data must be valid by here).
+- **T3.N**: `pin_rd_n ← 1`; `pin_mreq_n ← 1`. (Deasserted on the falling-edge
+  transition — matches the gate-level / perfectz80 trace and decouples the
+  latch phase from the deassert phase.)
+
+If the sequencer asks for extra T-states beyond T3 (e.g. CB `(HL)` reads use
+`m_len=4` for the internal RMW compute), the bus is silent for those — MREQ/RD
+stay high. The extra T-states are compute padding after the read completes,
+not part of the read window.
 
 ## Memory write (3 T-states: T1 T2 T3)
 
@@ -62,7 +70,12 @@ displacement and the CB opcode as **operand reads** (not M1) after the two prefi
 - **T2.P**: `pin_iorq_n ← 0`; `pin_rd_n ← 0`.
 - **Tw.N**: sample `pin_wait_n` (the automatic Tw is always present; further Tw if
   WAIT held).
-- **T3.N**: latch `pin_data_in`; `pin_iorq_n ← 1`; `pin_rd_n ← 1`.
+- **T3.P**: latch `pin_data_in`.
+- **T3.N**: `pin_iorq_n ← 1`; `pin_rd_n ← 1`.
+
+(In the C model and RTL the IORD cycle is `m_len=4`, counting Tw as T3 and the
+real T3 as T4. Substitute T4 for T3 above when reading the code; the silicon
+contract is the same.)
 
 ## I/O write (4 T-states: T1 T2 Tw T3)
 

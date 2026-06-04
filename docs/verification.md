@@ -86,16 +86,22 @@ only rebuilt the library, leaving stale runner binaries on disk).
   Q-variant (X/Y from `(A | Q)`), the DD/FD `36` cycle count fix (22T → 19T), and
   the HALT-PC convention fix (PC stays at the HALT byte) all landed during
   integration; see `docs/known-differences.md` rows 2, 9 and 11.
-- **FUSE through RTL** (`make fuse_rtl`): **1342/1356 (98.97%)**. The 14 fails are
-  testbench-init artifacts (post-reset M1 overhead, see row 7 in
-  known-differences); not RTL bugs.
+- **FUSE through RTL** (`make fuse_rtl`): **1356/1356 (100%)**. The earlier
+  testbench-init artifacts (post-reset M1 with stale m_addr) are fixed by poking
+  `dut.m_addr` alongside `dut.rf[PC]` — mirroring what `z80_set_pc()` does on the
+  C side. A related iverilog-12 sensitivity bug on `rf[hlp]` reads through function
+  calls in `always @*` (which let DD/FD-prefixed ALU ops decode as their unprefixed
+  variant) was fixed by exposing the index-aware byte read as a continuous wire.
 - **4-oracle lockstep** (`scripts/lockstep_quad.c`): our C model + superzazu C + chips/z80
   + suzukiplan/z80 all report identical PC/AF/BC/DE/HL/IX/IY/SP after every one of
   **7,022,691 instructions** of ZEXDOC3 (chips's PC is overlap-adjusted).
-- **Gate-level signal trace** (`scripts/compare_signal_timing.py`): perfectz80 (pure-C
-  Visual Z80 netlist port, no Qt) vs C model on 200 phases of prog1/prog2/prog3_cb:
-  93-96% control-pin-perfect; remaining diffs are MREQ/RD deassertion at T3.P (gate)
-  vs T3.N (us), a sub-cycle convention.
+- **Gate-level signal trace** (`scripts/compare_signal_timing.py`, `make perfectz80`):
+  perfectz80 (pure-C Visual Z80 netlist port, no Qt) vs C model on 200 phases of
+  prog1/prog2/prog3_cb: **100% control-pin-perfect** across all three programs. The
+  C model and the Verilog RTL now deassert MREQ/RD/IORQ/WR at the falling-edge of
+  the bus cycle's last T-state (T3.N for MRD/MWR, T4.N for IORD/IOWR) — matching
+  the silicon transition observed at the gate level. Read latch is at T_last.P, one
+  phase before the deassert. The previous sub-cycle-convention gap is closed.
 - **Speed**: C model 6.56 Minstr/s, Verilator 0.31 Minstr/s, perfectz80 ~10 kphases/s.
 
 ### Verilator
@@ -114,14 +120,26 @@ test memory loaded byte-by-byte, then `run_phases(2 × ts_target)` posedges, the
 `$display` dump). The driver `scripts/compare_fuse_rtl.py` compiles, runs `vvp`, and
 diffs against `tests.expected`.
 
-**Result: 1342/1356 (98.97%) PASS** through the RTL on first run. The 14 failures
-all share `R=exp1/got2` — the one M1 the RTL implicitly executes after reset
-deassert (and before the per-test pokes take effect) bumps the refresh register
-once. The C-side FUSE harness, which has no such reset-overhead window, passes the
-same 14 cases 1356/1356. So the RTL behavior is correct; the off-by-one is a
-testbench-init artifact, not an RTL bug. The remaining gap is the cost of running
-FUSE inside a synthesizable-RTL framework without a dedicated "load state and skip
-the boot M1" instruction, which the testbench would have to bootstrap manually.
+**Result: 1356/1356 (100%) PASS** through the RTL. The first-run gap (1342/1356)
+turned out to be two distinct issues, both fixed:
+
+1. **Testbench in-flight M1 from wrong address.** After `do_reset()` the RTL has
+   already begun an M1 fetch with `m_addr=0` (from reset). The per-test pokes set
+   `dut.rf[PC]` but not `dut.m_addr`, so for tests with non-zero PC the in-flight
+   M1 read `mem[0]` (junk) instead of `mem[PC]`. For RST tests where the test's
+   PC=0 and `mem[0]` happened to be the test's RST opcode, this caused the RST to
+   execute twice — once from the in-flight M1, once for real. Fix: also poke
+   `dut.m_addr = test_pc` after the do_reset, mirroring what `z80_set_pc()` does
+   on the C side.
+
+2. **iverilog 12 sensitivity bug on `rf[hlp]` through functions.** The ALU
+   operand mux called `getri(rf_src_w)` which internally read `rf[hlp][...]`.
+   iverilog's `always @*` failed to propagate the array-index dependency through
+   the function call, so when `idx_w` transitioned 0→2 under DD/FD prefix the mux
+   did not re-fire — it kept the unprefixed H/L value. Fix: replace the function
+   with a continuous wire (`getri_src_val` / `getri_dst_val`) that reads
+   `rf[hlp][...]` directly in the wire's RHS, so iverilog sees the dependency
+   and the wire re-evaluates correctly.
 
 This is independent of the transitive argument from `make compare` (C ≡ iverilog ≡
 Verilator phase-by-phase over the 8 trace programs); both stand on their own.

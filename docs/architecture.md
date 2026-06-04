@@ -22,12 +22,13 @@ modern clk tick:^    ^   ^    ^   ^    ^
 
 - `phi == 0` ("**PHI_P**"): the first half of a T-state — corresponds to the Z80
   clock *rising-edge* region. Actions the real chip performs on the rising edge
-  (drive address bus, raise/clear M1 at T1, latch refresh address at T3) take effect
-  on the `posedge clk` that *enters* phi=0.
+  (drive address bus, raise/clear M1 at T1, latch refresh address at T3, **latch
+  MRD/IORD read data** at the last T-state's PHI_P) take effect on the
+  `posedge clk` that *enters* phi=0.
 - `phi == 1` ("**PHI_N**"): the second half — corresponds to the Z80 clock
   *falling-edge* region. Actions on the real chip's falling edge (assert MREQ/RD,
-  assert WR, sample WAIT and latch read data) take effect on the `posedge clk` that
-  *enters* phi=1.
+  assert WR, sample WAIT, deassert MREQ/RD/IORQ/WR at the last T-state, latch the
+  M1 opcode at T2.N) take effect on the `posedge clk` that *enters* phi=1.
 
 The canonical simulation step is **one phase** (`z80_phase_step()` in C; one `clk`
 edge in RTL). Two phase-steps advance one T-state. Traces are emitted once per phase.
