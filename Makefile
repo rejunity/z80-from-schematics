@@ -44,7 +44,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
-.PHONY: all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 basicrunner basic tinybasic
+.PHONY: all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 basicrunner basic tinybasic basic_tests
 
 all: cmodel ctest
 
@@ -148,6 +148,13 @@ basic: basicrunner
 
 tinybasic: basicrunner
 	@$(BIN)/basicrunner tests/basic/tinybasic_1k.hex
+
+# Canned-input BASIC ROM regression: pipe each tests/basic/scripts/<name>.in
+# through basicrunner, grep for the substrings listed in <name>.expect.
+# Failing if any expected line is missing. NASCOM scripts use --autostart;
+# Tiny scripts run as-is. See tests/basic/run_basic_tests.sh.
+basic_tests: basicrunner
+	@$(TESTS)/basic/run_basic_tests.sh
 
 # ----------------------------------------------------------------------------
 # RTL elaboration / sims

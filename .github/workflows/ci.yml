@@ -65,6 +65,19 @@ jobs:
       - name: FUSE / Cringle 1356 cases through iverilog RTL
         run: make fuse_rtl
 
+  basic-tests:
+    name: BASIC ROM (NASCOM BASIC 4.7c + Tiny BASIC)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install C toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential python3
+      - name: Pipe canned scripts through both BASIC ROMs and verify output
+        run: make basic_tests
+
   parity-tests:
     name: Parity (C vs iverilog vs Verilator + perfectz80)
     runs-on: ubuntu-latest
