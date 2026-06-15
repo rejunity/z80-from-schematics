@@ -61,23 +61,42 @@
 `define ALU_CP  3'd7
 
 // ---- flag-update modes (z80_flag_mode_t) ----
-`define FLAG_NONE   5'd0
-`define FLAG_ADD8   5'd1
-`define FLAG_SUB8   5'd2
-`define FLAG_CP8    5'd3
-`define FLAG_LOGIC  5'd4
-`define FLAG_INC8   5'd5
-`define FLAG_DEC8   5'd6
-`define FLAG_ROT_A  5'd7
-`define FLAG_ROT    5'd8
-`define FLAG_BIT    5'd9
-`define FLAG_ADD16  5'd10
-`define FLAG_ADC16  5'd11
-`define FLAG_SBC16  5'd12
-`define FLAG_DAA    5'd13
-`define FLAG_SCF    5'd14
-`define FLAG_CCF    5'd15
-`define FLAG_CPL    5'd16
+// Input-port overloads for the dispatched-through-z80_alu modes
+// (see cmodel/z80_alu.c / rtl/z80_alu.v case dispatch):
+//   FLAG_NEG       : a = A
+//   FLAG_LD_A_I    : b = I/R;  bit_idx[0] = iff2
+//   FLAG_IN        : b = IN byte
+//   FLAG_RRD/RLD   : a = A, b = mem; res = new_A
+//                    (new_mem is bus-fabric work, not flag-bearing)
+//   FLAG_BLOCK_LD  : a = A, b = val,  bit_idx[0] = bc_after != 0
+//   FLAG_BLOCK_CP  : a = A, b = val,  bit_idx[0] = bc_after != 0
+//   FLAG_BLOCK_IO  : a = data, b = newB, xy_src[2:0] = k[2:0],
+//                                         xy_src[3]   = k_carry
+`define FLAG_NONE      5'd0
+`define FLAG_ADD8      5'd1
+`define FLAG_SUB8      5'd2
+`define FLAG_CP8       5'd3
+`define FLAG_LOGIC     5'd4
+`define FLAG_INC8      5'd5
+`define FLAG_DEC8      5'd6
+`define FLAG_ROT_A     5'd7
+`define FLAG_ROT       5'd8
+`define FLAG_BIT       5'd9
+`define FLAG_ADD16     5'd10
+`define FLAG_ADC16     5'd11
+`define FLAG_SBC16     5'd12
+`define FLAG_DAA       5'd13
+`define FLAG_SCF       5'd14
+`define FLAG_CCF       5'd15
+`define FLAG_CPL       5'd16
+`define FLAG_NEG       5'd17
+`define FLAG_BLOCK_LD  5'd18
+`define FLAG_BLOCK_CP  5'd19
+`define FLAG_BLOCK_IO  5'd20
+`define FLAG_LD_A_I    5'd21
+`define FLAG_IN        5'd22
+`define FLAG_RRD       5'd23
+`define FLAG_RLD       5'd24
 
 // ---- exec (datapath action) codes, mirroring z80_exec_t order ----
 `define EXEC_NOP        6'd0

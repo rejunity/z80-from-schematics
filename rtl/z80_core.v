@@ -219,6 +219,12 @@ module z80_core (
         (rf_dst_w == 3'd5) ? rf[`RFP_HL][7:0]  :
         (rf_dst_w == 3'd7) ? rf[`RFP_AF][15:8] : 8'h00;
 
+    // Pre-derive the small inputs used by FLAG_BLOCK_IO so the mux below
+    // can stay simple. These are all functions of rf[] / tmp8 / tmpl /
+    // aux_w[0] (the dec/inc bit), readable here without dependence on rf_n.
+    wire [8:0] bk_ini = {1'b0, tmpl} + {1'b0, (rf[`RFP_BC][7:0] + (aux_w[0] ? 8'hFF : 8'h1))};
+    wire [8:0] bk_out = {1'b0, tmpl} + {1'b0, (rf[`RFP_HL][7:0] + (aux_w[0] ? 8'hFF : 8'h1))};
+
     always @* begin
         alu_a = A_cur;
         alu_b = 8'h00;
@@ -236,6 +242,45 @@ module z80_core (
             `EXEC_DDCB: begin alu_b = rbyte;           alu_xy = rf[`RFP_WZ][15:8];
                             alu_md = (tmph[7:6] == `CB_BIT) ? `FLAG_BIT : `FLAG_ROT;
                             alu_rot = tmph[5:3]; alu_bit = tmph[5:3]; end
+            // New A2 modes — flag formulas live in z80_alu.v, consumed
+            // by the EXEC handlers below as alu_res/alu_fout.
+            `EXEC_NEG: begin alu_md = `FLAG_NEG; alu_a = A_cur; end
+            `EXEC_LD_A_IR: begin alu_md = `FLAG_LD_A_I;
+                              alu_b = aux_w[0] ? reg_r : reg_i;
+                              alu_bit = {2'b0, iff2}; end
+            `EXEC_IN_C: begin alu_md = `FLAG_IN; alu_b = rbyte; end
+            `EXEC_RRD, `EXEC_RLD: begin
+                alu_md = (exec_w == `EXEC_RRD) ? `FLAG_RRD : `FLAG_RLD;
+                alu_a = A_cur; alu_b = rbyte;
+            end
+            `EXEC_BLOCK: begin
+                // (cat=aux_w[2:1], dec=aux_w[0]). Fire flag mux only at the
+                // M-cycle where the formula commits. tmp8 holds the latched
+                // byte for LD (latched at m=2's end); rbyte = data_in at the
+                // current latch phase for CP at m=2.
+                case (aux_w[2:1])
+                    2'd0: if (m_cycle == 3'd3) begin
+                        alu_md = `FLAG_BLOCK_LD; alu_a = A_cur; alu_b = tmp8;
+                        alu_bit = {2'b0, ((rf[`RFP_BC] - 16'd1) != 16'd0)};
+                    end
+                    2'd1: if (m_cycle == 3'd2) begin
+                        alu_md = `FLAG_BLOCK_CP; alu_a = A_cur; alu_b = rbyte;
+                        alu_bit = {2'b0, ((rf[`RFP_BC] - 16'd1) != 16'd0)};
+                    end
+                    2'd2: if (m_cycle == 3'd4) begin
+                        alu_md = `FLAG_BLOCK_IO;
+                        alu_a = tmpl;                      // data
+                        alu_b = rf[`RFP_BC][15:8] - 8'd1;   // newB
+                        alu_xy = {4'b0, bk_ini[8], bk_ini[2:0]};
+                    end
+                    default: if (m_cycle == 3'd4) begin   // 2'd3 = OUT
+                        alu_md = `FLAG_BLOCK_IO;
+                        alu_a = tmpl;                      // data
+                        alu_b = rf[`RFP_BC][15:8];          // already-decremented B
+                        alu_xy = {4'b0, bk_out[8], bk_out[2:0]};
+                    end
+                endcase
+            end
             default:             alu_b = 8'h00;
         endcase
     end
@@ -767,16 +812,8 @@ module z80_core (
                     end
                 end
                 `EXEC_NEG: begin
-                    edv = 8'h00 - A_cur;
-                    edf = `Z80_NF;
-                    if (edv[7]) edf = edf | `Z80_SF;
-                    if (edv == 8'h0) edf = edf | `Z80_ZF;
-                    if (A_cur[3:0] != 4'h0) edf = edf | `Z80_HF;
-                    if (A_cur == 8'h80) edf = edf | `Z80_PF;
-                    if (A_cur != 8'h00) edf = edf | `Z80_CF;
-                    edf = edf | (edv & (`Z80_YF | `Z80_XF));
-                    rf_n[`RFP_AF][15:8] = edv;
-                    rf_n[`RFP_AF][7:0]  = edf;
+                    rf_n[`RFP_AF][15:8] = alu_res;
+                    rf_n[`RFP_AF][7:0]  = alu_fout;
                     fin = 1'b1;
                 end
                 `EXEC_IM: begin im_n = aux_w[1:0]; fin = 1'b1; end
@@ -799,14 +836,9 @@ module z80_core (
                 `EXEC_LD_A_IR: begin
                     if (m_cycle == 3'd1) startm(`BUSOP_INTERNAL, rf[`RFP_PC], 8'h0, 4'd1);
                     else begin
-                        edv = aux_w[0] ? reg_r : reg_i;
-                        rf_n[`RFP_AF][15:8] = edv;
-                        edf = F_cur & `Z80_CF;
-                        if (edv[7]) edf = edf | `Z80_SF;
-                        if (edv == 8'h0) edf = edf | `Z80_ZF;
-                        edf = edf | (edv & (`Z80_YF | `Z80_XF));
-                        if (iff2) edf = edf | `Z80_PF;
-                        rf_n[`RFP_AF][7:0] = edf; fin = 1'b1;
+                        rf_n[`RFP_AF][15:8] = alu_res;
+                        rf_n[`RFP_AF][7:0]  = alu_fout;
+                        fin = 1'b1;
                     end
                 end
                 `EXEC_LD_NNA_RP: begin
@@ -837,12 +869,7 @@ module z80_core (
                         startm(`BUSOP_IORD, rf[`RFP_BC], 8'h0, 4'd0); end
                     else begin
                         if (rf_dst_w != 3'd6) setr8(rf_dst_w, rbyte);
-                        edf = F_cur & `Z80_CF;
-                        if (rbyte[7]) edf = edf | `Z80_SF;
-                        if (rbyte == 8'h0) edf = edf | `Z80_ZF;
-                        edf = edf | (rbyte & (`Z80_YF | `Z80_XF));
-                        if (~(^rbyte)) edf = edf | `Z80_PF;
-                        rf_n[`RFP_AF][7:0] = edf; fin = 1'b1;
+                        rf_n[`RFP_AF][7:0] = alu_fout; fin = 1'b1;
                     end
                 end
                 `EXEC_OUT_C: begin
@@ -853,20 +880,15 @@ module z80_core (
                 `EXEC_RRD, `EXEC_RLD: begin
                     if (m_cycle == 3'd1) startm(`BUSOP_MRD, rf[`RFP_HL], 8'h0, 4'd0);
                     else if (m_cycle == 3'd2) begin
-                        if (exec_w == `EXEC_RRD) begin
-                            edv   = {A_cur[7:4], rbyte[3:0]};   // new A
+                        // new_A and flags from z80_alu (FLAG_RRD / FLAG_RLD).
+                        // new_mem is pure nibble routing — kept here as bus
+                        // fabric until E1 lands the explicit db1/db2 segments.
+                        rf_n[`RFP_AF][15:8] = alu_res;
+                        rf_n[`RFP_AF][7:0]  = alu_fout;
+                        if (exec_w == `EXEC_RRD)
                             cbres = {A_cur[3:0], rbyte[7:4]};   // new (HL)
-                        end else begin
-                            edv   = {A_cur[7:4], rbyte[7:4]};   // new A
+                        else
                             cbres = {rbyte[3:0], A_cur[3:0]};   // new (HL)
-                        end
-                        rf_n[`RFP_AF][15:8] = edv;
-                        edf = F_cur & `Z80_CF;
-                        if (edv[7]) edf = edf | `Z80_SF;
-                        if (edv == 8'h0) edf = edf | `Z80_ZF;
-                        edf = edf | (edv & (`Z80_YF | `Z80_XF));
-                        if (~(^edv)) edf = edf | `Z80_PF;
-                        rf_n[`RFP_AF][7:0] = edf;
                         rf_n[`RFP_WZ] = rf[`RFP_HL] + 16'd1;
                         tmpl_n = cbres;
                         startm(`BUSOP_INTERNAL, rf[`RFP_HL], 8'h0, 4'd4);
@@ -878,6 +900,8 @@ module z80_core (
                 /* ---------- ED block instructions ----------
                    aux: [0]=dec  [2:1]=cat(0 LD,1 CP,2 IN,3 OUT)  [3]=repeat */
                 `EXEC_BLOCK: begin
+                    // Pointer/BC updates are IDU work (A1 will move them);
+                    // flags come from z80_alu (FLAG_BLOCK_LD/CP/IO modes).
                     if (aux_w[2:1] == 2'd0) begin                 // LDI/LDD/LDIR/LDDR
                         if (m_cycle == 3'd1) startm(`BUSOP_MRD, rf[`RFP_HL], 8'h0, 4'd0);
                         else if (m_cycle == 3'd2)
@@ -886,12 +910,7 @@ module z80_core (
                             bbc = rf[`RFP_BC] - 16'd1; rf_n[`RFP_BC] = bbc;
                             rf_n[`RFP_HL] = rf[`RFP_HL] + (aux_w[0] ? 16'hFFFF : 16'h1);
                             rf_n[`RFP_DE] = rf[`RFP_DE] + (aux_w[0] ? 16'hFFFF : 16'h1);
-                            bn2 = A_cur + tmp8;                   /* A + transferred byte */
-                            edf = F_cur & (`Z80_SF | `Z80_ZF | `Z80_CF);
-                            if (bn2[1]) edf = edf | `Z80_YF;
-                            if (bn2[3]) edf = edf | `Z80_XF;
-                            if (bbc != 16'd0) edf = edf | `Z80_PF;
-                            rf_n[`RFP_AF][7:0] = edf;
+                            rf_n[`RFP_AF][7:0] = alu_fout;
                             if (aux_w[3] && bbc != 16'd0) begin
                                 rf_n[`RFP_PC] = rf[`RFP_PC] - 16'd2;
                                 rf_n[`RFP_WZ] = rf[`RFP_PC] - 16'd1;
@@ -904,16 +923,7 @@ module z80_core (
                             bbc = rf[`RFP_BC] - 16'd1; rf_n[`RFP_BC] = bbc;
                             rf_n[`RFP_WZ] = rf[`RFP_WZ] + (aux_w[0] ? 16'hFFFF : 16'h1);
                             rf_n[`RFP_HL] = rf[`RFP_HL] + (aux_w[0] ? 16'hFFFF : 16'h1);
-                            bn2 = A_cur - rbyte;                  /* res */
-                            bhc = {1'b0, A_cur[3:0]} - {1'b0, rbyte[3:0]};
-                            edf = (F_cur & `Z80_CF) | `Z80_NF;
-                            if (bn2[7]) edf = edf | `Z80_SF;
-                            if (bn2 == 8'h0) edf = edf | `Z80_ZF;
-                            if (bhc[4]) edf = edf | `Z80_HF;
-                            if (((bn2 - {7'b0, bhc[4]}) & 8'h02) != 8'h0) edf = edf | `Z80_YF;
-                            if (((bn2 - {7'b0, bhc[4]}) & 8'h08) != 8'h0) edf = edf | `Z80_XF;
-                            if (bbc != 16'd0) edf = edf | `Z80_PF;
-                            rf_n[`RFP_AF][7:0] = edf;
+                            rf_n[`RFP_AF][7:0] = alu_fout;
                             startm(`BUSOP_INTERNAL, rf[`RFP_HL] + (aux_w[0] ? 16'hFFFF : 16'h1), 8'h0, 4'd5);
                         end else if (m_cycle == 3'd3) begin
                             if (aux_w[3] && rf[`RFP_BC] != 16'd0 && !(F_cur & `Z80_ZF)) begin
@@ -930,18 +940,9 @@ module z80_core (
                         end else if (m_cycle == 3'd3) begin
                             tmpl_n = rbyte; startm(`BUSOP_MWR, rf[`RFP_HL], rbyte, 4'd0);
                         end else if (m_cycle == 3'd4) begin
-                            bdata = tmpl;
                             bnewB = getr8(3'd0) - 8'd1; rf_n[`RFP_BC][15:8] = bnewB;
                             rf_n[`RFP_HL] = rf[`RFP_HL] + (aux_w[0] ? 16'hFFFF : 16'h1);
-                            bk = {1'b0, bdata} + {1'b0, (getr8(3'd1) + (aux_w[0] ? 8'hFF : 8'h1))};
-                            edf = 8'h0;
-                            if (bdata[7]) edf = edf | `Z80_NF;
-                            if (bk[8]) edf = edf | (`Z80_HF | `Z80_CF);
-                            if (~(^(bnewB ^ {5'b0, bk[2:0]}))) edf = edf | `Z80_PF;
-                            if (bnewB[7]) edf = edf | `Z80_SF;
-                            if (bnewB == 8'h0) edf = edf | `Z80_ZF;
-                            edf = edf | (bnewB & (`Z80_YF | `Z80_XF));
-                            rf_n[`RFP_AF][7:0] = edf;
+                            rf_n[`RFP_AF][7:0] = alu_fout;
                             if (aux_w[3] && bnewB != 8'h0) begin
                                 rf_n[`RFP_PC] = rf[`RFP_PC] - 16'd2;
                                 startm(`BUSOP_INTERNAL, rf[`RFP_PC] - 16'd2, 8'h0, 4'd5);
@@ -956,18 +957,9 @@ module z80_core (
                             rf_n[`RFP_WZ] = rf_n[`RFP_BC] + (aux_w[0] ? 16'hFFFF : 16'h1);
                             startm(`BUSOP_IOWR, rf_n[`RFP_BC], rbyte, 4'd0);
                         end else if (m_cycle == 3'd4) begin
-                            bdata = tmpl;
                             rf_n[`RFP_HL] = rf[`RFP_HL] + (aux_w[0] ? 16'hFFFF : 16'h1);
-                            bk = {1'b0, bdata} + {1'b0, rf_n[`RFP_HL][7:0]};
                             bnewB = getr8(3'd0);
-                            edf = 8'h0;
-                            if (bdata[7]) edf = edf | `Z80_NF;
-                            if (bk[8]) edf = edf | (`Z80_HF | `Z80_CF);
-                            if (~(^(bnewB ^ {5'b0, bk[2:0]}))) edf = edf | `Z80_PF;
-                            if (bnewB[7]) edf = edf | `Z80_SF;
-                            if (bnewB == 8'h0) edf = edf | `Z80_ZF;
-                            edf = edf | (bnewB & (`Z80_YF | `Z80_XF));
-                            rf_n[`RFP_AF][7:0] = edf;
+                            rf_n[`RFP_AF][7:0] = alu_fout;
                             if (aux_w[3] && bnewB != 8'h0) begin
                                 rf_n[`RFP_PC] = rf[`RFP_PC] - 16'd2;
                                 startm(`BUSOP_INTERNAL, rf[`RFP_PC] - 16'd2, 8'h0, 4'd5);

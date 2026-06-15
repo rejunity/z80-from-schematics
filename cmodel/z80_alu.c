@@ -277,6 +277,110 @@ uint8_t z80_flags_cpl(uint8_t a, uint8_t oldF, uint8_t *res)
     return f;
 }
 
+/* NEG: 0 - A. Same datapath as SUB(0, A). */
+static uint8_t z80_flags_neg(uint8_t a, uint8_t *res)
+{
+    return z80_flags_sub8(0, a, 0, false, 0, res);
+}
+
+/* LD A,I / LD A,R: copy I or R into A, set flags from the moved byte.
+   PF takes IFF2. CF preserved. */
+static uint8_t z80_flags_ld_a_ir(uint8_t v, uint8_t oldF, bool iff2, uint8_t *res)
+{
+    uint8_t f = oldF & Z80_CF;
+    if (v & 0x80) f |= Z80_SF;
+    if (v == 0)   f |= Z80_ZF;
+    f |= v & XY;
+    if (iff2)     f |= Z80_PF;
+    *res = v;
+    return f;
+}
+
+/* IN r,(C) / IN A,(C): set flags from the byte read.
+   PF = parity. CF preserved. */
+static uint8_t z80_flags_in(uint8_t v, uint8_t oldF, uint8_t *res)
+{
+    uint8_t f = oldF & Z80_CF;
+    if (v & 0x80) f |= Z80_SF;
+    if (v == 0)   f |= Z80_ZF;
+    f |= v & XY;
+    if (z80_parity(v)) f |= Z80_PF;
+    *res = v;
+    return f;
+}
+
+/* RRD: new_A = (A & 0xF0) | (mem & 0x0F). Flags from new_A.
+   The matching new_mem = (mem >> 4) | ((A & 0x0F) << 4) is pure nibble
+   routing through the bus fabric (not flag-bearing), computed in the
+   sequencer until E1 lands the explicit db1/db2 segments. */
+static uint8_t z80_flags_rrd(uint8_t a, uint8_t mem, uint8_t oldF, uint8_t *new_a)
+{
+    uint8_t r = (uint8_t)((a & 0xF0) | (mem & 0x0F));
+    uint8_t f = oldF & Z80_CF;
+    if (r & 0x80) f |= Z80_SF;
+    if (r == 0)   f |= Z80_ZF;
+    f |= r & XY;
+    if (z80_parity(r)) f |= Z80_PF;
+    *new_a = r;
+    return f;
+}
+
+/* RLD: new_A = (A & 0xF0) | ((mem >> 4) & 0x0F). Flags from new_A. */
+static uint8_t z80_flags_rld(uint8_t a, uint8_t mem, uint8_t oldF, uint8_t *new_a)
+{
+    uint8_t r = (uint8_t)((a & 0xF0) | ((mem >> 4) & 0x0F));
+    uint8_t f = oldF & Z80_CF;
+    if (r & 0x80) f |= Z80_SF;
+    if (r == 0)   f |= Z80_ZF;
+    f |= r & XY;
+    if (z80_parity(r)) f |= Z80_PF;
+    *new_a = r;
+    return f;
+}
+
+/* LDI/LDD (block load): flags only. The pointer/BC updates are IDU work. */
+static uint8_t z80_flags_block_ld(uint8_t oldF, uint8_t a, uint8_t val, bool bc_nz)
+{
+    uint8_t n = (uint8_t)(a + val);
+    uint8_t f = oldF & (Z80_SF | Z80_ZF | Z80_CF);
+    if (n & 0x02) f |= Z80_YF;
+    if (n & 0x08) f |= Z80_XF;
+    if (bc_nz)    f |= Z80_PF;
+    return f;
+}
+
+/* CPI/CPD (block compare): flags only. */
+static uint8_t z80_flags_block_cp(uint8_t oldF, uint8_t a, uint8_t val, bool bc_nz)
+{
+    uint8_t res = (uint8_t)(a - val);
+    uint8_t hf  = (((int)(a & 0xF) - (int)(val & 0xF)) < 0) ? Z80_HF : 0;
+    uint8_t n   = (uint8_t)(res - (hf ? 1u : 0u));
+    uint8_t f   = (oldF & Z80_CF) | Z80_NF;
+    if (res & 0x80) f |= Z80_SF;
+    if (res == 0)   f |= Z80_ZF;
+    f |= hf;
+    if (n & 0x02) f |= Z80_YF;
+    if (n & 0x08) f |= Z80_XF;
+    if (bc_nz)    f |= Z80_PF;
+    return f;
+}
+
+/* INI/IND/OUTI/OUTD (block I/O): flags only.
+   k_lo3 = low 3 bits of (data + (C ± 1)) for the PF formula;
+   k_carry = bit 8 of that sum, drives HF and CF. */
+static uint8_t z80_flags_block_io(uint8_t data, uint8_t newB,
+                                  uint8_t k_lo3, bool k_carry)
+{
+    uint8_t f = 0;
+    if (data & 0x80) f |= Z80_NF;
+    if (k_carry)     f |= (Z80_HF | Z80_CF);
+    if (z80_parity((uint8_t)(k_lo3 ^ newB))) f |= Z80_PF;
+    if (newB & 0x80) f |= Z80_SF;
+    if (newB == 0)   f |= Z80_ZF;
+    f |= newB & XY;
+    return f;
+}
+
 /* ===========================================================================
  * 4. Top-level combinational module — z80_alu()
  *
@@ -349,9 +453,36 @@ void z80_alu(uint8_t mode,      /* FLAG_*                                  */
         f = z80_flags_ccf(a, oldf, q);
         r = a;
         break;
+    case FLAG_NEG:
+        f = z80_flags_neg(a, &r);
+        break;
+    case FLAG_LD_A_I:
+        f = z80_flags_ld_a_ir(b, oldf, (bit_idx & 1) != 0, &r);
+        break;
+    case FLAG_IN:
+        f = z80_flags_in(b, oldf, &r);
+        break;
+    case FLAG_RRD:
+        f = z80_flags_rrd(a, b, oldf, &r);
+        break;
+    case FLAG_RLD:
+        f = z80_flags_rld(a, b, oldf, &r);
+        break;
+    case FLAG_BLOCK_LD:
+        f = z80_flags_block_ld(oldf, a, b, (bit_idx & 1) != 0);
+        r = b;
+        break;
+    case FLAG_BLOCK_CP:
+        f = z80_flags_block_cp(oldf, a, b, (bit_idx & 1) != 0);
+        r = b;
+        break;
+    case FLAG_BLOCK_IO:
+        f = z80_flags_block_io(a, b, (uint8_t)(xy_src & 0x7),
+                               (xy_src & 0x8) != 0);
+        r = b;
+        break;
     default:
-        /* FLAG_NONE / 16-bit / block modes are sequencer-internal; the ALU
-           top-level passes through. */
+        /* FLAG_NONE / 16-bit modes are sequencer-internal; pass through. */
         r = b;
         f = oldf;
         break;

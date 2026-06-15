@@ -138,12 +138,27 @@ typedef enum {
     SEQ_ILLEGAL
 } z80_seq_t;
 
-/* How the F register is updated after the operation. */
+/* How the F register is updated after the operation.
+
+   FLAG_NEG / FLAG_LD_A_I / FLAG_IN / FLAG_RRD / FLAG_RLD / FLAG_BLOCK_*
+   are dispatched through z80_alu() with the following input-port overloads
+   (see z80_alu.c case dispatch for the canonical table):
+
+      FLAG_NEG       : a = A
+      FLAG_LD_A_I    : b = I or R; bit_idx[0] = iff2
+      FLAG_IN        : b = the IN byte
+      FLAG_RRD/RLD   : a = A, b = mem; res = new_A (new_mem is bus-fabric work)
+      FLAG_BLOCK_LD  : a = A, b = val,       bit_idx[0] = (bc_after != 0)
+      FLAG_BLOCK_CP  : a = A, b = val,       bit_idx[0] = (bc_after != 0)
+      FLAG_BLOCK_IO  : a = data, b = newB,   xy_src[2:0] = k[2:0],
+                                              xy_src[3]   = k_carry
+*/
 typedef enum {
     FLAG_NONE = 0, FLAG_ADD8, FLAG_SUB8, FLAG_CP8, FLAG_LOGIC,
     FLAG_INC8, FLAG_DEC8, FLAG_ROT_A, FLAG_ROT, FLAG_BIT,
     FLAG_ADD16, FLAG_ADC16, FLAG_SBC16, FLAG_DAA, FLAG_SCF, FLAG_CCF,
-    FLAG_CPL, FLAG_NEG, FLAG_BLOCK_LD, FLAG_BLOCK_CP, FLAG_BLOCK_IO
+    FLAG_CPL, FLAG_NEG, FLAG_BLOCK_LD, FLAG_BLOCK_CP, FLAG_BLOCK_IO,
+    FLAG_LD_A_I, FLAG_IN, FLAG_RRD, FLAG_RLD
 } z80_flag_mode_t;
 
 /* Address-bus source for the current data M-cycle. */

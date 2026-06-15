@@ -216,42 +216,6 @@ static void do_adc16(z80_t *c, bool sub)
     z80_setF(c, f);
 }
 
-/* ---- block-instruction flag helpers (docs/flags.md) ---- */
-static uint8_t block_ld_flags(uint8_t oldF, uint8_t a, uint8_t val, uint16_t bc_after)
-{
-    uint8_t n = (uint8_t)(a + val);
-    uint8_t f = oldF & (Z80_SF | Z80_ZF | Z80_CF);  /* S,Z,C unchanged; H=N=0 */
-    if (n & 0x02) f |= Z80_YF;                      /* YF = bit1 of (A+byte) */
-    if (n & 0x08) f |= Z80_XF;                      /* XF = bit3 of (A+byte) */
-    if (bc_after) f |= Z80_PF;
-    return f;
-}
-static uint8_t block_cp_flags(uint8_t oldF, uint8_t a, uint8_t val, uint16_t bc_after)
-{
-    uint8_t res = (uint8_t)(a - val);
-    uint8_t hf = (((int)(a & 0xF) - (int)(val & 0xF)) < 0) ? Z80_HF : 0;
-    uint8_t n  = (uint8_t)(res - (hf ? 1u : 0u));
-    uint8_t f  = (oldF & Z80_CF) | Z80_NF;
-    if (res & 0x80) f |= Z80_SF;
-    if (res == 0)   f |= Z80_ZF;
-    f |= hf;
-    if (n & 0x02) f |= Z80_YF;
-    if (n & 0x08) f |= Z80_XF;
-    if (bc_after) f |= Z80_PF;
-    return f;
-}
-static uint8_t block_io_flags(uint8_t data, uint8_t newB, uint16_t k)
-{
-    uint8_t f = 0;
-    if (data & 0x80) f |= Z80_NF;
-    if (k > 0xFF)    f |= (Z80_HF | Z80_CF);
-    if (z80_parity((uint8_t)((k & 7) ^ newB))) f |= Z80_PF;
-    if (newB & 0x80) f |= Z80_SF;
-    if (newB == 0)   f |= Z80_ZF;
-    f |= newB & (Z80_YF | Z80_XF);
-    return f;
-}
-
 static void set_prefix_from_ir(z80_t *c)
 {
     switch (c->ir) {
@@ -702,7 +666,7 @@ static void z80_exec_step(z80_t *c)
         break;
     case EXEC_NEG: {
         uint8_t res, f;
-        z80_alu(FLAG_SUB8, ALU_SUB, 0, 0, 0, 0, z80_A(c), z80_F(c), 0, &res, &f);
+        z80_alu(FLAG_NEG, 0, 0, 0, 0, z80_A(c), 0, z80_F(c), 0, &res, &f);
         z80_setA(c, res); z80_setF(c, f); finish(c); break;
     }
     case EXEC_IM: c->im = ctl->aux; finish(c); break;
@@ -726,13 +690,11 @@ static void z80_exec_step(z80_t *c)
         if (m == 1) z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 1);
         else {
             uint8_t v = ctl->aux ? c->reg_r : c->reg_i;
-            z80_setA(c, v);
-            uint8_t f = z80_F(c) & Z80_CF;
-            if (v & 0x80) f |= Z80_SF;
-            if (v == 0)   f |= Z80_ZF;
-            f |= v & (Z80_YF | Z80_XF);
-            if (c->iff2)  f |= Z80_PF;
-            z80_setF(c, f); finish(c);
+            uint8_t res, f;
+            /* bit_idx[0] = iff2 per z80.h overload table */
+            z80_alu(FLAG_LD_A_I, 0, 0, c->iff2 ? 1 : 0, 0,
+                    0, v, z80_F(c), 0, &res, &f);
+            z80_setA(c, res); z80_setF(c, f); finish(c);
         }
         break;
     case EXEC_LD_NNA_RP:
@@ -760,11 +722,8 @@ static void z80_exec_step(z80_t *c)
         else {
             uint8_t d = RB;
             if (ctl->rf_dst != REG_iHL) setr(c, ctl->rf_dst, d);
-            uint8_t f = z80_F(c) & Z80_CF;
-            if (d & 0x80) f |= Z80_SF;
-            if (d == 0)   f |= Z80_ZF;
-            f |= d & (Z80_YF | Z80_XF);
-            if (z80_parity(d)) f |= Z80_PF;
+            uint8_t res, f;
+            z80_alu(FLAG_IN, 0, 0, 0, 0, 0, d, z80_F(c), 0, &res, &f);
             z80_setF(c, f); finish(c);
         }
         break;
@@ -778,21 +737,16 @@ static void z80_exec_step(z80_t *c)
     case EXEC_RLD:
         if (m == 1) z80_start_mcycle(c, BUSOP_MRD, c->rf[RFP_HL], 0, 0);
         else if (m == 2) {
-            uint8_t mem = RB, a = z80_A(c), newA, newMem;
-            if (ctl->exec == EXEC_RRD) {
-                newA   = (uint8_t)((a & 0xF0) | (mem & 0x0F));
-                newMem = (uint8_t)((mem >> 4) | ((a & 0x0F) << 4));
-            } else {
-                newA   = (uint8_t)((a & 0xF0) | ((mem >> 4) & 0x0F));
-                newMem = (uint8_t)(((mem << 4) & 0xF0) | (a & 0x0F));
-            }
-            z80_setA(c, newA);
-            uint8_t f = z80_F(c) & Z80_CF;
-            if (newA & 0x80) f |= Z80_SF;
-            if (newA == 0)   f |= Z80_ZF;
-            f |= newA & (Z80_YF | Z80_XF);
-            if (z80_parity(newA)) f |= Z80_PF;
-            z80_setF(c, f);
+            uint8_t mem = RB, a = z80_A(c);
+            uint8_t newA, f;
+            z80_alu(ctl->exec == EXEC_RRD ? FLAG_RRD : FLAG_RLD,
+                    0, 0, 0, 0, a, mem, z80_F(c), 0, &newA, &f);
+            z80_setA(c, newA); z80_setF(c, f);
+            /* new_mem is pure nibble routing through the bus fabric — keep
+               here until E1 lands the explicit db1/db2 segments. */
+            uint8_t newMem = (ctl->exec == EXEC_RRD)
+                ? (uint8_t)((mem >> 4) | ((a & 0x0F) << 4))
+                : (uint8_t)(((mem << 4) & 0xF0) | (a & 0x0F));
             c->rf[RFP_WZ] = (uint16_t)(c->rf[RFP_HL] + 1);
             c->tmpl = newMem;
             z80_start_mcycle(c, BUSOP_INTERNAL, c->rf[RFP_HL], 0, 4);
@@ -808,6 +762,11 @@ static void z80_exec_step(z80_t *c)
         bool    dec = (id & 1) != 0;
         uint8_t cat = (uint8_t)(id >> 1);   /* 0 LD, 1 CP, 2 IN, 3 OUT */
 
+        /* All block ops: sequencer does the IDU work (pointer +/-1, BC-1),
+           z80_alu produces the flags via FLAG_BLOCK_* modes. The xy_src and
+           bit_idx overloads carry the small bits of context the formulas
+           need (see z80.h flag-mode-table comment). */
+        uint8_t res, f;
         if (cat == 0) {                     /* LDI/LDD/LDIR/LDDR */
             if (m == 1) z80_start_mcycle(c, BUSOP_MRD, c->rf[RFP_HL], 0, 0);
             else if (m == 2) z80_start_mcycle(c, BUSOP_MWR, c->rf[RFP_DE], RB, 2); /* 5T write */
@@ -816,7 +775,9 @@ static void z80_exec_step(z80_t *c)
                 uint16_t bc = (uint16_t)(c->rf[RFP_BC] - 1); c->rf[RFP_BC] = bc;
                 c->rf[RFP_HL] = (uint16_t)(c->rf[RFP_HL] + (dec ? -1 : 1));
                 c->rf[RFP_DE] = (uint16_t)(c->rf[RFP_DE] + (dec ? -1 : 1));
-                z80_setF(c, block_ld_flags(z80_F(c), z80_A(c), val, bc));
+                z80_alu(FLAG_BLOCK_LD, 0, 0, bc ? 1 : 0, 0,
+                        z80_A(c), val, z80_F(c), 0, &res, &f);
+                z80_setF(c, f);
                 if (rep && bc != 0) { z80_setPC(c, (uint16_t)(z80_PC(c) - 2));
                     c->rf[RFP_WZ] = (uint16_t)(z80_PC(c) + 1);
                     z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 5); }
@@ -831,7 +792,9 @@ static void z80_exec_step(z80_t *c)
                 uint16_t bc = (uint16_t)(c->rf[RFP_BC] - 1); c->rf[RFP_BC] = bc;
                 c->rf[RFP_WZ] = (uint16_t)(c->rf[RFP_WZ] + (dec ? -1 : 1));
                 c->rf[RFP_HL] = (uint16_t)(c->rf[RFP_HL] + (dec ? -1 : 1));
-                z80_setF(c, block_cp_flags(z80_F(c), z80_A(c), val, bc));
+                z80_alu(FLAG_BLOCK_CP, 0, 0, bc ? 1 : 0, 0,
+                        z80_A(c), val, z80_F(c), 0, &res, &f);
+                z80_setF(c, f);
                 z80_start_mcycle(c, BUSOP_INTERNAL, c->rf[RFP_HL], 0, 5);
             }
             else if (m == 3) {
@@ -855,7 +818,10 @@ static void z80_exec_step(z80_t *c)
                 uint8_t newB = (uint8_t)(getr(c, REG_B) - 1); setr(c, REG_B, newB);
                 c->rf[RFP_HL] = (uint16_t)(c->rf[RFP_HL] + (dec ? -1 : 1));
                 uint16_t k = (uint16_t)(data + (uint8_t)(dec ? (creg - 1) : (creg + 1)));
-                z80_setF(c, block_io_flags(data, newB, k));
+                uint8_t xy = (uint8_t)((k & 0x7) | ((k & 0x100) ? 0x8 : 0));
+                z80_alu(FLAG_BLOCK_IO, 0, 0, 0, xy,
+                        data, newB, z80_F(c), 0, &res, &f);
+                z80_setF(c, f);
                 if (rep && newB != 0) { z80_setPC(c, (uint16_t)(z80_PC(c) - 2));
                     z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 5); }
                 else finish(c);
@@ -877,7 +843,10 @@ static void z80_exec_step(z80_t *c)
                 uint8_t l = getr(c, REG_L);
                 uint16_t k = (uint16_t)(data + l);
                 uint8_t newB = getr(c, REG_B);
-                z80_setF(c, block_io_flags(data, newB, k));
+                uint8_t xy = (uint8_t)((k & 0x7) | ((k & 0x100) ? 0x8 : 0));
+                z80_alu(FLAG_BLOCK_IO, 0, 0, 0, xy,
+                        data, newB, z80_F(c), 0, &res, &f);
+                z80_setF(c, f);
                 if (rep && newB != 0) { z80_setPC(c, (uint16_t)(z80_PC(c) - 2));
                     z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 5); }
                 else finish(c);
