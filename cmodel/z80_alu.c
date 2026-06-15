@@ -48,7 +48,7 @@ static uint8_t add4(uint8_t a, uint8_t b, uint8_t cin, uint8_t *cout)
 static uint8_t sub4(uint8_t a, uint8_t b, uint8_t bin, uint8_t *bout)
 {
     int s = (int)(a & 0xF) - (int)(b & 0xF) - (int)(bin & 1);
-    *bout = (s < 0) ? 1u : 0u;
+    *bout = (uint8_t)((s < 0) ? 1 : 0);
     return (uint8_t)(s & 0xF);
 }
 

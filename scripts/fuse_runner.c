@@ -202,7 +202,8 @@ int main(int argc, char** argv) {
         }
     }
     clock_gettime(CLOCK_MONOTONIC, &t1);
-    double secs = (t1.tv_sec-t0.tv_sec) + (t1.tv_nsec-t0.tv_nsec)/1e9;
+    double secs = (double)(t1.tv_sec - t0.tv_sec)
+                + (double)(t1.tv_nsec - t0.tv_nsec) / 1e9;
 
     printf("=== FUSE z80-test (final-state mode) ===\n");
     printf("%d tests: %d PASS, %d FAIL  (%.2f s)\n", ntotal, npass, nfail, secs);

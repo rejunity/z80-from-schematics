@@ -90,7 +90,11 @@ module z80_core (
     wire [1:0] cb_kind_w, idx_w;
     wire [3:0] rp_sel_w, aux_w;
     wire [7:0] rst_addr_w;
-    wire       uses_cc_w, valid_w, use_disp_w;
+    wire       use_disp_w;
+    // uses_cc / valid are produced by z80_pla but the sequencer doesn't
+    // consume them yet. Wire them up so iverilog and Verilator don't warn
+    // about missing pins; -Wno-UNUSEDSIGNAL handles the dead-end side.
+    wire       uses_cc_w, valid_w;
 
     z80_pla u_pla (
         .prefix(prefix), .op(ir),

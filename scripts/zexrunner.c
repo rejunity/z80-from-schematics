@@ -66,12 +66,13 @@ int main(int argc, char **argv)
         if (++count >= max_instr) { hit_limit = 1; break; }
     }
     clock_gettime(CLOCK_MONOTONIC, &t1);
-    double secs = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
+    double secs = (double)(t1.tv_sec - t0.tv_sec)
+                + (double)(t1.tv_nsec - t0.tv_nsec) / 1e9;
 
     printf("\n=== zexrunner: %s ===\n", argv[1]);
     printf("instructions executed: %lld%s\n", count, hit_limit ? " (LIMIT REACHED)" : "");
     printf("final PC=%04X  loaded %zu bytes\n", s->cpu.rf[RFP_PC], n);
-    printf("elapsed: %.2f s  (%.2f Minstr/s)\n", secs, count / secs / 1e6);
+    printf("elapsed: %.2f s  (%.2f Minstr/s)\n", secs, (double)count / secs / 1e6);
     free(s);
     return hit_limit ? 3 : 0;
 }

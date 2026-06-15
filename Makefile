@@ -175,10 +175,20 @@ verilator: dirs
 	  exit 0; \
 	fi; \
 	echo "== building verilator sim =="; \
-	$(VERILATOR) --cc --exe --build -j 0 -Wall -Wno-fatal -Wno-WIDTH -Wno-CASEINCOMPLETE \
+	$(VERILATOR) --cc --exe --build -j 0 -Wall \
+	  -Wno-fatal -Wno-WIDTH -Wno-CASEINCOMPLETE -Wno-UNUSEDSIGNAL \
 	  --Mdir $(BUILD)/obj_dir --top-module z80_core \
 	  -I$(RTL) $(RTL_SRCS) $(abspath $(TESTS)/verilator/sim_main.cpp) -o sim_z80 && \
 	echo "Built $(BUILD)/obj_dir/sim_z80"
+
+# -Wno-UNUSEDSIGNAL above silences a recurring "wide compute, only carry
+# bit consumed" pattern (rtl/z80_alu.v lo_add/lo_sub[3:0]; rtl/z80_core.v
+# add12/r13/bk/bhc; rtl/z80_timing.v m_len) — those wires are declared
+# at their full width to make the silicon-faithful structural narrative
+# visible (the chip's wide adder produces both sum and carry; we route
+# only the carry into HF). The carry-only consumption is correct, not a
+# bug — but Verilator flags it. Will be revisited when the bus-segment
+# refactor (E1) introduces explicit named taps.
 
 # ZEX runner driven through the Verilated RTL — apples-to-apples with the C
 # zexrunner but every cycle simulated at gate-level-equivalent fidelity. Same
@@ -195,7 +205,8 @@ verilator_zex: dirs
 	  exit 0; \
 	fi; \
 	echo "== building verilator sim_zex =="; \
-	$(VERILATOR) --cc --exe --build -j 0 -O3 -Wall -Wno-fatal -Wno-WIDTH -Wno-CASEINCOMPLETE \
+	$(VERILATOR) --cc --exe --build -j 0 -O3 -Wall \
+	  -Wno-fatal -Wno-WIDTH -Wno-CASEINCOMPLETE -Wno-UNUSEDSIGNAL \
 	  --Mdir $(BUILD)/obj_dir_zex --top-module z80_core \
 	  -I$(RTL) $(RTL_SRCS) $(abspath $(TESTS)/verilator/sim_zex.cpp) -o sim_zex && \
 	echo "Built $(BUILD)/obj_dir_zex/sim_zex"
