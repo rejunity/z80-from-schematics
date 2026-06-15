@@ -387,7 +387,12 @@ static void z80_exec_step(z80_t *c)
         z80_setF(c, f); finish(c); break; }
 
     case EXEC_EX_DE_HL: { uint16_t t = c->rf[RFP_DE]; c->rf[RFP_DE] = c->rf[RFP_HL]; c->rf[RFP_HL] = t; finish(c); break; }
-    case EXEC_EX_AF:    { uint16_t t = c->rf[RFP_AF]; c->rf[RFP_AF] = c->rf[RFP_AF2]; c->rf[RFP_AF2] = t; finish(c); break; }
+    case EXEC_EX_AF:    {
+        /* Swap replaces F with the alternate F — counts as modifying F, so
+           Q (= new F) must be committed at instruction end. Sean Young §4.1. */
+        uint16_t t = c->rf[RFP_AF]; c->rf[RFP_AF] = c->rf[RFP_AF2]; c->rf[RFP_AF2] = t;
+        c->f_modified = true; finish(c); break;
+    }
     case EXEC_EXX: {
         uint16_t t;
         t = c->rf[RFP_BC]; c->rf[RFP_BC] = c->rf[RFP_BC2]; c->rf[RFP_BC2] = t;

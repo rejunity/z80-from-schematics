@@ -428,7 +428,8 @@ module z80_core (
                 `EXEC_SCF, `EXEC_CCF: begin rf_n[`RFP_AF][7:0] = alu_fout; fin = 1'b1; end
 
                 `EXEC_EX_DE_HL: begin rf_n[`RFP_DE] = rf[`RFP_HL]; rf_n[`RFP_HL] = rf[`RFP_DE]; fin = 1'b1; end
-                `EXEC_EX_AF:    begin rf_n[`RFP_AF] = rf[`RFP_AF2]; rf_n[`RFP_AF2] = rf[`RFP_AF]; fin = 1'b1; end
+                `EXEC_EX_AF:    begin rf_n[`RFP_AF] = rf[`RFP_AF2]; rf_n[`RFP_AF2] = rf[`RFP_AF];
+                                      f_modified_n = 1'b1; fin = 1'b1; end
                 `EXEC_EXX: begin
                     rf_n[`RFP_BC] = rf[`RFP_BC2]; rf_n[`RFP_BC2] = rf[`RFP_BC];
                     rf_n[`RFP_DE] = rf[`RFP_DE2]; rf_n[`RFP_DE2] = rf[`RFP_DE];
