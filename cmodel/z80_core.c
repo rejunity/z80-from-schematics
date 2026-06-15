@@ -1020,14 +1020,20 @@ static void begin_next(z80_t *c)
     bool allow_int = !c->ei_delay;
     c->ei_delay = false;
 
-    if (c->nmi_pending) {
+    /* Use the silicon sample latches (taken at T_last.P), not the live pin
+       state. Silicon's accept decision is locked in one phase before the
+       M-cycle boundary; this prevents an edge/level change between T_last.P
+       and the boundary from retroactively flipping the decision. */
+    if (c->nmi_sampled) {
+        c->nmi_sampled = false;
         c->nmi_pending = false;
         if (c->halted) { c->rf[RFP_PC] = (uint16_t)(c->rf[RFP_PC] + 1); c->halted = false; }
         c->iff2 = c->iff1; c->iff1 = false;        /* IFF1->IFF2, disable */
         start_seq_m1(c, EXEC_NMI, 5, true);        /* 5T ack, opcode discarded */
         return;
     }
-    if (allow_int && !c->pins.int_n && c->iff1) {
+    if (allow_int && c->int_sampled && c->iff1) {
+        c->int_sampled = false;
         if (c->halted) { c->rf[RFP_PC] = (uint16_t)(c->rf[RFP_PC] + 1); c->halted = false; }
         c->iff1 = c->iff2 = false;
         start_seq_inta(c, 7);                      /* INTA ack (IM0/1/2) */
@@ -1075,6 +1081,8 @@ static void reset_state(z80_t *c)
     c->prefix = PFX_NONE;
     c->nmi_pending = false;
     c->prev_nmi_n = true;
+    c->nmi_sampled = false;
+    c->int_sampled = false;
     c->ei_delay = false;
     c->suppress_decode = false;
     c->bus_granted = false;
@@ -1162,6 +1170,16 @@ void z80_phase_step(z80_t *c)
 
     if (!c->stalled && is_latch_phase(c))
         do_latch(c);
+
+    /* NMI / INT silicon sample point: rising edge of the last T-state of
+       the current M-cycle (= T_last.P, the .P sub-phase of t_state == m_len)
+       per Zilog UM0080. Sample once per M-cycle here; the last M-cycle's
+       sample is the one begin_next() reads. While WAIT is asserted we hold
+       the previous sample (T-state didn't advance), matching silicon. */
+    if (!c->stalled && c->t_state == c->m_len && c->phi == 0) {
+        c->nmi_sampled = c->nmi_pending;
+        c->int_sampled = !c->pins.int_n;
+    }
 
     z80_timing(c->bus_op, c->t_state, c->phi, c->m_len, c->m_addr, c->m_wdata,
                c->reg_i, c->reg_r,

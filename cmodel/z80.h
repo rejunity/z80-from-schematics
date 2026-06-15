@@ -255,8 +255,17 @@ typedef struct {
     bool         iff1, iff2;
     uint8_t      im;            /* interrupt mode 0/1/2                       */
     bool         halted;
-    bool         nmi_pending;
+    bool         nmi_pending;   /* sticky latch: any falling edge on NMI seen */
     bool         prev_nmi_n;    /* for edge detection                        */
+    /* NMI / INT silicon sample latches. Per Zilog UM0080, both are sampled at
+       the rising edge of the last T-state of the last M-cycle (= T_last.P in
+       our phase model). nmi_sampled freezes nmi_pending's value at that
+       phase; int_sampled freezes !int_n at that phase. begin_next() uses
+       these latches, not the live signals, so an interrupt that changes
+       between T_last.P and the M-cycle boundary cannot retroactively
+       affect the current instruction's accept decision. */
+    bool         nmi_sampled;
+    bool         int_sampled;
     bool         ei_delay;      /* suppress INT for one instruction after EI  */
     bool         suppress_decode;/* ack-cycle M1: latch but don't decode/PC++ */
     bool         bus_granted;   /* BUSACK active (DMA owns the bus)           */

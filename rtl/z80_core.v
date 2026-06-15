@@ -58,6 +58,7 @@ module z80_core (
     reg [31:0] cycle, instr_count;
     reg        decoded;
     reg        nmi_pending, prev_nmi_n, ei_delay, suppress_decode, bus_granted;
+    reg        nmi_sampled, int_sampled;  // latched at T_last.P per UM0080
     reg [1:0]  irq_seq;        // 0 none, 1 NMI, 2 INT, 3 HALT-nop
 
     // ---- next-state ----
@@ -79,6 +80,7 @@ module z80_core (
     reg [31:0] cycle_n, instr_count_n;
     reg        decoded_n;
     reg        nmi_pending_n, prev_nmi_n_n, ei_delay_n, suppress_decode_n, bus_granted_n;
+    reg        nmi_sampled_n, int_sampled_n;
     reg [1:0]  irq_seq_n;
     reg        allow_int;
     reg        fin;
@@ -305,11 +307,21 @@ module z80_core (
         add16 = 17'd0; f16 = 8'd0;
         ei_delay_n = ei_delay; suppress_decode_n = suppress_decode;
         bus_granted_n = bus_granted; irq_seq_n = irq_seq;
+        nmi_sampled_n = nmi_sampled; int_sampled_n = int_sampled;
         allow_int = 1'b0;
 
         // NMI: latch a falling edge on nmi_n
         prev_nmi_n_n = nmi_n;
         nmi_pending_n = nmi_pending | (prev_nmi_n & ~nmi_n);
+
+        // NMI/INT silicon sample point: rising edge of the last T-state of
+        // the current M-cycle (= T_last.P) per Zilog UM0080. Refresh the
+        // sample latches here once per M-cycle; the last M-cycle's sample
+        // is the one the boundary uses to accept.
+        if (!stall && (t_state == m_len) && (phi == 1'b0)) begin
+            nmi_sampled_n = nmi_pending_n;
+            int_sampled_n = ~int_n;
+        end
 
         // latch on the current phase
         if (islatch) begin
@@ -1008,7 +1020,12 @@ module z80_core (
                     end else begin
                         allow_int = ~ei_delay_n;         // ei_delay_n reflects EI this cycle
                         ei_delay_n = 1'b0;
-                        if (nmi_pending_n) begin
+                        // Accept based on the SAMPLED interrupt state (latched at
+                        // T_last.P), not the live signals. The sampled latches
+                        // freeze the silicon's accept decision one phase before
+                        // the boundary; that matches Zilog UM0080 NMI/INT timing.
+                        if (nmi_sampled_n) begin
+                            nmi_sampled_n = 1'b0;
                             nmi_pending_n = 1'b0;
                             // exiting HALT: re-advance PC past the HALT byte
                             if (halted_n) rf_n[`RFP_PC] = rf_n[`RFP_PC] + 16'd1;
@@ -1018,7 +1035,8 @@ module z80_core (
                             bus_op_n = `BUSOP_M1; m_addr_n = rf_n[`RFP_PC]; m_wdata_n = 8'h0;
                             m_len_n = 4'd5; t_n = 4'd1; phi_n = 1'b0; m_cycle_n = 3'd1;
                             decoded_n = 1'b1; suppress_decode_n = 1'b1;
-                        end else if (allow_int && !int_n && iff1_n) begin
+                        end else if (allow_int && int_sampled_n && iff1_n) begin
+                            int_sampled_n = 1'b0;
                             if (halted_n) rf_n[`RFP_PC] = rf_n[`RFP_PC] + 16'd1;
                             halted_n = 1'b0; iff1_n = 1'b0; iff2_n = 1'b0;
                             irq_seq_n = 2'd2;
@@ -1056,6 +1074,7 @@ module z80_core (
             tmp8 <= 8'h00; tmpl <= 8'h00; tmph <= 8'h00; tmp16 <= 16'h0000;
             cycle <= 32'd0; instr_count <= 32'd0; decoded <= 1'b0;
             nmi_pending <= 1'b0; prev_nmi_n <= 1'b1; ei_delay <= 1'b0;
+            nmi_sampled <= 1'b0; int_sampled <= 1'b0;
             suppress_decode <= 1'b0; bus_granted <= 1'b0; irq_seq <= 2'd0;
             reg_q <= 8'h00; f_modified <= 1'b0;
         end else begin
@@ -1067,6 +1086,7 @@ module z80_core (
             tmp8 <= tmp8_n; tmpl <= tmpl_n; tmph <= tmph_n; tmp16 <= tmp16_n;
             cycle <= cycle_n; instr_count <= instr_count_n; decoded <= decoded_n;
             nmi_pending <= nmi_pending_n; prev_nmi_n <= prev_nmi_n_n; ei_delay <= ei_delay_n;
+            nmi_sampled <= nmi_sampled_n; int_sampled <= int_sampled_n;
             suppress_decode <= suppress_decode_n; bus_granted <= bus_granted_n; irq_seq <= irq_seq_n;
             reg_q <= reg_q_n; f_modified <= f_modified_n;
         end
