@@ -177,12 +177,16 @@ verilator: dirs
 	echo "== building verilator sim =="; \
 	$(VERILATOR) --cc --exe --build -j 0 -Wall -Wno-fatal -Wno-WIDTH -Wno-CASEINCOMPLETE \
 	  --Mdir $(BUILD)/obj_dir --top-module z80_core \
-	  -I$(RTL) $(RTL_SRCS) $(TESTS)/verilator/sim_main.cpp -o sim_z80 && \
+	  -I$(RTL) $(RTL_SRCS) $(abspath $(TESTS)/verilator/sim_main.cpp) -o sim_z80 && \
 	echo "Built $(BUILD)/obj_dir/sim_z80"
 
 # ZEX runner driven through the Verilated RTL — apples-to-apples with the C
 # zexrunner but every cycle simulated at gate-level-equivalent fidelity. Same
 # C++17 self-check as `verilator:` so the macOS dev box skips gracefully.
+# The .cpp source MUST be an absolute path: Verilator 5.020 (Ubuntu 24.04 apt)
+# leaves the cpp path as-given in the inner Makefile rule, which then fails
+# because the inner make runs from inside --Mdir. Verilator 5.042 (Homebrew)
+# rewrites it to "../../..." automatically. abspath sidesteps the difference.
 verilator_zex: dirs
 	@if [ ! -f $(TESTS)/verilator/sim_zex.cpp ]; then echo "sim_zex.cpp not present."; exit 0; fi; \
 	printf '#include <cstdio>\nint main(){return 0;}\n' > $(BUILD)/.cxxcheck.cpp; \
@@ -193,7 +197,7 @@ verilator_zex: dirs
 	echo "== building verilator sim_zex =="; \
 	$(VERILATOR) --cc --exe --build -j 0 -O3 -Wall -Wno-fatal -Wno-WIDTH -Wno-CASEINCOMPLETE \
 	  --Mdir $(BUILD)/obj_dir_zex --top-module z80_core \
-	  -I$(RTL) $(RTL_SRCS) $(TESTS)/verilator/sim_zex.cpp -o sim_zex && \
+	  -I$(RTL) $(RTL_SRCS) $(abspath $(TESTS)/verilator/sim_zex.cpp) -o sim_zex && \
 	echo "Built $(BUILD)/obj_dir_zex/sim_zex"
 
 # Run ZEXALL through the Verilated RTL. sim_zex prints the same Cringle

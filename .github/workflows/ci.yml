@@ -75,6 +75,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential python3 iverilog verilator
+      - name: Build Verilator sim (sim_z80) so compare actually exercises it
+        run: make verilator
       - name: C vs iverilog vs Verilator parity (8 trace programs)
         run: make compare
       - name: C model vs perfectz80 gate-level netlist (signal-timing)
@@ -103,15 +105,19 @@ jobs:
         run: |
           make zexrunner
           set -o pipefail
-          build/bin/zexrunner tests/zex/zexdoc.com 6000000000 2>&1 \
-            | tr -d '\r' | tee zexdoc.log
+          # stdbuf -oL forces line buffering on the zexrunner pipe so each
+          # Cringle "<test> ...  OK" line streams to the live log as soon
+          # as it's emitted — without this glibc block-buffers stdout when
+          # not a TTY and you only see output after the ~18 min run ends.
+          stdbuf -oL build/bin/zexrunner tests/zex/zexdoc.com 6000000000 2>&1 \
+            | stdbuf -oL tr -d '\r' | tee zexdoc.log
           if grep -q ERROR zexdoc.log; then
             echo "::error::ZEXDOC reported ERROR — see lines above"
             exit 1
           fi
       - name: Upload ZEXDOC log
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: zexdoc-log
           path: zexdoc.log
@@ -132,15 +138,15 @@ jobs:
         run: |
           make zexrunner
           set -o pipefail
-          build/bin/zexrunner tests/zex/zexall.com 12000000000 2>&1 \
-            | tr -d '\r' | tee zexall.log
+          stdbuf -oL build/bin/zexrunner tests/zex/zexall.com 12000000000 2>&1 \
+            | stdbuf -oL tr -d '\r' | tee zexall.log
           if grep -q ERROR zexall.log; then
             echo "::error::ZEXALL reported ERROR — see lines above"
             exit 1
           fi
       - name: Upload ZEXALL log
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: zexall-log
           path: zexall.log
@@ -172,14 +178,14 @@ jobs:
       - name: Run ZEXALL through Verilated RTL and fail on any ERROR line
         run: |
           set -o pipefail
-          make zexall_rtl 2>&1 | tr -d '\r' | tee zexall_rtl.log
+          stdbuf -oL make zexall_rtl 2>&1 | stdbuf -oL tr -d '\r' | tee zexall_rtl.log
           if grep -q ERROR zexall_rtl.log; then
             echo "::error::ZEXALL through Verilator RTL reported ERROR — see lines above"
             exit 1
           fi
       - name: Upload ZEXALL-RTL log
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: zexall-rtl-log
           path: zexall_rtl.log
