@@ -2,6 +2,10 @@
    model. Reads tests/fuse/tests.in (~1356 cases) and tests/fuse/tests.expected,
    compares final state (regs+IFFs+IM+HALTED+T-states+memory) per case.
    Per-cycle bus-event verification (the MC/MR/MW lines) is deferred. */
+/* Expose clock_gettime / CLOCK_MONOTONIC / struct timespec from <time.h>:
+   Linux glibc hides POSIX.1-2008 extensions at -std=c99 unless asked;
+   macOS libc exposes them unconditionally. */
+#define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

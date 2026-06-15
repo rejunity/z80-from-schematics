@@ -8,6 +8,10 @@
  * BDOS is trapped by placing a RET at 0x0005 and acting whenever the core is
  * about to fetch there; program exit is detected when PC returns to 0x0000.
  * ==========================================================================*/
+/* Expose clock_gettime / CLOCK_MONOTONIC / struct timespec from <time.h>:
+   Linux glibc hides POSIX.1-2008 extensions at -std=c99 unless asked;
+   macOS libc exposes them unconditionally. */
+#define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

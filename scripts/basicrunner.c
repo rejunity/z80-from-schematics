@@ -10,6 +10,10 @@
    datasheet; reads from the data register return one byte from stdin
    (blocking if none is available); writes go to stdout. Other ports return
    0xFF on read and are ignored on write. */
+/* Expose POSIX termios / signal / fcntl / select / usleep on Linux glibc
+   (hidden at -std=c99 without this); macOS exposes them unconditionally. */
+#define _POSIX_C_SOURCE 200809L
+#define _XOPEN_SOURCE   700        /* usleep(3) lived under _XOPEN_SOURCE */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

@@ -104,7 +104,9 @@ fuse: fuse_runner
 
 # FUSE through the RTL (iverilog). Generates tb_fuse.v from tests.in, builds
 # with iverilog, runs vvp, diffs results against tests.expected.
-fuse_rtl:
+# Depends on `dirs` so the build/ output directory exists on a fresh checkout
+# (the compare_fuse_rtl.py driver writes build/tb_fuse.vvp).
+fuse_rtl: dirs
 	@$(PYTHON) $(SCRIPTS)/compare_fuse_rtl.py
 
 # Real-silicon T-state validation against the sigrok KC85/4 logic-analyzer
