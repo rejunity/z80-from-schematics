@@ -65,8 +65,8 @@ jobs:
       - name: FUSE / Cringle 1356 cases through iverilog RTL
         run: make fuse_rtl
 
-  basic-tests:
-    name: BASIC ROM (NASCOM BASIC 4.7c + Tiny BASIC)
+  basic-c-tests:
+    name: BASIC ROM via C model (NASCOM 4.7c + Tiny BASIC)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -75,8 +75,39 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential python3
-      - name: Pipe canned scripts through both BASIC ROMs and verify output
-        run: make basic_tests
+      - name: Pipe canned scripts through basicrunner and verify output
+        run: make basic_c_tests
+
+  basic-rtl-tests:
+    name: BASIC ROM via Verilator RTL (NASCOM 4.7c + Tiny BASIC)
+    runs-on: ubuntu-latest
+    # ~10 min wall clock on ubuntu-latest. 8 subtests cumulative: NASCOM
+    # cold-start to prompt + 8 PRINT lines per script + 3 scripts + Tiny.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install C + Verilator
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential python3 verilator
+      - name: Pipe canned scripts through sim_basic (Verilated RTL) and verify
+        run: make basic_rtl_tests
+
+  z80test:
+    name: Patrik Rak z80test (doc / memptr / full — within baseline)
+    runs-on: ubuntu-latest
+    # 3 variants × ~25 s each + cold start = ~2 min
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install C toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential python3
+      - name: Run Rak's z80doc + z80memptr + z80full and check baselines
+        run: make z80test
 
   parity-tests:
     name: Parity (C vs iverilog vs Verilator + perfectz80)

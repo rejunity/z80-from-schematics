@@ -44,7 +44,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
-.PHONY: all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 basicrunner basic tinybasic basic_tests
+.PHONY: all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl verilator_basic traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests z80test_runner z80test
 
 all: cmodel ctest
 
@@ -92,6 +92,29 @@ zexrunner: cmodel $(BIN)/zexrunner
 $(BIN)/zexrunner: $(SCRIPTS)/zexrunner.c $(CMODEL_LIB) $(CMODEL_HDRS)
 	@mkdir -p $(BIN)
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(CMODEL_LIB) -o $@
+
+# Patrik Rak z80test (raxoft) harness — ZX Spectrum .tap loader + ROM stubs
+# at 0x10 (RST 10 print) and 0x1601 (CHAN-OPEN no-op). Tests/z80test/*.tap
+# bundled from https://github.com/raxoft/z80test (MIT).
+z80test_runner: cmodel $(BIN)/z80test_runner
+$(BIN)/z80test_runner: $(SCRIPTS)/z80test_runner.c $(CMODEL_LIB) $(CMODEL_HDRS)
+	@mkdir -p $(BIN)
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(CMODEL_LIB) -o $@
+
+# Run the full / documented / memptr z80test variants in sequence with the
+# per-variant baseline allowed-failure counts. Failures THAT EXCEED the
+# baseline = a regression and the make target exits non-zero. New variants
+# go in this list:
+#   z80doc      2  — INI/IND block-I/O sub-cycle (audit followup; see
+#                    docs/audit-followups.md F-block-op-M-cycle)
+#   z80memptr   2  — INIR->NOP'/INDR->NOP' (same root cause as above)
+#   z80full    10  — additional SCF/CCF ST-variant differences (we model
+#                    Zilog NMOS Q, not Toshiba) + LDIR/LDDR->NOP'
+z80test: z80test_runner
+	@set -e; \
+	stdbuf -oL $(BIN)/z80test_runner $(TESTS)/z80test/z80doc.tap     5000000000  2; \
+	stdbuf -oL $(BIN)/z80test_runner $(TESTS)/z80test/z80memptr.tap  5000000000  2; \
+	stdbuf -oL $(BIN)/z80test_runner $(TESTS)/z80test/z80full.tap    8000000000 10
 
 # FUSE z80-test harness (Frank D. Cringle test corpus, 1356 cases)
 fuse_runner: cmodel $(BIN)/fuse_runner
@@ -149,12 +172,20 @@ basic: basicrunner
 tinybasic: basicrunner
 	@$(BIN)/basicrunner tests/basic/tinybasic_1k.hex
 
-# Canned-input BASIC ROM regression: pipe each tests/basic/scripts/<name>.in
-# through basicrunner, grep for the substrings listed in <name>.expect.
-# Failing if any expected line is missing. NASCOM scripts use --autostart;
-# Tiny scripts run as-is. See tests/basic/run_basic_tests.sh.
-basic_tests: basicrunner
-	@$(TESTS)/basic/run_basic_tests.sh
+# Canned-input BASIC ROM regression via the C model. Pipes each
+# tests/basic/scripts/<name>.in through basicrunner, greps for the
+# substrings in <name>.expect. NASCOM scripts use --autostart; Tiny
+# scripts run as-is. See tests/basic/run_basic_tests.sh.
+basic_c_tests: basicrunner
+	@$(TESTS)/basic/run_basic_tests.sh c
+
+# Same suite but driven through the Verilated RTL via sim_basic. ~20x
+# slower than basic_c_tests; gate appropriately in CI.
+basic_rtl_tests: verilator_basic
+	@$(TESTS)/basic/run_basic_tests.sh rtl
+
+# Back-compat alias kept until external callers migrate.
+basic_tests: basic_c_tests
 
 # ----------------------------------------------------------------------------
 # RTL elaboration / sims
@@ -224,6 +255,23 @@ verilator_zex: dirs
 # of wall clock — gate to CI's main / nightly / dispatch only.
 zexall_rtl: verilator_zex
 	@$(BUILD)/obj_dir_zex/sim_zex tests/zex/zexall.com 12000000000
+
+# BASIC ROM driver through the Verilated RTL (sim_basic). Builds the
+# Verilator harness analogously to verilator_zex. Same C++17 self-check
+# pattern as verilator: so macOS dev box skips gracefully.
+verilator_basic: dirs
+	@if [ ! -f $(TESTS)/verilator/sim_basic.cpp ]; then echo "sim_basic.cpp not present."; exit 0; fi; \
+	printf '#include <cstdio>\nint main(){return 0;}\n' > $(BUILD)/.cxxcheck.cpp; \
+	if ! c++ -std=gnu++17 -c $(BUILD)/.cxxcheck.cpp -o $(BUILD)/.cxxcheck.o >/dev/null 2>&1; then \
+	  echo "SKIP verilator_basic: host C++17 toolchain cannot compile libc++ headers."; \
+	  exit 0; \
+	fi; \
+	echo "== building verilator sim_basic =="; \
+	$(VERILATOR) --cc --exe --build -j 0 -O3 -Wall \
+	  -Wno-fatal -Wno-WIDTH -Wno-CASEINCOMPLETE -Wno-UNUSEDSIGNAL \
+	  --Mdir $(BUILD)/obj_dir_basic --top-module z80_core \
+	  -I$(RTL) $(RTL_SRCS) $(abspath $(TESTS)/verilator/sim_basic.cpp) -o sim_basic && \
+	echo "Built $(BUILD)/obj_dir_basic/sim_basic"
 
 # ----------------------------------------------------------------------------
 # traces / comparison
