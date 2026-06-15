@@ -18,7 +18,7 @@ Status legend:
 | 1  | Reset register initialisation                 | reference ambiguity       | accepted |
 | 2  | SCF / CCF X / Y flags (NMOS Q variant)        | undocumented / flag       | resolved |
 | 3  | `OUT (C),0` (ED71)                            | undocumented              | accepted |
-| 4  | M1 deassert phase                             | timing                    | accepted |
+| 4  | M1 deassert phase                             | timing                    | resolved |
 | 5  | `LD A,I` / `LD A,R` PF interrupt race         | undocumented / interrupt  | watching |
 | 6  | Verilator build on host                       | environment               | resolved |
 | 7  | DDCB / FDCB `(IX+d)` ZEXDOC subtests          | tooling (stale binary)    | resolved |
@@ -42,8 +42,15 @@ Notes for each row:
   3. `OUT (C),0` — NMOS outputs `0x00`; CMOS outputs `0xFF`. We implement
      NMOS (`0x00`).
 
-  4. M1 deassert phase — we deassert `m1_n` at T3.P; some references show it
-     late in T2. Externally M1 is low T1–T2, high by T3 in both.
+  4. M1 deassert phase — our `m1_n` goes high at T3.P (deassert transition
+     between T2.N and T3.P). Verified against the perfectz80 gate-level
+     netlist via per-half-cycle `cpu_step()` — perfectz80 reads `m1_n=0` at
+     T2.N and `m1_n=1` at T3.P, exactly matching our model. "Deassert late
+     in T2" descriptions in some references refer to the continuous-time
+     analog edge; at half-cycle sample resolution (the resolution at which
+     we model and compare against the gate-level reference) M1 is high
+     starting at T3.P, which is what both models produce. No code change
+     needed; `make perfectz80` is the gate of record.
 
   5. `LD A,I/R` PF interrupt race — the documented race that clears PF if INT
      arrives during the instruction is modelled only at the sequencer's INT

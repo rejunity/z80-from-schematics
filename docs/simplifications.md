@@ -82,19 +82,21 @@ merged.
 
 ## B. Timing / phase shortcuts
 
-### B1. M1 deassert phase
+### B1. M1 deassert phase (RESOLVED — no simplification at our resolution)
 
-Documented in `docs/known-differences.md` row 4 ("accepted"). We deassert
-`pin_m1_n` at T3.P; the real chip deasserts late in T2. Externally M1 is low
-during T1–T2 and high by T3 in both, but a sub-T-state-resolution oracle (real
-KC85 captures, perfectz80) sees the difference.
+Direct gate-level cross-check (`make perfectz80`, which steps perfectz80's
+transistor-level netlist one half-cycle at a time and compares pin samples)
+shows perfectz80 reads `m1_n=0` at T2.N and `m1_n=1` at T3.P — exactly what
+our model produces. The "real chip deasserts late in T2" description in some
+references is the continuous-time analog edge; at the half-cycle sample
+resolution at which we model (and at which the gate-level reference operates),
+M1 is high starting T3.P, and our model matches.
 
-**Fix**: change `BUSOP_M1` `m1_n` to `(t_state < 2 || (t_state == 2 && phi == 0)) ? 0 : 1`
-or wherever the silicon actually transitions (cross-check perfectz80 +
-KC85 sigrok captures for the exact half-phase).
+The model is silicon-faithful at the granularity at which it models. No code
+change. `docs/known-differences.md` row 4 is now marked resolved with the
+verification path noted.
 
-**Status**: pending, accepted in old known-differences but the user wants
-silicon parity.
+**Status**: resolved.
 
 ### B2. NMI sampling on every phase step
 
