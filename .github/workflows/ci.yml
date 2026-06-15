@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name != 'schedule'  # nightly fires zex jobs only
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install C toolchain
         run: |
           sudo apt-get update
@@ -56,7 +56,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name != 'schedule'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install C + iverilog
         run: |
           sudo apt-get update
@@ -72,7 +72,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name != 'schedule'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install C + iverilog + Verilator
         run: |
           sudo apt-get update
@@ -100,7 +100,7 @@ jobs:
       || github.event_name == 'workflow_dispatch'
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install C toolchain
         run: |
           sudo apt-get update
@@ -118,7 +118,7 @@ jobs:
           fi
       - name: Upload ZEXDOC log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: zexdoc-log
           path: zexdoc.log
@@ -133,7 +133,7 @@ jobs:
       || github.event_name == 'workflow_dispatch'
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install C toolchain
         run: |
           sudo apt-get update
@@ -151,7 +151,7 @@ jobs:
           fi
       - name: Upload ZEXALL log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: zexall-log
           path: zexall.log
