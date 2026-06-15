@@ -2,6 +2,10 @@
    model. Reads tests/fuse/tests.in (~1356 cases) and tests/fuse/tests.expected,
    compares final state (regs+IFFs+IM+HALTED+T-states+memory) per case.
    Per-cycle bus-event verification (the MC/MR/MW lines) is deferred. */
+/* Expose clock_gettime / CLOCK_MONOTONIC / struct timespec from <time.h>:
+   Linux glibc hides POSIX.1-2008 extensions at -std=c99 unless asked;
+   macOS libc exposes them unconditionally. */
+#define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -198,7 +202,8 @@ int main(int argc, char** argv) {
         }
     }
     clock_gettime(CLOCK_MONOTONIC, &t1);
-    double secs = (t1.tv_sec-t0.tv_sec) + (t1.tv_nsec-t0.tv_nsec)/1e9;
+    double secs = (double)(t1.tv_sec - t0.tv_sec)
+                + (double)(t1.tv_nsec - t0.tv_nsec) / 1e9;
 
     printf("=== FUSE z80-test (final-state mode) ===\n");
     printf("%d tests: %d PASS, %d FAIL  (%.2f s)\n", ntotal, npass, nfail, secs);

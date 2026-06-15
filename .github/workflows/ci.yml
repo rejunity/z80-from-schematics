@@ -1,0 +1,192 @@
+name: CI
+
+# Every push and every PR fires the fast tier (c-tests, rtl-tests,
+# parity-tests). PRs to main, a nightly cron, and manual dispatch
+# additionally fire the slow ZEX jobs (zexdoc + zexall in parallel).
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main, master]
+  schedule:
+    - cron: '0 4 * * *'        # 04:00 UTC daily
+  workflow_dispatch: {}
+
+# Cancel stale runs of the same branch/PR when a newer push lands —
+# avoids burning minutes on commits the user has already superseded.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # =====================================================================
+  # FAST TIER — runs on every push + every PR.
+  # Three parallel jobs split by tool surface, each installing only what
+  # it needs.
+  # =====================================================================
+
+  c-tests:
+    name: C model (ctest + FUSE + silicon + lockstep)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install C toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential python3
+      - name: C unit tests (test_alu/block/cb/ddcb/ddfd/ed/exec/flags/int/pla)
+        run: make ctest
+      - name: FUSE / Cringle 1356 cases through C model
+        run: make fuse
+      - name: Real-silicon T-state oracle (sigrok KC85 capture)
+        run: make silicon_cycles
+      - name: Real-silicon sub-T-state timing (sigrok 20 MHz capture)
+        run: make silicon_async
+      - name: 4-way lockstep on ZEXDOC3 (mine + superzazu + chips + suzukiplan)
+        run: |
+          make tracegen
+          c++ -std=gnu++17 -O2 -w -Iscripts -Icmodel \
+            scripts/lockstep_quad.c build/libz80.a -o build/bin/lockstep_quad
+          build/bin/lockstep_quad tests/zex/zexdoc3.com 20000000
+
+  rtl-tests:
+    name: RTL (iverilog elaboration + FUSE through RTL)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install C + iverilog
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential python3 iverilog
+      - name: RTL elaboration smoke (iverilog)
+        run: make rtl
+      - name: FUSE / Cringle 1356 cases through iverilog RTL
+        run: make fuse_rtl
+
+  parity-tests:
+    name: Parity (C vs iverilog vs Verilator + perfectz80)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install C + iverilog + Verilator
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential python3 iverilog verilator
+      - name: Build Verilator sim (sim_z80) so compare actually exercises it
+        run: make verilator
+      - name: C vs iverilog vs Verilator parity (8 trace programs)
+        run: make compare
+      - name: C model vs perfectz80 gate-level netlist (signal-timing)
+        run: make perfectz80
+
+  # =====================================================================
+  # ZEX TIER (C model) — runs on every event, including every push.
+  # ZEXDOC and ZEXALL are independent jobs so they run in parallel
+  # (~18 + 19 min serial -> ~19 min parallel wall clock). Neither
+  # depends on the fast tier — each has its own self-contained build
+  # (no iverilog/verilator needed).
+  # =====================================================================
+
+  zexdoc:
+    name: ZEXDOC (~18 min via C model)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install C toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential python3
+      - name: Run ZEXDOC and fail on any ERROR line
+        run: |
+          make zexrunner
+          set -o pipefail
+          # stdbuf -oL forces line buffering on the zexrunner pipe so each
+          # Cringle "<test> ...  OK" line streams to the live log as soon
+          # as it's emitted — without this glibc block-buffers stdout when
+          # not a TTY and you only see output after the ~18 min run ends.
+          stdbuf -oL build/bin/zexrunner tests/zex/zexdoc.com 6000000000 2>&1 \
+            | stdbuf -oL tr -d '\r' | tee zexdoc.log
+          if grep -q ERROR zexdoc.log; then
+            echo "::error::ZEXDOC reported ERROR — see lines above"
+            exit 1
+          fi
+      - name: Upload ZEXDOC log
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: zexdoc-log
+          path: zexdoc.log
+          retention-days: 14
+
+  zexall:
+    name: ZEXALL (~19 min via C model)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install C toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential python3
+      - name: Run ZEXALL and fail on any ERROR line
+        run: |
+          make zexrunner
+          set -o pipefail
+          stdbuf -oL build/bin/zexrunner tests/zex/zexall.com 12000000000 2>&1 \
+            | stdbuf -oL tr -d '\r' | tee zexall.log
+          if grep -q ERROR zexall.log; then
+            echo "::error::ZEXALL reported ERROR — see lines above"
+            exit 1
+          fi
+      - name: Upload ZEXALL log
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: zexall-log
+          path: zexall.log
+          retention-days: 14
+
+  # =====================================================================
+  # RTL ZEXALL via Verilator — apples-to-apples with the C-side zexall,
+  # but every cycle simulated at gate-level-equivalent fidelity. Verilator
+  # is ~20x slower than the C model, so this is gated to push-to-main /
+  # nightly cron / manual dispatch (a few-hours-of-wall-clock budget),
+  # not every-branch push.
+  # =====================================================================
+
+  zexall-rtl:
+    name: ZEXALL via Verilator RTL (~3-5 h)
+    runs-on: ubuntu-latest
+    if: >-
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'))
+      || github.event_name == 'schedule'
+      || github.event_name == 'workflow_dispatch'
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install C + Verilator
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential python3 verilator
+      - name: Run ZEXALL through Verilated RTL and fail on any ERROR line
+        run: |
+          set -o pipefail
+          stdbuf -oL make zexall_rtl 2>&1 | stdbuf -oL tr -d '\r' | tee zexall_rtl.log
+          if grep -q ERROR zexall_rtl.log; then
+            echo "::error::ZEXALL through Verilator RTL reported ERROR — see lines above"
+            exit 1
+          fi
+      - name: Upload ZEXALL-RTL log
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: zexall-rtl-log
+          path: zexall_rtl.log
+          retention-days: 14

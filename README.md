@@ -1,5 +1,7 @@
 # RZ80 — Z80 ready for FPGA/ASIC, but also runs in C
 
+[![CI](https://github.com/rejunity/z80-from-schematics/actions/workflows/ci.yml/badge.svg)](https://github.com/rejunity/z80-from-schematics/actions/workflows/ci.yml)
+
 A reverse-engineered, schematic-faithful Z80-compatible CPU core, implemented in
 parallel as a **C99 hardware-like model** and a **Verilog-2001 RTL core**.
 

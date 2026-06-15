@@ -513,8 +513,11 @@ static void z80_exec_step(z80_t *c)
     case EXEC_JP_CC:
         if (m == 1) z80_start_mcycle(c, BUSOP_MRD, z80_pc_inc(c), 0, 0);
         else if (m == 2) { c->tmpl = RB; z80_start_mcycle(c, BUSOP_MRD, z80_pc_inc(c), 0, 0); }
-        else { uint16_t nn = z80_pair_hi_lo(RB, c->tmpl); c->rf[RFP_WZ] = nn;
-               if (z80_cc_true(z80_F(c), ctl->cc)) z80_setPC(c, nn); finish(c); }
+        else {
+            uint16_t nn = z80_pair_hi_lo(RB, c->tmpl); c->rf[RFP_WZ] = nn;
+            if (z80_cc_true(z80_F(c), ctl->cc)) z80_setPC(c, nn);
+            finish(c);
+        }
         break;
     case EXEC_LD_A_NN:
         if (m == 1) z80_start_mcycle(c, BUSOP_MRD, z80_pc_inc(c), 0, 0);

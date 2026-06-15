@@ -44,7 +44,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
-.PHONY: all cmodel ctest rtl iverilog verilator traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 basicrunner basic tinybasic
+.PHONY: all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 basicrunner basic tinybasic
 
 all: cmodel ctest
 
@@ -104,7 +104,9 @@ fuse: fuse_runner
 
 # FUSE through the RTL (iverilog). Generates tb_fuse.v from tests.in, builds
 # with iverilog, runs vvp, diffs results against tests.expected.
-fuse_rtl:
+# Depends on `dirs` so the build/ output directory exists on a fresh checkout
+# (the compare_fuse_rtl.py driver writes build/tb_fuse.vvp).
+fuse_rtl: dirs
 	@$(PYTHON) $(SCRIPTS)/compare_fuse_rtl.py
 
 # Real-silicon T-state validation against the sigrok KC85/4 logic-analyzer
@@ -173,10 +175,48 @@ verilator: dirs
 	  exit 0; \
 	fi; \
 	echo "== building verilator sim =="; \
-	$(VERILATOR) --cc --exe --build -j 0 -Wall -Wno-fatal -Wno-WIDTH -Wno-CASEINCOMPLETE \
+	$(VERILATOR) --cc --exe --build -j 0 -Wall \
+	  -Wno-fatal -Wno-WIDTH -Wno-CASEINCOMPLETE -Wno-UNUSEDSIGNAL \
 	  --Mdir $(BUILD)/obj_dir --top-module z80_core \
-	  -I$(RTL) $(RTL_SRCS) $(TESTS)/verilator/sim_main.cpp -o sim_z80 && \
+	  -I$(RTL) $(RTL_SRCS) $(abspath $(TESTS)/verilator/sim_main.cpp) -o sim_z80 && \
 	echo "Built $(BUILD)/obj_dir/sim_z80"
+
+# -Wno-UNUSEDSIGNAL above silences a recurring "wide compute, only carry
+# bit consumed" pattern (rtl/z80_alu.v lo_add/lo_sub[3:0]; rtl/z80_core.v
+# add12/r13/bk/bhc; rtl/z80_timing.v m_len) — those wires are declared
+# at their full width to make the silicon-faithful structural narrative
+# visible (the chip's wide adder produces both sum and carry; we route
+# only the carry into HF). The carry-only consumption is correct, not a
+# bug — but Verilator flags it. Will be revisited when the bus-segment
+# refactor (E1) introduces explicit named taps.
+
+# ZEX runner driven through the Verilated RTL — apples-to-apples with the C
+# zexrunner but every cycle simulated at gate-level-equivalent fidelity. Same
+# C++17 self-check as `verilator:` so the macOS dev box skips gracefully.
+# The .cpp source MUST be an absolute path: Verilator 5.020 (Ubuntu 24.04 apt)
+# leaves the cpp path as-given in the inner Makefile rule, which then fails
+# because the inner make runs from inside --Mdir. Verilator 5.042 (Homebrew)
+# rewrites it to "../../..." automatically. abspath sidesteps the difference.
+verilator_zex: dirs
+	@if [ ! -f $(TESTS)/verilator/sim_zex.cpp ]; then echo "sim_zex.cpp not present."; exit 0; fi; \
+	printf '#include <cstdio>\nint main(){return 0;}\n' > $(BUILD)/.cxxcheck.cpp; \
+	if ! c++ -std=gnu++17 -c $(BUILD)/.cxxcheck.cpp -o $(BUILD)/.cxxcheck.o >/dev/null 2>&1; then \
+	  echo "SKIP verilator_zex: host C++17 toolchain cannot compile libc++ headers."; \
+	  exit 0; \
+	fi; \
+	echo "== building verilator sim_zex =="; \
+	$(VERILATOR) --cc --exe --build -j 0 -O3 -Wall \
+	  -Wno-fatal -Wno-WIDTH -Wno-CASEINCOMPLETE -Wno-UNUSEDSIGNAL \
+	  --Mdir $(BUILD)/obj_dir_zex --top-module z80_core \
+	  -I$(RTL) $(RTL_SRCS) $(abspath $(TESTS)/verilator/sim_zex.cpp) -o sim_zex && \
+	echo "Built $(BUILD)/obj_dir_zex/sim_zex"
+
+# Run ZEXALL through the Verilated RTL. sim_zex prints the same Cringle
+# OK/ERROR per-subtest lines as the C zexrunner (via BDOS console out).
+# Verilator is ~20x slower than the C model; ZEXALL takes several hours
+# of wall clock — gate to CI's main / nightly / dispatch only.
+zexall_rtl: verilator_zex
+	@$(BUILD)/obj_dir_zex/sim_zex tests/zex/zexall.com 12000000000
 
 # ----------------------------------------------------------------------------
 # traces / comparison
