@@ -52,13 +52,11 @@ int main(int argc, char** argv) {
 
     long long phases = 0, instr = 0;
     bool prev_m1_n = true;
+    uint16_t prev_pc_at_m1 = 0xFFFF;  // PC observed at the last M1 edge
 
     auto t0 = std::chrono::steady_clock::now();
 
     while (instr < max_instr) {
-        uint16_t pc = R->z80_core__DOT__rf[11];
-        if (pc == 0) break;
-        if (pc == 5) bdos(t, R);
         // one phase
         t->clk = !t->clk; t->eval();
         if (!t->mreq_n && !t->wr_n)      mem[t->addr & 0xFFFF] = t->data_out;
@@ -67,8 +65,18 @@ int main(int argc, char** argv) {
         else                              t->data_in = 0;
         phases++;
         // detect new instruction: m1_n falling edge (1->0) marks the start of
-        // the next M1 fetch; one such edge per executed instruction.
-        if (prev_m1_n && !t->m1_n) instr++;
+        // the next M1 fetch. Sample PC *after* eval so we see the PC the
+        // model latched into the M1 address bus for this fetch.
+        if (prev_m1_n && !t->m1_n) {
+            instr++;
+            uint16_t pc = R->z80_core__DOT__rf[11];
+            if (pc == 0) break;                       // exit trap (RET to 0x0000)
+            // Service BDOS once per execution of the RET at 0x0005, not once
+            // per phase that happens to sample PC==5 (which would print the
+            // string 3-6 times — one per T-state of the RET fetch+decode).
+            if (pc == 5 && prev_pc_at_m1 != 5) bdos(t, R);
+            prev_pc_at_m1 = pc;
+        }
         prev_m1_n = t->m1_n;
     }
     auto t1 = std::chrono::steady_clock::now();

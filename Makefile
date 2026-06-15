@@ -44,7 +44,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
-.PHONY: all cmodel ctest rtl iverilog verilator traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 basicrunner basic tinybasic
+.PHONY: all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 basicrunner basic tinybasic
 
 all: cmodel ctest
 
@@ -179,6 +179,29 @@ verilator: dirs
 	  --Mdir $(BUILD)/obj_dir --top-module z80_core \
 	  -I$(RTL) $(RTL_SRCS) $(TESTS)/verilator/sim_main.cpp -o sim_z80 && \
 	echo "Built $(BUILD)/obj_dir/sim_z80"
+
+# ZEX runner driven through the Verilated RTL — apples-to-apples with the C
+# zexrunner but every cycle simulated at gate-level-equivalent fidelity. Same
+# C++17 self-check as `verilator:` so the macOS dev box skips gracefully.
+verilator_zex: dirs
+	@if [ ! -f $(TESTS)/verilator/sim_zex.cpp ]; then echo "sim_zex.cpp not present."; exit 0; fi; \
+	printf '#include <cstdio>\nint main(){return 0;}\n' > $(BUILD)/.cxxcheck.cpp; \
+	if ! c++ -std=gnu++17 -c $(BUILD)/.cxxcheck.cpp -o $(BUILD)/.cxxcheck.o >/dev/null 2>&1; then \
+	  echo "SKIP verilator_zex: host C++17 toolchain cannot compile libc++ headers."; \
+	  exit 0; \
+	fi; \
+	echo "== building verilator sim_zex =="; \
+	$(VERILATOR) --cc --exe --build -j 0 -O3 -Wall -Wno-fatal -Wno-WIDTH -Wno-CASEINCOMPLETE \
+	  --Mdir $(BUILD)/obj_dir_zex --top-module z80_core \
+	  -I$(RTL) $(RTL_SRCS) $(TESTS)/verilator/sim_zex.cpp -o sim_zex && \
+	echo "Built $(BUILD)/obj_dir_zex/sim_zex"
+
+# Run ZEXALL through the Verilated RTL. sim_zex prints the same Cringle
+# OK/ERROR per-subtest lines as the C zexrunner (via BDOS console out).
+# Verilator is ~20x slower than the C model; ZEXALL takes several hours
+# of wall clock — gate to CI's main / nightly / dispatch only.
+zexall_rtl: verilator_zex
+	@$(BUILD)/obj_dir_zex/sim_zex tests/zex/zexall.com 12000000000
 
 # ----------------------------------------------------------------------------
 # traces / comparison

@@ -28,7 +28,6 @@ jobs:
   c-tests:
     name: C model (ctest + FUSE + silicon + lockstep)
     runs-on: ubuntu-latest
-    if: github.event_name != 'schedule'  # nightly fires zex jobs only
     steps:
       - uses: actions/checkout@v5
       - name: Install C toolchain
@@ -54,7 +53,6 @@ jobs:
   rtl-tests:
     name: RTL (iverilog elaboration + FUSE through RTL)
     runs-on: ubuntu-latest
-    if: github.event_name != 'schedule'
     steps:
       - uses: actions/checkout@v5
       - name: Install C + iverilog
@@ -70,7 +68,6 @@ jobs:
   parity-tests:
     name: Parity (C vs iverilog vs Verilator + perfectz80)
     runs-on: ubuntu-latest
-    if: github.event_name != 'schedule'
     steps:
       - uses: actions/checkout@v5
       - name: Install C + iverilog + Verilator
@@ -84,20 +81,16 @@ jobs:
         run: make perfectz80
 
   # =====================================================================
-  # EXTENDED TIER — runs on PRs to main, nightly cron, manual dispatch.
-  # ZEXDOC and ZEXALL each run as their own job so they execute in
-  # parallel instead of sequentially (~18 + 19 min serial -> ~19 min
-  # parallel wall clock). Neither depends on the fast tier — they have
-  # their own self-contained build (no iverilog/verilator needed).
+  # ZEX TIER (C model) — runs on every event, including every push.
+  # ZEXDOC and ZEXALL are independent jobs so they run in parallel
+  # (~18 + 19 min serial -> ~19 min parallel wall clock). Neither
+  # depends on the fast tier — each has its own self-contained build
+  # (no iverilog/verilator needed).
   # =====================================================================
 
   zexdoc:
     name: ZEXDOC (~18 min via C model)
     runs-on: ubuntu-latest
-    if: >-
-      (github.event_name == 'pull_request' && (github.base_ref == 'main' || github.base_ref == 'master'))
-      || github.event_name == 'schedule'
-      || github.event_name == 'workflow_dispatch'
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
@@ -127,10 +120,6 @@ jobs:
   zexall:
     name: ZEXALL (~19 min via C model)
     runs-on: ubuntu-latest
-    if: >-
-      (github.event_name == 'pull_request' && (github.base_ref == 'main' || github.base_ref == 'master'))
-      || github.event_name == 'schedule'
-      || github.event_name == 'workflow_dispatch'
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
@@ -155,4 +144,43 @@ jobs:
         with:
           name: zexall-log
           path: zexall.log
+          retention-days: 14
+
+  # =====================================================================
+  # RTL ZEXALL via Verilator — apples-to-apples with the C-side zexall,
+  # but every cycle simulated at gate-level-equivalent fidelity. Verilator
+  # is ~20x slower than the C model, so this is gated to push-to-main /
+  # nightly cron / manual dispatch (a few-hours-of-wall-clock budget),
+  # not every-branch push.
+  # =====================================================================
+
+  zexall-rtl:
+    name: ZEXALL via Verilator RTL (~3-5 h)
+    runs-on: ubuntu-latest
+    if: >-
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'))
+      || github.event_name == 'schedule'
+      || github.event_name == 'workflow_dispatch'
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install C + Verilator
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential python3 verilator
+      - name: Run ZEXALL through Verilated RTL and fail on any ERROR line
+        run: |
+          set -o pipefail
+          make zexall_rtl 2>&1 | tr -d '\r' | tee zexall_rtl.log
+          if grep -q ERROR zexall_rtl.log; then
+            echo "::error::ZEXALL through Verilator RTL reported ERROR — see lines above"
+            exit 1
+          fi
+      - name: Upload ZEXALL-RTL log
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: zexall-rtl-log
+          path: zexall_rtl.log
           retention-days: 14
