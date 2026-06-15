@@ -1,0 +1,4 @@
+# Reach HALT around phase 8-10 then pulse NMI to exit; window 35..37 lets
+# the perfectz80 / our model both observe the HALT-loop-then-NMI sequence.
+35  nmi  0
+37  nmi  1

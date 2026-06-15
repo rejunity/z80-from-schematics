@@ -1,0 +1,6 @@
+# LD A,(nn) starts: M1 fetch (4 T = 8 phases), then 2 immediate-byte MRDs,
+# then the (nn) MRD. The (nn) MRD's T2 lands somewhere around phase 28-32.
+# Pulse wait_n low during that window and release 4 phases later — should
+# force the model to insert 2 Tw states (one per .N sample held low).
+30  wait  0
+38  wait  1

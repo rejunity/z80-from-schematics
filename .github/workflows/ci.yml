@@ -125,6 +125,12 @@ jobs:
         run: make compare
       - name: C model vs perfectz80 gate-level netlist (signal-timing)
         run: make perfectz80
+      - name: Pin-scenario programs vs perfectz80 (INFORMATIONAL)
+        # New trace programs (prog9..prog11) that drive INT / NMI / WAIT via
+        # the .events sidecar. Currently surface real silicon-faithfulness
+        # divergences vs gate-level — the make target is informational and
+        # exits 0 even on divergences. CI shows the findings without going red.
+        run: make pin_scenarios
 
   # =====================================================================
   # ZEX TIER (C model) — runs on every event, including every push.

@@ -1,0 +1,3 @@
+# Pulse INT low at phase 50 (well past EI delay); release at phase 52.
+50  int  0
+52  int  1
