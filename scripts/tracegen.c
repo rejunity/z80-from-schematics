@@ -66,13 +66,25 @@ static void events_apply(z80_pins_t *p, int phase) {
 int main(int argc, char **argv)
 {
     if (argc < 3) {
-        fprintf(stderr, "usage: %s <prog.hex> <num_phases> [events_file]\n", argv[0]);
+        fprintf(stderr, "usage: %s <prog.hex> <num_phases> [nmi_phase | events_file]\n", argv[0]);
         return 2;
     }
     FILE *f = fopen(argv[1], "r");
     if (!f) { fprintf(stderr, "cannot open %s\n", argv[1]); return 2; }
     int phases = atoi(argv[2]);
-    const char *events_path = (argc > 3) ? argv[3] : NULL;
+    /* Back-compat with the old `[nmi_phase]` argv: if argv[3] is an
+       all-digits string, treat it as a single NMI pulse at that phase.
+       Otherwise it's an events sidecar path. scripts/compare_traces.py
+       still uses the integer form for prog8_nmi. */
+    const char *events_path = NULL;
+    int  nmi_phase   = -1;
+    if (argc > 3) {
+        const char *p = argv[3];
+        int all_digits = (*p != 0);
+        for (const char *q = p; *q; q++) if (*q < '0' || *q > '9') { all_digits = 0; break; }
+        if (all_digits) nmi_phase = atoi(p);
+        else            events_path = p;
+    }
 
     z80_system_t s;
     z80_sys_init(&s);
@@ -98,6 +110,10 @@ int main(int argc, char **argv)
 
     z80_trace_header(stdout);
     for (int i = 0; i < phases; i++) {
+        /* legacy NMI-phase shorthand kept side-by-side with the events
+           sidecar — if both are given the sidecar wins, but
+           compare_traces.py only ever passes one or the other. */
+        if (nmi_phase >= 0) s.cpu.pins.nmi_n = (i == nmi_phase) ? 0 : 1;
         events_apply(&s.cpu.pins, i);
         z80_sys_phase(&s);
         z80_trace_rec_t r;

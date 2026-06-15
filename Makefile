@@ -161,9 +161,9 @@ perfectz80: tracegen $(BIN)/perfectz80_runner
 # docs/audit-followups.md once a concrete fix lands.
 pin_scenarios: tracegen $(BIN)/perfectz80_runner
 	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py 200 \
-	  $(TESTS)/traces/prog9_inta_im1.hex \
-	  $(TESTS)/traces/prog10_halt_nmi.hex \
-	  $(TESTS)/traces/prog11_wait_mem.hex \
+	  $(TESTS)/traces/pin_scenarios/prog9_inta_im1.hex \
+	  $(TESTS)/traces/pin_scenarios/prog10_halt_nmi.hex \
+	  $(TESTS)/traces/pin_scenarios/prog11_wait_mem.hex \
 	  || echo "(pin_scenarios is informational; failures are expected silicon-faithfulness findings)"
 
 $(BIN)/perfectz80_runner: $(SCRIPTS)/perfectz80_runner.c $(SCRIPTS)/refs/perfectz80/perfectz80.c $(SCRIPTS)/refs/perfectz80/netlist_sim.c
