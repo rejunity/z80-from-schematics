@@ -938,7 +938,10 @@ static void z80_exec_step(z80_t *c)
 
 /* ---- timing-point predicates ---- */
 
-static bool is_wait_phase(const z80_t *c)
+/* The WAIT *sample edge* — the single phase per (T2 or any inserted Tw) at
+   which the silicon latches !wait_n. Memory: T2.N. I/O: the automatic Tw.N
+   (= t_state 3 in our IORD/IOWR which has m_len=4 and counts Tw as T3). */
+static bool is_wait_sample_phase(const z80_t *c)
 {
     if (c->phi != 1) return false;
     switch (c->bus_op) {
@@ -946,7 +949,7 @@ static bool is_wait_phase(const z80_t *c)
         case BUSOP_MRD:
         case BUSOP_MWR:  return c->t_state == 2;
         case BUSOP_IORD:
-        case BUSOP_IOWR: return c->t_state == 3; /* the automatic Tw */
+        case BUSOP_IOWR: return c->t_state == 3;
         default:         return false;
     }
 }
@@ -1090,7 +1093,7 @@ static void reset_state(z80_t *c)
     c->t_state = 1; c->phi = 0; c->m_cycle = 1;
     c->bus_op = BUSOP_M1; c->m_len = 4; c->m_addr = 0x0000;
     c->decoded = false; c->instr_done = false; c->ucode = 0;
-    c->phase_primed = false; c->stalled = false;
+    c->phase_primed = false; c->stalled = false; c->wait_sampled = false;
     c->q = 0; c->f_modified = false;
 
     c->pins.m1_n = c->pins.mreq_n = c->pins.iorq_n = 1;
@@ -1166,7 +1169,15 @@ void z80_phase_step(z80_t *c)
         advance(c);
     c->phase_primed = true;
 
-    c->stalled = is_wait_phase(c) && (c->pins.wait_n == 0);
+    /* WAIT sample + latch (UM0080). Sample only at the spec edge; outside
+       that single phase the latch falls to 0 so subsequent .N→.P advances
+       run normally. This is the silicon's behavior: each Tw is decided by
+       one falling-edge sample. */
+    if (is_wait_sample_phase(c))
+        c->wait_sampled = (c->pins.wait_n == 0);
+    else
+        c->wait_sampled = false;
+    c->stalled = c->wait_sampled;
 
     if (!c->stalled && is_latch_phase(c))
         do_latch(c);

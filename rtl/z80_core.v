@@ -136,11 +136,15 @@ module z80_core (
                       ((bus_op == `BUSOP_MRD)  && (t_state == 4'd3)) ||
                       ((bus_op == `BUSOP_IORD) && (t_state == 4'd4))
                     ) );
-    wire iswait  =  (phi == 1'b1) &&
+    // WAIT *sample edge* per Zilog UM0080: T2.N for memory cycles, the
+    // automatic Tw.N for I/O. Silicon latches !wait_n at this single
+    // phase per (T2 or inserted Tw) and inserts a Tw if asserted.
+    wire wait_sample_phase  =  (phi == 1'b1) &&
                   ( (((bus_op == `BUSOP_M1) || (bus_op == `BUSOP_MRD) ||
                       (bus_op == `BUSOP_MWR)) && (t_state == 4'd2)) ||
                     (((bus_op == `BUSOP_IORD) || (bus_op == `BUSOP_IOWR)) && (t_state == 4'd3)) );
-    wire stall   = iswait && (wait_n == 1'b0);
+    wire wait_sampled = wait_sample_phase && (wait_n == 1'b0);
+    wire stall = wait_sampled;  // hold current T-state as a Tw
     wire [7:0] rbyte = islatch ? data_in : tmp8;
 
     // ---- 8-bit register read ----

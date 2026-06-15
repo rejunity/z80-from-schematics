@@ -284,7 +284,16 @@ typedef struct {
     bool         instr_done;    /* set when the instruction completes        */
     bool         decoded;       /* opcode for this instr has been decoded    */
     bool         phase_primed;  /* false right after reset (skip 1st advance) */
-    bool         stalled;       /* wait detected at last .N sample            */
+    /* WAIT-state engine, per Zilog UM0080:
+       wait_sampled is set at the WAIT sample edge (T2.N for memory cycles,
+       Tw.N for I/O cycles and any inserted Tw). It captures !wait_n at
+       exactly that phase; advance() consults it at the .N→.P boundary
+       to decide whether to hold the current T-state as a Tw.
+       stalled = wait_sampled for the small window during which advance()
+       reads it; this is the same single-cycle latch the silicon WAIT
+       gate behaves as. */
+    bool         wait_sampled;
+    bool         stalled;
 
     uint64_t     cycle;         /* global half-step (phase) counter          */
     uint64_t     instr_count;   /* completed-instruction counter             */
