@@ -160,7 +160,7 @@ jobs:
   # =====================================================================
 
   librelane-netlist:
-    name: LibreLane gate-level sim vs perfectz80 (5 starter programs)
+    name: LibreLane gate-level sim vs perfectz80 (12 programs)
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -212,7 +212,7 @@ jobs:
       - name: Build gate-level iverilog testbench (sky130 cells)
         run: make iverilog_netlist
 
-      - name: Gate-level netlist vs perfectz80 (5 starter programs)
+      - name: Gate-level netlist vs perfectz80 (8 hand + 4 random = 12 programs)
         run: make perfectz80_netlist
 
       - name: Upload synthesised netlist artifact

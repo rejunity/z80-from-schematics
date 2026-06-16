@@ -231,22 +231,18 @@ sufficient for logical correctness.
 runs `vvp build/tb_z80_netlist.vvp +prog=<prog> +phases=<N>` and parses
 the same 14-column trace.
 
-### Step 6 — Starter program set
+### Step 6 — Program set
 
-Hold to **5 programs** for the first run to keep wall clock down:
+All 12 programs that the C and source-RTL legs run: 8 hand-crafted
+(`prog1.hex`..`prog8_nmi.hex`) + 4 seeded-random (`prog_rnd_01.hex`..
+`prog_rnd_04.hex`). 200 phases each. Gate-level iverilog is ~5-10×
+slower than RTL — so ~10-30 s per program. Total: under 7 min of sim
+after synthesis.
 
-  - `prog1.hex` — base set (LD, ALU, ADD HL,rp, HALT)
-  - `prog2.hex` — branch/control (DJNZ, CALL, JR, RET)
-  - `prog3_cb.hex` — CB-prefix rotates/shifts/BIT
-  - `prog4_ed.hex` — ED-prefix 16-bit ALU + IM
-  - `prog_rnd_01.hex` — one random-opcode program
-
-5 programs × 200 phases each. Gate-level iverilog is ~5-10× slower than
-RTL — so ~10-30 s per program. Total: under 3 min of sim after
-synthesis.
-
-Once that gate is green, expand to all 12 (8 hand + 4 random) and
-eventually pin-scenarios (once `.events` lands in the iverilog tb).
+The 5-program starter set (`prog1`, `prog2`, `prog3_cb`, `prog4_ed`,
+`prog_rnd_01`) confirmed control-pin parity locally — synthesis-time
+green — before expanding to the full 12. Pin-scenarios stay C-only
+until `.events` lands in the iverilog testbenches (separate followup).
 
 ### Step 7 — CI job (`librelane-netlist`)
 

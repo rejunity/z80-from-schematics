@@ -214,17 +214,13 @@ $(BUILD)/tb_z80_netlist.vvp: $(TESTS)/iverilog/tb_z80_netlist.v $(BUILD)/synth/z
 	    $$SKY130_V_DIR/sky130_fd_sc_hd.v && \
 	  echo "Built $@"
 
-# Gate-level netlist vs perfectz80. Starter set: 5 programs (4 hand +
-# 1 random); expand to all 12 once green. Pin-scenarios still go
-# through the C-only path until .events lands in the iverilog
-# testbenches (see docs/librelane-flow.md "What we don't do").
+# Gate-level netlist vs perfectz80. Default program set: 8 hand + 4
+# random = 12 programs (the script's default when called without
+# explicit paths). Pin-scenarios still go through the C-only path
+# until .events lands in the iverilog testbenches (see
+# docs/librelane-flow.md "What we don't do").
 perfectz80_netlist: iverilog_netlist $(BIN)/perfectz80_runner
-	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --rtl=netlist 200 \
-	  $(TESTS)/traces/prog1.hex \
-	  $(TESTS)/traces/prog2.hex \
-	  $(TESTS)/traces/prog3_cb.hex \
-	  $(TESTS)/traces/prog4_ed.hex \
-	  $(TESTS)/traces/prog_rnd_01.hex
+	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --rtl=netlist 200
 # =============================================================================
 
 
