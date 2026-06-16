@@ -274,17 +274,20 @@ jobs:
         # UDP primitives (sky130_fd_sc_hd__udp_dff$P etc.) as their DFF
         # storage elements — without UDP table support the cells become
         # empty modules and the gate-level Z80 doesn't store state.
-        #
-        # LibreLane's nix closure ships Verilator 5.044 which DOES handle
-        # UDP tables, so we use that (already on PATH from the prior
-        # `nix profile install`). Don't apt-install verilator — it would
-        # shadow the nix one via /usr/bin precedence.
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential python3
 
-      - name: Verify Verilator is the nix-provided 5.044+ (UDP-table capable)
+      - name: Install Verilator from nixpkgs (≥ 5.030, UDP-table capable)
+        # LibreLane's own `nix profile install github:librelane/librelane`
+        # does NOT put Verilator on PATH — librelane is a Python CLI that
+        # references its bundled tools by absolute /nix/store paths. We
+        # need a top-level Verilator on PATH explicitly. nixpkgs ships a
+        # current Verilator (5.030+) which handles UDP tables.
+        run: nix profile install nixpkgs#verilator
+
+      - name: Verify Verilator version (must be UDP-table capable)
         run: |
           which verilator
           verilator --version
