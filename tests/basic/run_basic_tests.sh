@@ -141,19 +141,12 @@ for s in "$ROOT"/tests/basic/scripts/nascom_*.in; do
   run_one "$name" "$NASCOM" "--autostart"
 done
 
-# Tiny BASIC is fast enough on the C model but Verilator at ~20x slower
-# pushes the 3-NASCOM + 1-Tiny suite past GitHub's job timeout. The
-# coverage Tiny adds beyond NASCOM is small (a different ACIA port map
-# at 0x00/0x01 — but the same code path through the model). Keep it on
-# C, skip on RTL.
-if [ "$MODE" != "rtl" ]; then
-  echo "-- Tiny BASIC 1K --"
-  for s in "$ROOT"/tests/basic/scripts/tiny_*.in; do
-    [ -e "$s" ] || continue
-    name=$(basename "$s" .in)
-    run_one "$name" "$TINY" ""
-  done
-fi
+echo "-- Tiny BASIC 1K --"
+for s in "$ROOT"/tests/basic/scripts/tiny_*.in; do
+  [ -e "$s" ] || continue
+  name=$(basename "$s" .in)
+  run_one "$name" "$TINY" ""
+done
 
 echo
 if [ "$fail" -eq 0 ]; then

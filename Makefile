@@ -192,8 +192,10 @@ tinybasic: basicrunner
 basic_c_tests: basicrunner
 	@$(TESTS)/basic/run_basic_tests.sh c
 
-# Same NASCOM subtests but driven through the Verilated RTL via sim_basic.
-# ~20x slower than basic_c_tests; Tiny is skipped (already covered on C).
+# Same subtests as basic_c_tests but driven through the Verilated RTL.
+# Verilator is ~20x slower per cycle than the C model, but the harness's
+# --exit-on sentinel handling keeps each subtest's actual sim work to
+# ~100-150K instructions — the suite finishes in seconds, not minutes.
 basic_rtl_tests: verilator_basic
 	@$(TESTS)/basic/run_basic_tests.sh rtl
 
