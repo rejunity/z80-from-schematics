@@ -239,10 +239,11 @@ jobs:
   librelane-basic-netlist:
     name: LibreLane gate-level BASIC (NASCOM 4.7c + Tiny BASIC)
     runs-on: ubuntu-latest
-    # TEMPORARILY runs on every push while we iterate on the gate-level
-    # Verilator build (sky130 cell-library / UDP / FUNCTIONAL flag tuning).
-    # Once green, re-gate to main + nightly + manual (heavy; ~10-15 min
-    # wall clock), matching the zexall-subset-rtl policy.
+    # Runs on every push. Measured wall clock on a warm-cache runner is
+    # ~9 min: nix install (~1 min) + Verilator gate-level build (~4 min)
+    # + 4 canned BASIC subtests on the synthesised netlist (~3 min). The
+    # synth output is cached on hash(rtl/*.v + librelane/config.json +
+    # run_synth.sh) so most pushes skip the ~3 min synthesis step.
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5

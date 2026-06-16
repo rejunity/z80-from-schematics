@@ -27,7 +27,7 @@ stack.
 | Gate-level vs perfectz80 (C model path)           | `tests/traces/`                | `make perfectz80`                        | ~10 s           | Per-half-cycle 7-pin parity + bus addr/data informational findings |
 | Gate-level vs perfectz80 (iverilog RTL path)      | `tests/traces/`                | `make perfectz80_rtl`                    | ~15 s           | Same diff but driving the iverilog RTL testbench (silicon-faithful leg) |
 | Gate-level vs perfectz80 (LibreLane synth path)   | `librelane/` + `tests/iverilog/tb_z80_netlist.v` | `make perfectz80_netlist` | ~5 min cold / ~1 min warm | yosys-synthesised sky130 gate-level netlist diffed against the Visual-Z80 gate-level netlist over all 12 trace programs (8 hand + 4 random) — the "ultimate test" |
-| Gate-level BASIC ROM (LibreLane synth path)       | `librelane/` + `tests/verilator/sim_basic.cpp`   | `make basic_netlist_tests` | ~10-15 min          | "Real software" — NASCOM BASIC 4.7c + Tiny BASIC running on the synthesised gates (Verilator + sky130 cells). CI: main + nightly + manual only. |
+| Gate-level BASIC ROM (LibreLane synth path)       | `librelane/` + `tests/verilator/sim_basic.cpp`   | `make basic_netlist_tests` | ~9 min (CI)         | "Real software" — NASCOM BASIC 4.7c + Tiny BASIC running on the synthesised gates (Verilator + sky130 cells). CI runs on every push. |
 | Pin-scenario programs vs perfectz80               | `tests/traces/pin_scenarios/`  | `make pin_scenarios`                     | ~15 s           | INT / NMI / WAIT / BUSREQ / RESET event-driven scenarios (informational) |
 | Real KC85 silicon sync capture                    | `tests/sigrok/`                | `make silicon_cycles`                    | ~1 s            | Per-opcode T-state count vs a real Z80 logic-analyzer capture |
 | Real KC85 silicon 20 MHz capture                  | `tests/sigrok/`                | `make silicon_async`                     | ~3 s            | Real CPU clock + sub-T-state pin-edge offsets |
@@ -250,8 +250,17 @@ ROM port and assert the expected output substrings appear, matching
 the `basic_rtl_tests` pattern. Catches synthesis-introduced bugs that
 take millions of cycles of ROM boot + interrupt-driven RX to manifest.
 Uses Verilator (gate-level Verilator is ~10-50× slower than source-RTL
-Verilator; ~10-15 min wall clock with the --exit-on sentinel).
-CI-gated to main + nightly + manual.
+Verilator; ~9 min total CI wall clock — Verilator build ~4 min + sim
+~3 min — with the --exit-on sentinel). Runs on every push.
+
+Verilator gotcha: this needs **Verilator ≥ 5.030** for Verilog-1995
+UDP-table parsing (sky130 FUNCTIONAL cells use UDPs like
+`sky130_fd_sc_hd__udp_dff$P` as their DFF primitives). Ubuntu 24.04's
+`apt install verilator` is 5.020 which lacks UDP support → black-boxed
+DFFs → broken sim. CI installs Verilator via `nix profile install
+nixpkgs#verilator`. Locally, a `nix profile install` of LibreLane gets
+you a compatible Verilator too, but you may need to ensure it's on
+PATH ahead of any system-installed Verilator.
 
 See [../docs/librelane-flow.md](../docs/librelane-flow.md) for the full
 plan, including the CI job, caching strategy, and risks/gotchas.
