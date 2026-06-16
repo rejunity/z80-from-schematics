@@ -213,6 +213,39 @@ jobs:
   # not every-branch push.
   # =====================================================================
 
+  zexall-subset-rtl:
+    name: ZEXALL 14-test subset via Verilator RTL (~15-25 min)
+    runs-on: ubuntu-latest
+    # The subset is the curated audit-focused 14-test slice of ZEXALL
+    # (LDIR/LDDR/CPIR/CPDR + DDCB variants + RRD/RLD + NEG + DAA/SCF/CCF
+    # + 16-bit ADC/SBC HL,rp). 550M instr on C = ~86 s; Verilator at
+    # ~0.5 Minstr/s on ubuntu-latest = ~15-25 min wall clock. Fits on
+    # every push; timeout 50 min gives generous headroom.
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install C + Verilator
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential python3 verilator
+      - name: Run ZEXALL 14-test subset through Verilator RTL; fail on ERROR
+        run: |
+          set -o pipefail
+          stdbuf -oL make zexall_subset_rtl 2>&1 \
+            | stdbuf -oL tr -d '\r' | tee zexall_subset_rtl.log
+          if grep -q ERROR zexall_subset_rtl.log; then
+            echo "::error::ZEXALL subset through Verilator RTL reported ERROR — see lines above"
+            exit 1
+          fi
+      - name: Upload ZEXALL-subset-RTL log
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: zexall-subset-rtl-log
+          path: zexall_subset_rtl.log
+          retention-days: 14
+
   zexall-rtl:
     name: ZEXALL via Verilator RTL (~3-5 h)
     runs-on: ubuntu-latest

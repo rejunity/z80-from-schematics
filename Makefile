@@ -44,7 +44,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
-.PHONY: all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl verilator_basic traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 pin_scenarios basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests z80test_runner z80test
+.PHONY: all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 pin_scenarios basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests z80test_runner z80test
 
 all: cmodel ctest
 
@@ -270,6 +270,28 @@ verilator_zex: dirs
 # of wall clock — gate to CI's main / nightly / dispatch only.
 zexall_rtl: verilator_zex
 	@$(BUILD)/obj_dir_zex/sim_zex tests/zex/zexall.com 12000000000
+
+# Curated 14-test subset of ZEXALL chosen to fit comfortably under a
+# 45-50 min Verilator wall clock while exercising the instructions our
+# silicon-faithfulness audit has flagged as most error-prone (LDIR/
+# LDDR + variants, CPIR/CPDR, DDCB BIT/SET/RES/INC/DEC/SHF, RRD/RLD,
+# NEG, DAA/SCF/CCF Q-leak, 16-bit ADC/SBC HL,rp). C model runs the
+# subset in ~86 s / ~550 M instructions on the dev box, so Verilator
+# on ubuntu-latest (~0.5 Minstr/s) is roughly 15-25 min wall clock.
+#
+# The .com is generated from tests/zex/zexall.com by patching the
+# 67-entry test-pointer table at file offset 0x3A; everything else
+# (driver loop, BDOS shim, CRC tables, all 67 test data blocks)
+# stays in place. See scripts/zex_make_subset.py.
+tests/zex/zexall_subset.com: tests/zex/zexall.com scripts/zex_make_subset.py
+	@$(PYTHON) $(SCRIPTS)/zex_make_subset.py $< $@ \
+	  12 0 56 57 52 53 54 55 10 11 8 27 59 62
+
+zexall_subset_c: zexrunner tests/zex/zexall_subset.com
+	@$(BIN)/zexrunner tests/zex/zexall_subset.com 1000000000
+
+zexall_subset_rtl: verilator_zex tests/zex/zexall_subset.com
+	@$(BUILD)/obj_dir_zex/sim_zex tests/zex/zexall_subset.com 1000000000
 
 # BASIC ROM driver through the Verilated RTL (sim_basic). Builds the
 # Verilator harness analogously to verilator_zex. Same C++17 self-check
