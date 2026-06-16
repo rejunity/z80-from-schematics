@@ -27,6 +27,7 @@ stack.
 | Gate-level vs perfectz80 (C model path)           | `tests/traces/`                | `make perfectz80`                        | ~10 s           | Per-half-cycle 7-pin parity + bus addr/data informational findings |
 | Gate-level vs perfectz80 (iverilog RTL path)      | `tests/traces/`                | `make perfectz80_rtl`                    | ~15 s           | Same diff but driving the iverilog RTL testbench (silicon-faithful leg) |
 | Gate-level vs perfectz80 (LibreLane synth path)   | `librelane/` + `tests/iverilog/tb_z80_netlist.v` | `make perfectz80_netlist` | ~5 min cold / ~1 min warm | yosys-synthesised sky130 gate-level netlist diffed against the Visual-Z80 gate-level netlist over all 12 trace programs (8 hand + 4 random) — the "ultimate test" |
+| Gate-level BASIC ROM (LibreLane synth path)       | `librelane/` + `tests/verilator/sim_basic.cpp`   | `make basic_netlist_tests` | ~10-15 min          | "Real software" — NASCOM BASIC 4.7c + Tiny BASIC running on the synthesised gates (Verilator + sky130 cells). CI: main + nightly + manual only. |
 | Pin-scenario programs vs perfectz80               | `tests/traces/pin_scenarios/`  | `make pin_scenarios`                     | ~15 s           | INT / NMI / WAIT / BUSREQ / RESET event-driven scenarios (informational) |
 | Real KC85 silicon sync capture                    | `tests/sigrok/`                | `make silicon_cycles`                    | ~1 s            | Per-opcode T-state count vs a real Z80 logic-analyzer capture |
 | Real KC85 silicon 20 MHz capture                  | `tests/sigrok/`                | `make silicon_async`                     | ~3 s            | Real CPU clock + sub-T-state pin-edge offsets |
@@ -240,6 +241,17 @@ hand-crafted (`prog1.hex`..`prog8_nmi.hex`) + 4 seeded-random
 (`prog_rnd_01.hex`..`prog_rnd_04.hex`). 200 phases each. Pin-scenarios
 stay C-only until `.events` is wired into the iverilog testbenches
 (separate followup).
+
+**Gate-level BASIC** (`make basic_netlist_tests`) is a heavier
+companion test. Same synthesised netlist, but instead of 200-phase
+trace programs we run "real software" — NASCOM BASIC 4.7c cold-boots,
+prints "Ok", and we feed canned input scripts through the 68B50 ACIA
+ROM port and assert the expected output substrings appear, matching
+the `basic_rtl_tests` pattern. Catches synthesis-introduced bugs that
+take millions of cycles of ROM boot + interrupt-driven RX to manifest.
+Uses Verilator (gate-level Verilator is ~10-50× slower than source-RTL
+Verilator; ~10-15 min wall clock with the --exit-on sentinel).
+CI-gated to main + nightly + manual.
 
 See [../docs/librelane-flow.md](../docs/librelane-flow.md) for the full
 plan, including the CI job, caching strategy, and risks/gotchas.

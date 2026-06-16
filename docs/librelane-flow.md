@@ -346,9 +346,11 @@ flow.
   - `librelane/config.json` + `librelane/run_synth.py` — flow config.
   - `tests/iverilog/tb_z80_netlist.v` — gate-level testbench.
   - `Makefile` — new targets `synth`, `iverilog_netlist`,
-    `perfectz80_netlist`.
+    `perfectz80_netlist`, `verilator_basic_netlist`,
+    `basic_netlist_tests`.
   - `scripts/compare_signal_timing.py` — `--rtl=netlist` arm.
-  - `.github/workflows/ci.yml` — `librelane-netlist` job.
+  - `.github/workflows/ci.yml` — `librelane-netlist` job (every push)
+    + `librelane-basic-netlist` job (main + nightly + manual).
   - `tests/README.md` — new row + category section.
 
 Merge to `main` when the gate is green on the 5-program starter set.

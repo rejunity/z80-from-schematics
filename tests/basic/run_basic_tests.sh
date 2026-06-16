@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
-# Run NASCOM BASIC 4.7 + Tiny BASIC scripts through either the C model
-# (basicrunner) or the Verilated RTL (sim_basic) and verify expected
-# substrings appear in stdout. Exit 0 if all subtests pass; non-zero
-# (and a printed list of failures) otherwise.
+# Run NASCOM BASIC 4.7 + Tiny BASIC scripts through one of three Z80
+# backends:
+#   c        — the C model (basicrunner)
+#   rtl      — the Verilated source-RTL (sim_basic)
+#   netlist  — the Verilated LibreLane-synthesised sky130 gate-level
+#              netlist (sim_basic_netlist) — slow but the silicon-
+#              faithful gate of record for BASIC.
+# Verify expected substrings appear in stdout. Exit 0 if all subtests
+# pass; non-zero (and a printed list of failures) otherwise.
 #
-# Usage:  tests/basic/run_basic_tests.sh [c|rtl]   (default: c)
+# Usage:  tests/basic/run_basic_tests.sh [c|rtl|netlist]   (default: c)
 #
 # Each subtest:
 #   tests/basic/scripts/<name>.in     - lines fed to BASIC stdin
@@ -39,8 +44,16 @@ case "$MODE" in
       exit 2
     fi
     ;;
+  netlist)
+    BIN="$ROOT/build/obj_dir_basic_netlist/sim_basic_netlist"
+    SUITE_NAME="Verilator gate-level (sky130 / LibreLane)"
+    if [ ! -x "$BIN" ]; then
+      echo "FAIL: sim_basic_netlist not built at $BIN — run \`make verilator_basic_netlist\` first" >&2
+      exit 2
+    fi
+    ;;
   *)
-    echo "usage: $0 [c|rtl]" >&2
+    echo "usage: $0 [c|rtl|netlist]" >&2
     exit 2
     ;;
 esac

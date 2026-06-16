@@ -44,7 +44,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
-.PHONY: all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests z80test_runner z80test
+.PHONY: all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test
 
 all: cmodel ctest
 
@@ -221,6 +221,52 @@ $(BUILD)/tb_z80_netlist.vvp: $(TESTS)/iverilog/tb_z80_netlist.v $(BUILD)/synth/z
 # docs/librelane-flow.md "What we don't do").
 perfectz80_netlist: iverilog_netlist $(BIN)/perfectz80_runner
 	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --rtl=netlist 200
+
+# Gate-level BASIC. Same sim_basic.cpp testbench (68B50 ACIA, NASCOM /INT
+# wiring, --exit-on sentinel, etc.) but Verilator builds it against the
+# LibreLane-synthesised netlist + sky130 cells instead of source RTL.
+#
+# "Real software" running across millions of cycles of synthesised gates —
+# any ROM-boot regression that the rtl/ -> synth/ transformation
+# introduces (latches, glitches, async-reset folding) shows up here long
+# before it would on prog1..prog8 traces.
+#
+# Wall clock: gate-level Verilator is 10-50× slower than source-RTL
+# Verilator. With the --exit-on sentinel terminating each subtest soon
+# after its DONE marker prints, expect ~5-15 min total for the 4 canned
+# subtests vs ~2 s for the source-RTL leg.
+verilator_basic_netlist: synth dirs
+	@if [ ! -f $(TESTS)/verilator/sim_basic.cpp ]; then echo "sim_basic.cpp not present."; exit 0; fi; \
+	if [ ! -f $(BUILD)/synth/pdk_root.path ]; then \
+	  echo "verilator_basic_netlist: $(BUILD)/synth/pdk_root.path missing — run \`make synth\`"; exit 1; \
+	fi; \
+	printf '#include <cstdio>\nint main(){return 0;}\n' > $(BUILD)/.cxxcheck.cpp; \
+	if ! c++ -std=gnu++17 -c $(BUILD)/.cxxcheck.cpp -o $(BUILD)/.cxxcheck.o >/dev/null 2>&1; then \
+	  echo "SKIP verilator_basic_netlist: host C++17 toolchain cannot compile libc++ headers."; \
+	  exit 0; \
+	fi; \
+	PDK_ROOT=$$(cat $(BUILD)/synth/pdk_root.path); \
+	SKY130_V=$$PDK_ROOT/sky130A/libs.ref/sky130_fd_sc_hd/verilog; \
+	if [ ! -d "$$SKY130_V" ]; then \
+	  echo "verilator_basic_netlist: sky130 verilog not found at $$SKY130_V"; exit 1; \
+	fi; \
+	echo "== building verilator gate-level sim_basic_netlist (sky130) =="; \
+	$(VERILATOR) --cc --exe --build -j 0 -O3 -Wall \
+	  -Wno-fatal -Wno-WIDTH -Wno-CASEINCOMPLETE -Wno-UNUSEDSIGNAL \
+	  -Wno-MULTITOP -Wno-MODDUP -Wno-PINMISSING -Wno-TIMESCALEMOD \
+	  --Mdir $(BUILD)/obj_dir_basic_netlist --top-module z80_core \
+	  -DFUNCTIONAL \
+	  -I$$SKY130_V \
+	  $$SKY130_V/primitives.v $$SKY130_V/sky130_fd_sc_hd.v \
+	  $(BUILD)/synth/z80_core.nl.v \
+	  $(abspath $(TESTS)/verilator/sim_basic.cpp) -o sim_basic_netlist && \
+	echo "Built $(BUILD)/obj_dir_basic_netlist/sim_basic_netlist"
+
+# Run the canned BASIC subtests through the gate-level Verilator
+# binary. Same scripts as basic_rtl_tests, same sentinel-driven early
+# exit; just a different backend.
+basic_netlist_tests: verilator_basic_netlist
+	@$(TESTS)/basic/run_basic_tests.sh netlist
 # =============================================================================
 
 
