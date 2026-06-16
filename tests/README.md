@@ -308,33 +308,46 @@ Cringle's CRCs.
     legacy `+nmi=<phase>` is supported. The full `.events` sidecar
     (`int`/`nmi`/`wait`/`busreq`/`reset`) is NOT yet wired in — that's
     the gap that keeps `pin_scenarios` C-only.
+  - `tests/iverilog/tb_z80_netlist.v` — gate-level mirror of `tb_z80.v`,
+    used by `make perfectz80_netlist`. Instantiates the LibreLane-
+    synthesised netlist from `build/synth/z80_core.nl.v` and the sky130
+    cell-model Verilog library; same 14-column trace format.
   - `tests/iverilog/tb_fuse.v`  — testbench used by `make fuse_rtl`.
   - `tests/verilator/sim_main.cpp`  — main Verilator driver (mirror of `tb_z80.v`).
   - `tests/verilator/sim_zex.cpp`   — Verilator driver for `make zexall_subset_rtl`.
-  - `tests/verilator/sim_basic.cpp` — Verilator driver for `make basic_rtl_tests`
-    (68B50 ACIA emulation, `--exit-on` sentinel, NASCOM RX-interrupt
-    wiring).
+  - `tests/verilator/sim_basic.cpp` — Verilator driver for BOTH `make basic_rtl_tests`
+    (source-RTL) AND `make basic_netlist_tests` (gate-level netlist).
+    Same source compiled twice — the regfile-poke that pre-initialises
+    PC=0 / SP=0xFFFE is wrapped in `#ifndef NETLIST_BUILD` because the
+    synthesised regfile is flattened to individual sky130 DFFs and the
+    Verilator hierarchical array name disappears. The Makefile passes
+    `-CFLAGS -DNETLIST_BUILD` only on the gate-level build.
 
 
 ## CI footprint
 
-The `.github/workflows/ci.yml` workflow has five parallel jobs that
+The `.github/workflows/ci.yml` workflow has 11 parallel jobs that
 together exercise everything above:
 
-| Job                  | Triggers          | Includes |
-|----------------------|-------------------|----------|
-| `c-tests`            | every push        | `make ctest`, `make fuse`, `make silicon_cycles`, `make silicon_async`, 4-way lockstep |
-| `rtl-tests`          | every push        | `make rtl` (elaboration), `make fuse_rtl` |
-| `basic-c-tests`      | every push        | `make basic_c_tests` |
-| `basic-rtl-tests`    | every push        | `make basic_rtl_tests` |
-| `z80test`            | every push        | `make z80test` (~2 min) |
-| `parity-tests`       | every push        | `make compare`, `make perfectz80`, `make perfectz80_rtl`, `make pin_scenarios` |
-| `zexdoc`             | every push        | full ZEXDOC via C model (~18 min) |
-| `zexall`             | every push        | full ZEXALL via C model (~19 min) |
-| `zexall-subset-rtl`  | main + nightly    | 14-test ZEXALL slice via Verilator RTL (~17 min) |
+| Job                       | Triggers          | Includes |
+|---------------------------|-------------------|----------|
+| `c-tests`                 | every push        | `make ctest`, `make fuse`, `make silicon_cycles`, `make silicon_async`, 4-way lockstep |
+| `rtl-tests`               | every push        | `make rtl` (elaboration), `make fuse_rtl` |
+| `basic-c-tests`           | every push        | `make basic_c_tests` |
+| `basic-rtl-tests`         | every push        | `make basic_rtl_tests` |
+| `z80test`                 | every push        | `make z80test` (~2 min) |
+| `parity-tests`            | every push        | `make compare`, `make perfectz80`, `make perfectz80_rtl`, `make pin_scenarios` |
+| `librelane-netlist`       | every push        | `make synth` + `make perfectz80_netlist` — 12 trace programs through synthesised sky130 netlist vs perfectz80 (~3-5 min) |
+| `librelane-basic-netlist` | every push        | `make synth` + `make verilator_basic_netlist` + `make basic_netlist_tests` — NASCOM BASIC 4.7c + Tiny BASIC running on the synthesised gates (~9 min) |
+| `zexdoc`                  | every push        | full ZEXDOC via C model (~18 min) |
+| `zexall`                  | every push        | full ZEXALL via C model (~19 min) |
+| `zexall-subset-rtl`       | main + nightly    | 14-test ZEXALL slice via Verilator RTL (~17 min) |
 
 Branch-push builds skip the RTL ZEXALL leg; PR-to-main + cron + manual
-dispatch include it.
+dispatch include it. Both LibreLane jobs cache the synthesised netlist
+on `hashFiles('rtl/*.v', 'librelane/config.json', 'librelane/run_synth.sh')`,
+so most pushes skip the ~3 min synthesis step and reuse the cached
+`build/synth/z80_core.nl.v`.
 
 
 ## Forward-looking — what's not yet here
@@ -342,13 +355,23 @@ dispatch include it.
   - **A-Z80 as a second gate-level oracle**. Design sketch in
     [docs/ring3-az80-oracle.md](../docs/ring3-az80-oracle.md) — would
     cross-check perfectz80's Visual-Z80 netlist itself against an
-    independent schematic-driven Verilog Z80. Deferred until needed.
+    independent schematic-driven Verilog Z80. With LibreLane's
+    sky130-synthesised netlist now adding a third independent gate-
+    level reference, A-Z80 becomes less critical but still useful for
+    cross-validation. Deferred until needed.
   - **`.events` sidecar in the iverilog and Verilator testbenches**.
     Today only the C `tracegen` and `perfectz80_runner` consume the full
-    sidecar; the RTL testbenches only understand legacy `+nmi=<phase>`.
-    Plumbing it in is a one-liner per pin per harness — wires up
-    `nmi_n` / `int_n` / `wait_n` / `busreq_n` / `reset_n` to phase-driven
-    events.
+    sidecar; the RTL testbenches (including the gate-level
+    `tb_z80_netlist.v`) only understand legacy `+nmi=<phase>`. Plumbing
+    it in is a one-liner per pin per harness — wires up `nmi_n` /
+    `int_n` / `wait_n` / `busreq_n` / `reset_n` to phase-driven events.
+    Would unblock pin-scenarios on the LibreLane gate-level path.
+  - **Full LibreLane PnR + STA**. Currently we run synthesis only —
+    no floorplan / placement / routing / clock-tree / static timing
+    analysis. Going through the full ASIC flow would prove the design
+    closes timing on sky130 at a chosen frequency. Substantial CI
+    budget (~30-60 min per run); deferred until there's a tape-out
+    target.
   - **Woodster `Timing_Tests-48k_v1.0`** — third-party M-cycle-shape
     regression cited by MAME PR #11522. License unclear; to evaluate.
 
