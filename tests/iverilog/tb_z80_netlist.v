@@ -77,6 +77,8 @@ module tb_z80;
     always #1 clk = ~clk;
 
     integer i, phases, nmiph;
+    integer nmi_lo, nmi_hi, int_lo, int_hi, wait_lo, wait_hi;
+    integer busreq_lo, busreq_hi, reset_lo, reset_hi;
     reg [1023:0] progf;
 
     task dump;
@@ -89,6 +91,17 @@ module tb_z80;
         if (!$value$plusargs("prog=%s", progf)) progf = "prog.hex";
         if (!$value$plusargs("phases=%d", phases)) phases = 200;
         if (!$value$plusargs("nmi=%d", nmiph)) nmiph = -1;
+        // Per-pin lo/hi event phases — see tb_z80.v for the encoding.
+        if (!$value$plusargs("nmi_lo=%d",    nmi_lo))    nmi_lo    = -1;
+        if (!$value$plusargs("nmi_hi=%d",    nmi_hi))    nmi_hi    = -1;
+        if (!$value$plusargs("int_lo=%d",    int_lo))    int_lo    = -1;
+        if (!$value$plusargs("int_hi=%d",    int_hi))    int_hi    = -1;
+        if (!$value$plusargs("wait_lo=%d",   wait_lo))   wait_lo   = -1;
+        if (!$value$plusargs("wait_hi=%d",   wait_hi))   wait_hi   = -1;
+        if (!$value$plusargs("busreq_lo=%d", busreq_lo)) busreq_lo = -1;
+        if (!$value$plusargs("busreq_hi=%d", busreq_hi)) busreq_hi = -1;
+        if (!$value$plusargs("reset_lo=%d",  reset_lo))  reset_lo  = -1;
+        if (!$value$plusargs("reset_hi=%d",  reset_hi))  reset_hi  = -1;
         for (i = 0; i < 65536; i = i + 1) mem[i] = 8'h00;
         $readmemh(progf, mem);
 
@@ -96,11 +109,25 @@ module tb_z80;
         repeat (4) @(negedge clk);
         reset_n = 1'b1;
 
-        nmi_n = (0 == nmiph) ? 1'b0 : 1'b1;
+        nmi_n    = (0 == nmiph || 0 == nmi_lo) ? 1'b0 : 1'b1;
+        int_n    = (0 == int_lo)    ? 1'b0 : 1'b1;
+        wait_n   = (0 == wait_lo)   ? 1'b0 : 1'b1;
+        busreq_n = (0 == busreq_lo) ? 1'b0 : 1'b1;
+        if (0 == reset_lo) reset_n = 1'b0;
         dump;                                 // line 1 = reset state (T1.P)
         for (i = 1; i < phases; i = i + 1) begin
             @(negedge clk);
-            nmi_n = (i == nmiph) ? 1'b0 : 1'b1;
+            if (i == nmi_hi)    nmi_n    = 1'b1;
+            if (i == nmiph || i == nmi_lo) nmi_n = 1'b0;
+            if (i == int_hi)    int_n    = 1'b1;
+            if (i == int_lo)    int_n    = 1'b0;
+            if (i == wait_hi)   wait_n   = 1'b1;
+            if (i == wait_lo)   wait_n   = 1'b0;
+            if (i == busreq_hi) busreq_n = 1'b1;
+            if (i == busreq_lo) busreq_n = 1'b0;
+            if (i == reset_hi)  reset_n  = 1'b1;
+            if (i == reset_lo)  reset_n  = 1'b0;
+            if (nmiph >= 0 && i != nmiph && nmi_lo < 0 && nmi_hi < 0) nmi_n = 1'b1;
             dump;
         end
         $finish;

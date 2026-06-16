@@ -151,29 +151,65 @@ def parse_pz80(text):
         rows.append(dict(zip(["phase","addr","data_o","data_i","mreq","iorq","rd","wr","m1","rfsh","halt"], p)))
     return rows
 
+def parse_events_to_plusargs(events_path):
+    """Parse a .events sidecar (`<phase> <pin> <0|1>` per line) into
+    per-pin plusargs `+<pin>_lo=N +<pin>_hi=M` consumed by the iverilog
+    and Verilator testbenches. Each pin can have at most one lo and one
+    hi event in the current sidecar format; pin-scenarios that need
+    richer event sequences would need a richer encoding."""
+    if not events_path or not os.path.exists(events_path):
+        return []
+    lo = {}
+    hi = {}
+    with open(events_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split()
+            if len(parts) != 3:
+                continue
+            phase, pin, val = parts[0], parts[1], parts[2]
+            try:
+                ph = int(phase)
+            except ValueError:
+                continue
+            if val == "0":
+                lo[pin] = ph
+            elif val == "1":
+                hi[pin] = ph
+    args = []
+    for pin in ("nmi", "int", "wait", "busreq", "reset"):
+        if pin in lo:
+            args.append(f"+{pin}_lo={lo[pin]}")
+        if pin in hi:
+            args.append(f"+{pin}_hi={hi[pin]}")
+    return args
+
 def compare(prog, phases, source="c"):
     events = prog[:-4] + ".events" if prog.endswith(".hex") else prog + ".events"
     events = events if os.path.exists(events) else ""
+    event_plusargs = parse_events_to_plusargs(events)
     if source == "c":
         tg_argv = [TRACEGEN, prog, str(phases)] + ([events] if events else [])
         emit_label = "C"
     elif source == "iverilog":
-        # iverilog testbench only understands +nmi=<phase> shorthand, not
-        # the full sidecar; skip events for now. Programs with .events
-        # files will show ctrl-pin diffs vs perfectz80 (which DOES apply
-        # the sidecar) and that's expected — pin-scenarios still belong
-        # to the C-only path.
-        tg_argv = [VVP, TB_VVP, f"+prog={prog}", f"+phases={phases}"]
+        # iverilog testbench accepts +<pin>_lo=N +<pin>_hi=M plusargs
+        # for the pin-scenario .events sidecars. The C tracegen and
+        # perfectz80_runner still consume the raw sidecar; the iverilog
+        # path takes the same events through this plusarg encoding so
+        # all three drive the same pin transitions at the same phases.
+        tg_argv = [VVP, TB_VVP, f"+prog={prog}", f"+phases={phases}"] + event_plusargs
         emit_label = "iverilog RTL"
     elif source == "verilator":
-        tg_argv = [VERILATOR_SIM, prog, str(phases)]
+        # sim_main.cpp accepts the same +<pin>_lo / +<pin>_hi argv form
+        # as the iverilog testbenches.
+        tg_argv = [VERILATOR_SIM, prog, str(phases)] + event_plusargs
         emit_label = "Verilator RTL"
     elif source == "netlist":
         # LibreLane-synthesized sky130 gate-level netlist driven by the
-        # same iverilog testbench. Like iverilog mode, the testbench
-        # doesn't consume the .events sidecar — pin-scenarios still go
-        # through the C-only path.
-        tg_argv = [VVP, TB_NETLIST_VVP, f"+prog={prog}", f"+phases={phases}"]
+        # iverilog testbench tb_z80_netlist.v — same plusargs as tb_z80.v.
+        tg_argv = [VVP, TB_NETLIST_VVP, f"+prog={prog}", f"+phases={phases}"] + event_plusargs
         emit_label = "gate-level netlist"
     else:
         raise SystemExit(f"unknown source: {source}")
@@ -183,15 +219,7 @@ def compare(prog, phases, source="c"):
     g = g[PZ_OFFSET:]                 # drop pz80's pre-M1 idle phase(s)
     n = min(len(c), len(g))
     name = os.path.basename(prog)
-    # C tracegen consumes events; RTL paths don't yet — note that in the
-    # report so a curious reader knows why pin_scenarios diff through
-    # iverilog when they pass through C.
-    if events and source == "c":
-        suffix = f" + events"
-    elif events:
-        suffix = f" (events skipped — RTL path)"
-    else:
-        suffix = ""
+    suffix = " + events" if events else ""
     if n == 0:
         print(f"  {name}: FAIL (no rows)"); return False
 
