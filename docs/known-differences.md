@@ -109,25 +109,30 @@ Notes for each row:
      repeat termination" pattern. Tolerated within the z80full baseline
      of 10.
 
- 14. Pin-scenario vs perfectz80 (`make pin_scenarios`) — twelve trace
+ 14. Pin-scenario vs perfectz80 (`make pin_scenarios` /
+     `pin_scenarios_rtl` / `pin_scenarios_netlist`) — twelve trace
      programs (`prog9_inta_im1`..`prog20_block_int`) drive INT / NMI /
      WAIT / BUSREQ / RESET through the `.events` sidecar and diff
-     against perfectz80 per-half-cycle. Make target is informational
-     today (exits 0 even on divergence); current divergences are folded
-     into the simplifications-audit list rather than gating CI. When all
-     twelve reach control-pin parity, this row flips to `resolved` and
-     the gate becomes hard.
+     against perfectz80 per-half-cycle. `.events` is now consumed by
+     all paths — C tracegen, iverilog RTL, Verilator, LibreLane gate-
+     level netlist — via per-pin `+<pin>_lo / +<pin>_hi` plusargs.
+     Make targets are informational (exit 0 even on divergence);
+     current divergences are folded into the simplifications-audit list
+     rather than gating CI. When all twelve reach control-pin parity,
+     this row flips to `resolved` and the gates become hard.
 
      Additionally, `scripts/compare_signal_timing.py` (used by
-     `make perfectz80`) now compares `addr` and `data_o` on the cycles
-     where their respective strobes are low on both sides. Reported as
-     **informational**: control-pin parity is the gate of record (still
-     PASS across all 8 prog1..prog8 files), while bus diffs are
-     summarised per-program. Current state: `data_o` matches at **100 %**
-     wherever a write window is defined; `addr` matches at 60-100 %, with
-     the residual delta being the well-known refresh-phase one-cycle
-     `addr`-settle delta (tracked in [simplifications.md](simplifications.md)). Promote bus diffs
-     to gating with `BUS_STRICT=1` env var.
+     `make perfectz80` / `_rtl` / `_netlist`) compares `addr` and
+     `data_o` with an **address-bus don't-care tolerance**: phases
+     where no data transfer is in progress on either side (refresh
+     windows, idle phases between M-cycles, T1.P setup) are treated as
+     matches regardless of `addr` value. With the tolerance in place,
+     `addr` matches at **100 %** on 10/12 trace programs (8 hand + 4
+     random), with the residual 95-98 % on `prog_rnd_02` / `prog_rnd_03`
+     being the reset-register-init delta (row 1) surfacing via PUSH
+     instructions. `data_o` matches at **100 %** wherever a write
+     window is defined. Promote bus diffs to gating with `BUS_STRICT=1`
+     env var.
 
 Add rows as new differences are discovered. Each "watching" row should gain a
 test that pins the chosen behaviour or escalates it.

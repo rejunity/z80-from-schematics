@@ -28,7 +28,9 @@ stack.
 | Gate-level vs perfectz80 (iverilog RTL path)      | `tests/traces/`                | `make perfectz80_rtl`                    | ~15 s           | Same diff but driving the iverilog RTL testbench (silicon-faithful leg) |
 | Gate-level vs perfectz80 (LibreLane synth path)   | `librelane/` + `tests/iverilog/tb_z80_netlist.v` | `make perfectz80_netlist` | ~5 min cold / ~1 min warm | yosys-synthesised sky130 gate-level netlist diffed against the Visual-Z80 gate-level netlist over all 12 trace programs (8 hand + 4 random) — the "ultimate test" |
 | Gate-level BASIC ROM (LibreLane synth path)       | `librelane/` + `tests/verilator/sim_basic.cpp`   | `make basic_netlist_tests` | ~9 min (CI)         | "Real software" — NASCOM BASIC 4.7c + Tiny BASIC running on the synthesised gates (Verilator + sky130 cells). CI runs on every push. |
-| Pin-scenario programs vs perfectz80               | `tests/traces/pin_scenarios/`  | `make pin_scenarios`                     | ~15 s           | INT / NMI / WAIT / BUSREQ / RESET event-driven scenarios (informational) |
+| Pin-scenario programs vs perfectz80 — C path      | `tests/traces/pin_scenarios/`  | `make pin_scenarios`                     | ~15 s           | INT / NMI / WAIT / BUSREQ / RESET event-driven scenarios (informational) |
+| Pin-scenario programs vs perfectz80 — iverilog RTL| `tests/traces/pin_scenarios/`  | `make pin_scenarios_rtl`                 | ~15 s           | Same 12 scenarios through tb_z80.v's `.events` plusarg support (informational) |
+| Pin-scenario programs vs perfectz80 — sky130 netlist | `tests/traces/pin_scenarios/` | `make pin_scenarios_netlist`           | ~30 s           | Same 12 scenarios through the LibreLane gate-level netlist (informational) |
 | Real KC85 silicon sync capture                    | `tests/sigrok/`                | `make silicon_cycles`                    | ~1 s            | Per-opcode T-state count vs a real Z80 logic-analyzer capture |
 | Real KC85 silicon 20 MHz capture                  | `tests/sigrok/`                | `make silicon_async`                     | ~3 s            | Real CPU clock + sub-T-state pin-edge offsets |
 | Lockstep 4-way oracle on ZEXDOC3                  | `scripts/lockstep_quad.c`      | (inline, see CI)                         | ~3 s            | Instruction-by-instruction regs + memory match across 4 emulators |
@@ -179,9 +181,13 @@ Pin-scenario (`tests/traces/pin_scenarios/prog9` ... `prog20`):
 
   - 12 programs driving external input pins (`int`, `nmi`, `wait`,
     `busreq`, `reset`) on a deterministic phase schedule via a
-    `<prog>.events` sidecar file parsed identically by both the C
-    `tracegen` and `perfectz80_runner`.
+    `<prog>.events` sidecar file.
   - Sidecar format: `<phase>  <pin>  <0|1>` per line.
+  - Sidecar is now consumed by **all four** harnesses: C `tracegen`,
+    `perfectz80_runner`, the iverilog testbench (`tb_z80.v`), and the
+    Verilator harness (`sim_main.cpp`). The RTL paths take the sidecar
+    via per-pin `+<pin>_lo=N +<pin>_hi=M` plusargs that
+    `compare_signal_timing.py` derives from the sidecar.
   - Coverage: IM 1 / IM 2 INT-ack, HALT exit via NMI + via INT, WAIT
     insertion on mem + I/O, BUSREQ / BUSACK, EI shadow window, RESET
     mid-execution, DI masking, NMI during INTA, INT during LDIR.
@@ -194,17 +200,30 @@ breakdown.
 | Make target              | What it diffs                                                     | Status |
 |--------------------------|-------------------------------------------------------------------|--------|
 | `make compare`           | C model ↔ iverilog ↔ Verilator (all three identical, every phase) | **PASS** on all 12 programs (8 hand + 4 random) |
-| `make perfectz80`        | C model vs perfectz80 gate-level netlist (7 control pins)         | **PASS** on all 12 programs |
+| `make perfectz80`        | C model vs perfectz80 gate-level netlist (7 control pins + bus addr/data) | **PASS** on control pins, all 12 programs; **100 % `addr` match** with don't-care tolerance on 10/12, ~95-98 % on prog_rnd_02/03 (reset-register-init delta surfacing via PUSH) |
 | `make perfectz80_rtl`    | iverilog RTL vs perfectz80 (same 12 programs, RTL trace source)   | **PASS** on all 12 programs — silicon-faithful leg |
 | `make pin_scenarios`     | C model vs perfectz80 on the 12 pin-scenario programs             | **Informational**; divergences are real audit findings, not regressions |
+| `make pin_scenarios_rtl` | iverilog RTL vs perfectz80 on the 12 pin-scenarios                | **Informational**; same root causes as `make pin_scenarios` plus any RTL-only deltas |
+| `make pin_scenarios_netlist` | LibreLane sky130 gate-level netlist vs perfectz80 on the 12 pin-scenarios | **Informational**; same as above plus any synth-introduced deltas |
 
-`compare_signal_timing.py` (the driver for `make perfectz80` / `_rtl`)
-also reports informational bus-value parity — `data_o` (where wr is low
-on both sides) and `addr` (where mreq||iorq is low on both sides).
-Currently `data_o` is at **100 % match** wherever it's defined; `addr`
-matches 60–100 % with the residual gap being the well-known refresh-phase
-one-cycle `addr`-settle delta. Set `BUS_STRICT=1` env var to promote bus
-diffs to gating.
+`compare_signal_timing.py` (the driver for `make perfectz80` / `_rtl` /
+`_netlist`) reports informational bus-value parity — `data_o` (where wr
+is low on both sides) and `addr` (compared with a **don't-care
+tolerance**: phases where no data transfer is in progress on either
+side — refresh windows, idle phases, T1.P setup — are treated as
+matches regardless of value). Currently `data_o` is at **100 % match**
+wherever it's defined; `addr` matches **100 %** on 10/12 programs, with
+the residual 95-98 % on `prog_rnd_02` / `prog_rnd_03` being the
+reset-register-init delta (our 0xFFFF vs perfectz80 netlist's 0x5555)
+surfacing via PUSH instructions (same root cause as
+[docs/known-differences.md](../docs/known-differences.md) row 1). Set
+`BUS_STRICT=1` env var to promote bus diffs to gating.
+
+`compare_signal_timing.py` also emits per-program VCD waveforms to
+`build/vcd/<prog>.<source>.vcd` containing both our model's pins (top
+scope) and perfectz80's pins (under `perfectz80` scope). Open with
+`gtkwave` / `surfer` / similar to inspect both sides side-by-side from
+a single file. Set `EMIT_VCD=0` to disable.
 
 
 ### 7. LibreLane gate-level — `librelane/` + `tests/iverilog/tb_z80_netlist.v`
@@ -239,8 +258,9 @@ self-test suite has 1 flaky case on x86_64-linux and the install fails.
 Program set: the same 12 programs the C and source-RTL legs run — 8
 hand-crafted (`prog1.hex`..`prog8_nmi.hex`) + 4 seeded-random
 (`prog_rnd_01.hex`..`prog_rnd_04.hex`). 200 phases each. Pin-scenarios
-stay C-only until `.events` is wired into the iverilog testbenches
-(separate followup).
+also run through the gate-level netlist via `make
+pin_scenarios_netlist` now that `.events` is plumbed into
+`tb_z80_netlist.v` (per-pin lo/hi plusargs derived from the sidecar).
 
 **Gate-level BASIC** (`make basic_netlist_tests`) is a heavier
 companion test. Same synthesised netlist, but instead of 200-phase
@@ -303,11 +323,11 @@ Cringle's CRCs.
 
 ## Testbench files (not directly invoked)
 
-  - `tests/iverilog/tb_z80.v`   — iverilog testbench used by `make compare`
-    and `make perfectz80_rtl`. Accepts `+prog=<hex>` and `+phases=<N>`;
-    legacy `+nmi=<phase>` is supported. The full `.events` sidecar
-    (`int`/`nmi`/`wait`/`busreq`/`reset`) is NOT yet wired in — that's
-    the gap that keeps `pin_scenarios` C-only.
+  - `tests/iverilog/tb_z80.v`   — iverilog testbench used by `make compare`,
+    `make perfectz80_rtl`, and `make pin_scenarios_rtl`. Accepts
+    `+prog=<hex>`, `+phases=<N>`, legacy `+nmi=<phase>` and per-pin
+    `+<pin>_lo=N +<pin>_hi=M` plusargs (pins: `nmi`, `int`, `wait`,
+    `busreq`, `reset`) for `.events` sidecar consumption.
   - `tests/iverilog/tb_fuse.v`  — testbench used by `make fuse_rtl`.
   - `tests/verilator/sim_main.cpp`  — main Verilator driver (mirror of `tb_z80.v`).
   - `tests/verilator/sim_zex.cpp`   — Verilator driver for `make zexall_subset_rtl`.
@@ -328,13 +348,17 @@ together exercise everything above:
 | `basic-c-tests`      | every push        | `make basic_c_tests` |
 | `basic-rtl-tests`    | every push        | `make basic_rtl_tests` |
 | `z80test`            | every push        | `make z80test` (~2 min) |
-| `parity-tests`       | every push        | `make compare`, `make perfectz80`, `make perfectz80_rtl`, `make pin_scenarios` |
-| `zexdoc`             | every push        | full ZEXDOC via C model (~18 min) |
-| `zexall`             | every push        | full ZEXALL via C model (~19 min) |
-| `zexall-subset-rtl`  | main + nightly    | 14-test ZEXALL slice via Verilator RTL (~17 min) |
+| `parity-tests`            | every push        | `make compare`, `make perfectz80`, `make perfectz80_rtl`, `make pin_scenarios`, `make pin_scenarios_rtl` |
+| `librelane-netlist`       | every push        | `make synth` + `make perfectz80_netlist` + `make pin_scenarios_netlist` — 12 trace programs + 12 pin-scenarios through synthesised sky130 netlist vs perfectz80 (~3-5 min) |
+| `librelane-basic-netlist` | every push        | `make synth` + `make verilator_basic_netlist` + `make basic_netlist_tests` — NASCOM BASIC 4.7c + Tiny BASIC running on the synthesised gates (~9 min) |
+| `zexdoc`                  | every push        | full ZEXDOC via C model (~18 min) |
+| `zexall`                  | every push        | full ZEXALL via C model (~19 min) |
+| `zexall-subset-rtl`       | main + nightly    | 14-test ZEXALL slice via Verilator RTL (~17 min) |
 
 Branch-push builds skip the RTL ZEXALL leg; PR-to-main + cron + manual
-dispatch include it.
+dispatch include it. Both LibreLane jobs cache the synthesised netlist
+on `hashFiles('rtl/*.v', 'librelane/config.json', 'librelane/run_synth.sh')`,
+so most pushes skip the ~3 min synthesis step.
 
 
 ## Forward-looking — what's not yet here
@@ -343,12 +367,13 @@ dispatch include it.
     [docs/ring3-az80-oracle.md](../docs/ring3-az80-oracle.md) — would
     cross-check perfectz80's Visual-Z80 netlist itself against an
     independent schematic-driven Verilog Z80. Deferred until needed.
-  - **`.events` sidecar in the iverilog and Verilator testbenches**.
-    Today only the C `tracegen` and `perfectz80_runner` consume the full
-    sidecar; the RTL testbenches only understand legacy `+nmi=<phase>`.
-    Plumbing it in is a one-liner per pin per harness — wires up
-    `nmi_n` / `int_n` / `wait_n` / `busreq_n` / `reset_n` to phase-driven
-    events.
+  - **NMOS vs Toshiba CMOS Q-leak switch**. The current C model + RTL
+    implement Zilog NMOS Q-leak behaviour in SCF / CCF X / Y flags
+    (well-documented silicon-faithful default). A Toshiba CMOS variant
+    (no Q-leak) is a known divergence but isn't required by any test
+    we currently fail — the z80test SCF/CCF baselines are already at
+    the NMOS-correct number. Deferred until a use case demands it; see
+    [docs/known-differences.md](../docs/known-differences.md) row 2.
   - **Woodster `Timing_Tests-48k_v1.0`** — third-party M-cycle-shape
     regression cited by MAME PR #11522. License unclear; to evaluate.
 
