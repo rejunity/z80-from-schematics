@@ -268,11 +268,26 @@ jobs:
           path: build/synth
           key: synth-${{ hashFiles('rtl/*.v', 'librelane/config.json', 'librelane/run_synth.sh') }}
 
-      - name: Install C toolchain + Verilator
+      - name: Install C toolchain (no apt verilator — see below)
+        # apt's Verilator on Ubuntu 24.04 is 5.020 which lacks Verilog-1995
+        # UDP table parsing. The sky130 FUNCTIONAL cell models instantiate
+        # UDP primitives (sky130_fd_sc_hd__udp_dff$P etc.) as their DFF
+        # storage elements — without UDP table support the cells become
+        # empty modules and the gate-level Z80 doesn't store state.
+        #
+        # LibreLane's nix closure ships Verilator 5.044 which DOES handle
+        # UDP tables, so we use that (already on PATH from the prior
+        # `nix profile install`). Don't apt-install verilator — it would
+        # shadow the nix one via /usr/bin precedence.
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential python3 verilator
+            build-essential python3
+
+      - name: Verify Verilator is the nix-provided 5.044+ (UDP-table capable)
+        run: |
+          which verilator
+          verilator --version
 
       - name: Run LibreLane synthesis (skipped on cache hit)
         if: steps.synth-cache.outputs.cache-hit != 'true'

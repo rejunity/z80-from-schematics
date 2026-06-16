@@ -254,7 +254,6 @@ verilator_basic_netlist: synth dirs
 	$(VERILATOR) --cc --exe --build -j 0 -O3 -Wall \
 	  -Wno-fatal -Wno-WIDTH -Wno-CASEINCOMPLETE -Wno-UNUSEDSIGNAL \
 	  -Wno-MULTITOP -Wno-MODDUP -Wno-PINMISSING -Wno-TIMESCALEMOD \
-	  --bbox-unsup \
 	  --Mdir $(BUILD)/obj_dir_basic_netlist --top-module z80_core \
 	  +define+FUNCTIONAL +define+UNIT_DELAY \
 	  -CFLAGS -DNETLIST_BUILD \
