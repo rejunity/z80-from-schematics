@@ -145,6 +145,146 @@ jobs:
         run: make pin_scenarios
 
   # =====================================================================
+  # LIBRELANE GATE-LEVEL — "ultimate test". Synthesise rtl/*.v via
+  # LibreLane (Yosys.Synthesis only) into a sky130 gate-level netlist,
+  # then diff the synthesised netlist's per-half-cycle pin behaviour
+  # against the perfectz80 Visual-Z80 gate-level netlist. See
+  # docs/librelane-flow.md for the full plan.
+  #
+  # Heavy step. First cold run on a CI runner is ~8-10 min (nix store
+  # download + librelane install + sky130 PDK fetch + ~2 min synth).
+  # Subsequent runs are ~30 s when the synth-output cache is warm and
+  # ~5 min when only the nix-store cache is warm.
+  #
+  # Gated to every push during development per user direction.
+  # =====================================================================
+
+  librelane-netlist:
+    name: LibreLane gate-level sim vs perfectz80 (12 programs)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Nix (Determinate Systems)
+        uses: DeterminateSystems/nix-installer-action@main
+        with:
+          # Configure the fossi-foundation nix cache up front so all
+          # downstream `nix` invocations pull pre-built LibreLane
+          # binaries (iverilog, openroad, yosys-with-plugins, etc.)
+          # instead of building from source. Without this, nix tries
+          # to rebuild iverilog's pinned snapshot whose self-test suite
+          # has 1 flaky case on x86_64-linux (Ran 297, Failed 1) →
+          # derivation fails → librelane install fails. Verified URL +
+          # public key from
+          # librelane.readthedocs.io/en/latest/installation/nix_installation/installation_linux.html
+          extra-conf: |
+            extra-substituters = https://nix-cache.fossi-foundation.org
+            extra-trusted-public-keys = nix-cache.fossi-foundation.org:3+K59iFwXqKsL7BNu6Guy0v+uTlwsxYQxjspXzqLYQs=
+            extra-experimental-features = nix-command flakes
+
+      - name: Cache /nix/store across runs
+        # Speeds up subsequent runs by ~10x. First cold run still has
+        # to fetch the LibreLane closure from the fossi-foundation
+        # cache (~5 min). Following runs warm from GHA cache (~30 s).
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: Install LibreLane via nix profile
+        run: nix profile install github:librelane/librelane
+
+      - name: Cache synthesised netlist on (rtl + librelane config) hash
+        id: synth-cache
+        uses: actions/cache@v4
+        with:
+          path: build/synth
+          key: synth-${{ hashFiles('rtl/*.v', 'librelane/config.json', 'librelane/run_synth.sh') }}
+
+      - name: Install C toolchain + iverilog
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential python3 iverilog
+
+      - name: Run LibreLane synthesis (skipped on cache hit)
+        if: steps.synth-cache.outputs.cache-hit != 'true'
+        run: make synth
+
+      - name: Build gate-level iverilog testbench (sky130 cells)
+        run: make iverilog_netlist
+
+      - name: Gate-level netlist vs perfectz80 (8 hand + 4 random = 12 programs)
+        run: make perfectz80_netlist
+
+      - name: Upload synthesised netlist artifact
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: synth-netlist
+          path: build/synth/z80_core.nl.v
+          retention-days: 30
+
+  # =====================================================================
+  # LIBRELANE GATE-LEVEL + BASIC — same synthesised netlist as
+  # librelane-netlist, but instead of 200-phase trace programs we run
+  # "real software" (NASCOM BASIC 4.7c + 1 KiB Tiny BASIC) through the
+  # gates. Catches synthesis-introduced bugs that 200-phase traces never
+  # exercise — anything that takes millions of cycles of ROM boot,
+  # interrupt-driven RX, ACIA polling, etc. to manifest.
+  #
+  # Heavy (~10-15 min wall clock for the canned subtests at gate-level
+  # Verilator speed). Gated to push-to-main + nightly cron + manual
+  # dispatch — same gate as zexall-subset-rtl.
+  # =====================================================================
+
+  librelane-basic-netlist:
+    name: LibreLane gate-level BASIC (NASCOM 4.7c + Tiny BASIC)
+    runs-on: ubuntu-latest
+    if: >-
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'))
+      || github.event_name == 'schedule'
+      || github.event_name == 'workflow_dispatch'
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Nix (Determinate Systems)
+        uses: DeterminateSystems/nix-installer-action@main
+        with:
+          extra-conf: |
+            extra-substituters = https://nix-cache.fossi-foundation.org
+            extra-trusted-public-keys = nix-cache.fossi-foundation.org:3+K59iFwXqKsL7BNu6Guy0v+uTlwsxYQxjspXzqLYQs=
+            extra-experimental-features = nix-command flakes
+
+      - name: Cache /nix/store across runs
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: Install LibreLane via nix profile
+        run: nix profile install github:librelane/librelane
+
+      - name: Cache synthesised netlist on (rtl + librelane config) hash
+        id: synth-cache
+        uses: actions/cache@v4
+        with:
+          path: build/synth
+          key: synth-${{ hashFiles('rtl/*.v', 'librelane/config.json', 'librelane/run_synth.sh') }}
+
+      - name: Install C toolchain + Verilator
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential python3 verilator
+
+      - name: Run LibreLane synthesis (skipped on cache hit)
+        if: steps.synth-cache.outputs.cache-hit != 'true'
+        run: make synth
+
+      - name: Build gate-level Verilator BASIC sim (sky130 cells)
+        run: make verilator_basic_netlist
+
+      - name: Run canned BASIC subtests on the synthesised netlist
+        run: make basic_netlist_tests
+
+  # =====================================================================
   # ZEX TIER (C model) — runs on every event, including every push.
   # ZEXDOC and ZEXALL are independent jobs so they run in parallel
   # (~18 + 19 min serial -> ~19 min parallel wall clock). Neither

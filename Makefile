@@ -44,7 +44,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
-.PHONY: all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl pin_scenarios basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests z80test_runner z80test
+.PHONY: all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test
 
 all: cmodel ctest
 
@@ -163,6 +163,113 @@ perfectz80: tracegen $(BIN)/perfectz80_runner
 # INT / WAIT / BUSREQ / RESET events still go through the C-only path.
 perfectz80_rtl: iverilog $(BIN)/perfectz80_runner
 	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --rtl=iverilog 200
+
+# === LibreLane gate-level flow — "ultimate test" =============================
+# Synthesise rtl/*.v through LibreLane (Yosys.Synthesis step only — no
+# floorplan/PnR/STA) into a sky130 gate-level netlist, then diff its
+# per-half-cycle pin behavior against the perfectz80 Visual-Z80
+# gate-level netlist. The first gate that catches synthesis-introduced
+# bugs (latches inferred where DFFs were intended, reset domain
+# crossings folded by the synthesizer, etc.) — see docs/librelane-flow.md.
+#
+# `make synth` runs LibreLane via the librelane/run_synth.sh wrapper,
+# which expects `librelane` on PATH (nix profile install). It writes:
+#   build/synth/z80_core.nl.v   — synthesized netlist (symlink)
+#   build/synth/pdk_root.path   — resolved PDK_ROOT for downstream rules
+synth: $(BUILD)/synth/z80_core.nl.v
+
+# Synthesis produces both the netlist .v and a small pdk_root.path file
+# (read lazily by the iverilog rule's recipe). One rule, two outputs.
+# Only the netlist is declared here; pdk_root.path is a side effect.
+# (Grouped-target syntax `&:` would be cleaner but is GNU Make 4.3+
+# only; macOS ships 3.81.)
+$(BUILD)/synth/z80_core.nl.v: $(RTL_SRCS) librelane/config.json librelane/run_synth.sh
+	@mkdir -p $(BUILD)/synth
+	librelane/run_synth.sh
+
+# Build the gate-level iverilog testbench. The sky130_fd_sc_hd Verilog
+# cell models live under $(PDK_ROOT)/sky130A/libs.ref/sky130_fd_sc_hd/verilog/
+# (PDK_ROOT resolved at synth time by run_synth.sh and persisted to
+# build/synth/pdk_root.path, which this recipe reads).
+#
+# `-DFUNCTIONAL` picks the zero-delay functional cell models — much
+# faster than spec-block timing models and sufficient for the logical
+# correctness diff against perfectz80 (which is also unit-delay).
+iverilog_netlist: synth $(BUILD)/tb_z80_netlist.vvp
+
+$(BUILD)/tb_z80_netlist.vvp: $(TESTS)/iverilog/tb_z80_netlist.v $(BUILD)/synth/z80_core.nl.v
+	@if [ ! -f $(BUILD)/synth/pdk_root.path ]; then \
+	    echo "iverilog_netlist: $(BUILD)/synth/pdk_root.path missing — run \`make synth\` first"; exit 1; \
+	  fi; \
+	  PDK_ROOT=$$(cat $(BUILD)/synth/pdk_root.path); \
+	  SKY130_V_DIR=$$PDK_ROOT/sky130A/libs.ref/sky130_fd_sc_hd/verilog; \
+	  if [ ! -d "$$SKY130_V_DIR" ]; then \
+	    echo "iverilog_netlist: sky130 verilog models not found at $$SKY130_V_DIR"; exit 1; \
+	  fi; \
+	  echo "== building gate-level iverilog sim (sky130 cells) =="; \
+	  $(IVERILOG) -g2012 -DFUNCTIONAL -s tb_z80 -o $@ \
+	    $(TESTS)/iverilog/tb_z80_netlist.v \
+	    $(BUILD)/synth/z80_core.nl.v \
+	    $$SKY130_V_DIR/primitives.v \
+	    $$SKY130_V_DIR/sky130_fd_sc_hd.v && \
+	  echo "Built $@"
+
+# Gate-level netlist vs perfectz80. Default program set: 8 hand + 4
+# random = 12 programs (the script's default when called without
+# explicit paths). Pin-scenarios still go through the C-only path
+# until .events lands in the iverilog testbenches (see
+# docs/librelane-flow.md "What we don't do").
+perfectz80_netlist: iverilog_netlist $(BIN)/perfectz80_runner
+	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --rtl=netlist 200
+
+# Gate-level BASIC. Same sim_basic.cpp testbench (68B50 ACIA, NASCOM /INT
+# wiring, --exit-on sentinel, etc.) but Verilator builds it against the
+# LibreLane-synthesised netlist + sky130 cells instead of source RTL.
+#
+# "Real software" running across millions of cycles of synthesised gates —
+# any ROM-boot regression that the rtl/ -> synth/ transformation
+# introduces (latches, glitches, async-reset folding) shows up here long
+# before it would on prog1..prog8 traces.
+#
+# Wall clock: gate-level Verilator is 10-50× slower than source-RTL
+# Verilator. With the --exit-on sentinel terminating each subtest soon
+# after its DONE marker prints, expect ~5-15 min total for the 4 canned
+# subtests vs ~2 s for the source-RTL leg.
+verilator_basic_netlist: synth dirs
+	@if [ ! -f $(TESTS)/verilator/sim_basic.cpp ]; then echo "sim_basic.cpp not present."; exit 0; fi; \
+	if [ ! -f $(BUILD)/synth/pdk_root.path ]; then \
+	  echo "verilator_basic_netlist: $(BUILD)/synth/pdk_root.path missing — run \`make synth\`"; exit 1; \
+	fi; \
+	printf '#include <cstdio>\nint main(){return 0;}\n' > $(BUILD)/.cxxcheck.cpp; \
+	if ! c++ -std=gnu++17 -c $(BUILD)/.cxxcheck.cpp -o $(BUILD)/.cxxcheck.o >/dev/null 2>&1; then \
+	  echo "SKIP verilator_basic_netlist: host C++17 toolchain cannot compile libc++ headers."; \
+	  exit 0; \
+	fi; \
+	PDK_ROOT=$$(cat $(BUILD)/synth/pdk_root.path); \
+	SKY130_V=$$PDK_ROOT/sky130A/libs.ref/sky130_fd_sc_hd/verilog; \
+	if [ ! -d "$$SKY130_V" ]; then \
+	  echo "verilator_basic_netlist: sky130 verilog not found at $$SKY130_V"; exit 1; \
+	fi; \
+	echo "== building verilator gate-level sim_basic_netlist (sky130) =="; \
+	$(VERILATOR) --cc --exe --build -j 0 -O3 -Wall \
+	  -Wno-fatal -Wno-WIDTH -Wno-CASEINCOMPLETE -Wno-UNUSEDSIGNAL \
+	  -Wno-MULTITOP -Wno-MODDUP -Wno-PINMISSING -Wno-TIMESCALEMOD \
+	  --Mdir $(BUILD)/obj_dir_basic_netlist --top-module z80_core \
+	  +define+FUNCTIONAL +define+UNIT_DELAY \
+	  -CFLAGS -DNETLIST_BUILD \
+	  -I$$SKY130_V \
+	  $$SKY130_V/primitives.v $$SKY130_V/sky130_fd_sc_hd.v \
+	  $(BUILD)/synth/z80_core.nl.v \
+	  $(abspath $(TESTS)/verilator/sim_basic.cpp) -o sim_basic_netlist && \
+	echo "Built $(BUILD)/obj_dir_basic_netlist/sim_basic_netlist"
+
+# Run the canned BASIC subtests through the gate-level Verilator
+# binary. Same scripts as basic_rtl_tests, same sentinel-driven early
+# exit; just a different backend.
+basic_netlist_tests: verilator_basic_netlist
+	@$(TESTS)/basic/run_basic_tests.sh netlist
+# =============================================================================
+
 
 # Pin-scenario programs (prog9..prog20). Each drives a specific external-
 # pin event sequence via the .events sidecar (INT pulse, NMI pulse, WAIT

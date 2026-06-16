@@ -95,10 +95,20 @@ int main(int argc, char** argv) {
     t->reset_n = 1;
 
     // PC=0 (the ROM's reset vector); SP=0xFFFE (typical BASIC ROM init).
+    //
+    // These reach into Verilator's hierarchical view of the source RTL's
+    // register-file array (`rf` / `rf_n`). After yosys synthesis the
+    // regfile is flattened to individual sky130 DFFs and the array name
+    // disappears, so we can only do this in source-RTL builds. The
+    // Makefile passes -DNETLIST_BUILD to the gate-level Verilator
+    // invocation; NASCOM BASIC's cold-boot path sets its own SP via
+    // `LD SP,nn` early, so the netlist path doesn't need the prime.
+#ifndef NETLIST_BUILD
     R->z80_core__DOT__rf[11]   = 0x0000;
     R->z80_core__DOT__rf_n[11] = 0x0000;
     R->z80_core__DOT__rf[10]   = 0xFFFE;
     R->z80_core__DOT__rf_n[10] = 0xFFFE;
+#endif
 
     long long phases = 0, instr = 0;
     bool prev_m1_n  = true;

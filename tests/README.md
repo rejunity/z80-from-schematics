@@ -26,6 +26,8 @@ stack.
 | C ↔ iverilog ↔ Verilator phase parity             | `tests/traces/`                | `make compare`                           | ~3 s            | Per-half-cycle bus-cycle trace identity across all three harnesses |
 | Gate-level vs perfectz80 (C model path)           | `tests/traces/`                | `make perfectz80`                        | ~10 s           | Per-half-cycle 7-pin parity + bus addr/data informational findings |
 | Gate-level vs perfectz80 (iverilog RTL path)      | `tests/traces/`                | `make perfectz80_rtl`                    | ~15 s           | Same diff but driving the iverilog RTL testbench (silicon-faithful leg) |
+| Gate-level vs perfectz80 (LibreLane synth path)   | `librelane/` + `tests/iverilog/tb_z80_netlist.v` | `make perfectz80_netlist` | ~5 min cold / ~1 min warm | yosys-synthesised sky130 gate-level netlist diffed against the Visual-Z80 gate-level netlist over all 12 trace programs (8 hand + 4 random) — the "ultimate test" |
+| Gate-level BASIC ROM (LibreLane synth path)       | `librelane/` + `tests/verilator/sim_basic.cpp`   | `make basic_netlist_tests` | ~10-15 min          | "Real software" — NASCOM BASIC 4.7c + Tiny BASIC running on the synthesised gates (Verilator + sky130 cells). CI: main + nightly + manual only. |
 | Pin-scenario programs vs perfectz80               | `tests/traces/pin_scenarios/`  | `make pin_scenarios`                     | ~15 s           | INT / NMI / WAIT / BUSREQ / RESET event-driven scenarios (informational) |
 | Real KC85 silicon sync capture                    | `tests/sigrok/`                | `make silicon_cycles`                    | ~1 s            | Per-opcode T-state count vs a real Z80 logic-analyzer capture |
 | Real KC85 silicon 20 MHz capture                  | `tests/sigrok/`                | `make silicon_async`                     | ~3 s            | Real CPU clock + sub-T-state pin-edge offsets |
@@ -205,7 +207,56 @@ one-cycle `addr`-settle delta. Set `BUS_STRICT=1` env var to promote bus
 diffs to gating.
 
 
-### 7. Real-silicon traces — `tests/sigrok/`
+### 7. LibreLane gate-level — `librelane/` + `tests/iverilog/tb_z80_netlist.v`
+
+The **ultimate test**. Pushes our Verilog RTL through LibreLane (Yosys
+synthesis only — no floorplan/PnR/STA) into a sky130 gate-level netlist,
+then runs that netlist through iverilog against the same trace programs
+and diffs per-half-cycle pin behavior against perfectz80. Catches
+synthesis-introduced bugs that pure source-RTL sim never sees: latches
+inferred where DFFs were intended, async-reset domain crossings folded
+into combinational paths, lint-suppressed glitches that gates expose.
+
+```
+make synth                # LibreLane synthesis → build/synth/z80_core.nl.v
+make iverilog_netlist     # gate-level iverilog tb compiled w/ sky130 cell models
+make perfectz80_netlist   # diff vs perfectz80 over all 12 trace programs
+```
+
+Install LibreLane via Nix (the project's first-class non-Docker path).
+The fossi-foundation substituter MUST be configured at install time, or
+nix tries to rebuild iverilog's pinned snapshot from source — its
+self-test suite has 1 flaky case on x86_64-linux and the install fails.
+
+    curl --proto '=https' --tlsv1.2 -fsSL https://install.determinate.systems/nix \
+      | sh -s -- install --no-confirm --extra-conf "
+          extra-substituters = https://nix-cache.fossi-foundation.org
+          extra-trusted-public-keys = nix-cache.fossi-foundation.org:3+K59iFwXqKsL7BNu6Guy0v+uTlwsxYQxjspXzqLYQs=
+          extra-experimental-features = nix-command flakes
+        "
+    nix profile install github:librelane/librelane
+
+Program set: the same 12 programs the C and source-RTL legs run — 8
+hand-crafted (`prog1.hex`..`prog8_nmi.hex`) + 4 seeded-random
+(`prog_rnd_01.hex`..`prog_rnd_04.hex`). 200 phases each. Pin-scenarios
+stay C-only until `.events` is wired into the iverilog testbenches
+(separate followup).
+
+**Gate-level BASIC** (`make basic_netlist_tests`) is a heavier
+companion test. Same synthesised netlist, but instead of 200-phase
+trace programs we run "real software" — NASCOM BASIC 4.7c cold-boots,
+prints "Ok", and we feed canned input scripts through the 68B50 ACIA
+ROM port and assert the expected output substrings appear, matching
+the `basic_rtl_tests` pattern. Catches synthesis-introduced bugs that
+take millions of cycles of ROM boot + interrupt-driven RX to manifest.
+Uses Verilator (gate-level Verilator is ~10-50× slower than source-RTL
+Verilator; ~10-15 min wall clock with the --exit-on sentinel).
+CI-gated to main + nightly + manual.
+
+See [../docs/librelane-flow.md](../docs/librelane-flow.md) for the full
+plan, including the CI job, caching strategy, and risks/gotchas.
+
+### 8. Real-silicon traces — `tests/sigrok/`
 
 Two captures from a real KC85/2 (East-German Z80 clone running at
 1.767 MHz) taken with a Saleae Logic + sigrok:
@@ -224,7 +275,7 @@ See [docs/real-silicon-traces.md](../docs/real-silicon-traces.md) for the
 full decode + interpretation notes.
 
 
-### 8. 4-way oracle lockstep
+### 9. 4-way oracle lockstep
 
 Not a `make` target — runs inline in CI's `c-tests` job. The driver
 `scripts/lockstep_quad.c` loads `tests/zex/zexdoc3.com` and steps four
