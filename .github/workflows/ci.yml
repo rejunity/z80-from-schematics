@@ -136,13 +136,19 @@ jobs:
         # programs (prog_rnd_01..04 from scripts/gen_random_trace_progs.py)
         # give opcode-mix coverage no hand-written program would have.
         run: make perfectz80_rtl
-      - name: Pin-scenario programs vs perfectz80 (INFORMATIONAL)
+      - name: Pin-scenario programs vs perfectz80 — C path (INFORMATIONAL)
         # 12 trace programs (prog9..prog20) that drive INT / NMI / WAIT /
         # BUSREQ / RESET via the .events sidecar. Currently surface real
         # silicon-faithfulness divergences vs gate-level — the make target
         # is informational and exits 0 even on divergences. CI shows the
         # findings without going red.
         run: make pin_scenarios
+      - name: Pin-scenario programs vs perfectz80 — iverilog RTL path (INFORMATIONAL)
+        # Same 12 scenarios through the iverilog RTL testbench. .events
+        # is now plumbed via per-pin +<pin>_lo / +<pin>_hi plusargs
+        # (compare_signal_timing.py encodes the sidecar). Same
+        # informational status.
+        run: make pin_scenarios_rtl
 
   # =====================================================================
   # LIBRELANE GATE-LEVEL — "ultimate test". Synthesise rtl/*.v via
@@ -214,6 +220,13 @@ jobs:
 
       - name: Gate-level netlist vs perfectz80 (8 hand + 4 random = 12 programs)
         run: make perfectz80_netlist
+
+      - name: Pin-scenarios vs perfectz80 — gate-level netlist (INFORMATIONAL)
+        # 12 pin-scenario programs (prog9..prog20) driven through the
+        # synthesised sky130 netlist via tb_z80_netlist.v's .events
+        # plusarg support. Informational like the C and iverilog
+        # pin_scenarios* targets.
+        run: make pin_scenarios_netlist
 
       - name: Upload synthesised netlist artifact
         if: always()

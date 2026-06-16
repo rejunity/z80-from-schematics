@@ -44,7 +44,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
-.PHONY: all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test
+.PHONY: all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test
 
 all: cmodel ctest
 
@@ -277,8 +277,7 @@ basic_netlist_tests: verilator_basic_netlist
 # between our model and perfectz80 — exit 0 unconditionally so CI shows
 # the findings without flipping red; they're tracked alongside
 # docs/simplifications.md once a concrete fix lands.
-pin_scenarios: tracegen $(BIN)/perfectz80_runner
-	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py 200 \
+PIN_SCENARIOS = \
 	  $(TESTS)/traces/pin_scenarios/prog9_inta_im1.hex \
 	  $(TESTS)/traces/pin_scenarios/prog10_halt_nmi.hex \
 	  $(TESTS)/traces/pin_scenarios/prog11_wait_mem.hex \
@@ -290,8 +289,24 @@ pin_scenarios: tracegen $(BIN)/perfectz80_runner
 	  $(TESTS)/traces/pin_scenarios/prog17_reset.hex \
 	  $(TESTS)/traces/pin_scenarios/prog18_di_then_int.hex \
 	  $(TESTS)/traces/pin_scenarios/prog19_nmi_in_int.hex \
-	  $(TESTS)/traces/pin_scenarios/prog20_block_int.hex \
+	  $(TESTS)/traces/pin_scenarios/prog20_block_int.hex
+
+pin_scenarios: tracegen $(BIN)/perfectz80_runner
+	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py 200 $(PIN_SCENARIOS) \
 	  || echo "(pin_scenarios is informational; failures are expected silicon-faithfulness findings)"
+
+# Same pin-scenarios but driving the iverilog RTL testbench (now that
+# .events is wired into tb_z80.v via per-pin plusargs — see the
+# tests/iverilog/tb_z80.v initial block). Informational.
+pin_scenarios_rtl: iverilog $(BIN)/perfectz80_runner
+	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --rtl=iverilog 200 $(PIN_SCENARIOS) \
+	  || echo "(pin_scenarios_rtl is informational; failures are expected silicon-faithfulness findings)"
+
+# Same pin-scenarios through the LibreLane-synthesised sky130 gate-level
+# netlist (tb_z80_netlist.v consumes the same plusargs). Informational.
+pin_scenarios_netlist: iverilog_netlist $(BIN)/perfectz80_runner
+	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --rtl=netlist 200 $(PIN_SCENARIOS) \
+	  || echo "(pin_scenarios_netlist is informational; failures are expected silicon-faithfulness findings)"
 
 $(BIN)/perfectz80_runner: $(SCRIPTS)/perfectz80_runner.c $(SCRIPTS)/refs/perfectz80/perfectz80.c $(SCRIPTS)/refs/perfectz80/netlist_sim.c
 	@mkdir -p $(BIN)
