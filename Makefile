@@ -192,8 +192,8 @@ tinybasic: basicrunner
 basic_c_tests: basicrunner
 	@$(TESTS)/basic/run_basic_tests.sh c
 
-# Same suite but driven through the Verilated RTL via sim_basic. ~20x
-# slower than basic_c_tests; gate appropriately in CI.
+# Same NASCOM subtests but driven through the Verilated RTL via sim_basic.
+# ~20x slower than basic_c_tests; Tiny is skipped (already covered on C).
 basic_rtl_tests: verilator_basic
 	@$(TESTS)/basic/run_basic_tests.sh rtl
 

@@ -79,11 +79,14 @@ jobs:
         run: make basic_c_tests
 
   basic-rtl-tests:
-    name: BASIC ROM via Verilator RTL (NASCOM 4.7c + Tiny BASIC)
+    name: BASIC ROM via Verilator RTL (NASCOM 4.7c)
     runs-on: ubuntu-latest
-    # ~10 min wall clock on ubuntu-latest. 8 subtests cumulative: NASCOM
-    # cold-start to prompt + 8 PRINT lines per script + 3 scripts + Tiny.
-    timeout-minutes: 30
+    # 3 NASCOM scripts at ~7-9 min wall clock each on ubuntu-latest +
+    # Verilator build + apt install. Tiny is C-only (covered in
+    # basic-c-tests) — its sub-cycle through Verilator pushes the suite
+    # past 30 min for no extra coverage. 45 min leaves comfortable
+    # margin; trip an investigation if any single run actually hits it.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
       - name: Install C + Verilator
