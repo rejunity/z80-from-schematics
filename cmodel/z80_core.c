@@ -154,22 +154,6 @@ static void setri(z80_t *c, uint8_t r, uint8_t v)
 
 static void finish(z80_t *c) { c->instr_done = true; }
 
-static void do_alu(z80_t *c, uint8_t b)
-{
-    uint8_t a = z80_A(c), res = 0, f = 0;
-    uint8_t mode;
-    switch (c->ctl.alu_op) {
-        case ALU_ADD: case ALU_ADC:               mode = FLAG_ADD8;  break;
-        case ALU_SUB: case ALU_SBC:               mode = FLAG_SUB8;  break;
-        case ALU_AND: case ALU_XOR: case ALU_OR:  mode = FLAG_LOGIC; break;
-        default: /* ALU_CP */                     mode = FLAG_CP8;   break;
-    }
-    z80_alu(mode, (uint8_t)c->ctl.alu_op, 0, 0, 0,
-            a, b, z80_F(c), c->q, &res, &f);
-    if (c->ctl.alu_op != ALU_CP) z80_setA(c, res);
-    z80_setF(c, f);
-}
-
 static void do_add16(z80_t *c)
 {
     uint8_t  dp = hl_pair(c);               /* HL / IX / IY */
@@ -214,42 +198,6 @@ static void do_adc16(z80_t *c, bool sub)
     f |= (uint8_t)(r16 >> 8) & (Z80_YF | Z80_XF);
     c->rf[RFP_HL] = r16;
     z80_setF(c, f);
-}
-
-/* ---- block-instruction flag helpers (docs/flags.md) ---- */
-static uint8_t block_ld_flags(uint8_t oldF, uint8_t a, uint8_t val, uint16_t bc_after)
-{
-    uint8_t n = (uint8_t)(a + val);
-    uint8_t f = oldF & (Z80_SF | Z80_ZF | Z80_CF);  /* S,Z,C unchanged; H=N=0 */
-    if (n & 0x02) f |= Z80_YF;                      /* YF = bit1 of (A+byte) */
-    if (n & 0x08) f |= Z80_XF;                      /* XF = bit3 of (A+byte) */
-    if (bc_after) f |= Z80_PF;
-    return f;
-}
-static uint8_t block_cp_flags(uint8_t oldF, uint8_t a, uint8_t val, uint16_t bc_after)
-{
-    uint8_t res = (uint8_t)(a - val);
-    uint8_t hf = (((int)(a & 0xF) - (int)(val & 0xF)) < 0) ? Z80_HF : 0;
-    uint8_t n  = (uint8_t)(res - (hf ? 1u : 0u));
-    uint8_t f  = (oldF & Z80_CF) | Z80_NF;
-    if (res & 0x80) f |= Z80_SF;
-    if (res == 0)   f |= Z80_ZF;
-    f |= hf;
-    if (n & 0x02) f |= Z80_YF;
-    if (n & 0x08) f |= Z80_XF;
-    if (bc_after) f |= Z80_PF;
-    return f;
-}
-static uint8_t block_io_flags(uint8_t data, uint8_t newB, uint16_t k)
-{
-    uint8_t f = 0;
-    if (data & 0x80) f |= Z80_NF;
-    if (k > 0xFF)    f |= (Z80_HF | Z80_CF);
-    if (z80_parity((uint8_t)((k & 7) ^ newB))) f |= Z80_PF;
-    if (newB & 0x80) f |= Z80_SF;
-    if (newB == 0)   f |= Z80_ZF;
-    f |= newB & (Z80_YF | Z80_XF);
-    return f;
 }
 
 static void set_prefix_from_ir(z80_t *c)
@@ -299,6 +247,92 @@ static void z80_exec_step(z80_t *c)
         }
     }
 
+    /* =====================================================================
+     * ALU input mux  (mirrors rtl/z80_core.v's always @* alu-input mux).
+     *
+     * Drives the inputs to the single z80_alu() call below. Defaults track
+     * the PLA control word; per-exec overrides match V's case (exec_w).
+     * For EXEC_BLOCK the active inputs depend on (cat, m_cycle); the alu
+     * output is ignored at M-cycles where the formula is not committed.
+     * =================================================================== */
+    uint8_t alu_md  = (uint8_t)ctl->flag_mode;
+    uint8_t alu_a   = z80_A(c);
+    uint8_t alu_b   = 0;
+    uint8_t alu_xy  = 0;
+    uint8_t alu_bit = ctl->bit_index;
+    uint8_t alu_rot = ctl->rot_op;
+    switch (ctl->exec) {
+        case EXEC_ALU_R:               alu_b = getri(c, ctl->rf_src); break;
+        case EXEC_ALU_N: case EXEC_ALU_M: alu_b = c->tmp8; break;
+        case EXEC_INC_R: case EXEC_DEC_R: alu_b = getri(c, ctl->rf_dst); break;
+        case EXEC_INC_M: case EXEC_DEC_M: alu_b = c->tmp8; break;
+        case EXEC_CB_R:  alu_b = getr(c, ctl->rf_src); alu_xy = alu_b; break;
+        case EXEC_CB_M:  alu_b = c->tmp8; alu_xy = (uint8_t)(c->rf[RFP_WZ] >> 8); break;
+        case EXEC_DDCB: {
+            /* mode + rot/bit come from the latched CB opcode in tmph */
+            uint8_t cb_op = c->tmph;
+            alu_b   = c->tmp8;
+            alu_xy  = (uint8_t)(c->rf[RFP_WZ] >> 8);
+            alu_md  = ((cb_op >> 6) == CB_BIT) ? (uint8_t)FLAG_BIT : (uint8_t)FLAG_ROT;
+            alu_rot = (uint8_t)((cb_op >> 3) & 7);
+            alu_bit = (uint8_t)((cb_op >> 3) & 7);
+        } break;
+        case EXEC_NEG:     alu_md = (uint8_t)FLAG_NEG; break;
+        case EXEC_LD_A_IR:
+            alu_md  = (uint8_t)FLAG_LD_A_I;
+            alu_b   = ctl->aux ? c->reg_r : c->reg_i;
+            alu_bit = c->iff2 ? 1u : 0u;
+            break;
+        case EXEC_IN_C:    alu_md = (uint8_t)FLAG_IN; alu_b = c->tmp8; break;
+        case EXEC_RRD: case EXEC_RLD:
+            alu_md = (ctl->exec == EXEC_RRD) ? (uint8_t)FLAG_RRD : (uint8_t)FLAG_RLD;
+            alu_b  = c->tmp8;
+            break;
+        case EXEC_BLOCK: {
+            /* (cat=aux>>1, dec=aux[0]); mux fires at the M-cycle that
+               commits the flag formula. tmp8 holds the byte latched in
+               the prior MRD; for BLOCK_CP the current rbyte == tmp8 too. */
+            uint8_t cat = (uint8_t)((ctl->aux >> 1) & 0x3);
+            bool dec = (ctl->aux & 1) != 0;
+            switch (cat) {
+                case 0: if (m == 3) {
+                    alu_md = (uint8_t)FLAG_BLOCK_LD; alu_b = c->tmp8;
+                    alu_bit = ((c->rf[RFP_BC] - 1u) & 0xFFFFu) ? 1u : 0u;
+                } break;
+                case 1: if (m == 2) {
+                    alu_md = (uint8_t)FLAG_BLOCK_CP; alu_b = c->tmp8;
+                    alu_bit = ((c->rf[RFP_BC] - 1u) & 0xFFFFu) ? 1u : 0u;
+                } break;
+                case 2: if (m == 4) {
+                    /* INI/IND: data = tmpl, newB = B-1, k = data + C +/- 1 */
+                    uint16_t bk = (uint16_t)(c->tmpl +
+                                  (uint8_t)(getr(c, REG_C) + (dec ? -1 : 1)));
+                    alu_md = (uint8_t)FLAG_BLOCK_IO;
+                    alu_a  = c->tmpl;
+                    alu_b  = (uint8_t)(getr(c, REG_B) - 1u);
+                    alu_xy = (uint8_t)((bk & 0x7u) | ((bk & 0x100u) ? 0x8u : 0u));
+                } break;
+                default: if (m == 4) { /* cat==3 OUTI/OUTD */
+                    /* data = tmpl, newB = current B (already decremented at m=3),
+                       k = data + new_L (after HL +/-1) */
+                    uint8_t new_l = (uint8_t)((c->rf[RFP_HL] + (dec ? -1 : 1)) & 0xFF);
+                    uint16_t bk = (uint16_t)(c->tmpl + new_l);
+                    alu_md = (uint8_t)FLAG_BLOCK_IO;
+                    alu_a  = c->tmpl;
+                    alu_b  = getr(c, REG_B);
+                    alu_xy = (uint8_t)((bk & 0x7u) | ((bk & 0x100u) ? 0x8u : 0u));
+                } break;
+            }
+        } break;
+        default: break;
+    }
+
+    /* Single z80_alu call (mirrors u_alu instance in V). */
+    uint8_t alu_res, alu_fout;
+    z80_alu(alu_md, (uint8_t)ctl->alu_op, alu_rot, alu_bit, alu_xy,
+            alu_a, alu_b, z80_F(c), c->q,
+            &alu_res, &alu_fout);
+
     switch (ctl->exec) {
 
     /* ---------- single M-cycle (finish at end of M1) ---------- */
@@ -324,20 +358,16 @@ static void z80_exec_step(z80_t *c)
                       z80_start_mcycle(c, BUSOP_INTERNAL, c->rf[RFP_WZ], 0, 2); }
         else if (m == 4) z80_start_mcycle(c, BUSOP_MRD, c->rf[RFP_WZ], 0, 1); /* read (IX+d) 4T */
         else if (m == 5) {
+            /* mode / rot / bit / xy were set by the alu mux from tmph + WZ */
             uint8_t op = c->tmph, val = RB, res = val;
             uint8_t x = (uint8_t)(op >> 6), yy = (uint8_t)((op >> 3) & 7), zz = (uint8_t)(op & 7);
             if (x == CB_BIT) {
-                uint8_t xy = (uint8_t)(c->rf[RFP_WZ] >> 8);
-                uint8_t r, f;
-                z80_alu(FLAG_BIT, 0, 0, yy, xy, 0, val, z80_F(c), 0, &r, &f);
-                z80_setF(c, f);
+                z80_setF(c, alu_fout);
                 finish(c);
             } else {
-                if (x == CB_ROT) { uint8_t f;
-                                   z80_alu(FLAG_ROT, 0, yy, 0, 0, 0, val, z80_F(c), 0, &res, &f);
-                                   z80_setF(c, f); }
+                if      (x == CB_ROT) { res = alu_res; z80_setF(c, alu_fout); }
                 else if (x == CB_RES) res = (uint8_t)(val & ~(1u << yy));
-                else                  res = (uint8_t)(val | (1u << yy));
+                else                  res = (uint8_t)(val |  (1u << yy));
                 if (zz != REG_iHL) setr(c, zz, res);   /* undocumented register copy */
                 z80_start_mcycle(c, BUSOP_MWR, c->rf[RFP_WZ], res, 0);
             }
@@ -357,37 +387,31 @@ static void z80_exec_step(z80_t *c)
         break;
 
     case EXEC_LD_R_R: setri(c, ctl->rf_dst, getri(c, ctl->rf_src)); finish(c); break;
-    case EXEC_ALU_R:  do_alu(c, getri(c, ctl->rf_src)); finish(c); break;
-    case EXEC_INC_R: {
-        uint8_t res, f;
-        z80_alu(FLAG_INC8, 0, 0, 0, 0, 0, getri(c, ctl->rf_dst), z80_F(c), 0, &res, &f);
-        setri(c, ctl->rf_dst, res); z80_setF(c, f); finish(c); break;
-    }
-    case EXEC_DEC_R: {
-        uint8_t res, f;
-        z80_alu(FLAG_DEC8, 0, 0, 0, 0, 0, getri(c, ctl->rf_dst), z80_F(c), 0, &res, &f);
-        setri(c, ctl->rf_dst, res); z80_setF(c, f); finish(c); break;
-    }
-    case EXEC_ROT_A: {
-        uint8_t res, f;
-        z80_alu(FLAG_ROT_A, 0, ctl->rot_op, 0, 0, z80_A(c), 0, z80_F(c), 0, &res, &f);
-        z80_setA(c, res); z80_setF(c, f); finish(c); break;
-    }
-    case EXEC_DAA: { uint8_t res, f;
-        z80_alu(FLAG_DAA, 0, 0, 0, 0, z80_A(c), 0, z80_F(c), 0, &res, &f);
-        z80_setA(c, res); z80_setF(c, f); finish(c); break; }
-    case EXEC_CPL: { uint8_t res, f;
-        z80_alu(FLAG_CPL, 0, 0, 0, 0, z80_A(c), 0, z80_F(c), 0, &res, &f);
-        z80_setA(c, res); z80_setF(c, f); finish(c); break; }
-    case EXEC_SCF: { uint8_t res, f;
-        z80_alu(FLAG_SCF, 0, 0, 0, 0, z80_A(c), 0, z80_F(c), c->q, &res, &f);
-        z80_setF(c, f); finish(c); break; }
-    case EXEC_CCF: { uint8_t res, f;
-        z80_alu(FLAG_CCF, 0, 0, 0, 0, z80_A(c), 0, z80_F(c), c->q, &res, &f);
-        z80_setF(c, f); finish(c); break; }
+    case EXEC_ALU_R:
+        if (ctl->alu_op != ALU_CP) z80_setA(c, alu_res);
+        z80_setF(c, alu_fout); finish(c); break;
+    case EXEC_INC_R:
+        setri(c, ctl->rf_dst, alu_res); z80_setF(c, alu_fout); finish(c); break;
+    case EXEC_DEC_R:
+        setri(c, ctl->rf_dst, alu_res); z80_setF(c, alu_fout); finish(c); break;
+    case EXEC_ROT_A:
+        z80_setA(c, alu_res); z80_setF(c, alu_fout); finish(c); break;
+    case EXEC_DAA:
+        z80_setA(c, alu_res); z80_setF(c, alu_fout); finish(c); break;
+    case EXEC_CPL:
+        z80_setA(c, alu_res); z80_setF(c, alu_fout); finish(c); break;
+    case EXEC_SCF:
+        z80_setF(c, alu_fout); finish(c); break;
+    case EXEC_CCF:
+        z80_setF(c, alu_fout); finish(c); break;
 
     case EXEC_EX_DE_HL: { uint16_t t = c->rf[RFP_DE]; c->rf[RFP_DE] = c->rf[RFP_HL]; c->rf[RFP_HL] = t; finish(c); break; }
-    case EXEC_EX_AF:    { uint16_t t = c->rf[RFP_AF]; c->rf[RFP_AF] = c->rf[RFP_AF2]; c->rf[RFP_AF2] = t; finish(c); break; }
+    case EXEC_EX_AF:    {
+        /* Swap replaces F with the alternate F — counts as modifying F, so
+           Q (= new F) must be committed at instruction end. Sean Young §4.1. */
+        uint16_t t = c->rf[RFP_AF]; c->rf[RFP_AF] = c->rf[RFP_AF2]; c->rf[RFP_AF2] = t;
+        c->f_modified = true; finish(c); break;
+    }
     case EXEC_EXX: {
         uint16_t t;
         t = c->rf[RFP_BC]; c->rf[RFP_BC] = c->rf[RFP_BC2]; c->rf[RFP_BC2] = t;
@@ -425,7 +449,10 @@ static void z80_exec_step(z80_t *c)
         break;
     case EXEC_ALU_N:
         if (m == 1) z80_start_mcycle(c, BUSOP_MRD, z80_pc_inc(c), 0, 0);
-        else { do_alu(c, RB); finish(c); }
+        else {
+            if (ctl->alu_op != ALU_CP) z80_setA(c, alu_res);
+            z80_setF(c, alu_fout); finish(c);
+        }
         break;
 
     /* ---------- (HL) / (IX+d) read ---------- */
@@ -435,7 +462,10 @@ static void z80_exec_step(z80_t *c)
         break;
     case EXEC_ALU_M:
         if (mm == 1) z80_start_mcycle(c, BUSOP_MRD, memaddr, 0, 0);
-        else { do_alu(c, RB); finish(c); }
+        else {
+            if (ctl->alu_op != ALU_CP) z80_setA(c, alu_res);
+            z80_setF(c, alu_fout); finish(c);
+        }
         break;
 
     /* ---------- (HL) / (IX+d) write ---------- */
@@ -457,16 +487,14 @@ static void z80_exec_step(z80_t *c)
     /* ---------- (HL) / (IX+d) read-modify-write ---------- */
     case EXEC_INC_M:
         if (mm == 1) z80_start_mcycle(c, BUSOP_MRD, memaddr, 0, 1); /* 4T read */
-        else if (mm == 2) { uint8_t res, f;
-                           z80_alu(FLAG_INC8, 0, 0, 0, 0, 0, RB, z80_F(c), 0, &res, &f);
-                           z80_setF(c, f); z80_start_mcycle(c, BUSOP_MWR, memaddr, res, 0); }
+        else if (mm == 2) { z80_setF(c, alu_fout);
+                           z80_start_mcycle(c, BUSOP_MWR, memaddr, alu_res, 0); }
         else finish(c);
         break;
     case EXEC_DEC_M:
         if (mm == 1) z80_start_mcycle(c, BUSOP_MRD, memaddr, 0, 1);
-        else if (mm == 2) { uint8_t res, f;
-                           z80_alu(FLAG_DEC8, 0, 0, 0, 0, 0, RB, z80_F(c), 0, &res, &f);
-                           z80_setF(c, f); z80_start_mcycle(c, BUSOP_MWR, memaddr, res, 0); }
+        else if (mm == 2) { z80_setF(c, alu_fout);
+                           z80_start_mcycle(c, BUSOP_MWR, memaddr, alu_res, 0); }
         else finish(c);
         break;
 
@@ -485,8 +513,11 @@ static void z80_exec_step(z80_t *c)
     case EXEC_JP_CC:
         if (m == 1) z80_start_mcycle(c, BUSOP_MRD, z80_pc_inc(c), 0, 0);
         else if (m == 2) { c->tmpl = RB; z80_start_mcycle(c, BUSOP_MRD, z80_pc_inc(c), 0, 0); }
-        else { uint16_t nn = z80_pair_hi_lo(RB, c->tmpl); c->rf[RFP_WZ] = nn;
-               if (z80_cc_true(z80_F(c), ctl->cc)) z80_setPC(c, nn); finish(c); }
+        else {
+            uint16_t nn = z80_pair_hi_lo(RB, c->tmpl); c->rf[RFP_WZ] = nn;
+            if (z80_cc_true(z80_F(c), ctl->cc)) z80_setPC(c, nn);
+            finish(c);
+        }
         break;
     case EXEC_LD_A_NN:
         if (m == 1) z80_start_mcycle(c, BUSOP_MRD, z80_pc_inc(c), 0, 0);
@@ -652,34 +683,31 @@ static void z80_exec_step(z80_t *c)
         else finish(c);
         break;
 
-    /* ---------- CB: rotates/shifts + BIT/RES/SET ---------- */
+    /* ---------- CB: rotates/shifts + BIT/RES/SET ----------
+       ALU mode (FLAG_ROT for cb_kind=ROT, FLAG_BIT for cb_kind=BIT, FLAG_NONE
+       for RES/SET) comes from the PLA via the mux above; for RES/SET the
+       sequencer computes the bit-manipulation result directly (alu unused). */
     case EXEC_CB_R: {
-        uint8_t val = getr(c, ctl->rf_src), res, f;
+        uint8_t val = getr(c, ctl->rf_src), res = val;
         switch (ctl->cb_kind) {
-            case CB_ROT: z80_alu(FLAG_ROT, 0, ctl->rot_op, 0, 0, 0, val, z80_F(c), 0, &res, &f);
-                         setr(c, ctl->rf_dst, res); z80_setF(c, f); break;
-            case CB_BIT: z80_alu(FLAG_BIT, 0, 0, ctl->bit_index, val, 0, val, z80_F(c), 0, &res, &f);
-                         z80_setF(c, f); break;
+            case CB_ROT: res = alu_res;    setr(c, ctl->rf_dst, res); z80_setF(c, alu_fout); break;
+            case CB_BIT:                   z80_setF(c, alu_fout); break;
             case CB_RES: setr(c, ctl->rf_dst, (uint8_t)(val & ~(1u << ctl->bit_index))); break;
-            case CB_SET: setr(c, ctl->rf_dst, (uint8_t)(val | (1u << ctl->bit_index))); break;
+            case CB_SET: setr(c, ctl->rf_dst, (uint8_t)(val |  (1u << ctl->bit_index))); break;
         }
         finish(c); break;
     }
     case EXEC_CB_M:
         if (m == 1) z80_start_mcycle(c, BUSOP_MRD, c->rf[RFP_HL], 0, 1); /* 4T read */
         else if (ctl->cb_kind == CB_BIT) {
-            uint8_t xy = (uint8_t)(c->rf[RFP_WZ] >> 8);   /* MEMPTR high byte */
-            uint8_t r, f;
-            z80_alu(FLAG_BIT, 0, 0, ctl->bit_index, xy, 0, RB, z80_F(c), 0, &r, &f);
-            z80_setF(c, f);
+            z80_setF(c, alu_fout);
             finish(c);
         } else if (m == 2) {
-            uint8_t val = RB, res = val, f;
+            uint8_t val = RB, res = val;
             switch (ctl->cb_kind) {
-                case CB_ROT: z80_alu(FLAG_ROT, 0, ctl->rot_op, 0, 0, 0, val, z80_F(c), 0, &res, &f);
-                             z80_setF(c, f); break;
+                case CB_ROT: res = alu_res; z80_setF(c, alu_fout); break;
                 case CB_RES: res = (uint8_t)(val & ~(1u << ctl->bit_index)); break;
-                case CB_SET: res = (uint8_t)(val | (1u << ctl->bit_index)); break;
+                case CB_SET: res = (uint8_t)(val |  (1u << ctl->bit_index)); break;
                 default: break;
             }
             z80_start_mcycle(c, BUSOP_MWR, c->rf[RFP_HL], res, 0);
@@ -695,11 +723,8 @@ static void z80_exec_step(z80_t *c)
         if (m == 1) z80_start_mcycle(c, BUSOP_INTERNAL, c->rf[RFP_HL], 0, 7);
         else { do_adc16(c, true); finish(c); }
         break;
-    case EXEC_NEG: {
-        uint8_t res, f;
-        z80_alu(FLAG_SUB8, ALU_SUB, 0, 0, 0, 0, z80_A(c), z80_F(c), 0, &res, &f);
-        z80_setA(c, res); z80_setF(c, f); finish(c); break;
-    }
+    case EXEC_NEG:
+        z80_setA(c, alu_res); z80_setF(c, alu_fout); finish(c); break;
     case EXEC_IM: c->im = ctl->aux; finish(c); break;
     case EXEC_RETN:
         if (m == 1) z80_start_mcycle(c, BUSOP_MRD, z80_SP(c), 0, 0);
@@ -719,16 +744,7 @@ static void z80_exec_step(z80_t *c)
         break;
     case EXEC_LD_A_IR:
         if (m == 1) z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 1);
-        else {
-            uint8_t v = ctl->aux ? c->reg_r : c->reg_i;
-            z80_setA(c, v);
-            uint8_t f = z80_F(c) & Z80_CF;
-            if (v & 0x80) f |= Z80_SF;
-            if (v == 0)   f |= Z80_ZF;
-            f |= v & (Z80_YF | Z80_XF);
-            if (c->iff2)  f |= Z80_PF;
-            z80_setF(c, f); finish(c);
-        }
+        else { z80_setA(c, alu_res); z80_setF(c, alu_fout); finish(c); }
         break;
     case EXEC_LD_NNA_RP:
         if (m == 1) z80_start_mcycle(c, BUSOP_MRD, z80_pc_inc(c), 0, 0);
@@ -753,14 +769,8 @@ static void z80_exec_step(z80_t *c)
         if (m == 1) { c->rf[RFP_WZ] = (uint16_t)(c->rf[RFP_BC] + 1);
                       z80_start_mcycle(c, BUSOP_IORD, c->rf[RFP_BC], 0, 0); }
         else {
-            uint8_t d = RB;
-            if (ctl->rf_dst != REG_iHL) setr(c, ctl->rf_dst, d);
-            uint8_t f = z80_F(c) & Z80_CF;
-            if (d & 0x80) f |= Z80_SF;
-            if (d == 0)   f |= Z80_ZF;
-            f |= d & (Z80_YF | Z80_XF);
-            if (z80_parity(d)) f |= Z80_PF;
-            z80_setF(c, f); finish(c);
+            if (ctl->rf_dst != REG_iHL) setr(c, ctl->rf_dst, RB);
+            z80_setF(c, alu_fout); finish(c);
         }
         break;
     case EXEC_OUT_C:
@@ -773,21 +783,14 @@ static void z80_exec_step(z80_t *c)
     case EXEC_RLD:
         if (m == 1) z80_start_mcycle(c, BUSOP_MRD, c->rf[RFP_HL], 0, 0);
         else if (m == 2) {
-            uint8_t mem = RB, a = z80_A(c), newA, newMem;
-            if (ctl->exec == EXEC_RRD) {
-                newA   = (uint8_t)((a & 0xF0) | (mem & 0x0F));
-                newMem = (uint8_t)((mem >> 4) | ((a & 0x0F) << 4));
-            } else {
-                newA   = (uint8_t)((a & 0xF0) | ((mem >> 4) & 0x0F));
-                newMem = (uint8_t)(((mem << 4) & 0xF0) | (a & 0x0F));
-            }
-            z80_setA(c, newA);
-            uint8_t f = z80_F(c) & Z80_CF;
-            if (newA & 0x80) f |= Z80_SF;
-            if (newA == 0)   f |= Z80_ZF;
-            f |= newA & (Z80_YF | Z80_XF);
-            if (z80_parity(newA)) f |= Z80_PF;
-            z80_setF(c, f);
+            uint8_t mem = RB, a = z80_A(c);
+            /* new_A and flags from z80_alu (FLAG_RRD/RLD set by the mux).
+               new_mem is pure nibble routing — kept here as bus fabric
+               until E1 lands the explicit db1/db2 segments. */
+            z80_setA(c, alu_res); z80_setF(c, alu_fout);
+            uint8_t newMem = (ctl->exec == EXEC_RRD)
+                ? (uint8_t)((mem >> 4) | ((a & 0x0F) << 4))
+                : (uint8_t)(((mem << 4) & 0xF0) | (a & 0x0F));
             c->rf[RFP_WZ] = (uint16_t)(c->rf[RFP_HL] + 1);
             c->tmpl = newMem;
             z80_start_mcycle(c, BUSOP_INTERNAL, c->rf[RFP_HL], 0, 4);
@@ -803,15 +806,16 @@ static void z80_exec_step(z80_t *c)
         bool    dec = (id & 1) != 0;
         uint8_t cat = (uint8_t)(id >> 1);   /* 0 LD, 1 CP, 2 IN, 3 OUT */
 
+        /* Pointer/BC updates are IDU work (A1 will move them); flags come
+           from z80_alu (FLAG_BLOCK_LD/CP/IO modes; inputs set by the mux). */
         if (cat == 0) {                     /* LDI/LDD/LDIR/LDDR */
             if (m == 1) z80_start_mcycle(c, BUSOP_MRD, c->rf[RFP_HL], 0, 0);
             else if (m == 2) z80_start_mcycle(c, BUSOP_MWR, c->rf[RFP_DE], RB, 2); /* 5T write */
             else if (m == 3) {
-                uint8_t val = c->tmp8;
                 uint16_t bc = (uint16_t)(c->rf[RFP_BC] - 1); c->rf[RFP_BC] = bc;
                 c->rf[RFP_HL] = (uint16_t)(c->rf[RFP_HL] + (dec ? -1 : 1));
                 c->rf[RFP_DE] = (uint16_t)(c->rf[RFP_DE] + (dec ? -1 : 1));
-                z80_setF(c, block_ld_flags(z80_F(c), z80_A(c), val, bc));
+                z80_setF(c, alu_fout);
                 if (rep && bc != 0) { z80_setPC(c, (uint16_t)(z80_PC(c) - 2));
                     c->rf[RFP_WZ] = (uint16_t)(z80_PC(c) + 1);
                     z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 5); }
@@ -822,11 +826,10 @@ static void z80_exec_step(z80_t *c)
         else if (cat == 1) {                /* CPI/CPD/CPIR/CPDR */
             if (m == 1) z80_start_mcycle(c, BUSOP_MRD, c->rf[RFP_HL], 0, 0);
             else if (m == 2) {
-                uint8_t val = c->tmp8;
                 uint16_t bc = (uint16_t)(c->rf[RFP_BC] - 1); c->rf[RFP_BC] = bc;
                 c->rf[RFP_WZ] = (uint16_t)(c->rf[RFP_WZ] + (dec ? -1 : 1));
                 c->rf[RFP_HL] = (uint16_t)(c->rf[RFP_HL] + (dec ? -1 : 1));
-                z80_setF(c, block_cp_flags(z80_F(c), z80_A(c), val, bc));
+                z80_setF(c, alu_fout);
                 z80_start_mcycle(c, BUSOP_INTERNAL, c->rf[RFP_HL], 0, 5);
             }
             else if (m == 3) {
@@ -845,12 +848,9 @@ static void z80_exec_step(z80_t *c)
             else if (m == 3) { c->tmpl = RB;   /* data */
                                z80_start_mcycle(c, BUSOP_MWR, c->rf[RFP_HL], RB, 0); }
             else if (m == 4) {
-                uint8_t data = c->tmpl;
-                uint8_t creg = getr(c, REG_C);
                 uint8_t newB = (uint8_t)(getr(c, REG_B) - 1); setr(c, REG_B, newB);
                 c->rf[RFP_HL] = (uint16_t)(c->rf[RFP_HL] + (dec ? -1 : 1));
-                uint16_t k = (uint16_t)(data + (uint8_t)(dec ? (creg - 1) : (creg + 1)));
-                z80_setF(c, block_io_flags(data, newB, k));
+                z80_setF(c, alu_fout);
                 if (rep && newB != 0) { z80_setPC(c, (uint16_t)(z80_PC(c) - 2));
                     z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 5); }
                 else finish(c);
@@ -867,12 +867,9 @@ static void z80_exec_step(z80_t *c)
                 z80_start_mcycle(c, BUSOP_IOWR, c->rf[RFP_BC], c->tmpl, 0); /* BC has new B */
             }
             else if (m == 4) {
-                uint8_t data = c->tmpl;
                 c->rf[RFP_HL] = (uint16_t)(c->rf[RFP_HL] + (dec ? -1 : 1));
-                uint8_t l = getr(c, REG_L);
-                uint16_t k = (uint16_t)(data + l);
                 uint8_t newB = getr(c, REG_B);
-                z80_setF(c, block_io_flags(data, newB, k));
+                z80_setF(c, alu_fout);
                 if (rep && newB != 0) { z80_setPC(c, (uint16_t)(z80_PC(c) - 2));
                     z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 5); }
                 else finish(c);
@@ -933,7 +930,10 @@ static void z80_exec_step(z80_t *c)
 
 /* ---- timing-point predicates ---- */
 
-static bool is_wait_phase(const z80_t *c)
+/* The WAIT *sample edge* — the single phase per (T2 or any inserted Tw) at
+   which the silicon latches !wait_n. Memory: T2.N. I/O: the automatic Tw.N
+   (= t_state 3 in our IORD/IOWR which has m_len=4 and counts Tw as T3). */
+static bool is_wait_sample_phase(const z80_t *c)
 {
     if (c->phi != 1) return false;
     switch (c->bus_op) {
@@ -941,7 +941,7 @@ static bool is_wait_phase(const z80_t *c)
         case BUSOP_MRD:
         case BUSOP_MWR:  return c->t_state == 2;
         case BUSOP_IORD:
-        case BUSOP_IOWR: return c->t_state == 3; /* the automatic Tw */
+        case BUSOP_IOWR: return c->t_state == 3;
         default:         return false;
     }
 }
@@ -1015,14 +1015,20 @@ static void begin_next(z80_t *c)
     bool allow_int = !c->ei_delay;
     c->ei_delay = false;
 
-    if (c->nmi_pending) {
+    /* Use the silicon sample latches (taken at T_last.P), not the live pin
+       state. Silicon's accept decision is locked in one phase before the
+       M-cycle boundary; this prevents an edge/level change between T_last.P
+       and the boundary from retroactively flipping the decision. */
+    if (c->nmi_sampled) {
+        c->nmi_sampled = false;
         c->nmi_pending = false;
         if (c->halted) { c->rf[RFP_PC] = (uint16_t)(c->rf[RFP_PC] + 1); c->halted = false; }
         c->iff2 = c->iff1; c->iff1 = false;        /* IFF1->IFF2, disable */
         start_seq_m1(c, EXEC_NMI, 5, true);        /* 5T ack, opcode discarded */
         return;
     }
-    if (allow_int && !c->pins.int_n && c->iff1) {
+    if (allow_int && c->int_sampled && c->iff1) {
+        c->int_sampled = false;
         if (c->halted) { c->rf[RFP_PC] = (uint16_t)(c->rf[RFP_PC] + 1); c->halted = false; }
         c->iff1 = c->iff2 = false;
         start_seq_inta(c, 7);                      /* INTA ack (IM0/1/2) */
@@ -1070,6 +1076,8 @@ static void reset_state(z80_t *c)
     c->prefix = PFX_NONE;
     c->nmi_pending = false;
     c->prev_nmi_n = true;
+    c->nmi_sampled = false;
+    c->int_sampled = false;
     c->ei_delay = false;
     c->suppress_decode = false;
     c->bus_granted = false;
@@ -1077,7 +1085,7 @@ static void reset_state(z80_t *c)
     c->t_state = 1; c->phi = 0; c->m_cycle = 1;
     c->bus_op = BUSOP_M1; c->m_len = 4; c->m_addr = 0x0000;
     c->decoded = false; c->instr_done = false; c->ucode = 0;
-    c->phase_primed = false; c->stalled = false;
+    c->phase_primed = false; c->stalled = false; c->wait_sampled = false;
     c->q = 0; c->f_modified = false;
 
     c->pins.m1_n = c->pins.mreq_n = c->pins.iorq_n = 1;
@@ -1153,10 +1161,28 @@ void z80_phase_step(z80_t *c)
         advance(c);
     c->phase_primed = true;
 
-    c->stalled = is_wait_phase(c) && (c->pins.wait_n == 0);
+    /* WAIT sample + latch (UM0080). Sample only at the spec edge; outside
+       that single phase the latch falls to 0 so subsequent .N→.P advances
+       run normally. This is the silicon's behavior: each Tw is decided by
+       one falling-edge sample. */
+    if (is_wait_sample_phase(c))
+        c->wait_sampled = (c->pins.wait_n == 0);
+    else
+        c->wait_sampled = false;
+    c->stalled = c->wait_sampled;
 
     if (!c->stalled && is_latch_phase(c))
         do_latch(c);
+
+    /* NMI / INT silicon sample point: rising edge of the last T-state of
+       the current M-cycle (= T_last.P, the .P sub-phase of t_state == m_len)
+       per Zilog UM0080. Sample once per M-cycle here; the last M-cycle's
+       sample is the one begin_next() reads. While WAIT is asserted we hold
+       the previous sample (T-state didn't advance), matching silicon. */
+    if (!c->stalled && c->t_state == c->m_len && c->phi == 0) {
+        c->nmi_sampled = c->nmi_pending;
+        c->int_sampled = !c->pins.int_n;
+    }
 
     z80_timing(c->bus_op, c->t_state, c->phi, c->m_len, c->m_addr, c->m_wdata,
                c->reg_i, c->reg_r,

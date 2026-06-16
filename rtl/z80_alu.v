@@ -134,23 +134,94 @@ module z80_alu (
                      | ((bittest & 8'h80) ? `Z80_SF : 8'h0)
                      | (xy_src & (`Z80_YF | `Z80_XF));
 
+    // ---- NEG: 0 - a, using the existing SUB datapath. ----
+    // We reuse the SUB chain: when mode==FLAG_NEG, drive the subtractor with
+    // a=0 and b=a externally not possible (signature is fixed), so we
+    // compute a parallel SUB(0, a, 0) inline here.
+    wire [4:0]  neg_lo  = {1'b0, 4'h0} - {1'b0, a[3:0]};
+    wire [8:0]  neg9    = {1'b0, 8'h0} - {1'b0, a};
+    wire [7:0]  neg_r   = neg9[7:0];
+    wire        neg_h   = neg_lo[4];
+    wire        neg_c   = neg9[8];
+    wire        neg_ov  = ((8'h00 ^ a) & (8'h00 ^ neg_r) & 8'h80) != 8'h00;
+    wire [7:0]  f_neg   = `Z80_NF | (neg_r[7] ? `Z80_SF : 8'h0) | (neg_r == 8'h0 ? `Z80_ZF : 8'h0)
+                        | (neg_h ? `Z80_HF : 8'h0) | (neg_ov ? `Z80_PF : 8'h0)
+                        | (neg_c ? `Z80_CF : 8'h0) | (neg_r & (`Z80_YF | `Z80_XF));
+
+    // ---- LD A,I / LD A,R: b carries the source byte, bit_idx[0] = iff2 ----
+    wire [7:0]  f_ld_a_i = (oldf & `Z80_CF)
+                        | (b[7] ? `Z80_SF : 8'h0) | (b == 8'h0 ? `Z80_ZF : 8'h0)
+                        | (b & (`Z80_YF | `Z80_XF))
+                        | (bit_idx[0] ? `Z80_PF : 8'h0);
+
+    // ---- IN r,(C): flags from b (the read byte) ----
+    wire        par_in = ~(^b);
+    wire [7:0]  f_in   = (oldf & `Z80_CF)
+                       | (b[7] ? `Z80_SF : 8'h0) | (b == 8'h0 ? `Z80_ZF : 8'h0)
+                       | (b & (`Z80_YF | `Z80_XF))
+                       | (par_in ? `Z80_PF : 8'h0);
+
+    // ---- RRD / RLD: new_A only; new_mem is bus-fabric (sequencer) ----
+    wire [7:0]  rrd_a  = {a[7:4], b[3:0]};
+    wire [7:0]  rld_a  = {a[7:4], b[7:4]};
+    wire        par_rrd = ~(^rrd_a);
+    wire        par_rld = ~(^rld_a);
+    wire [7:0]  f_rrd  = (oldf & `Z80_CF)
+                       | (rrd_a[7] ? `Z80_SF : 8'h0) | (rrd_a == 8'h0 ? `Z80_ZF : 8'h0)
+                       | (rrd_a & (`Z80_YF | `Z80_XF))
+                       | (par_rrd ? `Z80_PF : 8'h0);
+    wire [7:0]  f_rld  = (oldf & `Z80_CF)
+                       | (rld_a[7] ? `Z80_SF : 8'h0) | (rld_a == 8'h0 ? `Z80_ZF : 8'h0)
+                       | (rld_a & (`Z80_YF | `Z80_XF))
+                       | (par_rld ? `Z80_PF : 8'h0);
+
+    // ---- Block-op flags (a, b carry the operands; bit_idx[0] = bc_nz;
+    //                     xy_src[3:0] = {k_carry, k_lo3} for BLOCK_IO) ----
+    wire [7:0]  bld_n   = a + b;
+    wire [7:0]  f_blk_ld = (oldf & (`Z80_SF | `Z80_ZF | `Z80_CF))
+                        | (bld_n[1] ? `Z80_YF : 8'h0) | (bld_n[3] ? `Z80_XF : 8'h0)
+                        | (bit_idx[0] ? `Z80_PF : 8'h0);
+    wire [7:0]  bcp_r   = a - b;
+    wire [4:0]  bcp_hc  = {1'b0, a[3:0]} - {1'b0, b[3:0]};
+    wire        bcp_h   = bcp_hc[4];
+    wire [7:0]  bcp_n   = bcp_r - {7'b0, bcp_h};
+    wire [7:0]  f_blk_cp = (oldf & `Z80_CF) | `Z80_NF
+                        | (bcp_r[7] ? `Z80_SF : 8'h0) | (bcp_r == 8'h0 ? `Z80_ZF : 8'h0)
+                        | (bcp_h ? `Z80_HF : 8'h0)
+                        | (bcp_n[1] ? `Z80_YF : 8'h0) | (bcp_n[3] ? `Z80_XF : 8'h0)
+                        | (bit_idx[0] ? `Z80_PF : 8'h0);
+    wire        par_bio = ~(^({5'b0, xy_src[2:0]} ^ b));   // xy_src[2:0] = k_lo3, b = newB
+    wire [7:0]  f_blk_io = (a[7] ? `Z80_NF : 8'h0)
+                        | (xy_src[3] ? (`Z80_HF | `Z80_CF) : 8'h0)   // k_carry
+                        | (par_bio ? `Z80_PF : 8'h0)
+                        | (b[7] ? `Z80_SF : 8'h0) | (b == 8'h0 ? `Z80_ZF : 8'h0)
+                        | (b & (`Z80_YF | `Z80_XF));
+
     // ---- output mux ----
     always @* begin
         case (mode)
-            `FLAG_ROT:  begin res = cbr; fout = f_rot; end
-            `FLAG_BIT:  begin res = b;   fout = f_bit; end
-            `FLAG_ADD8: begin res = sum;   fout = f_add; end
-            `FLAG_SUB8: begin res = diff;  fout = f_sub; end
-            `FLAG_CP8:  begin res = diff;  fout = f_sub; end  // core discards res
-            `FLAG_LOGIC:begin res = lres;  fout = f_log; end
-            `FLAG_INC8: begin res = inc_r; fout = f_inc; end
-            `FLAG_DEC8: begin res = dec_r; fout = f_dec; end
-            `FLAG_ROT_A:begin res = rr;    fout = f_rota;end
-            `FLAG_DAA:  begin res = daa_r; fout = f_daa; end
-            `FLAG_CPL:  begin res = cpl_r; fout = f_cpl; end
-            `FLAG_SCF:  begin res = a;     fout = f_scf; end
-            `FLAG_CCF:  begin res = a;     fout = f_ccf; end
-            default:  begin res = b;     fout = oldf; end
+            `FLAG_ROT:      begin res = cbr;   fout = f_rot;    end
+            `FLAG_BIT:      begin res = b;     fout = f_bit;    end
+            `FLAG_ADD8:     begin res = sum;   fout = f_add;    end
+            `FLAG_SUB8:     begin res = diff;  fout = f_sub;    end
+            `FLAG_CP8:      begin res = diff;  fout = f_sub;    end  // core discards res
+            `FLAG_LOGIC:    begin res = lres;  fout = f_log;    end
+            `FLAG_INC8:     begin res = inc_r; fout = f_inc;    end
+            `FLAG_DEC8:     begin res = dec_r; fout = f_dec;    end
+            `FLAG_ROT_A:    begin res = rr;    fout = f_rota;   end
+            `FLAG_DAA:      begin res = daa_r; fout = f_daa;    end
+            `FLAG_CPL:      begin res = cpl_r; fout = f_cpl;    end
+            `FLAG_SCF:      begin res = a;     fout = f_scf;    end
+            `FLAG_CCF:      begin res = a;     fout = f_ccf;    end
+            `FLAG_NEG:      begin res = neg_r; fout = f_neg;    end
+            `FLAG_LD_A_I:   begin res = b;     fout = f_ld_a_i; end
+            `FLAG_IN:       begin res = b;     fout = f_in;     end
+            `FLAG_RRD:      begin res = rrd_a; fout = f_rrd;    end
+            `FLAG_RLD:      begin res = rld_a; fout = f_rld;    end
+            `FLAG_BLOCK_LD: begin res = b;     fout = f_blk_ld; end
+            `FLAG_BLOCK_CP: begin res = b;     fout = f_blk_cp; end
+            `FLAG_BLOCK_IO: begin res = b;     fout = f_blk_io; end
+            default:        begin res = b;     fout = oldf;     end
         endcase
     end
 endmodule

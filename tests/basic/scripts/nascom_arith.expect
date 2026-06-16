@@ -1,0 +1,11 @@
+# Each line is a substring that must appear (in order) in BASIC's stdout.
+# Lines starting with '#' are comments, blank lines ignored.
+ 3
+ 50
+ 50
+ 4
+ 79
+ 42
+ 12
+ 3
+DONE-ARITH

@@ -33,10 +33,13 @@ Phase-exact actions:
 - **T4.N**: `pin_mreq_n ← 1`.
 - After T4.N the next M-cycle of the instruction begins (or the next M1).
 
-Note: on the real chip M1 deasserts late in T2; the externally important fact is that
-M1 is low during T1–T2 and high by T3. We deassert at T3.P, which matches the bus
-observation and keeps trace comparison deterministic; logged in known-differences if
-any reference samples it mid-T2.
+Note: M1 deasserts at T3.P in our model. Verified against the perfectz80 gate-level
+netlist (`make perfectz80`): perfectz80's per-half-cycle `cpu_step()` reads `m1_n=0`
+at T2.N and `m1_n=1` at T3.P, exactly matching us. Some references describe M1
+"deasserting late in T2" — that's the continuous-time analog edge; at half-cycle
+sample resolution (the granularity at which both we and the gate-level reference
+operate) M1 is high starting T3.P. So the model is silicon-faithful at the
+resolution at which it models.
 
 The opcode prefix bytes (CB/ED/DD/FD) are themselves fetched with an M1 cycle; the DD/FD
 chains keep issuing M1 fetches until a non-prefix opcode arrives. DDCB/FDCB fetch the

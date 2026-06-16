@@ -1,0 +1,9 @@
+# WAIT-state insertion on a memory read. The instruction LD A,(0x0100)
+# triggers an MRD cycle; pulse wait_n at T2.N inside that MRD to force
+# the model to insert Tw states until WAIT releases.
+@0000
+3A 00 01           # LD A,(0x0100)
+00 00              # NOPs
+76                 # HALT
+@0100
+A5                 # 0xA5 (the read value, makes the data bus distinctive)

@@ -58,6 +58,7 @@ module z80_core (
     reg [31:0] cycle, instr_count;
     reg        decoded;
     reg        nmi_pending, prev_nmi_n, ei_delay, suppress_decode, bus_granted;
+    reg        nmi_sampled, int_sampled;  // latched at T_last.P per UM0080
     reg [1:0]  irq_seq;        // 0 none, 1 NMI, 2 INT, 3 HALT-nop
 
     // ---- next-state ----
@@ -79,6 +80,7 @@ module z80_core (
     reg [31:0] cycle_n, instr_count_n;
     reg        decoded_n;
     reg        nmi_pending_n, prev_nmi_n_n, ei_delay_n, suppress_decode_n, bus_granted_n;
+    reg        nmi_sampled_n, int_sampled_n;
     reg [1:0]  irq_seq_n;
     reg        allow_int;
     reg        fin;
@@ -90,7 +92,11 @@ module z80_core (
     wire [1:0] cb_kind_w, idx_w;
     wire [3:0] rp_sel_w, aux_w;
     wire [7:0] rst_addr_w;
-    wire       uses_cc_w, valid_w, use_disp_w;
+    wire       use_disp_w;
+    // uses_cc / valid are produced by z80_pla but the sequencer doesn't
+    // consume them yet. Wire them up so iverilog and Verilator don't warn
+    // about missing pins; -Wno-UNUSEDSIGNAL handles the dead-end side.
+    wire       uses_cc_w, valid_w;
 
     z80_pla u_pla (
         .prefix(prefix), .op(ir),
@@ -134,11 +140,15 @@ module z80_core (
                       ((bus_op == `BUSOP_MRD)  && (t_state == 4'd3)) ||
                       ((bus_op == `BUSOP_IORD) && (t_state == 4'd4))
                     ) );
-    wire iswait  =  (phi == 1'b1) &&
+    // WAIT *sample edge* per Zilog UM0080: T2.N for memory cycles, the
+    // automatic Tw.N for I/O. Silicon latches !wait_n at this single
+    // phase per (T2 or inserted Tw) and inserts a Tw if asserted.
+    wire wait_sample_phase  =  (phi == 1'b1) &&
                   ( (((bus_op == `BUSOP_M1) || (bus_op == `BUSOP_MRD) ||
                       (bus_op == `BUSOP_MWR)) && (t_state == 4'd2)) ||
                     (((bus_op == `BUSOP_IORD) || (bus_op == `BUSOP_IOWR)) && (t_state == 4'd3)) );
-    wire stall   = iswait && (wait_n == 1'b0);
+    wire wait_sampled = wait_sample_phase && (wait_n == 1'b0);
+    wire stall = wait_sampled;  // hold current T-state as a Tw
     wire [7:0] rbyte = islatch ? data_in : tmp8;
 
     // ---- 8-bit register read ----
@@ -213,6 +223,12 @@ module z80_core (
         (rf_dst_w == 3'd5) ? rf[`RFP_HL][7:0]  :
         (rf_dst_w == 3'd7) ? rf[`RFP_AF][15:8] : 8'h00;
 
+    // Pre-derive the small inputs used by FLAG_BLOCK_IO so the mux below
+    // can stay simple. These are all functions of rf[] / tmp8 / tmpl /
+    // aux_w[0] (the dec/inc bit), readable here without dependence on rf_n.
+    wire [8:0] bk_ini = {1'b0, tmpl} + {1'b0, (rf[`RFP_BC][7:0] + (aux_w[0] ? 8'hFF : 8'h1))};
+    wire [8:0] bk_out = {1'b0, tmpl} + {1'b0, (rf[`RFP_HL][7:0] + (aux_w[0] ? 8'hFF : 8'h1))};
+
     always @* begin
         alu_a = A_cur;
         alu_b = 8'h00;
@@ -230,6 +246,45 @@ module z80_core (
             `EXEC_DDCB: begin alu_b = rbyte;           alu_xy = rf[`RFP_WZ][15:8];
                             alu_md = (tmph[7:6] == `CB_BIT) ? `FLAG_BIT : `FLAG_ROT;
                             alu_rot = tmph[5:3]; alu_bit = tmph[5:3]; end
+            // New A2 modes — flag formulas live in z80_alu.v, consumed
+            // by the EXEC handlers below as alu_res/alu_fout.
+            `EXEC_NEG: begin alu_md = `FLAG_NEG; alu_a = A_cur; end
+            `EXEC_LD_A_IR: begin alu_md = `FLAG_LD_A_I;
+                              alu_b = aux_w[0] ? reg_r : reg_i;
+                              alu_bit = {2'b0, iff2}; end
+            `EXEC_IN_C: begin alu_md = `FLAG_IN; alu_b = rbyte; end
+            `EXEC_RRD, `EXEC_RLD: begin
+                alu_md = (exec_w == `EXEC_RRD) ? `FLAG_RRD : `FLAG_RLD;
+                alu_a = A_cur; alu_b = rbyte;
+            end
+            `EXEC_BLOCK: begin
+                // (cat=aux_w[2:1], dec=aux_w[0]). Fire flag mux only at the
+                // M-cycle where the formula commits. tmp8 holds the latched
+                // byte for LD (latched at m=2's end); rbyte = data_in at the
+                // current latch phase for CP at m=2.
+                case (aux_w[2:1])
+                    2'd0: if (m_cycle == 3'd3) begin
+                        alu_md = `FLAG_BLOCK_LD; alu_a = A_cur; alu_b = tmp8;
+                        alu_bit = {2'b0, ((rf[`RFP_BC] - 16'd1) != 16'd0)};
+                    end
+                    2'd1: if (m_cycle == 3'd2) begin
+                        alu_md = `FLAG_BLOCK_CP; alu_a = A_cur; alu_b = rbyte;
+                        alu_bit = {2'b0, ((rf[`RFP_BC] - 16'd1) != 16'd0)};
+                    end
+                    2'd2: if (m_cycle == 3'd4) begin
+                        alu_md = `FLAG_BLOCK_IO;
+                        alu_a = tmpl;                      // data
+                        alu_b = rf[`RFP_BC][15:8] - 8'd1;   // newB
+                        alu_xy = {4'b0, bk_ini[8], bk_ini[2:0]};
+                    end
+                    default: if (m_cycle == 3'd4) begin   // 2'd3 = OUT
+                        alu_md = `FLAG_BLOCK_IO;
+                        alu_a = tmpl;                      // data
+                        alu_b = rf[`RFP_BC][15:8];          // already-decremented B
+                        alu_xy = {4'b0, bk_out[8], bk_out[2:0]};
+                    end
+                endcase
+            end
             default:             alu_b = 8'h00;
         endcase
     end
@@ -305,11 +360,21 @@ module z80_core (
         add16 = 17'd0; f16 = 8'd0;
         ei_delay_n = ei_delay; suppress_decode_n = suppress_decode;
         bus_granted_n = bus_granted; irq_seq_n = irq_seq;
+        nmi_sampled_n = nmi_sampled; int_sampled_n = int_sampled;
         allow_int = 1'b0;
 
         // NMI: latch a falling edge on nmi_n
         prev_nmi_n_n = nmi_n;
         nmi_pending_n = nmi_pending | (prev_nmi_n & ~nmi_n);
+
+        // NMI/INT silicon sample point: rising edge of the last T-state of
+        // the current M-cycle (= T_last.P) per Zilog UM0080. Refresh the
+        // sample latches here once per M-cycle; the last M-cycle's sample
+        // is the one the boundary uses to accept.
+        if (!stall && (t_state == m_len) && (phi == 1'b0)) begin
+            nmi_sampled_n = nmi_pending_n;
+            int_sampled_n = ~int_n;
+        end
 
         // latch on the current phase
         if (islatch) begin
@@ -428,7 +493,8 @@ module z80_core (
                 `EXEC_SCF, `EXEC_CCF: begin rf_n[`RFP_AF][7:0] = alu_fout; fin = 1'b1; end
 
                 `EXEC_EX_DE_HL: begin rf_n[`RFP_DE] = rf[`RFP_HL]; rf_n[`RFP_HL] = rf[`RFP_DE]; fin = 1'b1; end
-                `EXEC_EX_AF:    begin rf_n[`RFP_AF] = rf[`RFP_AF2]; rf_n[`RFP_AF2] = rf[`RFP_AF]; fin = 1'b1; end
+                `EXEC_EX_AF:    begin rf_n[`RFP_AF] = rf[`RFP_AF2]; rf_n[`RFP_AF2] = rf[`RFP_AF];
+                                      f_modified_n = 1'b1; fin = 1'b1; end
                 `EXEC_EXX: begin
                     rf_n[`RFP_BC] = rf[`RFP_BC2]; rf_n[`RFP_BC2] = rf[`RFP_BC];
                     rf_n[`RFP_DE] = rf[`RFP_DE2]; rf_n[`RFP_DE2] = rf[`RFP_DE];
@@ -750,16 +816,8 @@ module z80_core (
                     end
                 end
                 `EXEC_NEG: begin
-                    edv = 8'h00 - A_cur;
-                    edf = `Z80_NF;
-                    if (edv[7]) edf = edf | `Z80_SF;
-                    if (edv == 8'h0) edf = edf | `Z80_ZF;
-                    if (A_cur[3:0] != 4'h0) edf = edf | `Z80_HF;
-                    if (A_cur == 8'h80) edf = edf | `Z80_PF;
-                    if (A_cur != 8'h00) edf = edf | `Z80_CF;
-                    edf = edf | (edv & (`Z80_YF | `Z80_XF));
-                    rf_n[`RFP_AF][15:8] = edv;
-                    rf_n[`RFP_AF][7:0]  = edf;
+                    rf_n[`RFP_AF][15:8] = alu_res;
+                    rf_n[`RFP_AF][7:0]  = alu_fout;
                     fin = 1'b1;
                 end
                 `EXEC_IM: begin im_n = aux_w[1:0]; fin = 1'b1; end
@@ -782,14 +840,9 @@ module z80_core (
                 `EXEC_LD_A_IR: begin
                     if (m_cycle == 3'd1) startm(`BUSOP_INTERNAL, rf[`RFP_PC], 8'h0, 4'd1);
                     else begin
-                        edv = aux_w[0] ? reg_r : reg_i;
-                        rf_n[`RFP_AF][15:8] = edv;
-                        edf = F_cur & `Z80_CF;
-                        if (edv[7]) edf = edf | `Z80_SF;
-                        if (edv == 8'h0) edf = edf | `Z80_ZF;
-                        edf = edf | (edv & (`Z80_YF | `Z80_XF));
-                        if (iff2) edf = edf | `Z80_PF;
-                        rf_n[`RFP_AF][7:0] = edf; fin = 1'b1;
+                        rf_n[`RFP_AF][15:8] = alu_res;
+                        rf_n[`RFP_AF][7:0]  = alu_fout;
+                        fin = 1'b1;
                     end
                 end
                 `EXEC_LD_NNA_RP: begin
@@ -820,12 +873,7 @@ module z80_core (
                         startm(`BUSOP_IORD, rf[`RFP_BC], 8'h0, 4'd0); end
                     else begin
                         if (rf_dst_w != 3'd6) setr8(rf_dst_w, rbyte);
-                        edf = F_cur & `Z80_CF;
-                        if (rbyte[7]) edf = edf | `Z80_SF;
-                        if (rbyte == 8'h0) edf = edf | `Z80_ZF;
-                        edf = edf | (rbyte & (`Z80_YF | `Z80_XF));
-                        if (~(^rbyte)) edf = edf | `Z80_PF;
-                        rf_n[`RFP_AF][7:0] = edf; fin = 1'b1;
+                        rf_n[`RFP_AF][7:0] = alu_fout; fin = 1'b1;
                     end
                 end
                 `EXEC_OUT_C: begin
@@ -836,20 +884,15 @@ module z80_core (
                 `EXEC_RRD, `EXEC_RLD: begin
                     if (m_cycle == 3'd1) startm(`BUSOP_MRD, rf[`RFP_HL], 8'h0, 4'd0);
                     else if (m_cycle == 3'd2) begin
-                        if (exec_w == `EXEC_RRD) begin
-                            edv   = {A_cur[7:4], rbyte[3:0]};   // new A
+                        // new_A and flags from z80_alu (FLAG_RRD / FLAG_RLD).
+                        // new_mem is pure nibble routing — kept here as bus
+                        // fabric until E1 lands the explicit db1/db2 segments.
+                        rf_n[`RFP_AF][15:8] = alu_res;
+                        rf_n[`RFP_AF][7:0]  = alu_fout;
+                        if (exec_w == `EXEC_RRD)
                             cbres = {A_cur[3:0], rbyte[7:4]};   // new (HL)
-                        end else begin
-                            edv   = {A_cur[7:4], rbyte[7:4]};   // new A
+                        else
                             cbres = {rbyte[3:0], A_cur[3:0]};   // new (HL)
-                        end
-                        rf_n[`RFP_AF][15:8] = edv;
-                        edf = F_cur & `Z80_CF;
-                        if (edv[7]) edf = edf | `Z80_SF;
-                        if (edv == 8'h0) edf = edf | `Z80_ZF;
-                        edf = edf | (edv & (`Z80_YF | `Z80_XF));
-                        if (~(^edv)) edf = edf | `Z80_PF;
-                        rf_n[`RFP_AF][7:0] = edf;
                         rf_n[`RFP_WZ] = rf[`RFP_HL] + 16'd1;
                         tmpl_n = cbres;
                         startm(`BUSOP_INTERNAL, rf[`RFP_HL], 8'h0, 4'd4);
@@ -861,6 +904,8 @@ module z80_core (
                 /* ---------- ED block instructions ----------
                    aux: [0]=dec  [2:1]=cat(0 LD,1 CP,2 IN,3 OUT)  [3]=repeat */
                 `EXEC_BLOCK: begin
+                    // Pointer/BC updates are IDU work (A1 will move them);
+                    // flags come from z80_alu (FLAG_BLOCK_LD/CP/IO modes).
                     if (aux_w[2:1] == 2'd0) begin                 // LDI/LDD/LDIR/LDDR
                         if (m_cycle == 3'd1) startm(`BUSOP_MRD, rf[`RFP_HL], 8'h0, 4'd0);
                         else if (m_cycle == 3'd2)
@@ -869,12 +914,7 @@ module z80_core (
                             bbc = rf[`RFP_BC] - 16'd1; rf_n[`RFP_BC] = bbc;
                             rf_n[`RFP_HL] = rf[`RFP_HL] + (aux_w[0] ? 16'hFFFF : 16'h1);
                             rf_n[`RFP_DE] = rf[`RFP_DE] + (aux_w[0] ? 16'hFFFF : 16'h1);
-                            bn2 = A_cur + tmp8;                   /* A + transferred byte */
-                            edf = F_cur & (`Z80_SF | `Z80_ZF | `Z80_CF);
-                            if (bn2[1]) edf = edf | `Z80_YF;
-                            if (bn2[3]) edf = edf | `Z80_XF;
-                            if (bbc != 16'd0) edf = edf | `Z80_PF;
-                            rf_n[`RFP_AF][7:0] = edf;
+                            rf_n[`RFP_AF][7:0] = alu_fout;
                             if (aux_w[3] && bbc != 16'd0) begin
                                 rf_n[`RFP_PC] = rf[`RFP_PC] - 16'd2;
                                 rf_n[`RFP_WZ] = rf[`RFP_PC] - 16'd1;
@@ -887,16 +927,7 @@ module z80_core (
                             bbc = rf[`RFP_BC] - 16'd1; rf_n[`RFP_BC] = bbc;
                             rf_n[`RFP_WZ] = rf[`RFP_WZ] + (aux_w[0] ? 16'hFFFF : 16'h1);
                             rf_n[`RFP_HL] = rf[`RFP_HL] + (aux_w[0] ? 16'hFFFF : 16'h1);
-                            bn2 = A_cur - rbyte;                  /* res */
-                            bhc = {1'b0, A_cur[3:0]} - {1'b0, rbyte[3:0]};
-                            edf = (F_cur & `Z80_CF) | `Z80_NF;
-                            if (bn2[7]) edf = edf | `Z80_SF;
-                            if (bn2 == 8'h0) edf = edf | `Z80_ZF;
-                            if (bhc[4]) edf = edf | `Z80_HF;
-                            if (((bn2 - {7'b0, bhc[4]}) & 8'h02) != 8'h0) edf = edf | `Z80_YF;
-                            if (((bn2 - {7'b0, bhc[4]}) & 8'h08) != 8'h0) edf = edf | `Z80_XF;
-                            if (bbc != 16'd0) edf = edf | `Z80_PF;
-                            rf_n[`RFP_AF][7:0] = edf;
+                            rf_n[`RFP_AF][7:0] = alu_fout;
                             startm(`BUSOP_INTERNAL, rf[`RFP_HL] + (aux_w[0] ? 16'hFFFF : 16'h1), 8'h0, 4'd5);
                         end else if (m_cycle == 3'd3) begin
                             if (aux_w[3] && rf[`RFP_BC] != 16'd0 && !(F_cur & `Z80_ZF)) begin
@@ -913,18 +944,9 @@ module z80_core (
                         end else if (m_cycle == 3'd3) begin
                             tmpl_n = rbyte; startm(`BUSOP_MWR, rf[`RFP_HL], rbyte, 4'd0);
                         end else if (m_cycle == 3'd4) begin
-                            bdata = tmpl;
                             bnewB = getr8(3'd0) - 8'd1; rf_n[`RFP_BC][15:8] = bnewB;
                             rf_n[`RFP_HL] = rf[`RFP_HL] + (aux_w[0] ? 16'hFFFF : 16'h1);
-                            bk = {1'b0, bdata} + {1'b0, (getr8(3'd1) + (aux_w[0] ? 8'hFF : 8'h1))};
-                            edf = 8'h0;
-                            if (bdata[7]) edf = edf | `Z80_NF;
-                            if (bk[8]) edf = edf | (`Z80_HF | `Z80_CF);
-                            if (~(^(bnewB ^ {5'b0, bk[2:0]}))) edf = edf | `Z80_PF;
-                            if (bnewB[7]) edf = edf | `Z80_SF;
-                            if (bnewB == 8'h0) edf = edf | `Z80_ZF;
-                            edf = edf | (bnewB & (`Z80_YF | `Z80_XF));
-                            rf_n[`RFP_AF][7:0] = edf;
+                            rf_n[`RFP_AF][7:0] = alu_fout;
                             if (aux_w[3] && bnewB != 8'h0) begin
                                 rf_n[`RFP_PC] = rf[`RFP_PC] - 16'd2;
                                 startm(`BUSOP_INTERNAL, rf[`RFP_PC] - 16'd2, 8'h0, 4'd5);
@@ -939,18 +961,9 @@ module z80_core (
                             rf_n[`RFP_WZ] = rf_n[`RFP_BC] + (aux_w[0] ? 16'hFFFF : 16'h1);
                             startm(`BUSOP_IOWR, rf_n[`RFP_BC], rbyte, 4'd0);
                         end else if (m_cycle == 3'd4) begin
-                            bdata = tmpl;
                             rf_n[`RFP_HL] = rf[`RFP_HL] + (aux_w[0] ? 16'hFFFF : 16'h1);
-                            bk = {1'b0, bdata} + {1'b0, rf_n[`RFP_HL][7:0]};
                             bnewB = getr8(3'd0);
-                            edf = 8'h0;
-                            if (bdata[7]) edf = edf | `Z80_NF;
-                            if (bk[8]) edf = edf | (`Z80_HF | `Z80_CF);
-                            if (~(^(bnewB ^ {5'b0, bk[2:0]}))) edf = edf | `Z80_PF;
-                            if (bnewB[7]) edf = edf | `Z80_SF;
-                            if (bnewB == 8'h0) edf = edf | `Z80_ZF;
-                            edf = edf | (bnewB & (`Z80_YF | `Z80_XF));
-                            rf_n[`RFP_AF][7:0] = edf;
+                            rf_n[`RFP_AF][7:0] = alu_fout;
                             if (aux_w[3] && bnewB != 8'h0) begin
                                 rf_n[`RFP_PC] = rf[`RFP_PC] - 16'd2;
                                 startm(`BUSOP_INTERNAL, rf[`RFP_PC] - 16'd2, 8'h0, 4'd5);
@@ -1007,7 +1020,12 @@ module z80_core (
                     end else begin
                         allow_int = ~ei_delay_n;         // ei_delay_n reflects EI this cycle
                         ei_delay_n = 1'b0;
-                        if (nmi_pending_n) begin
+                        // Accept based on the SAMPLED interrupt state (latched at
+                        // T_last.P), not the live signals. The sampled latches
+                        // freeze the silicon's accept decision one phase before
+                        // the boundary; that matches Zilog UM0080 NMI/INT timing.
+                        if (nmi_sampled_n) begin
+                            nmi_sampled_n = 1'b0;
                             nmi_pending_n = 1'b0;
                             // exiting HALT: re-advance PC past the HALT byte
                             if (halted_n) rf_n[`RFP_PC] = rf_n[`RFP_PC] + 16'd1;
@@ -1017,7 +1035,8 @@ module z80_core (
                             bus_op_n = `BUSOP_M1; m_addr_n = rf_n[`RFP_PC]; m_wdata_n = 8'h0;
                             m_len_n = 4'd5; t_n = 4'd1; phi_n = 1'b0; m_cycle_n = 3'd1;
                             decoded_n = 1'b1; suppress_decode_n = 1'b1;
-                        end else if (allow_int && !int_n && iff1_n) begin
+                        end else if (allow_int && int_sampled_n && iff1_n) begin
+                            int_sampled_n = 1'b0;
                             if (halted_n) rf_n[`RFP_PC] = rf_n[`RFP_PC] + 16'd1;
                             halted_n = 1'b0; iff1_n = 1'b0; iff2_n = 1'b0;
                             irq_seq_n = 2'd2;
@@ -1055,6 +1074,7 @@ module z80_core (
             tmp8 <= 8'h00; tmpl <= 8'h00; tmph <= 8'h00; tmp16 <= 16'h0000;
             cycle <= 32'd0; instr_count <= 32'd0; decoded <= 1'b0;
             nmi_pending <= 1'b0; prev_nmi_n <= 1'b1; ei_delay <= 1'b0;
+            nmi_sampled <= 1'b0; int_sampled <= 1'b0;
             suppress_decode <= 1'b0; bus_granted <= 1'b0; irq_seq <= 2'd0;
             reg_q <= 8'h00; f_modified <= 1'b0;
         end else begin
@@ -1066,6 +1086,7 @@ module z80_core (
             tmp8 <= tmp8_n; tmpl <= tmpl_n; tmph <= tmph_n; tmp16 <= tmp16_n;
             cycle <= cycle_n; instr_count <= instr_count_n; decoded <= decoded_n;
             nmi_pending <= nmi_pending_n; prev_nmi_n <= prev_nmi_n_n; ei_delay <= ei_delay_n;
+            nmi_sampled <= nmi_sampled_n; int_sampled <= int_sampled_n;
             suppress_decode <= suppress_decode_n; bus_granted <= bus_granted_n; irq_seq <= irq_seq_n;
             reg_q <= reg_q_n; f_modified <= f_modified_n;
         end

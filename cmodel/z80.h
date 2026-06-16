@@ -138,12 +138,27 @@ typedef enum {
     SEQ_ILLEGAL
 } z80_seq_t;
 
-/* How the F register is updated after the operation. */
+/* How the F register is updated after the operation.
+
+   FLAG_NEG / FLAG_LD_A_I / FLAG_IN / FLAG_RRD / FLAG_RLD / FLAG_BLOCK_*
+   are dispatched through z80_alu() with the following input-port overloads
+   (see z80_alu.c case dispatch for the canonical table):
+
+      FLAG_NEG       : a = A
+      FLAG_LD_A_I    : b = I or R; bit_idx[0] = iff2
+      FLAG_IN        : b = the IN byte
+      FLAG_RRD/RLD   : a = A, b = mem; res = new_A (new_mem is bus-fabric work)
+      FLAG_BLOCK_LD  : a = A, b = val,       bit_idx[0] = (bc_after != 0)
+      FLAG_BLOCK_CP  : a = A, b = val,       bit_idx[0] = (bc_after != 0)
+      FLAG_BLOCK_IO  : a = data, b = newB,   xy_src[2:0] = k[2:0],
+                                              xy_src[3]   = k_carry
+*/
 typedef enum {
     FLAG_NONE = 0, FLAG_ADD8, FLAG_SUB8, FLAG_CP8, FLAG_LOGIC,
     FLAG_INC8, FLAG_DEC8, FLAG_ROT_A, FLAG_ROT, FLAG_BIT,
     FLAG_ADD16, FLAG_ADC16, FLAG_SBC16, FLAG_DAA, FLAG_SCF, FLAG_CCF,
-    FLAG_CPL, FLAG_NEG, FLAG_BLOCK_LD, FLAG_BLOCK_CP, FLAG_BLOCK_IO
+    FLAG_CPL, FLAG_NEG, FLAG_BLOCK_LD, FLAG_BLOCK_CP, FLAG_BLOCK_IO,
+    FLAG_LD_A_I, FLAG_IN, FLAG_RRD, FLAG_RLD
 } z80_flag_mode_t;
 
 /* Address-bus source for the current data M-cycle. */
@@ -255,8 +270,17 @@ typedef struct {
     bool         iff1, iff2;
     uint8_t      im;            /* interrupt mode 0/1/2                       */
     bool         halted;
-    bool         nmi_pending;
+    bool         nmi_pending;   /* sticky latch: any falling edge on NMI seen */
     bool         prev_nmi_n;    /* for edge detection                        */
+    /* NMI / INT silicon sample latches. Per Zilog UM0080, both are sampled at
+       the rising edge of the last T-state of the last M-cycle (= T_last.P in
+       our phase model). nmi_sampled freezes nmi_pending's value at that
+       phase; int_sampled freezes !int_n at that phase. begin_next() uses
+       these latches, not the live signals, so an interrupt that changes
+       between T_last.P and the M-cycle boundary cannot retroactively
+       affect the current instruction's accept decision. */
+    bool         nmi_sampled;
+    bool         int_sampled;
     bool         ei_delay;      /* suppress INT for one instruction after EI  */
     bool         suppress_decode;/* ack-cycle M1: latch but don't decode/PC++ */
     bool         bus_granted;   /* BUSACK active (DMA owns the bus)           */
@@ -275,7 +299,16 @@ typedef struct {
     bool         instr_done;    /* set when the instruction completes        */
     bool         decoded;       /* opcode for this instr has been decoded    */
     bool         phase_primed;  /* false right after reset (skip 1st advance) */
-    bool         stalled;       /* wait detected at last .N sample            */
+    /* WAIT-state engine, per Zilog UM0080:
+       wait_sampled is set at the WAIT sample edge (T2.N for memory cycles,
+       Tw.N for I/O cycles and any inserted Tw). It captures !wait_n at
+       exactly that phase; advance() consults it at the .N→.P boundary
+       to decide whether to hold the current T-state as a Tw.
+       stalled = wait_sampled for the small window during which advance()
+       reads it; this is the same single-cycle latch the silicon WAIT
+       gate behaves as. */
+    bool         wait_sampled;
+    bool         stalled;
 
     uint64_t     cycle;         /* global half-step (phase) counter          */
     uint64_t     instr_count;   /* completed-instruction counter             */
