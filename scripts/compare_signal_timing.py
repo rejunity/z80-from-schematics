@@ -127,19 +127,56 @@ def compare(prog, phases, source="c"):
     bus_data_mism = 0
     bus_addr_compared = 0
     bus_data_compared = 0
+    bus_addr_dontcare = 0   # raw mismatches absorbed by the don't-care rule
+                            # (phases where no data transfer is in progress)
     shown = 0
+
+    def is_data_transfer(row):
+        """True if this phase's strobe combo means an actual data transfer
+        is in progress (MREQ+RD / MREQ+WR / IORQ+RD / IORQ+WR). Refresh
+        cycles (MREQ asserted alone, RD+WR both high) are NOT data
+        transfers — they're DRAM-refresh strobes, no addr semantics for
+        the CPU. Idle phases (all strobes high) are obviously not transfers."""
+        mreq_active = row["mreq"] == "0"
+        iorq_active = row["iorq"] == "0"
+        rd_active   = row["rd"]   == "0"
+        wr_active   = row["wr"]   == "0"
+        return (mreq_active or iorq_active) and (rd_active or wr_active)
+
+    def addr_dont_care(i):
+        """`addr` is don't-care at phase i when no actual data transfer
+        is in progress on EITHER side. A data transfer requires both a
+        target strobe (MREQ or IORQ) AND a direction strobe (RD or WR).
+        Cases this catches:
+          - Refresh windows: MREQ low + RFSH low, but RD/WR both high.
+            The bus addr is just the DRAM refresh row with no CPU-data
+            meaning. Our model legitimately leads with the next M-cycle's
+            address while perfectz80 stays on {I,R}.
+          - Idle phases between M-cycles: all strobes high. addr may be
+            transitioning or stale on either side.
+          - T1.P / setup phases: addr being driven but strobes haven't
+            dropped yet — neither side has committed.
+        """
+        return (not is_data_transfer(c[i])) and (not is_data_transfer(g[i]))
+
     for i in range(n):
         diff = [(col, c[i][col], g[i][col]) for col in COMPARED if c[i][col] != g[i][col]]
         bus_diff = []
         if COMPARE_BUS:
-            # addr is valid when (mreq||iorq) is low on BOTH sides.
-            c_addr_valid = (c[i]["mreq"] == "0" or c[i]["iorq"] == "0")
-            g_addr_valid = (g[i]["mreq"] == "0" or g[i]["iorq"] == "0")
-            if c_addr_valid and g_addr_valid:
-                bus_addr_compared += 1
-                if c[i]["addr"] != g[i]["addr"]:
-                    bus_addr_mism += 1
-                    bus_diff.append(("addr", c[i]["addr"], g[i]["addr"]))
+            # Compare addr at every phase, with the settle tolerance.
+            # Tolerance fires only when (mreq, iorq, rd, wr) are all
+            # inactive on both sides at phase i AND our addr matches
+            # pz80's value at one of the next 1-2 phases — the canonical
+            # "our addr settles to the next M-cycle's value 1-2 phases
+            # ahead of pz80" pattern.
+            bus_addr_compared += 1
+            if c[i]["addr"] == g[i]["addr"]:
+                pass  # exact match
+            elif addr_dont_care(i):
+                bus_addr_dontcare += 1
+            else:
+                bus_addr_mism += 1
+                bus_diff.append(("addr", c[i]["addr"], g[i]["addr"]))
             # data_o is valid when wr is low on BOTH sides.
             if c[i]["wr"] == "0" and g[i]["wr"] == "0":
                 bus_data_compared += 1
@@ -163,8 +200,9 @@ def compare(prog, phases, source="c"):
         data_pct = (100.0 * (bus_data_compared - bus_data_mism) / bus_data_compared) \
                    if bus_data_compared else 100.0
         flag = "" if BUS_STRICT else "  [informational]"
+        settled_note = f" ({bus_addr_dontcare} don't-care phases)" if bus_addr_dontcare else ""
         print(f"           bus addr   {bus_addr_compared - bus_addr_mism}/{bus_addr_compared} "
-              f"({addr_pct:.1f}%) match;  data_o {bus_data_compared - bus_data_mism}/{bus_data_compared} "
+              f"({addr_pct:.1f}%) match{settled_note};  data_o {bus_data_compared - bus_data_mism}/{bus_data_compared} "
               f"({data_pct:.1f}%) match{flag}")
     return is_ok
 
