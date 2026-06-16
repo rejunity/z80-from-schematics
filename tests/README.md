@@ -363,10 +363,35 @@ so most pushes skip the ~3 min synthesis step.
 
 ## Forward-looking — what's not yet here
 
+The main remaining test gaps are silicon-faithfulness items catalogued
+in [docs/simplifications.md](../docs/simplifications.md). Highest
+leverage, sorted by effort × test impact:
+
+  - **C1 — reset state un-force** (small). Currently our model forces
+    `rf=0xFFFF` on reset; perfectz80's netlist resets to 0x5555. The
+    delta surfaces via PUSH on `prog_rnd_02` / `prog_rnd_03`
+    (`make perfectz80` shows 95-98 % addr match instead of 100 %).
+    Changing one constant closes [known-differences.md](../docs/known-differences.md) row 1.
+  - **F — block-op M-cycle ordering** (medium-large). The blocker for
+    the Patrik Rak z80test baselines (rows 12 / 13 in
+    known-differences). Currently 2 / 2 / ~10 failures held at
+    baseline; fixing this would bring z80test to a clean ~160 / 160 /
+    160.
+  - **D1 — Q after EX AF,AF'** (small). May close one z80full case.
+  - **B2 / B3 — NMI / INT sample-point precision** (medium). Would
+    tighten the `pin_scenarios` parity on INT-ack / NMI-acceptance
+    scenarios (`prog9_inta_im1`, `prog12_inta_im2`,
+    `prog16_ei_delay`, `prog19_nmi_in_int`).
+
+Other deferred items:
+
   - **A-Z80 as a second gate-level oracle**. Design sketch in
     [docs/ring3-az80-oracle.md](../docs/ring3-az80-oracle.md) — would
     cross-check perfectz80's Visual-Z80 netlist itself against an
-    independent schematic-driven Verilog Z80. Deferred until needed.
+    independent schematic-driven Verilog Z80. With LibreLane's
+    sky130-synthesised netlist now adding a third independent gate-
+    level reference, A-Z80 becomes less critical but still useful for
+    cross-validation. Deferred until needed.
   - **NMOS vs Toshiba CMOS Q-leak switch**. The current C model + RTL
     implement Zilog NMOS Q-leak behaviour in SCF / CCF X / Y flags
     (well-documented silicon-faithful default). A Toshiba CMOS variant
