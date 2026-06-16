@@ -69,7 +69,8 @@ interactive controls (Enter, Backspace, Ctrl-C / Ctrl-Space = BREAK, Ctrl-\\ = e
     make zexall          # full ZEXALL                                 (~16 min)
     make silicon_cycles  # per-opcode T-state check vs real KC85 silicon (sigrok)
     make silicon_async   # real CPU clock + sub-T-state pin offsets from 20 MHz capture
-    make perfectz80      # gate-level signal-trace diff vs the perfectz80 Visual-Z80 netlist
+    make perfectz80      # gate-level signal-trace diff vs the perfectz80 Visual-Z80 netlist (C model)
+    make perfectz80_rtl  # same, but trace source is the iverilog RTL testbench (silicon-faithful leg)
     make basic           # NASCOM BASIC 4.7 on the C model
     make tinybasic       # 1 KiB Tiny BASIC on the C model
     make basic_c_tests   # canned-script BASIC ROM regression via C model    (~0.5 s)
@@ -90,7 +91,7 @@ build needs a working C++17 toolchain (Apple clang 21+ or any modern gcc / clang
 
 |     | Gate                                                            | Result                              |
 |:---:|-----------------------------------------------------------------|-------------------------------------|
-| ✅  | C unit tests (incl. per-T-state pin sequence)                   | PASS                                |
+| ✅  | C unit tests (incl. per-T-state pin sequence — 135 checks, 21 opcodes) | PASS                         |
 | ✅  | ZEXDOC                                                          | 67 / 67                             |
 | ✅  | ZEXALL                                                          | 67 / 67                             |
 | ✅  | ZEXALL 14-test subset via Verilator RTL (main + nightly)        | 14 / 14 (~17 min)                   |
@@ -99,12 +100,13 @@ build needs a working C++17 toolchain (Apple clang 21+ or any modern gcc / clang
 | 🟡  | Patrik Rak z80test (doc / memptr / full)                        | 158 / 158 / 150 (within baselines)  |
 | ✅  | BASIC ROM via C model (NASCOM + Tiny BASIC, canned scripts)     | 4 / 4 subtests                      |
 | ✅  | BASIC ROM via Verilator RTL (NASCOM + Tiny BASIC)               | 4 / 4 subtests                      |
-| ✅  | C ↔ iverilog ↔ Verilator, phase-by-phase                        | identical, 8 trace programs         |
+| ✅  | C ↔ iverilog ↔ Verilator, phase-by-phase                        | identical, 8 hand + 4 random trace programs |
 | ✅  | 4-way oracle lockstep (mine + superzazu + chips + suzukiplan)   | identical, 7,022,691 instr.         |
 | ✅  | Real KC85 silicon — sync   capture (`make silicon_cycles`)      | 50 / 50 OK,  0 emu mismatches       |
 | ✅  | Real KC85 silicon — 20 MHz capture (`make silicon_async`)       | CPU ≈ 1.767 MHz, pins ✓             |
-| ✅  | Gate-level signal trace vs perfectz80 (Visual Z80 netlist)      | 100 % control-pin perfect, 8 programs |
-| 🚧  | Pin-scenario programs vs perfectz80 (INT-ack / HALT-NMI / WAIT) | informational; surfaces real audit findings |
+| ✅  | Gate-level signal trace vs perfectz80 — **C model** path        | 100 % control-pin perfect, 8 hand + 4 random programs; `data_o` 100 % bus-match (informational) |
+| ✅  | Gate-level signal trace vs perfectz80 — **iverilog RTL** path   | 100 % control-pin perfect, same 8 hand + 4 random programs |
+| 🚧  | Pin-scenario programs vs perfectz80 (12 programs, INT/NMI/WAIT/BUSREQ/RESET/EI/DI/block-op) | informational; surfaces real audit findings |
 
 Legend: ✅ pass / 100 % &nbsp; 🟡 ≥ 95 % (close, known artifacts) &nbsp; 🚧 < 95 % (work in progress).
 
@@ -139,32 +141,15 @@ Verification and reverse-engineering background:
 
 Tests and ROMs:
 
-  - [tests/basic/README.md](tests/basic/README.md) — the BASIC ROMs and their I/O
-    conventions, plus the canned-script regression (`make basic_c_tests` /
-    `make basic_rtl_tests`).
-  - [tests/traces/README.md](tests/traces/README.md) — the 8 hand-assembled bus-cycle
-    trace programs, the 14-column shared trace format used by `make compare`, and
-    the new `pin_scenarios/` subdirectory of INT/NMI/WAIT-event programs driven
-    by the `<prog>.events` sidecar.
-  - [tests/fuse/README.md](tests/fuse/README.md) — the 1356-case Frank D. Cringle
-    opcode corpus (`tests.in` / `tests.expected`) driven by `make fuse` and
-    `make fuse_rtl`.
-  - [tests/zex/README.md](tests/zex/README.md) — the CP/M `.com` exercisers
-    (`prelim`, `zexdoc`, `zexall`, `zexdoc3`), the M80 source `zexdoc.z80`, and
-    the curated 14-test ZEXALL subset (`zexall_subset.com`, built by
-    `scripts/zex_make_subset.py`).
-  - [tests/z80test/](tests/z80test/) — Patrik Rak's z80test (raxoft, MIT): five
-    `.tap` files driven by `scripts/z80test_runner.c` for documented +
-    undocumented behaviour, MEMPTR, and SCF/CCF Q-leak coverage.
-
-Test expansion:
-
-  - [docs/test-expansion-plan.md](docs/test-expansion-plan.md) — the 3-ring plan
-    (external suites; pin-event sidecars + pin-scenario programs; second
-    gate-level oracle) and what's landed vs deferred.
-  - [docs/ring3-az80-oracle.md](docs/ring3-az80-oracle.md) — design sketch for
-    adding gdevic/A-Z80 as a second gate-level oracle (CI-time clone).
-  - [docs/audit-followups.md](docs/audit-followups.md) — silicon-faithfulness
-    items (C1, A1, A3, A4, E1, F) parked from the `unsimplify` branch.
+  - **[tests/README.md](tests/README.md)** — comprehensive test-suite
+    overview: every test type, what it covers, how to run it, current
+    result, and links to the per-subdirectory READMEs (`tests/common/`,
+    `tests/fuse/`, `tests/zex/`, `tests/z80test/`, `tests/basic/`,
+    `tests/traces/`, `tests/sigrok/`).
+  - [docs/ring3-az80-oracle.md](docs/ring3-az80-oracle.md) — design sketch
+    for the deferred second gate-level oracle (gdevic/A-Z80).
+  - [docs/simplifications.md](docs/simplifications.md) — silicon-faithfulness
+    audit (A1, A3, A4, B, C1, D, E1, F) — the source of truth for the
+    deliberate vs unintended divergences from gate-level Z80.
 
 The brief that this project follows: [z80_core_project_BRIEF.md](z80_core_project_BRIEF.md).

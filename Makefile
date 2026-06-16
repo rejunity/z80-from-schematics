@@ -44,7 +44,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
-.PHONY: all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 pin_scenarios basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests z80test_runner z80test
+.PHONY: all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl pin_scenarios basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests z80test_runner z80test
 
 all: cmodel ctest
 
@@ -105,8 +105,8 @@ $(BIN)/z80test_runner: $(SCRIPTS)/z80test_runner.c $(CMODEL_LIB) $(CMODEL_HDRS)
 # per-variant baseline allowed-failure counts. Failures THAT EXCEED the
 # baseline = a regression and the make target exits non-zero. New variants
 # go in this list:
-#   z80doc      2  — INI/IND block-I/O sub-cycle (audit followup; see
-#                    docs/audit-followups.md F-block-op-M-cycle)
+#   z80doc      2  — INI/IND block-I/O sub-cycle (see docs/simplifications.md
+#                    §F "Block-op M-cycle break")
 #   z80memptr   2  — INIR->NOP'/INDR->NOP' (same root cause as above)
 #   z80full    10  — additional SCF/CCF ST-variant differences (we model
 #                    Zilog NMOS Q, not Toshiba) + LDIR/LDDR->NOP'
@@ -149,21 +149,41 @@ silicon_async: tracegen
 # Gate-level signal-timing diff vs perfectz80 (Brian Silverman et al's
 # transistor-level netlist port of the Visual Z80 die scan). Compares
 # per-half-cycle control pins (mreq/iorq/rd/wr/m1/rfsh/halt) between our
-# C model and the gate-level simulator across the trace programs.
+# C model and the gate-level simulator across the trace programs (8 hand-
+# crafted + 4 seeded-random from scripts/gen_random_trace_progs.py).
 perfectz80: tracegen $(BIN)/perfectz80_runner
 	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py 200
 
-# Pin-scenario programs (prog9_inta_im1, prog10_halt_nmi, prog11_wait_mem).
-# Each drives a specific external-pin event sequence via the .events sidecar
-# (INT pulse, NMI pulse, WAIT pulse, ...). These currently surface real
-# divergences between our model and perfectz80 — exit 0 unconditionally so
-# CI shows the findings without flipping red; they're tracked alongside
-# docs/audit-followups.md once a concrete fix lands.
+# Same gate but driving the iverilog RTL testbench (build/tb_z80.vvp) as
+# the trace source instead of the C model. This is the silicon-faithful
+# leg of the perfectz80 comparison — every cycle simulated at RTL
+# fidelity, diffed against the gate-level netlist per-half-cycle. The
+# iverilog testbench only understands the legacy `+nmi=<phase>`
+# shorthand, not the full `.events` sidecar, so programs that need
+# INT / WAIT / BUSREQ / RESET events still go through the C-only path.
+perfectz80_rtl: iverilog $(BIN)/perfectz80_runner
+	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --rtl=iverilog 200
+
+# Pin-scenario programs (prog9..prog20). Each drives a specific external-
+# pin event sequence via the .events sidecar (INT pulse, NMI pulse, WAIT
+# pulse, BUSREQ, RESET, ...). These currently surface real divergences
+# between our model and perfectz80 — exit 0 unconditionally so CI shows
+# the findings without flipping red; they're tracked alongside
+# docs/simplifications.md once a concrete fix lands.
 pin_scenarios: tracegen $(BIN)/perfectz80_runner
 	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py 200 \
 	  $(TESTS)/traces/pin_scenarios/prog9_inta_im1.hex \
 	  $(TESTS)/traces/pin_scenarios/prog10_halt_nmi.hex \
 	  $(TESTS)/traces/pin_scenarios/prog11_wait_mem.hex \
+	  $(TESTS)/traces/pin_scenarios/prog12_inta_im2.hex \
+	  $(TESTS)/traces/pin_scenarios/prog13_halt_int.hex \
+	  $(TESTS)/traces/pin_scenarios/prog14_wait_io.hex \
+	  $(TESTS)/traces/pin_scenarios/prog15_busreq_m1.hex \
+	  $(TESTS)/traces/pin_scenarios/prog16_ei_delay.hex \
+	  $(TESTS)/traces/pin_scenarios/prog17_reset.hex \
+	  $(TESTS)/traces/pin_scenarios/prog18_di_then_int.hex \
+	  $(TESTS)/traces/pin_scenarios/prog19_nmi_in_int.hex \
+	  $(TESTS)/traces/pin_scenarios/prog20_block_int.hex \
 	  || echo "(pin_scenarios is informational; failures are expected silicon-faithfulness findings)"
 
 $(BIN)/perfectz80_runner: $(SCRIPTS)/perfectz80_runner.c $(SCRIPTS)/refs/perfectz80/perfectz80.c $(SCRIPTS)/refs/perfectz80/netlist_sim.c

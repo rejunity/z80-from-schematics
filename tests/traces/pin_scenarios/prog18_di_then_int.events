@@ -1,0 +1,4 @@
+# Pulse INT well past the DI; if IFF1 is correctly cleared, the trace shows
+# no INTA M-cycle (no M1 with IORQ asserted) for the entire INT window.
+40  int  0
+80  int  1

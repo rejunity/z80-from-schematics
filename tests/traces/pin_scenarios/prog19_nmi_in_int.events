@@ -1,0 +1,8 @@
+# INT pulse during a NOP, then NMI pulse a few phases later — inside what
+# would be the INTA M-cycle. Expect INTA first, then NMI ack after INTA
+# completes. NMI is edge-triggered so even a short pulse during INTA
+# should be latched.
+40  int  0
+44  int  1
+46  nmi  0
+48  nmi  1

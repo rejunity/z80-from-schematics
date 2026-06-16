@@ -1,0 +1,13 @@
+# EI's one-instruction delay window. EI enables IFF1/IFF2 effective AFTER
+# the NEXT instruction completes. Pulse INT during the EI's own M1 and the
+# following NOP — the model should defer INT acceptance until the NOP
+# after EI has finished, observable as: the INTA M-cycle starts AFTER the
+# second NOP's M-cycle, not immediately at EI's end.
+@0000
+ED 56              # IM 1
+FB                 # EI         (during this and the next NOP, INT is masked)
+00                 # NOP        (this is the EI shadow window)
+00                 # NOP        (INT may now be accepted)
+C3 03 00           # JP 0x0003  (loop in NOPs)
+@0038
+76                 # HALT (IM1 vector)

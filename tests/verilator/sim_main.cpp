@@ -42,8 +42,18 @@ static void load_hex(const char *path) {
     if (!f) { fprintf(stderr, "cannot open %s\n", path); exit(2); }
     unsigned addr = 0; char tok[64];
     while (fscanf(f, "%63s", tok) == 1) {
-        if (tok[0] == '@') addr = (unsigned)strtoul(tok + 1, NULL, 16) & 0xFFFF;
-        else { mem[addr & 0xFFFF] = (unsigned char)strtoul(tok, NULL, 16); addr++; }
+        if (tok[0] == '@') {
+            addr = (unsigned)strtoul(tok + 1, NULL, 16) & 0xFFFF;
+        } else if (tok[0] == '/' || tok[0] == '#' || tok[0] == ';') {
+            /* Skip the rest of the comment line. Matches the loader in
+             * scripts/tracegen.c and scripts/perfectz80_runner.c so the
+             * same .hex file produces identical memory images on every
+             * harness. */
+            int ch; while ((ch = fgetc(f)) != '\n' && ch != EOF) {}
+        } else {
+            mem[addr & 0xFFFF] = (unsigned char)strtoul(tok, NULL, 16);
+            addr++;
+        }
     }
     fclose(f);
 }

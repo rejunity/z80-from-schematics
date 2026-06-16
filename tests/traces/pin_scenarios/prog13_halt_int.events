@@ -1,0 +1,5 @@
+# EI(2T) + 3T M1 puts HALT entry at ~phase 10. Pulse INT in the HALT loop
+# (around phase 35); the CPU should exit HALT, advance PC past the HALT byte,
+# and accept INT — visible in the trace as M1 + IORQ asserted together.
+35  int  0
+40  int  1

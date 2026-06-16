@@ -1,0 +1,6 @@
+# IM 1 + EI: 4T+4T = 16 phases. The first post-EI NOP runs phases 16..23
+# (4T). Pulse INT inside that NOP's window — the INT sample at the rising
+# edge of the LAST T-state of the post-EI NOP should accept it, NOT the
+# rising edge inside EI's own M-cycle.
+18  int  0
+22  int  1

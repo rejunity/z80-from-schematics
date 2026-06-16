@@ -1,0 +1,19 @@
+# IM 2 INT acceptance. The CPU reads {I, vector} from memory to find the
+# interrupt-service-routine address, then jumps there. We set I=0x80 and
+# place the ISR pointer at 0x80FE (low byte of vector = 0xFE, set in I/O
+# scenario via the data bus during INTA — perfectz80 reads whatever's on
+# the data bus). Our model + perfectz80 disagree on exactly what byte is
+# captured during INTA; the make pin_scenarios target is informational.
+@0000
+ED 5E              # IM 2
+3E 80              # LD A,0x80
+ED 47              # LD I,A         (now I = 0x80)
+FB                 # EI
+00 00 00 00 00     # NOPs (loop)
+C3 07 00           # JP 0x0007      (back into the NOP loop)
+@0066
+76                 # HALT (NMI vector — present so an accidental NMI doesn't crash)
+@8000
+00 90              # ISR pointer at vector=0 (lo, hi) = 0x9000
+@9000
+76                 # HALT at the ISR (terminate trace deterministically)

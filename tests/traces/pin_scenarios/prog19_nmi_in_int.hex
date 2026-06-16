@@ -1,0 +1,14 @@
+# NMI arrives during an INTA cycle. NMI takes priority over INT — the test
+# is whether NMI is queued cleanly during INTA (without corrupting the INTA)
+# or whether the model handles concurrent edges in the right order. After
+# INTA completes (RST 38h in IM 1), NMI should be accepted; expect a NMI
+# ack M-cycle before the IM1 ISR runs to a final HALT.
+@0000
+ED 56              # IM 1
+FB                 # EI
+00 00 00 00 00     # NOPs (loop)
+C3 03 00           # JP 0x0003
+@0038
+76                 # HALT (IM1 vector)
+@0066
+76                 # HALT (NMI vector)

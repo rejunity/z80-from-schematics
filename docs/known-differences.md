@@ -99,7 +99,7 @@ Notes for each row:
      conventional emulator pattern, but the silicon's actual ordering
      produces a slightly different `H` / `P` flag mask via the well-known
      `B-1 + (C+1) & 0xFF` quirk. Listed as `F-block-op-M-cycle` in
-     [audit-followups.md](audit-followups.md). Baseline tolerated in the
+     [simplifications.md](simplifications.md) §F. Baseline tolerated in the
      `make z80test` runner so CI catches *new* drift but not these two.
 
  13. `LDIR` / `LDDR` / `INIR` / `INDR` Q-leak into next instruction —
@@ -109,14 +109,25 @@ Notes for each row:
      repeat termination" pattern. Tolerated within the z80full baseline
      of 10.
 
- 14. Pin-scenario vs perfectz80 (`make pin_scenarios`) — three trace
-     programs (`prog9_inta_im1`, `prog10_halt_nmi`, `prog11_wait_mem`)
-     drive INT / NMI / WAIT through the `.events` sidecar and diff
+ 14. Pin-scenario vs perfectz80 (`make pin_scenarios`) — twelve trace
+     programs (`prog9_inta_im1`..`prog20_block_int`) drive INT / NMI /
+     WAIT / BUSREQ / RESET through the `.events` sidecar and diff
      against perfectz80 per-half-cycle. Make target is informational
      today (exits 0 even on divergence); current divergences are folded
-     into the audit-followups list rather than gating CI. When all three
-     reach control-pin parity, this row flips to `resolved` and the gate
-     becomes hard.
+     into the simplifications-audit list rather than gating CI. When all
+     twelve reach control-pin parity, this row flips to `resolved` and
+     the gate becomes hard.
+
+     Additionally, `scripts/compare_signal_timing.py` (used by
+     `make perfectz80`) now compares `addr` and `data_o` on the cycles
+     where their respective strobes are low on both sides. Reported as
+     **informational**: control-pin parity is the gate of record (still
+     PASS across all 8 prog1..prog8 files), while bus diffs are
+     summarised per-program. Current state: `data_o` matches at **100 %**
+     wherever a write window is defined; `addr` matches at 60-100 %, with
+     the residual delta being the well-known refresh-phase one-cycle
+     `addr`-settle delta (tracked in [simplifications.md](simplifications.md)). Promote bus diffs
+     to gating with `BUS_STRICT=1` env var.
 
 Add rows as new differences are discovered. Each "watching" row should gain a
 test that pins the chosen behaviour or escalates it.
