@@ -54,6 +54,78 @@ COMPARED  = ["mreq","iorq","rd","wr","m1","rfsh","halt"]
 # Make bus diffs gate exit code too: BUS_STRICT=1 (default off).
 COMPARE_BUS = os.environ.get("COMPARE_BUS", "1") != "0"
 BUS_STRICT  = os.environ.get("BUS_STRICT",  "0") == "1"
+# When EMIT_VCD=1, emit build/vcd/<prog>.vcd per program containing both
+# our model's pins (top scope) and perfectz80's pins (under "perfectz80"
+# scope) so GTKWave / Surfer can render them side-by-side from one file.
+EMIT_VCD    = os.environ.get("EMIT_VCD",    "1") != "0"
+VCD_DIR     = os.path.join(ROOT, "build", "vcd")
+
+def write_vcd(out_path, c_rows, g_rows, source_label):
+    """Emit a VCD with our pins at top scope and perfectz80's pins under
+    a `perfectz80` scope. One time unit per phase (1 ns)."""
+    n = min(len(c_rows), len(g_rows))
+    if n == 0:
+        return
+    # Signal table: (var_id, name, width). Single chars from '!' (0x21)
+    # onward are valid VCD identifier codes.
+    ours   = [("addr", 16), ("data_o", 8), ("data_i", 8),
+              ("mreq", 1), ("iorq", 1), ("rd", 1), ("wr", 1),
+              ("m1", 1), ("rfsh", 1), ("halt", 1), ("busack", 1)]
+    theirs = [("addr", 16), ("data_o", 8), ("data_i", 8),
+              ("mreq", 1), ("iorq", 1), ("rd", 1), ("wr", 1),
+              ("m1", 1), ("rfsh", 1), ("halt", 1)]
+    # Assign identifier codes. Use 'a'..'z', 'A'..'Z' for theirs to keep
+    # them clearly distinct from ours.
+    next_code = iter([chr(c) for c in range(ord('!'), ord('~'))])
+    sig_ours   = {n: next(next_code) for n, _ in ours}
+    sig_theirs = {n: next(next_code) for n, _ in theirs}
+
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    with open(out_path, "w") as f:
+        f.write("$version compare_signal_timing.py $end\n")
+        f.write("$timescale 1ns $end\n")
+        f.write("$scope module top $end\n")
+        for name, width in ours:
+            f.write(f"$var wire {width} {sig_ours[name]} {name} $end\n")
+        f.write("$upscope $end\n")
+        f.write("$scope module perfectz80 $end\n")
+        for name, width in theirs:
+            f.write(f"$var wire {width} {sig_theirs[name]} {name} $end\n")
+        f.write("$upscope $end\n")
+        f.write("$enddefinitions $end\n")
+        # Dump initial values + per-phase updates.
+        prev_c = {n: None for n, _ in ours}
+        prev_g = {n: None for n, _ in theirs}
+        for i in range(n):
+            f.write(f"#{i}\n")
+            for name, width in ours:
+                v = c_rows[i].get(name, "0")
+                if v == prev_c[name]:
+                    continue
+                prev_c[name] = v
+                if width == 1:
+                    f.write(f"{v}{sig_ours[name]}\n")
+                else:
+                    try:
+                        val = int(v, 16)
+                    except ValueError:
+                        val = 0
+                    bits = bin(val & ((1 << width) - 1))[2:]
+                    f.write(f"b{bits} {sig_ours[name]}\n")
+            for name, width in theirs:
+                v = g_rows[i].get(name, "0")
+                if v == prev_g[name]:
+                    continue
+                prev_g[name] = v
+                if width == 1:
+                    f.write(f"{v}{sig_theirs[name]}\n")
+                else:
+                    try:
+                        val = int(v, 16)
+                    except ValueError:
+                        val = 0
+                    bits = bin(val & ((1 << width) - 1))[2:]
+                    f.write(f"b{bits} {sig_theirs[name]}\n")
 
 def run(cmd):
     p = subprocess.run(cmd, capture_output=True, text=True)
@@ -122,6 +194,13 @@ def compare(prog, phases, source="c"):
         suffix = ""
     if n == 0:
         print(f"  {name}: FAIL (no rows)"); return False
+
+    # Emit VCD waveform — our pins at top, pz80 pins under perfectz80 scope.
+    # Open with `gtkwave build/vcd/<prog>.vcd` to see both sides side-by-side.
+    if EMIT_VCD:
+        vcd_path = os.path.join(VCD_DIR, name.replace(".hex", "") + f".{source}.vcd")
+        write_vcd(vcd_path, c, g, source)
+
     ctrl_mism = 0           # control-pin mismatches — count against pass/fail
     bus_addr_mism = 0       # bus-value mismatches — informational by default
     bus_data_mism = 0
