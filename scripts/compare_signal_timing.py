@@ -17,6 +17,11 @@
 #   scripts/compare_signal_timing.py [phases] [prog...]
 #   scripts/compare_signal_timing.py --rtl=iverilog [phases] [prog...]
 #   scripts/compare_signal_timing.py --rtl=verilator [phases] [prog...]
+#   scripts/compare_signal_timing.py --rtl=netlist  [phases] [prog...]
+#
+# --rtl=netlist is the LibreLane gate-level path: feeds the synthesized
+# sky130 netlist (build/tb_z80_netlist.vvp) through iverilog and diffs
+# against perfectz80. See docs/librelane-flow.md.
 import os, sys, subprocess
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -24,6 +29,7 @@ TRACEGEN = os.path.join(ROOT, "build", "bin", "tracegen")
 PZ80     = os.path.join(ROOT, "build", "bin", "perfectz80_runner")
 VVP      = "vvp"
 TB_VVP   = os.path.join(ROOT, "build", "tb_z80.vvp")
+TB_NETLIST_VVP = os.path.join(ROOT, "build", "tb_z80_netlist.vvp")
 VERILATOR_SIM = os.path.join(ROOT, "build", "obj_dir", "sim_z80")
 
 # tracegen cols: t phi m addr data_o data_i mreq iorq rd wr m1 rfsh halt busack
@@ -90,6 +96,13 @@ def compare(prog, phases, source="c"):
     elif source == "verilator":
         tg_argv = [VERILATOR_SIM, prog, str(phases)]
         emit_label = "Verilator RTL"
+    elif source == "netlist":
+        # LibreLane-synthesized sky130 gate-level netlist driven by the
+        # same iverilog testbench. Like iverilog mode, the testbench
+        # doesn't consume the .events sidecar — pin-scenarios still go
+        # through the C-only path.
+        tg_argv = [VVP, TB_NETLIST_VVP, f"+prog={prog}", f"+phases={phases}"]
+        emit_label = "gate-level netlist"
     else:
         raise SystemExit(f"unknown source: {source}")
     pz_argv = [PZ80,     prog, str(phases + PZ_OFFSET)] + ([events] if events else [])
@@ -165,7 +178,7 @@ def main():
     elif argv and argv[0] == "--rtl":
         argv.pop(0)
         source = "iverilog" if not argv else argv.pop(0)
-    if source not in ("c", "iverilog", "verilator"):
+    if source not in ("c", "iverilog", "verilator", "netlist"):
         raise SystemExit(f"unknown --rtl source: {source}")
     if source == "c"        and not os.path.exists(TRACEGEN):
         raise SystemExit("missing tracegen (make tracegen)")
@@ -173,6 +186,8 @@ def main():
         raise SystemExit("missing tb_z80.vvp (make iverilog)")
     if source == "verilator" and not os.path.exists(VERILATOR_SIM):
         raise SystemExit("missing sim_z80 (make verilator)")
+    if source == "netlist" and not os.path.exists(TB_NETLIST_VVP):
+        raise SystemExit("missing tb_z80_netlist.vvp (make iverilog_netlist)")
     if not os.path.exists(PZ80):     raise SystemExit("missing perfectz80_runner")
     phases = int(argv[0]) if argv else 200
     rest = argv[1:]
@@ -193,6 +208,7 @@ def main():
         "c":         "C model",
         "iverilog":  "iverilog RTL",
         "verilator": "Verilator RTL",
+        "netlist":   "gate-level netlist (sky130 / LibreLane)",
     }[source]
     print(f"{src_label} vs perfectz80 gate-level signal-timing comparison "
           f"({phases} phases per program, {len(COMPARED)} ctrl pins; "

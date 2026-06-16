@@ -1,0 +1,17 @@
+{
+  "DESIGN_NAME": "z80_core",
+  "VERILOG_FILES": [
+    "dir::../rtl/z80_alu.v",
+    "dir::../rtl/z80_pla.v",
+    "dir::../rtl/z80_timing.v",
+    "dir::../rtl/z80_core.v"
+  ],
+  "CLOCK_PORT": "clk",
+  "CLOCK_NET": "clk",
+  "CLOCK_PERIOD": 50,
+  "DESIGN_IS_CORE": true,
+  "PDK": "sky130A",
+  "STD_CELL_LIBRARY": "sky130_fd_sc_hd",
+  "RUN_LINTER": false,
+  "RUN_HEURISTIC_DIODE_INSERTION": false
+}

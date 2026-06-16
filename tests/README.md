@@ -26,6 +26,7 @@ stack.
 | C ↔ iverilog ↔ Verilator phase parity             | `tests/traces/`                | `make compare`                           | ~3 s            | Per-half-cycle bus-cycle trace identity across all three harnesses |
 | Gate-level vs perfectz80 (C model path)           | `tests/traces/`                | `make perfectz80`                        | ~10 s           | Per-half-cycle 7-pin parity + bus addr/data informational findings |
 | Gate-level vs perfectz80 (iverilog RTL path)      | `tests/traces/`                | `make perfectz80_rtl`                    | ~15 s           | Same diff but driving the iverilog RTL testbench (silicon-faithful leg) |
+| Gate-level vs perfectz80 (LibreLane synth path)   | `librelane/` + `tests/iverilog/tb_z80_netlist.v` | `make perfectz80_netlist` | ~5 min cold / ~30 s warm | yosys-synthesised sky130 gate-level netlist diffed against the Visual-Z80 gate-level netlist — the "ultimate test" |
 | Pin-scenario programs vs perfectz80               | `tests/traces/pin_scenarios/`  | `make pin_scenarios`                     | ~15 s           | INT / NMI / WAIT / BUSREQ / RESET event-driven scenarios (informational) |
 | Real KC85 silicon sync capture                    | `tests/sigrok/`                | `make silicon_cycles`                    | ~1 s            | Per-opcode T-state count vs a real Z80 logic-analyzer capture |
 | Real KC85 silicon 20 MHz capture                  | `tests/sigrok/`                | `make silicon_async`                     | ~3 s            | Real CPU clock + sub-T-state pin-edge offsets |
@@ -205,7 +206,37 @@ one-cycle `addr`-settle delta. Set `BUS_STRICT=1` env var to promote bus
 diffs to gating.
 
 
-### 7. Real-silicon traces — `tests/sigrok/`
+### 7. LibreLane gate-level — `librelane/` + `tests/iverilog/tb_z80_netlist.v`
+
+The **ultimate test**. Pushes our Verilog RTL through LibreLane (Yosys
+synthesis only — no floorplan/PnR/STA) into a sky130 gate-level netlist,
+then runs that netlist through iverilog against the same trace programs
+and diffs per-half-cycle pin behavior against perfectz80. Catches
+synthesis-introduced bugs that pure source-RTL sim never sees: latches
+inferred where DFFs were intended, async-reset domain crossings folded
+into combinational paths, lint-suppressed glitches that gates expose.
+
+```
+make synth                # LibreLane synthesis → build/synth/z80_core.nl.v
+make iverilog_netlist     # gate-level iverilog tb compiled w/ sky130 cell models
+make perfectz80_netlist   # diff vs perfectz80 over 5 starter programs
+```
+
+Install LibreLane via Nix (the project's first-class non-Docker path):
+
+    curl -fsSL https://install.determinate.systems/nix | sh -s -- install
+    nix profile install github:librelane/librelane
+
+Starter program set: `prog1.hex`, `prog2.hex`, `prog3_cb.hex`,
+`prog4_ed.hex`, `prog_rnd_01.hex` — 5 programs × 200 phases each. Once
+the gate is green these will expand to the full 8 hand + 4 random.
+Pin-scenarios stay C-only until `.events` is wired into the iverilog
+testbenches (separate followup).
+
+See [../docs/librelane-flow.md](../docs/librelane-flow.md) for the full
+plan, including the CI job, caching strategy, and risks/gotchas.
+
+### 8. Real-silicon traces — `tests/sigrok/`
 
 Two captures from a real KC85/2 (East-German Z80 clone running at
 1.767 MHz) taken with a Saleae Logic + sigrok:
@@ -224,7 +255,7 @@ See [docs/real-silicon-traces.md](../docs/real-silicon-traces.md) for the
 full decode + interpretation notes.
 
 
-### 8. 4-way oracle lockstep
+### 9. 4-way oracle lockstep
 
 Not a `make` target — runs inline in CI's `c-tests` job. The driver
 `scripts/lockstep_quad.c` loads `tests/zex/zexdoc3.com` and steps four

@@ -44,7 +44,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
-.PHONY: all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl pin_scenarios basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests z80test_runner z80test
+.PHONY: all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests z80test_runner z80test
 
 all: cmodel ctest
 
@@ -163,6 +163,70 @@ perfectz80: tracegen $(BIN)/perfectz80_runner
 # INT / WAIT / BUSREQ / RESET events still go through the C-only path.
 perfectz80_rtl: iverilog $(BIN)/perfectz80_runner
 	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --rtl=iverilog 200
+
+# === LibreLane gate-level flow — "ultimate test" =============================
+# Synthesise rtl/*.v through LibreLane (Yosys.Synthesis step only — no
+# floorplan/PnR/STA) into a sky130 gate-level netlist, then diff its
+# per-half-cycle pin behavior against the perfectz80 Visual-Z80
+# gate-level netlist. The first gate that catches synthesis-introduced
+# bugs (latches inferred where DFFs were intended, reset domain
+# crossings folded by the synthesizer, etc.) — see docs/librelane-flow.md.
+#
+# `make synth` runs LibreLane via the librelane/run_synth.sh wrapper,
+# which expects `librelane` on PATH (nix profile install). It writes:
+#   build/synth/z80_core.nl.v   — synthesized netlist (symlink)
+#   build/synth/pdk_root.path   — resolved PDK_ROOT for downstream rules
+synth: $(BUILD)/synth/z80_core.nl.v
+
+# Synthesis produces both the netlist .v and a small pdk_root.path file
+# (read lazily by the iverilog rule's recipe). One rule, two outputs.
+# Only the netlist is declared here; pdk_root.path is a side effect.
+# (Grouped-target syntax `&:` would be cleaner but is GNU Make 4.3+
+# only; macOS ships 3.81.)
+$(BUILD)/synth/z80_core.nl.v: $(RTL_SRCS) librelane/config.json librelane/run_synth.sh
+	@mkdir -p $(BUILD)/synth
+	librelane/run_synth.sh
+
+# Build the gate-level iverilog testbench. The sky130_fd_sc_hd Verilog
+# cell models live under $(PDK_ROOT)/sky130A/libs.ref/sky130_fd_sc_hd/verilog/
+# (PDK_ROOT resolved at synth time by run_synth.sh and persisted to
+# build/synth/pdk_root.path, which this recipe reads).
+#
+# `-DFUNCTIONAL` picks the zero-delay functional cell models — much
+# faster than spec-block timing models and sufficient for the logical
+# correctness diff against perfectz80 (which is also unit-delay).
+iverilog_netlist: synth $(BUILD)/tb_z80_netlist.vvp
+
+$(BUILD)/tb_z80_netlist.vvp: $(TESTS)/iverilog/tb_z80_netlist.v $(BUILD)/synth/z80_core.nl.v
+	@if [ ! -f $(BUILD)/synth/pdk_root.path ]; then \
+	    echo "iverilog_netlist: $(BUILD)/synth/pdk_root.path missing — run \`make synth\` first"; exit 1; \
+	  fi; \
+	  PDK_ROOT=$$(cat $(BUILD)/synth/pdk_root.path); \
+	  SKY130_V_DIR=$$PDK_ROOT/sky130A/libs.ref/sky130_fd_sc_hd/verilog; \
+	  if [ ! -d "$$SKY130_V_DIR" ]; then \
+	    echo "iverilog_netlist: sky130 verilog models not found at $$SKY130_V_DIR"; exit 1; \
+	  fi; \
+	  echo "== building gate-level iverilog sim (sky130 cells) =="; \
+	  $(IVERILOG) -g2012 -DFUNCTIONAL -s tb_z80 -o $@ \
+	    $(TESTS)/iverilog/tb_z80_netlist.v \
+	    $(BUILD)/synth/z80_core.nl.v \
+	    $$SKY130_V_DIR/primitives.v \
+	    $$SKY130_V_DIR/sky130_fd_sc_hd.v && \
+	  echo "Built $@"
+
+# Gate-level netlist vs perfectz80. Starter set: 5 programs (4 hand +
+# 1 random); expand to all 12 once green. Pin-scenarios still go
+# through the C-only path until .events lands in the iverilog
+# testbenches (see docs/librelane-flow.md "What we don't do").
+perfectz80_netlist: iverilog_netlist $(BIN)/perfectz80_runner
+	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --rtl=netlist 200 \
+	  $(TESTS)/traces/prog1.hex \
+	  $(TESTS)/traces/prog2.hex \
+	  $(TESTS)/traces/prog3_cb.hex \
+	  $(TESTS)/traces/prog4_ed.hex \
+	  $(TESTS)/traces/prog_rnd_01.hex
+# =============================================================================
+
 
 # Pin-scenario programs (prog9..prog20). Each drives a specific external-
 # pin event sequence via the .events sidecar (INT pulse, NMI pulse, WAIT

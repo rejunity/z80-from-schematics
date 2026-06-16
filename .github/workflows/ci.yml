@@ -145,6 +145,71 @@ jobs:
         run: make pin_scenarios
 
   # =====================================================================
+  # LIBRELANE GATE-LEVEL — "ultimate test". Synthesise rtl/*.v via
+  # LibreLane (Yosys.Synthesis only) into a sky130 gate-level netlist,
+  # then diff the synthesised netlist's per-half-cycle pin behaviour
+  # against the perfectz80 Visual-Z80 gate-level netlist. See
+  # docs/librelane-flow.md for the full plan.
+  #
+  # Heavy step. First cold run on a CI runner is ~8-10 min (nix store
+  # download + librelane install + sky130 PDK fetch + ~2 min synth).
+  # Subsequent runs are ~30 s when the synth-output cache is warm and
+  # ~5 min when only the nix-store cache is warm.
+  #
+  # Gated to every push during development per user direction.
+  # =====================================================================
+
+  librelane-netlist:
+    name: LibreLane gate-level sim vs perfectz80 (5 starter programs)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Nix (Determinate Systems)
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Cache /nix/store across runs
+        # Speeds up the librelane install on subsequent runs by an
+        # order of magnitude. First run is still ~5-8 min for the full
+        # closure download.
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: Install LibreLane via nix profile
+        run: nix profile install github:librelane/librelane
+
+      - name: Cache synthesised netlist on (rtl + librelane config) hash
+        id: synth-cache
+        uses: actions/cache@v4
+        with:
+          path: build/synth
+          key: synth-${{ hashFiles('rtl/*.v', 'librelane/config.json', 'librelane/run_synth.sh') }}
+
+      - name: Install C toolchain + iverilog
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential python3 iverilog
+
+      - name: Run LibreLane synthesis (skipped on cache hit)
+        if: steps.synth-cache.outputs.cache-hit != 'true'
+        run: make synth
+
+      - name: Build gate-level iverilog testbench (sky130 cells)
+        run: make iverilog_netlist
+
+      - name: Gate-level netlist vs perfectz80 (5 starter programs)
+        run: make perfectz80_netlist
+
+      - name: Upload synthesised netlist artifact
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: synth-netlist
+          path: build/synth/z80_core.nl.v
+          retention-days: 30
+
+  # =====================================================================
   # ZEX TIER (C model) — runs on every event, including every push.
   # ZEXDOC and ZEXALL are independent jobs so they run in parallel
   # (~18 + 19 min serial -> ~19 min parallel wall clock). Neither
