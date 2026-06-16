@@ -19,7 +19,7 @@ baselines**: any number of failures *at or below* the baseline is treated
 as a PASS, any number *above* the baseline as a regression (non-zero exit).
 This is how we gate against drift without flipping red on the
 silicon-faithfulness gaps we already track in
-[docs/audit-followups.md](../../docs/audit-followups.md).
+[docs/simplifications.md](../../docs/simplifications.md).
 
 
 ## Variants (and their baselines)
@@ -71,7 +71,7 @@ The remaining `z80test` failures are **documented divergences**, not
 bugs:
 
   - INI / IND / INIR / INDR sub-cycle ordering — listed as `F-block-op-M-cycle`
-    in [docs/audit-followups.md](../../docs/audit-followups.md). Fixing
+    in [docs/simplifications.md](../../docs/simplifications.md). Fixing
     requires rewriting the block-I/O M-cycle, which has cascading effects
     on the gate-level perfectz80 oracle diff.
   - SCF / CCF Q-flag behaviour — Zilog NMOS Q-leak vs. Toshiba's
@@ -91,7 +91,7 @@ in any of these classes without the suite turning red on day one.
   - [`scripts/z80test_runner.c`](../../scripts/z80test_runner.c) — the
     headless runner: TAP loader, ROM stubs, port-FE wiring, pass/fail
     parser.
-  - [`../../docs/audit-followups.md`](../../docs/audit-followups.md) —
+  - [`../../docs/simplifications.md`](../../docs/simplifications.md) §F —
     silicon-faithfulness items, including the block-I/O sub-cycle.
   - [`../../docs/known-differences.md`](../../docs/known-differences.md)
     — running list of deliberate / watched divergences.

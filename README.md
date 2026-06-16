@@ -141,32 +141,15 @@ Verification and reverse-engineering background:
 
 Tests and ROMs:
 
-  - [tests/basic/README.md](tests/basic/README.md) — the BASIC ROMs and their I/O
-    conventions, plus the canned-script regression (`make basic_c_tests` /
-    `make basic_rtl_tests`).
-  - [tests/traces/README.md](tests/traces/README.md) — the 8 hand-assembled bus-cycle
-    trace programs, the 14-column shared trace format used by `make compare`, and
-    the new `pin_scenarios/` subdirectory of INT/NMI/WAIT-event programs driven
-    by the `<prog>.events` sidecar.
-  - [tests/fuse/README.md](tests/fuse/README.md) — the 1356-case Frank D. Cringle
-    opcode corpus (`tests.in` / `tests.expected`) driven by `make fuse` and
-    `make fuse_rtl`.
-  - [tests/zex/README.md](tests/zex/README.md) — the CP/M `.com` exercisers
-    (`prelim`, `zexdoc`, `zexall`, `zexdoc3`), the M80 source `zexdoc.z80`, and
-    the curated 14-test ZEXALL subset (`zexall_subset.com`, built by
-    `scripts/zex_make_subset.py`).
-  - [tests/z80test/](tests/z80test/) — Patrik Rak's z80test (raxoft, MIT): five
-    `.tap` files driven by `scripts/z80test_runner.c` for documented +
-    undocumented behaviour, MEMPTR, and SCF/CCF Q-leak coverage.
-
-Test expansion:
-
-  - [docs/test-expansion-plan.md](docs/test-expansion-plan.md) — the 3-ring plan
-    (external suites; pin-event sidecars + pin-scenario programs; second
-    gate-level oracle) and what's landed vs deferred.
-  - [docs/ring3-az80-oracle.md](docs/ring3-az80-oracle.md) — design sketch for
-    adding gdevic/A-Z80 as a second gate-level oracle (CI-time clone).
-  - [docs/audit-followups.md](docs/audit-followups.md) — silicon-faithfulness
-    items (C1, A1, A3, A4, E1, F) parked from the `unsimplify` branch.
+  - **[tests/README.md](tests/README.md)** — comprehensive test-suite
+    overview: every test type, what it covers, how to run it, current
+    result, and links to the per-subdirectory READMEs (`tests/common/`,
+    `tests/fuse/`, `tests/zex/`, `tests/z80test/`, `tests/basic/`,
+    `tests/traces/`, `tests/sigrok/`).
+  - [docs/ring3-az80-oracle.md](docs/ring3-az80-oracle.md) — design sketch
+    for the deferred second gate-level oracle (gdevic/A-Z80).
+  - [docs/simplifications.md](docs/simplifications.md) — silicon-faithfulness
+    audit (A1, A3, A4, B, C1, D, E1, F) — the source of truth for the
+    deliberate vs unintended divergences from gate-level Z80.
 
 The brief that this project follows: [z80_core_project_BRIEF.md](z80_core_project_BRIEF.md).

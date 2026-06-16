@@ -116,7 +116,7 @@ promote bus mismatches to gating too.
 `make pin_scenarios` is **informational** today (the make target exits 0 even
 on divergence) — every divergence between our model and perfectz80 surfaces
 a real silicon-faithfulness audit item rather than a regression. See
-[docs/audit-followups.md](../../docs/audit-followups.md) for the running list.
+[docs/simplifications.md](../../docs/simplifications.md) for the running list.
 
 
 ## How they were assembled

@@ -224,7 +224,7 @@ jobs:
   # We have a known set of silicon-faithful gaps (block-op M-cycle
   # ordering; LDIR/LDDR + INIR/INDR Q-leak) that make the full 67-test
   # ZEXALL fail under the RTL today — see docs/known-differences.md and
-  # docs/audit-followups.md. Once those gaps land, restore a full-ZEXALL
+  # docs/simplifications.md. Once those gaps land, restore a full-ZEXALL
   # RTL job here gated the same way.
   # =====================================================================
 

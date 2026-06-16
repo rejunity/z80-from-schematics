@@ -105,8 +105,8 @@ $(BIN)/z80test_runner: $(SCRIPTS)/z80test_runner.c $(CMODEL_LIB) $(CMODEL_HDRS)
 # per-variant baseline allowed-failure counts. Failures THAT EXCEED the
 # baseline = a regression and the make target exits non-zero. New variants
 # go in this list:
-#   z80doc      2  — INI/IND block-I/O sub-cycle (audit followup; see
-#                    docs/audit-followups.md F-block-op-M-cycle)
+#   z80doc      2  — INI/IND block-I/O sub-cycle (see docs/simplifications.md
+#                    §F "Block-op M-cycle break")
 #   z80memptr   2  — INIR->NOP'/INDR->NOP' (same root cause as above)
 #   z80full    10  — additional SCF/CCF ST-variant differences (we model
 #                    Zilog NMOS Q, not Toshiba) + LDIR/LDDR->NOP'
@@ -169,7 +169,7 @@ perfectz80_rtl: iverilog $(BIN)/perfectz80_runner
 # pulse, BUSREQ, RESET, ...). These currently surface real divergences
 # between our model and perfectz80 — exit 0 unconditionally so CI shows
 # the findings without flipping red; they're tracked alongside
-# docs/audit-followups.md once a concrete fix lands.
+# docs/simplifications.md once a concrete fix lands.
 pin_scenarios: tracegen $(BIN)/perfectz80_runner
 	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py 200 \
 	  $(TESTS)/traces/pin_scenarios/prog9_inta_im1.hex \
