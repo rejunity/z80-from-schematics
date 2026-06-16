@@ -192,16 +192,18 @@ int main(int argc, char** argv) {
     uint16_t load_at = 0x0000;
     long long max_instr = 5000000000LL;
     int autostart = 0;
+    const char* exit_on = NULL;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--bin"))                  is_bin = 1;
         else if (!strcmp(argv[i], "--start") && i+1<argc) load_at = (uint16_t)strtoul(argv[++i], 0, 0);
         else if (!strcmp(argv[i], "--max-instr") && i+1<argc) max_instr = atoll(argv[++i]);
         else if (!strcmp(argv[i], "--prefeed") && i+1<argc) prefeed_buf = argv[++i];
         else if (!strcmp(argv[i], "--autostart"))       autostart = 1;
+        else if (!strcmp(argv[i], "--exit-on") && i+1<argc) exit_on = argv[++i];
         else if (!rom)                                  rom = argv[i];
         else { fprintf(stderr, "unknown arg %s\n", argv[i]); return 2; }
     }
-    if (!rom) { fprintf(stderr, "usage: %s [--bin] <rom> [--start ADDR] [--max-instr N] [--prefeed STR] [--autostart]\n", argv[0]); return 2; }
+    if (!rom) { fprintf(stderr, "usage: %s [--bin] <rom> [--start ADDR] [--max-instr N] [--prefeed STR] [--autostart] [--exit-on <substr>]\n", argv[0]); return 2; }
     /* --autostart sends a CR to satisfy NASCOM BASIC's "Memory top?"
        cold-start prompt (default = max free RAM). Combine with --prefeed
        to send arbitrary additional bytes before stdin. */
@@ -231,6 +233,16 @@ int main(int argc, char** argv) {
        latch picks it up at the right phase. */
     int prev_mem_wr = 1, prev_io_wr = 1, prev_io_rd = 1;
     int latched_data_byte = -1;            /* sticky data for the current IORQ read cycle */
+    /* --exit-on bookkeeping: rolling tail of bytes emitted to stdout. When
+       the substring matches, run a small instruction grace then break, so
+       canned-script CI tests don't keep spinning past the test's own
+       "DONE-XYZ" sentinel until the max_instr cap fires. */
+    enum { TAIL_KEEP = 512 };
+    char tail_buf[TAIL_KEEP + 1] = {0};
+    size_t tail_len = 0;
+    int sentinel_seen = 0;
+    uint64_t sentinel_at_instr = 0;
+    const uint64_t EXIT_GRACE_INSTR = 50000;
     /* The 6850 ACIA's IRQ output is wired to the Z80 /INT pin in this ROM's
        hardware: IRQ stays asserted while RDRF=1 (or TDRE=1 with TX-int
        enabled, which this ROM doesn't keep on). NASCOM BASIC RX is fully
@@ -257,7 +269,24 @@ int main(int argc, char** argv) {
         if (io_wr_active  && !prev_io_wr) {
             uint8_t port = c->pins.addr & 0xFF;
             /* Data ports: NASCOM ACIA at 0x81, Tiny BASIC at 0x01 */
-            if (port == ACIA_DATA || port == 0x01) { putchar((int)c->pins.data_out); fflush(stdout); }
+            if (port == ACIA_DATA || port == 0x01) {
+                unsigned char ch = (unsigned char)c->pins.data_out;
+                putchar((int)ch); fflush(stdout);
+                if (exit_on && !sentinel_seen) {
+                    if (tail_len >= TAIL_KEEP) {
+                        memmove(tail_buf, tail_buf + 1, TAIL_KEEP - 1);
+                        tail_len = TAIL_KEEP - 1;
+                    }
+                    tail_buf[tail_len++] = (char)ch;
+                    tail_buf[tail_len]   = 0;
+                    if (strstr(tail_buf, exit_on)) {
+                        sentinel_seen = 1;
+                        sentinel_at_instr = s->cpu.instr_count;
+                        fprintf(stderr, "\n[basicrunner] sentinel '%s' seen; exiting in %llu instructions\n",
+                                exit_on, (unsigned long long)EXIT_GRACE_INSTR);
+                    }
+                }
+            }
             /* Status writes (control reg): port 0x80 NASCOM, port 0x00 Tiny BASIC - both ignored */
         }
         if (io_rd_active && !prev_io_rd) {
@@ -290,6 +319,12 @@ int main(int argc, char** argv) {
         prev_mem_wr = mem_wr_active;
         prev_io_wr  = io_wr_active;
         prev_io_rd  = io_rd_active;
+        if (sentinel_seen && (s->cpu.instr_count - sentinel_at_instr) >= EXIT_GRACE_INSTR) {
+            fprintf(stderr, "[basicrunner] sentinel '%s' grace elapsed; exiting at PC=%04x\n",
+                    exit_on, s->cpu.rf[RFP_PC]);
+            free(s);
+            return 0;
+        }
     }
     fprintf(stderr, "[basicrunner] max_instr reached at PC=%04x\n", s->cpu.rf[RFP_PC]);
     free(s);

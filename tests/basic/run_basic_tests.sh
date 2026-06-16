@@ -78,23 +78,33 @@ run_one() {
   echo "================  $name  ================"
   echo "----- input ($in_file) -----"
   cat "$in_file"
+  # Sentinel for --exit-on: the LAST non-comment / non-blank line of
+  # .expect is the test script's distinctive end marker (e.g. "DONE-ARITH").
+  # When it shows up in BASIC's stdout, the harness runs a small grace
+  # window (~50K instructions) then exits — instead of spinning out to
+  # max_instr after the test is already complete. Big speedup on
+  # Verilator runs.
+  local sentinel
+  sentinel=$(grep -v '^#' "$expect_file" | awk 'NF' | tail -1 | sed 's/^[[:space:]]*//')
+
   echo "----- BASIC stdout -----"
   local tmplog="/tmp/basic_test_${name}_$$.log"
   rm -f "$tmplog"
   case "$MODE" in
     c)
       prep_input "$in_file" \
-        | stdbuf -oL "$BIN" $rom_args --max-instr $MAX_INSTR "$rom" 2>&1 \
+        | stdbuf -oL "$BIN" $rom_args --max-instr $MAX_INSTR \
+            ${sentinel:+--exit-on "$sentinel"} "$rom" 2>&1 \
         | stdbuf -oL tee "$tmplog" || true
       ;;
     rtl)
-      # sim_basic argv: [--autostart] <rom.hex> [max_instr]. Pass through
-      # the same NASCOM --autostart flag so the "Memory top?" prompt is
-      # skipped. NASCOM cold-start to first prompt is ~50M instr; each
-      # PRINT subtest adds ~1M; bump the cap to 100M for comfort. Tiny
-      # BASIC takes <5M so 100M is plenty there too.
+      # sim_basic argv: [--autostart] [--exit-on <substr>] <rom.hex> [max_instr].
+      # NASCOM cold-start to first prompt is ~50M instr; each PRINT subtest
+      # adds ~1M. Sentinel-driven early exit normally kicks in well before
+      # the 100M cap.
       prep_input "$in_file" \
-        | stdbuf -oL "$BIN" $rom_args "$rom" 100000000 2>&1 \
+        | stdbuf -oL "$BIN" $rom_args ${sentinel:+--exit-on "$sentinel"} \
+            "$rom" 100000000 2>&1 \
         | stdbuf -oL tee "$tmplog" || true
       ;;
   esac

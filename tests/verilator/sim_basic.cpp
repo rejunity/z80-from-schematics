@@ -7,7 +7,13 @@
 // /INT is asserted while stdin queue is non-empty (NASCOM's interrupt-
 // driven RX path).
 //
-//   sim_basic <rom.hex> [max_instr]
+//   sim_basic [--autostart] [--exit-on <substr>] <rom.hex> [max_instr]
+//
+// --exit-on <substr>: when <substr> appears in the BASIC stdout, run a
+// brief grace window (~50K more instructions) so any trailing "Ok\n" or
+// newline finishes flushing, then exit cleanly. Used by the canned-script
+// CI tests so the harness doesn't waste 5+ minutes spinning past the
+// test's own "DONE-XYZ" sentinel before the max_instr cap fires.
 //
 // Exit code: 0 always — the test driver greps stdout for expected substrings.
 #include <cstdio>
@@ -16,6 +22,7 @@
 #include <cstdint>
 #include <chrono>
 #include <queue>
+#include <string>
 #include "Vz80_core.h"
 #include "Vz80_core___024root.h"
 #include "verilated.h"
@@ -45,16 +52,18 @@ static int load_hex(const char* path) {
 }
 
 int main(int argc, char** argv) {
-    bool autostart = false;
-    const char* rom_path = nullptr;
-    long long max_instr = 30000000LL;
+    bool        autostart = false;
+    const char* rom_path  = nullptr;
+    const char* exit_on   = nullptr;
+    long long   max_instr = 30000000LL;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--autostart")) autostart = true;
+        else if (!strcmp(argv[i], "--exit-on") && i + 1 < argc) exit_on = argv[++i];
         else if (!rom_path)                  rom_path = argv[i];
         else                                 max_instr = atoll(argv[i]);
     }
     if (!rom_path) {
-        fprintf(stderr, "usage: %s [--autostart] <rom.hex> [max_instr]\n", argv[0]);
+        fprintf(stderr,"usage: %s [--autostart] [--exit-on <substr>] <rom.hex> [max_instr]\n",argv[0]);
         return 2;
     }
 
@@ -96,6 +105,15 @@ int main(int argc, char** argv) {
     bool prev_iord_active = false;     // edge-detect for IORD start
     bool prev_iowr_active = false;     // edge-detect for IOWR start
     uint8_t latched_io_data = 0xFF;   // sticky for the current IORD cycle
+    // --exit-on bookkeeping: rolling tail of the last few hundred bytes
+    // emitted to stdout. When `exit_on` is set and shows up in the tail,
+    // arm a small instruction-grace countdown so the trailing "Ok\n" can
+    // flush, then break out.
+    std::string tail_buf;
+    bool      sentinel_seen   = false;
+    long long grace_remaining = 0;
+    static const size_t TAIL_KEEP = 512;
+    static const long long EXIT_GRACE_INSTR = 50000;
 
     auto t0 = std::chrono::steady_clock::now();
 
@@ -139,7 +157,19 @@ int main(int argc, char** argv) {
         if (iowr_active && !prev_iowr_active) { // start of this IOWR cycle
             uint8_t port = (uint8_t)(t->addr & 0xFF);
             if (port == 0x81 || port == 0x01) {                       // data write
-                putchar((int)t->data_out); fflush(stdout);
+                unsigned char ch = (unsigned char)t->data_out;
+                putchar((int)ch); fflush(stdout);
+                if (exit_on && !sentinel_seen) {
+                    tail_buf.push_back((char)ch);
+                    if (tail_buf.size() > TAIL_KEEP)
+                        tail_buf.erase(0, tail_buf.size() - TAIL_KEEP);
+                    if (tail_buf.find(exit_on) != std::string::npos) {
+                        sentinel_seen = true;
+                        grace_remaining = EXIT_GRACE_INSTR;
+                        fprintf(stderr,"\n[sim_basic] sentinel '%s' seen; exiting in %lld instructions\n",
+                                exit_on, grace_remaining);
+                    }
+                }
             }
             // 0x80 / 0x00 (control register) ignored
         }
@@ -147,7 +177,10 @@ int main(int argc, char** argv) {
         prev_iowr_active = iowr_active;
 
         phases++;
-        if (prev_m1_n && !t->m1_n) instr++;
+        if (prev_m1_n && !t->m1_n) {
+            instr++;
+            if (sentinel_seen && --grace_remaining <= 0) break;
+        }
         prev_m1_n = t->m1_n;
     }
 
