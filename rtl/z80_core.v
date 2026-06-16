@@ -1006,13 +1006,16 @@ module z80_core (
                 if (fin) begin
                     instr_count_n = instr_count + 32'd1;
                     prefix_n = `PFX_NONE;
-                    // Commit Q: F if THIS instruction wrote F, else 0. Detect
-                    // F-modification by comparing rf_n[AF][7:0] vs rf[AF][7:0]
-                    // at instruction end.
+                    // Commit Q: F if THIS instruction wrote F, else PERSIST
+                    // (don't reset to 0). Detect F-modification by comparing
+                    // rf_n[AF][7:0] vs rf[AF][7:0] at instruction end. The
+                    // persistence is the silicon-faithful Q-leak chain — see
+                    // cmodel/z80_core.c:1058 + Patrik Rak z80full tests 89/90
+                    // (LDIR/LDDR → NOP') and 102/103 (INIR/INDR → NOP') which
+                    // require Q to survive a non-F-modifying instruction.
                     if (rf_n[`RFP_AF][7:0] != rf[`RFP_AF][7:0])
                         reg_q_n = rf_n[`RFP_AF][7:0];
-                    else
-                        reg_q_n = 8'h0;
+                    // else: reg_q_n retains its default (`= reg_q` from line 357)
                     f_modified_n = 1'b0;
                     // begin_next: decide bus grant / NMI / INT / HALT / next opcode
                     if (!busreq_n) begin

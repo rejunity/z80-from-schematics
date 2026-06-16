@@ -98,31 +98,27 @@ verification path noted.
 
 **Status**: resolved.
 
-### B2. NMI sampling on every phase step
+### B2. NMI sampling (RESOLVED)
 
-NMI is edge-triggered. We latch a falling edge on `pins.nmi_n` on EVERY
-`z80_phase_step()` call (`cmodel/z80_core.c`). The silicon samples NMI at a
-specific phase — the rising edge of the last T-state of the last M-cycle of
-the current instruction. Same for the Verilog (`always @*` NMI capture).
+NMI is edge-triggered. The edge capture (`prev_nmi_n` → `nmi_pending`)
+does run on every `z80_phase_step()` call (sticky-latch behaviour), but
+the **acceptance gate** is exactly the silicon-spec sample point: the
+rising edge of the last T-state of the last M-cycle. See
+`cmodel/z80_core.c:1182` — `if (!c->stalled && c->t_state == c->m_len && c->phi == 0)`
+samples `nmi_pending` into `nmi_sampled` only at T_last.P. The RTL
+mirrors this at `rtl/z80_core.v:374`. Verified via `prog8_nmi` + the
+pin-scenario NMI programs (`prog10_halt_nmi`, `prog19_nmi_in_int`).
 
-The current model: any low pulse during the instruction sets `nmi_pending`,
-and acceptance happens at instruction boundary. The silicon: the pulse has to
-straddle a specific sample point.
+**Status**: resolved.
 
-**Fix**: gate the edge capture to the right phase. Cross-check with
-`prog8_nmi` trace + the FUSE NMI subtest if any.
+### B3. INT sampling (RESOLVED)
 
-**Status**: pending.
+INT is level-triggered, sampled at the rising edge of the last T-state
+of the last M-cycle. Same gate as B2: `cmodel/z80_core.c:1183`
+samples `!int_n` into `int_sampled` at T_last.P. RTL at
+`rtl/z80_core.v:375`.
 
-### B3. INT sampling at instruction boundary only
-
-Same family: `INT` is level-triggered, sampled at the rising edge of the last
-T-state of the last M-cycle. We sample once per instruction at `begin_next()`.
-Corner timing (level deasserting mid-instruction) may differ.
-
-**Fix**: same approach as B2.
-
-**Status**: pending.
+**Status**: resolved.
 
 ### B4. Latch + deassert co-phase (RESOLVED)
 
@@ -148,19 +144,19 @@ state anyway. Document in `docs/known-differences.md` row 1 as resolved.
 
 ## D. Q register
 
-### D1. EX AF,AF' doesn't bump f_modified
+### D1. EX AF,AF' Q-bump (RESOLVED)
 
-`EXEC_EX_AF` does `rf[AF] ↔ rf[AF2]` directly without going through `setF`, so
-`f_modified` stays false → at instruction end Q = 0 instead of (new F).
+The EX AF,AF' handler swaps `rf[AF] ↔ rf[AF2]` and also sets
+`f_modified = true` (`cmodel/z80_core.c:413`). At instruction-done the
+Q commit (`cmodel/z80_core.c:1058`) snapshots the swapped F so the next
+SCF/CCF sees the right value via `(A | Q)`. RTL mirrors this at
+`rtl/z80_core.v:497` (sets `f_modified_n = 1'b1` after the bank swap);
+the RTL Q commit at line 1010-1016 detects F modification by comparing
+`rf_n[AF][7:0]` vs `rf[AF][7:0]` instead of an explicit flag, which
+captures the swap. Verified in the z80full test: row 129 EX AF,AF' is
+OK.
 
-Per Sean Young's *Undocumented Z80 Documented* §4.1, Q is set to F whenever F
-is modified. EX AF,AF' changes F (by swap) and should bump Q.
-
-**Fix**: in EX AF,AF' handler, set `f_modified = true` (or call `setF` with
-the swapped value). Mirror in RTL.
-
-**Status**: pending — write a small test to confirm SCF after EX AF gives
-expected X/Y from `(A | new_F)`.
+**Status**: resolved.
 
 ## E. Internal bus / external pin protocols
 
@@ -192,37 +188,82 @@ silicon-faithful.
 
 **Status**: pending (low impact, low risk).
 
-## F. Other audit candidates (not yet validated)
+## F. Other audit candidates
 
-- **DDCB/FDCB displacement compute**: we fold the 2T IX+d compute into the
-  N-immediate read for `EXEC_LD_M_N` to save an M-cycle (mentioned in row 11
-  of known-differences as the fix to match FUSE's 19T). Worth confirming the
-  silicon actually does that vs the conceptual "internal 5T cycle" the
-  Zilog manual implies.
+### F1. Block-op M-cycle structure (z80test rows 12, 13)
 
-- **Block-op M-cycle structure**: LDI/CPI/INI/OUTI have a quirky cycle
-  layout. We use INTERNAL cycles for the "wait" parts; real silicon's exact
-  break between M-cycles needs verifying against a real-silicon trace.
+The current INI/IND flag computation matches Sean Young's spec exactly
+(`cmodel/z80_alu.c:371-382`):
+- `k = data + ((C ± 1) & 0xFF)`
+- HF/CF = `k & 0x100`
+- NF = `data[7]`
+- PF = `parity((k & 7) ^ newB)`
+- SF/ZF/XY from `newB = B - 1`
 
-- **Suppress-decode hack**: post-reset and during M1 of NMI/INT-ack we set
-  `suppress_decode = true` to discard the latched opcode. The real chip does
-  this differently — the M1 cycle of an interrupt ack doesn't even *decode*
-  because IORQ is asserted instead of MREQ. Worth re-examining.
+…and yet Patrik Rak's `z80test`:
+- z80doc tests 098 (INI) and 099 (IND) fail CRC.
+- z80memptr tests 102 (INIR→NOP') and 103 (INDR→NOP') fail CRC.
+- z80full tests 089 (LDIR→NOP'), 090 (LDDR→NOP'), 098, 099, 102, 103
+  fail CRC.
+
+FUSE's 1356-case INI/IND tests pass on our model, so the formula in
+isolation is right. Rak's tests fuzz over many more input combinations
+and CRC the post-state — the divergence is in some corner case (likely
+the **`->NOP'` chain** family where Q-leak from the block-op's final
+iteration propagates into a subsequent NOP and then a SCF/CCF). The
+specific silicon-faithful Q-leak timing for block-op repeat
+termination isn't captured by our "set f_modified once per instruction"
+model.
+
+**Fix path**: build a per-iteration Q tracker that mirrors the
+silicon's M-cycle-internal Q exposure during repeat termination.
+Substantial work; requires either Rak test-case dumps or careful
+silicon-spec study. Tracked under [known-differences.md](known-differences.md)
+rows 12, 13 at `make z80test` baselines 2 / 2 / 10.
+
+### F2. SCF / CCF "ST" variants (Toshiba CMOS)
+
+`z80full` tests 005 SCF (ST) and 006 CCF (ST) fail by design — they
+test the **Toshiba CMOS** variant of SCF/CCF (no Q-leak). We model
+Zilog NMOS (with Q-leak). Documented in [known-differences.md](known-differences.md)
+row 2; intentional NMOS-correct default. A runtime Toshiba switch is a
+future enhancement (deferred — no current use case demands it).
+
+### F3. SCF / CCF NMOS variants (Q-leak)
+
+`z80full` tests 001 SCF and 002 CCF also fail CRC even though our SCF/
+CCF implements the documented NMOS Q-leak (X/Y from `(A | Q)`). Likely
+same root cause as F1 — Q-leak timing during NOP-chain pipelines.
+
+### F4. Validated as silicon-faithful (no change needed)
+
+- **DDCB/FDCB displacement compute folding**: matches FUSE 1356/1356
+  and `make perfectz80` control-pin 100 %; documented at known-
+  differences.md row 11 as resolved.
+- **NMI/INT M1-ack suppress-decode**: matches `prog8_nmi` trace +
+  perfectz80 control pins. The pin combination during INTA (M1+IORQ
+  asserted together) does suppress the decode pipeline correctly.
 
 ## Plan
 
-Work order (roughly by leverage × risk):
+### Resolved
+B1 (M1 deassert), B2 (NMI sample), B3 (INT sample), B4 (latch/deassert
+co-phase), D1 (EX AF Q-bump).
 
-1. **A1**: introduce `z80_idu` (well understood, prototype already exists).
-2. **A2**: move inline 8-bit ALU ops into `z80_alu` modes.
-3. **A3**: 16-bit ALU ops via byte-twice in `z80_alu`.
-4. **D1**: Q after EX AF (small).
-5. **B1**: M1 deassert phase to match silicon.
-6. **B2, B3**: NMI / INT sample phase precision.
-7. **C1**: reset-state un-force.
-8. **A4**: register file restructure (large).
-9. **E1**: internal bus segments (largest; defer until A1–A4 done).
-10. **E2**: WAIT sample latch (cleanup).
+### Remaining work, sorted by leverage × risk
+
+1. **C1**: reset-state un-force. Small (one constant change). Would
+   close known-differences row 1 and bring the perfectz80 `addr` /
+   `data_o` match from 95-98 % to 100 % on `prog_rnd_02` / `prog_rnd_03`.
+2. **F1**: block-op Q-leak timing during repeat termination. Medium-
+   large. Would close z80doc 2/2, z80memptr 2/2, ~6 of z80full 10.
+3. **A2**: move inline 8-bit ALU ops into `z80_alu` modes (cleanup).
+4. **A3**: 16-bit ALU ops via byte-twice in `z80_alu` (cleanup).
+5. **A1**: introduce `z80_idu` module (well understood, prototype on a
+   wip branch).
+6. **A4**: register file restructure (large).
+7. **E1**: internal bus segments (largest; defer until A1–A4 done).
+8. **E2**: WAIT sample latch (cleanup — no observable difference).
 
 After each: full gate run (`make all-tests`) — must stay 100 % across every
 existing oracle (FUSE, fuse_rtl, compare, lockstep, silicon_cycles,
