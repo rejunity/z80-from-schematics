@@ -110,8 +110,11 @@ run_one() {
             ${sentinel:+--exit-on "$sentinel"} "$rom" 2>&1 \
         | stdbuf -oL tee "$tmplog" || true
       ;;
-    rtl)
-      # sim_basic argv: [--autostart] [--exit-on <substr>] <rom.hex> [max_instr].
+    rtl|netlist)
+      # sim_basic / sim_basic_netlist argv: [--autostart] [--exit-on <substr>] <rom.hex> [max_instr].
+      # Identical between source-RTL and gate-level Verilator harnesses
+      # (same sim_basic.cpp source). Gate-level is ~10-50× slower per
+      # cycle so the same --exit-on sentinel matters more.
       # NASCOM cold-start to first prompt is ~50M instr; each PRINT subtest
       # adds ~1M. Sentinel-driven early exit normally kicks in well before
       # the 100M cap.

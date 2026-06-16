@@ -255,7 +255,8 @@ verilator_basic_netlist: synth dirs
 	  -Wno-fatal -Wno-WIDTH -Wno-CASEINCOMPLETE -Wno-UNUSEDSIGNAL \
 	  -Wno-MULTITOP -Wno-MODDUP -Wno-PINMISSING -Wno-TIMESCALEMOD \
 	  --Mdir $(BUILD)/obj_dir_basic_netlist --top-module z80_core \
-	  -DFUNCTIONAL \
+	  +define+FUNCTIONAL +define+UNIT_DELAY \
+	  -CFLAGS -DNETLIST_BUILD \
 	  -I$$SKY130_V \
 	  $$SKY130_V/primitives.v $$SKY130_V/sky130_fd_sc_hd.v \
 	  $(BUILD)/synth/z80_core.nl.v \
