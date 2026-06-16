@@ -77,7 +77,7 @@ interactive controls (Enter, Backspace, Ctrl-C / Ctrl-Space = BREAK, Ctrl-\\ = e
     make z80test         # Patrik Rak z80test (doc / memptr / full) baseline
     make zexall_subset_c     # curated 14-test ZEXALL slice via C model     (~90 s)
     make zexall_subset_rtl   # same 14-test slice via Verilator             (~15-25 min)
-    make zexall_rtl      # full ZEXALL via Verilator                        (~3-5 h)
+    make zexall_rtl      # full ZEXALL via Verilator (local-only; not in CI — known fails) (~3-5 h)
     make pin_scenarios   # INT-ack / HALT-NMI / WAIT-state programs vs perfectz80
     make all-tests       # every gate above in sequence
     make clean
@@ -93,7 +93,7 @@ build needs a working C++17 toolchain (Apple clang 21+ or any modern gcc / clang
 | ✅  | C unit tests (incl. per-T-state pin sequence)                   | PASS                                |
 | ✅  | ZEXDOC                                                          | 67 / 67                             |
 | ✅  | ZEXALL                                                          | 67 / 67                             |
-| ✅  | ZEXALL 14-test subset via Verilator RTL                         | 14 / 14 (~17 min budget)            |
+| ✅  | ZEXALL 14-test subset via Verilator RTL (main + nightly)        | 14 / 14 (~17 min)                   |
 | ✅  | FUSE / Cringle (C)                                              | **1356 / 1356**  (100 %)            |
 | ✅  | FUSE / Cringle (through RTL via iverilog)                       | **1356 / 1356**  (100 %)            |
 | 🟡  | Patrik Rak z80test (doc / memptr / full)                        | 158 / 158 / 150 (within baselines)  |
