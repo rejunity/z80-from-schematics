@@ -44,6 +44,35 @@ until the NMI fires at phase 30 — the interesting behaviour is the NMI-ack M1
 phase-by-phase trace.
 
 
+## `pin_scenarios/` — pin-event driven scenarios
+
+`make pin_scenarios` runs a second class of trace programs that exercise
+the *input* pins (NMI, INT, WAIT, BUSREQ, RESET) on a deterministic phase
+schedule. The schedule lives next to each `.hex` as a `.events` sidecar
+parsed identically by `scripts/tracegen.c` and `scripts/perfectz80_runner.c`,
+so the C model and the perfectz80 gate-level netlist see *exactly* the same
+pin transitions at exactly the same phases.
+
+Sidecar format — one event per line, `#` for comments:
+
+    <phase>  <pin>  <0|1>
+
+`<phase>` is the phase index (modern-clock half-tick) at which to drive
+the pin, `<pin>` is one of `nmi`, `int`, `wait`, `busreq`, `reset`, and
+`<value>` is the level to drive (`0` = asserted/low, `1` = released/high).
+
+| File                          | What it exercises                                                                  |
+|-------------------------------|------------------------------------------------------------------------------------|
+| `prog9_inta_im1.hex`          | IM 1 INT acceptance — `EI` + NOP loop, INT pulsed at phase 50; expects an INTA M-cycle (`M1` + `IORQ` together, 7 T-states), then RST 38h to the IM1 vector, then `HALT`. |
+| `prog10_halt_nmi.hex`         | `HALT` self-refetch loop entered at boot, exited by an NMI pulse at phase 35; expects the NMI-ack 5-T M1, PC push, jump to `0x0066`, then a terminating `HALT`. |
+| `prog11_wait_mem.hex`         | WAIT-state insertion on a memory read — `LD A,(0x0100)` triggers an MRD whose T2.N sample lands inside a `wait_n` low window (phases 30..38); expects extra Tw states until WAIT releases. |
+
+`make pin_scenarios` is **informational** today (the make target exits 0 even
+on divergence) — every divergence between our model and perfectz80 surfaces
+a real silicon-faithfulness audit item rather than a regression. See
+[docs/audit-followups.md](../../docs/audit-followups.md) for the running list.
+
+
 ## How they were assembled
 
 Each `.hex` file is hand-assembled — no toolchain dependency. Lines are

@@ -11,25 +11,36 @@ three concentric rings:
   3. **Add a second gate-level oracle** alongside perfectz80 so we
      cross-check the Visual-Z80 netlist itself.
 
-Already in place on this branch (just landed):
+## Status as of 2026-06
 
-- **BASIC ROM regression** (`tests/basic/scripts/*`, `make basic_tests`,
-  CI job `basic-tests`). Pipes canned BASIC scripts through
-  `basicrunner` for NASCOM BASIC 4.7c (RC2014 build) and the 1K
-  Tiny BASIC ROM; greps for expected substrings. 4 subtests today
-  (arithmetic, FOR/NEXT + string accumulator, strings, Tiny arith).
-  Catches gross ROM-boot regressions and tens-of-millions of cycles
-  of "real software" execution that ZEX/FUSE never exercise.
+| Ring | Item                                                  | Status                                                                                                                                                                       |
+|:----:|-------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| –    | BASIC ROM regression                                   | ✅ landed (`basic_c_tests` + `basic_rtl_tests` CI jobs; `tests/basic/run_basic_tests.sh` + canned scripts; `--exit-on` sentinel speedup)                                       |
+| 1    | Patrik Rak z80test (raxoft) integration               | ✅ landed (`make z80test`, `tests/z80test/*.tap`, `scripts/z80test_runner.c`, baselines 2/2/10)                                                                                |
+| 1    | floooh chips-test / z80-timing.c port                 | ✅ landed (`tests/common/test_timing.c`, 29 / 29 PASS, runs under `make ctest`). Predicates adapted to our per-half-cycle pin conventions — see file header                    |
+| 1    | ZEXALL Verilator subset                                | ✅ landed (`tests/zex/zexall_subset.com`, `scripts/zex_make_subset.py`, `make zexall_subset_c` / `zexall_subset_rtl`, CI job `zexall-subset-rtl` ~17 min)                      |
+| 2    | Pin-event sidecar format + harness extensions          | ✅ landed (`<prog>.events` parsed by `scripts/tracegen.c` and `scripts/perfectz80_runner.c`; pins: `nmi`, `int`, `wait`, `busreq`, `reset`)                                    |
+| 2    | New pin-scenario trace programs                        | 🟡 partial — `prog9_inta_im1`, `prog10_halt_nmi`, `prog11_wait_mem` landed (`tests/traces/pin_scenarios/`, `make pin_scenarios`); `prog12..prog20` still deferred             |
+| 2    | Bus-data + bus-address comparison                      | ⏳ deferred                                                                                                                                                                   |
+| 3    | A-Z80 as second gate-level oracle                      | ⏳ deferred — design sketch lives in [docs/ring3-az80-oracle.md](ring3-az80-oracle.md)                                                                                         |
+
+The `unsimplify` audit followups ([docs/audit-followups.md](audit-followups.md))
+remain parked behind the remaining Ring-2 + Ring-3 work — broader test
+coverage will make the silicon-faithful refactors safer.
+
+`make pin_scenarios` is **informational**: divergences vs perfectz80
+surface real silicon-faithfulness items rather than CI regressions. See
+the file's row in the top-level README.
 
 ## Ring 1 — external test suites to integrate
 
 | Suite | Author | License | What it adds | Status |
 |---|---|---|---|---|
-| **z80test** (`z80full`, `z80doc`, `z80flags`, `z80memptr`, `z80ccf`) | Patrik Rak (raxoft) | MIT | Documented + undoc behaviour, MEMPTR/WZ, X/Y/H undoc flags, SCF/CCF Q-leak — **all things ZEXALL misses**. Per-subtest OK/CRC output like Cringle. | **to integrate** |
+| **z80test** (`z80full`, `z80doc`, `z80flags`, `z80memptr`, `z80ccf`) | Patrik Rak (raxoft) | MIT | Documented + undoc behaviour, MEMPTR/WZ, X/Y/H undoc flags, SCF/CCF Q-leak — **all things ZEXALL misses**. Per-subtest OK/CRC output like Cringle. | ✅ landed (`make z80test`; doc / memptr / full with baselines 2 / 2 / 10 — gaps tracked in [audit-followups.md](audit-followups.md)) |
 | **prelim.com** | Bartholomew 1981 | public domain | 899 instr / 8721 cycles — sanity-checks instructions ZEXALL itself depends on. Bundled in many emulators. | already shipped (`tests/zex/prelim.com`) |
 | **FUSE 1356-case** | F. Cringle / fuse-emulator | MIT-style | Per-T-state event list + final state. | already integrated (`make fuse`, `make fuse_rtl`) |
 | **ZEXDOC + ZEXALL** | F. Cringle | GPL-2.0 | Documented + undocumented opcode flag check. | already integrated (`make zexdoc`, `make zexall`, both CI jobs) |
-| **floooh chips-test / z80-timing.c** | Andre Weissflog | MIT | Per-T-state pin assertions (`M1|MREQ|RD`, `MREQ|RFSH`, `IORQ|RD/WR`, etc.) for every opcode. Closest available analogue to a pin-level exerciser. | **to integrate** |
+| **floooh chips-test / z80-timing.c** | Andre Weissflog | MIT | Per-T-state pin assertions (`M1|MREQ|RD`, `MREQ|RFSH`, `IORQ|RD/WR`, etc.) for every opcode. Closest available analogue to a pin-level exerciser. | ✅ landed (`tests/common/test_timing.c`, 29 / 29 PASS inside `make ctest`). Pin predicates re-derived against our per-half-cycle conventions — the structure is the same as floooh's but the assertions use OUR `.N`-sample pin model (see docs/timing.md) |
 | **Woodster `Timing_Tests-48k_v1.0`** | (cited by MAME PR #11522) | unknown | M-cycle-shape regression — useful if license permits. | to evaluate |
 
 ### Concrete integration tasks

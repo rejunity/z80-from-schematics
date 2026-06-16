@@ -26,6 +26,9 @@ Status legend:
 | 9  | HALT PC convention                            | undocumented / convention | resolved |
 | 10 | `IN A,(n)` / `IN r,(C)` port-input value      | reference ambiguity       | resolved |
 | 11 | `DD 36` / `FD 36` cycle count                 | timing                    | resolved |
+| 12 | `INI` / `IND` / `INIR` / `INDR` flag set      | undocumented / flag       | watching |
+| 13 | `LDIR` / `LDDR` Q-leak into next instruction  | undocumented / flag       | watching |
+| 14 | Pin-scenario vs perfectz80 (informational)    | timing                    | watching |
 
 Notes for each row:
 
@@ -89,6 +92,32 @@ Notes for each row:
      M-cycle (5 T) for `EXEC_LD_M_N` instead of emitting a separate 5 T internal
      cycle. Mirrored to RTL.
 
+ 12. `INI` / `IND` / `INIR` / `INDR` flag set — Patrik Rak's `z80doc` +
+     `z80memptr` (`make z80test`) surface 2 failures each on this family,
+     and they share the same root cause: our block-I/O M-cycle has the
+     `(HL) -> port` / `port -> (HL)` sub-cycle order matching the
+     conventional emulator pattern, but the silicon's actual ordering
+     produces a slightly different `H` / `P` flag mask via the well-known
+     `B-1 + (C+1) & 0xFF` quirk. Listed as `F-block-op-M-cycle` in
+     [audit-followups.md](audit-followups.md). Baseline tolerated in the
+     `make z80test` runner so CI catches *new* drift but not these two.
+
+ 13. `LDIR` / `LDDR` / `INIR` / `INDR` Q-leak into next instruction —
+     Rak's `z80full` surfaces these on top of the SCF/CCF Q-leak family
+     of #2. Same NMOS-Q model is in use; the few residual failures are
+     the well-documented "block-op chains a NOP'-style Q exposure on
+     repeat termination" pattern. Tolerated within the z80full baseline
+     of 10.
+
+ 14. Pin-scenario vs perfectz80 (`make pin_scenarios`) — three trace
+     programs (`prog9_inta_im1`, `prog10_halt_nmi`, `prog11_wait_mem`)
+     drive INT / NMI / WAIT through the `.events` sidecar and diff
+     against perfectz80 per-half-cycle. Make target is informational
+     today (exits 0 even on divergence); current divergences are folded
+     into the audit-followups list rather than gating CI. When all three
+     reach control-pin parity, this row flips to `resolved` and the gate
+     becomes hard.
+
 Add rows as new differences are discovered. Each "watching" row should gain a
 test that pins the chosen behaviour or escalates it.
 
@@ -103,6 +132,8 @@ test that pins the chosen behaviour or escalates it.
 | suzukiplan/z80 C++ (`scripts/lockstep_quad.c`)             | 7.0 M instr (ZEXDOC3)                               | identical regs across all four emulators                  |
 | FUSE / Frank D. Cringle (`make fuse`)                      | 1356 cases                                          | **1356 / 1356  (100 %)**                                  |
 | FUSE through RTL via iverilog (`make fuse_rtl`)            | 1356 cases                                          | **1356 / 1356  (100 %)**                                  |
+| Patrik Rak z80test (`make z80test`)                        | doc / memptr / full (~470 micro-tests across three)  | 158 / 158 / 150 — at baseline (2 / 2 / 10 allowed; see #12 / #13) |
+| ZEXALL 14-test subset via Verilator RTL (`make zexall_subset_rtl`) | 550 M instr through Verilator                 | **14 / 14** PASS; ~17 min on CI                            |
 | Real KC85 silicon — sync   (`make silicon_cycles`)         | 50 classified opcodes (kc85-cpuclk.sr)              | **50 OK** (4 with /WAIT attribution); 0 emu mismatches    |
 | Real KC85 silicon — 20 MHz (`make silicon_async`)          | CPU clock + sub-T pin offsets + 9-opcode re-sample  | **CPU ≈ 1.767 MHz**, M1 / MREQ / RD / WR at spec offsets   |
 | MAME Z80 differential                                      | —                                                   | resolved via suzukiplan (MAME's `z80.cpp` ties tightly to MAME's device framework) |

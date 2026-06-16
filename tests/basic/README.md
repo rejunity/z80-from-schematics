@@ -3,8 +3,15 @@
 Two ROMs vendored here for the `basic` branch. Driven by
 [`scripts/basicrunner.c`](../../scripts/basicrunner.c):
 
-  - `make basic`     — runs NASCOM BASIC 4.7
-  - `make tinybasic` — runs the 1 KiB Tiny BASIC
+  - `make basic`     — runs NASCOM BASIC 4.7 interactively (C model)
+  - `make tinybasic` — runs the 1 KiB Tiny BASIC interactively (C model)
+
+Plus two non-interactive regression suites that feed canned scripts in and
+assert against expected substrings in the BASIC output:
+
+  - `make basic_c_tests`   — canned-script regression via C model     (~0.5 s)
+  - `make basic_rtl_tests` — same canned-script regression via Verilator RTL
+    (`~1 s` sim + Verilator build time)
 
 ## NASCOM BASIC 4.7 (RC2014 build)
 File: `nascom_basic_4_7_rc2014.hex`  (Intel HEX, 8154 bytes of ROM 0x0000-0x1FD9)
@@ -97,10 +104,60 @@ Both port mappings (NASCOM 0x80 / 0x81 and Tiny BASIC 0 / 1) are recognised
 simultaneously by `basicrunner`, so the same binary handles both ROMs.
 
 
+## Canned-script regression: `make basic_c_tests` / `basic_rtl_tests`
+
+The regression driver lives at [`run_basic_tests.sh`](run_basic_tests.sh)
+and is shared by both the C and RTL paths — same scripts, same assertions,
+two harnesses.
+
+Each subtest is a pair of files in `scripts/`:
+
+  - `<name>.in`     — lines fed to BASIC stdin (CR-LF terminated, with a
+    one-space prefix on lines after the first to compensate for the
+    NASCOM "drop first char after Ok\n" quirk).
+  - `<name>.expect` — substrings that must appear in BASIC's stdout, in
+    file order. Lines beginning with `#` are comments. The **last
+    non-comment line** is treated specially (see "sentinel" below).
+
+Filename prefix selects ROM + autostart mode:
+
+  - `nascom_*`      — NASCOM BASIC 4.7c, runner started with `--autostart`.
+  - `tiny_*`        — 1 KiB Tiny BASIC, no autostart.
+
+Current subtest set:
+
+  - `nascom_arith.in`   — integer + floating point arithmetic, mixed types
+  - `nascom_loops.in`   — FOR / NEXT / GOTO control flow + nested loops
+  - `nascom_strings.in` — string functions (LEFT$, RIGHT$, MID$, LEN, CHR$, ASC)
+  - `tiny_arith.in`     — Tiny BASIC arithmetic + GOSUB / RETURN
+
+### `--exit-on` sentinel
+
+Both `basicrunner` (C) and `sim_basic` (Verilator) accept `--exit-on
+<substring>`. When the substring shows up in the program's stdout, the
+harness runs for a small grace window (`50_000` instructions) and then
+terminates cleanly, instead of spinning out to its `--max-instr` cap.
+`run_basic_tests.sh` derives the sentinel automatically from each
+`.expect` file as the last non-comment, non-blank line (typically a
+`DONE-ARITH` / `DONE-STRINGS` / `DONE-LOOPS` marker printed by the
+script's final `PRINT`). This makes the RTL run fast: instead of spending
+~10 minutes per subtest grinding through dead loops at Verilator speed,
+each subtest exits ~50K instructions after its last `PRINT`.
+
+The grace window matters: BASIC's prompt-print path executes hundreds of
+instructions per character, so cutting too early can clip the trailing
+`Ok` line and falsely-fail the next assertion. 50K is empirically clear
+across both ROMs.
+
+
 ## See also
 
   - [scripts/basicrunner.c](../../scripts/basicrunner.c) — the runner source
     (Intel HEX loader, ACIA emulation, ring-buffered stdin, termios setup).
+  - [`../verilator/sim_basic.cpp`](../verilator/sim_basic.cpp) — Verilator
+    harness that wraps the same ACIA + `--exit-on` plumbing around the RTL.
+  - [`run_basic_tests.sh`](run_basic_tests.sh) — the shared canned-script
+    driver invoked by `make basic_c_tests` / `make basic_rtl_tests`.
   - [../../README.md](../../README.md) — top-level project overview.
   - [../../docs/architecture.md](../../docs/architecture.md) — the design
     contract for the Z80 core these ROMs run on.
