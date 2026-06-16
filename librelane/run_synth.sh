@@ -18,16 +18,24 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT/librelane"
 
 if ! command -v librelane >/dev/null 2>&1; then
-  cat >&2 <<EOF
+  cat >&2 <<'EOF'
 librelane not found on PATH.
 
-Install with Nix (the project's recommended native install path —
-see docs/librelane-flow.md "Tooling"):
+Install with Nix (the project's recommended native install path — see
+docs/librelane-flow.md "Tooling"). The fossi-foundation substituter
+MUST be configured before installing or nix will try to rebuild
+LibreLane's pinned iverilog snapshot from source, which fails on
+x86_64-linux (1 of 297 self-tests fails).
 
-  curl -fsSL https://install.determinate.systems/nix | sh -s -- install
+  curl --proto '=https' --tlsv1.2 -fsSL https://install.determinate.systems/nix \
+    | sh -s -- install --no-confirm --extra-conf "
+        extra-substituters = https://nix-cache.fossi-foundation.org
+        extra-trusted-public-keys = nix-cache.fossi-foundation.org:3+K59iFwXqKsL7BNu6Guy0v+uTlwsxYQxjspXzqLYQs=
+        extra-experimental-features = nix-command flakes
+      "
   nix profile install github:librelane/librelane
 
-Then re-run \`make synth\`.
+Then re-run `make synth`.
 EOF
   exit 2
 fi

@@ -89,12 +89,22 @@ Install path: **Nix** (the LibreLane project's first-class non-Docker
 option). Same install method on macOS (local dev) and Ubuntu (CI), so
 no host-OS forking in our scripts.
 
+**Critical:** the `nix-cache.fossi-foundation.org` substituter MUST be
+configured (URL + trusted public key) before `nix profile install` —
+otherwise nix tries to rebuild LibreLane's pinned iverilog snapshot
+from source, whose self-test suite has 1 flaky case on x86_64-linux
+("Ran 297, Failed 1") and the build fails. URL + public key (from the
+[LibreLane Linux install docs](https://librelane.readthedocs.io/en/latest/installation/nix_installation/installation_linux.html)):
+
+  - `https://nix-cache.fossi-foundation.org`
+  - `nix-cache.fossi-foundation.org:3+K59iFwXqKsL7BNu6Guy0v+uTlwsxYQxjspXzqLYQs=`
+
 | Concern             | Approach                                                              |
 |---------------------|-----------------------------------------------------------------------|
-| Local install (Mac) | Determinate Systems installer: `curl -fsSL https://install.determinate.systems/nix \| sh -s -- install`. Then `nix profile install github:librelane/librelane`. |
-| CI install (Ubuntu) | `DeterminateSystems/nix-installer-action@main`. Then `nix profile install github:librelane/librelane`. |
-| First-time cost     | Local: ~5 min for the substituter download. CI: ~2 min on a warm runner with nix-action cache; first cold run ~8 min. |
-| Subsequent runs     | Local: instant (warm nix store). CI: ~30 s with GitHub Actions cache on `/nix/store`. |
+| Local install (Mac) | Determinate Systems installer with `--extra-conf` for the fossi-foundation substituter, then `nix profile install github:librelane/librelane`. See the project's [Linux install docs](https://librelane.readthedocs.io/en/latest/installation/nix_installation/installation_linux.html) — the Mac install page documents the same flags. |
+| CI install (Ubuntu) | `DeterminateSystems/nix-installer-action@main` with `extra-conf:` input containing the same substituter + public key + `extra-experimental-features = nix-command flakes`. Then `nix profile install github:librelane/librelane`. |
+| First-time cost     | Local: ~5 min for the closure download. CI: same on cold runner; ~30 s on warm GHA cache. |
+| Subsequent runs     | Local: instant (warm nix store). CI: ~30 s with `magic-nix-cache-action` on `/nix/store`. |
 
 Why not pip? `pip install librelane` exists but expects `yosys` + `openroad`
 already on PATH; Ubuntu's apt yosys is too old, and macOS doesn't have an

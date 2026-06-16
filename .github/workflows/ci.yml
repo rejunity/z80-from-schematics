@@ -168,11 +168,25 @@ jobs:
 
       - name: Install Nix (Determinate Systems)
         uses: DeterminateSystems/nix-installer-action@main
+        with:
+          # Configure the fossi-foundation nix cache up front so all
+          # downstream `nix` invocations pull pre-built LibreLane
+          # binaries (iverilog, openroad, yosys-with-plugins, etc.)
+          # instead of building from source. Without this, nix tries
+          # to rebuild iverilog's pinned snapshot whose self-test suite
+          # has 1 flaky case on x86_64-linux (Ran 297, Failed 1) →
+          # derivation fails → librelane install fails. Verified URL +
+          # public key from
+          # librelane.readthedocs.io/en/latest/installation/nix_installation/installation_linux.html
+          extra-conf: |
+            extra-substituters = https://nix-cache.fossi-foundation.org
+            extra-trusted-public-keys = nix-cache.fossi-foundation.org:3+K59iFwXqKsL7BNu6Guy0v+uTlwsxYQxjspXzqLYQs=
+            extra-experimental-features = nix-command flakes
 
       - name: Cache /nix/store across runs
-        # Speeds up the librelane install on subsequent runs by an
-        # order of magnitude. First run is still ~5-8 min for the full
-        # closure download.
+        # Speeds up subsequent runs by ~10x. First cold run still has
+        # to fetch the LibreLane closure from the fossi-foundation
+        # cache (~5 min). Following runs warm from GHA cache (~30 s).
         uses: DeterminateSystems/magic-nix-cache-action@main
 
       - name: Install LibreLane via nix profile
