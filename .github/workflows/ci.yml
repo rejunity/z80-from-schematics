@@ -239,10 +239,10 @@ jobs:
   librelane-basic-netlist:
     name: LibreLane gate-level BASIC (NASCOM 4.7c + Tiny BASIC)
     runs-on: ubuntu-latest
-    if: >-
-      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'))
-      || github.event_name == 'schedule'
-      || github.event_name == 'workflow_dispatch'
+    # TEMPORARILY runs on every push while we iterate on the gate-level
+    # Verilator build (sky130 cell-library / UDP / FUNCTIONAL flag tuning).
+    # Once green, re-gate to main + nightly + manual (heavy; ~10-15 min
+    # wall clock), matching the zexall-subset-rtl policy.
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
