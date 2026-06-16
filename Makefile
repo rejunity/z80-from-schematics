@@ -153,17 +153,26 @@ silicon_async: tracegen
 perfectz80: tracegen $(BIN)/perfectz80_runner
 	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py 200
 
-# Pin-scenario programs (prog9_inta_im1, prog10_halt_nmi, prog11_wait_mem).
-# Each drives a specific external-pin event sequence via the .events sidecar
-# (INT pulse, NMI pulse, WAIT pulse, ...). These currently surface real
-# divergences between our model and perfectz80 — exit 0 unconditionally so
-# CI shows the findings without flipping red; they're tracked alongside
+# Pin-scenario programs (prog9..prog20). Each drives a specific external-
+# pin event sequence via the .events sidecar (INT pulse, NMI pulse, WAIT
+# pulse, BUSREQ, RESET, ...). These currently surface real divergences
+# between our model and perfectz80 — exit 0 unconditionally so CI shows
+# the findings without flipping red; they're tracked alongside
 # docs/audit-followups.md once a concrete fix lands.
 pin_scenarios: tracegen $(BIN)/perfectz80_runner
 	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py 200 \
 	  $(TESTS)/traces/pin_scenarios/prog9_inta_im1.hex \
 	  $(TESTS)/traces/pin_scenarios/prog10_halt_nmi.hex \
 	  $(TESTS)/traces/pin_scenarios/prog11_wait_mem.hex \
+	  $(TESTS)/traces/pin_scenarios/prog12_inta_im2.hex \
+	  $(TESTS)/traces/pin_scenarios/prog13_halt_int.hex \
+	  $(TESTS)/traces/pin_scenarios/prog14_wait_io.hex \
+	  $(TESTS)/traces/pin_scenarios/prog15_busreq_m1.hex \
+	  $(TESTS)/traces/pin_scenarios/prog16_ei_delay.hex \
+	  $(TESTS)/traces/pin_scenarios/prog17_reset.hex \
+	  $(TESTS)/traces/pin_scenarios/prog18_di_then_int.hex \
+	  $(TESTS)/traces/pin_scenarios/prog19_nmi_in_int.hex \
+	  $(TESTS)/traces/pin_scenarios/prog20_block_int.hex \
 	  || echo "(pin_scenarios is informational; failures are expected silicon-faithfulness findings)"
 
 $(BIN)/perfectz80_runner: $(SCRIPTS)/perfectz80_runner.c $(SCRIPTS)/refs/perfectz80/perfectz80.c $(SCRIPTS)/refs/perfectz80/netlist_sim.c

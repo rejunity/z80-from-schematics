@@ -1,0 +1,5 @@
+# Run for ~25 phases of forward progress, then assert reset for a window
+# long enough that the core sees it (>=3 T-states recommended); release
+# and watch the first post-reset M1 fetch at addr=0x0000.
+50  reset  0
+70  reset  1

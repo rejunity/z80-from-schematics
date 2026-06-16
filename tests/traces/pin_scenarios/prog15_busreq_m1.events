@@ -1,0 +1,5 @@
+# Assert busreq mid NOP-loop (around phase 30 — well into the loop body so
+# the busreq-sample edge lands on a known M-cycle boundary). Hold low for
+# enough phases that busack should be visible (>=20 phases), then release.
+30  busreq  0
+70  busreq  1

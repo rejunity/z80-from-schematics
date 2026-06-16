@@ -1,0 +1,4 @@
+# Pulse INT low after EI's one-instruction delay window (well past phase 50);
+# release at phase 52.
+50  int  0
+52  int  1

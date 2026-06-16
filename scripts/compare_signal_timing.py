@@ -23,15 +23,21 @@ PZ80     = os.path.join(ROOT, "build", "bin", "perfectz80_runner")
 # idle); align with PZ_OFFSET=1.
 PZ_OFFSET = 1
 
-# Always-on control-pin parity (CPU-driven, no don't-cares).
+# Always-on control-pin parity (CPU-driven, no don't-cares) — this is the
+# gate of record and affects exit code.
 COMPARED  = ["mreq","iorq","rd","wr","m1","rfsh","halt"]
-# Per-phase address-bus parity surfaced a real one-phase delta where our
-# model settles `addr` slightly earlier than perfectz80's gate-level
-# netlist — that's a silicon-faithfulness polish item (see
-# docs/test-expansion-plan.md "bus-window comparison"). Disabled here
-# until the phase alignment is sharpened; the 7 control pins suffice as
-# the gate of record.
-COMPARE_BUS = False
+# Bus parity: addr is valid when (mreq||iorq) is low; data_o is valid
+# when wr is low. Compared only on phases where BOTH the C model AND
+# perfectz80 agree on the relevant strobe being low. Reported as
+# informational findings (counted, summarised, but DO NOT affect exit
+# code) because there's a well-known one-phase addr-settle delta where
+# our model latches addr slightly earlier than pz80 — silicon-faithfulness
+# polish item, tracked in docs/test-expansion-plan.md "bus-window
+# comparison" and docs/audit-followups.md.
+# Enable bus comparison: COMPARE_BUS=1 (default).
+# Make bus diffs gate exit code too: BUS_STRICT=1 (default off).
+COMPARE_BUS = os.environ.get("COMPARE_BUS", "1") != "0"
+BUS_STRICT  = os.environ.get("BUS_STRICT",  "0") == "1"
 
 def run(cmd):
     p = subprocess.run(cmd, capture_output=True, text=True)
@@ -70,19 +76,51 @@ def compare(prog, phases):
     suffix = f" + events" if events else ""
     if n == 0:
         print(f"  {name}: FAIL (no rows)"); return False
-    mism = 0
+    ctrl_mism = 0           # control-pin mismatches — count against pass/fail
+    bus_addr_mism = 0       # bus-value mismatches — informational by default
+    bus_data_mism = 0
+    bus_addr_compared = 0
+    bus_data_compared = 0
+    shown = 0
     for i in range(n):
         diff = [(col, c[i][col], g[i][col]) for col in COMPARED if c[i][col] != g[i][col]]
+        bus_diff = []
+        if COMPARE_BUS:
+            # addr is valid when (mreq||iorq) is low on BOTH sides.
+            c_addr_valid = (c[i]["mreq"] == "0" or c[i]["iorq"] == "0")
+            g_addr_valid = (g[i]["mreq"] == "0" or g[i]["iorq"] == "0")
+            if c_addr_valid and g_addr_valid:
+                bus_addr_compared += 1
+                if c[i]["addr"] != g[i]["addr"]:
+                    bus_addr_mism += 1
+                    bus_diff.append(("addr", c[i]["addr"], g[i]["addr"]))
+            # data_o is valid when wr is low on BOTH sides.
+            if c[i]["wr"] == "0" and g[i]["wr"] == "0":
+                bus_data_compared += 1
+                if c[i]["data_o"] != g[i]["data_o"]:
+                    bus_data_mism += 1
+                    bus_diff.append(("data_o", c[i]["data_o"], g[i]["data_o"]))
         if diff:
-            mism += 1
-            if mism <= 5:
-                d = " ".join(f"{c1}: C={v1} pz80={v2}" for c1,v1,v2 in diff)
-                print(f"  {name} phase {i} differ:  {d}")
-    if mism == 0:
-        print(f"  {name}: PASS ({n} phases identical on {len(COMPARED)} control pins{suffix})")
-        return True
-    print(f"  {name}: {mism}/{n} phases differ on control pins{suffix}")
-    return False
+            ctrl_mism += 1
+        if (diff or bus_diff) and shown < 5:
+            shown += 1
+            d = " ".join(f"{c1}: C={v1} pz80={v2}" for c1,v1,v2 in (diff + bus_diff))
+            print(f"  {name} phase {i} differ:  {d}")
+    # Headline status reflects control-pin parity only (the gate of record);
+    # bus diffs are summarised in a second line as informational findings.
+    is_ok = (ctrl_mism == 0) and (not BUS_STRICT or (bus_addr_mism + bus_data_mism) == 0)
+    head  = "PASS" if ctrl_mism == 0 else f"{ctrl_mism}/{n} ctrl-pin phases differ"
+    print(f"  {name}: {head}{suffix}")
+    if COMPARE_BUS:
+        addr_pct = (100.0 * (bus_addr_compared - bus_addr_mism) / bus_addr_compared) \
+                   if bus_addr_compared else 100.0
+        data_pct = (100.0 * (bus_data_compared - bus_data_mism) / bus_data_compared) \
+                   if bus_data_compared else 100.0
+        flag = "" if BUS_STRICT else "  [informational]"
+        print(f"           bus addr   {bus_addr_compared - bus_addr_mism}/{bus_addr_compared} "
+              f"({addr_pct:.1f}%) match;  data_o {bus_data_compared - bus_data_mism}/{bus_data_compared} "
+              f"({data_pct:.1f}%) match{flag}")
+    return is_ok
 
 def main():
     if not os.path.exists(TRACEGEN): raise SystemExit("missing tracegen (make tracegen)")
@@ -94,8 +132,11 @@ def main():
                         "prog1","prog2","prog3_cb","prog4_ed",
                         "prog5_ddfd","prog6_block","prog7_ddcb","prog8_nmi")]
                     if os.path.exists(p)])
+    bus_mode = "informational" if (COMPARE_BUS and not BUS_STRICT) else \
+               ("strict"        if BUS_STRICT else "off")
     print(f"C model vs perfectz80 gate-level signal-timing comparison "
-          f"({phases} phases per program, {len(COMPARED)} ctrl pins + bus-valid windows)")
+          f"({phases} phases per program, {len(COMPARED)} ctrl pins; "
+          f"bus addr+data {bus_mode})")
     ok = True
     for p in progs:
         if not compare(p, phases): ok = False

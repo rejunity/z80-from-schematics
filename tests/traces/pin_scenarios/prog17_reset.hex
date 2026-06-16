@@ -1,0 +1,10 @@
+# RESET mid-execution. Drive a non-trivial pattern (LD HL,nn + INC HL loop)
+# so that PC, HL, I, R, IFF have all advanced beyond reset state by the
+# time the reset pulse arrives. After reset, PC/I/R must be 0 and the
+# core should resume fetching at 0x0000 (visible as an M1 with addr=0x0000).
+@0000
+21 34 12           # LD HL,0x1234
+23                 # INC HL
+23                 # INC HL
+00 00 00           # NOPs
+C3 03 00           # JP 0x0003  (loop on INC HL)

@@ -1,0 +1,5 @@
+# LD A,n: M1(4T)+MREAD(3T) = 7T = 14 phases. OUT (n),A: M1(4T)+MREAD(3T)+
+# IOWR(4T) = 11T = 22 phases. Tw of the IOWR lands around phases 26..32.
+# Hold wait_n low across that window.
+28  wait  0
+38  wait  1

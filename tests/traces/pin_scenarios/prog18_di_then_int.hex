@@ -1,0 +1,10 @@
+# INT held while DI set — interrupt must be ignored entirely. DI clears
+# IFF1; subsequent INT pulses should NOT trigger an INTA M-cycle. The
+# trace should show a clean NOP loop throughout the INT window.
+@0000
+ED 56              # IM 1
+F3                 # DI         (IFF1 = 0; INT ignored)
+00 00 00 00 00     # NOPs (loop)
+C3 03 00           # JP 0x0003
+@0038
+76                 # HALT (IM1 vector — present so an accidental ack lands here)
