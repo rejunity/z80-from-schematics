@@ -90,7 +90,7 @@ build needs a working C++17 toolchain (Apple clang 21+ or any modern gcc / clang
 
 |     | Gate                                                            | Result                              |
 |:---:|-----------------------------------------------------------------|-------------------------------------|
-| ✅  | C unit tests (incl. per-T-state pin sequence)                   | PASS                                |
+| ✅  | C unit tests (incl. per-T-state pin sequence — 135 checks, 21 opcodes) | PASS                         |
 | ✅  | ZEXDOC                                                          | 67 / 67                             |
 | ✅  | ZEXALL                                                          | 67 / 67                             |
 | ✅  | ZEXALL 14-test subset via Verilator RTL (main + nightly)        | 14 / 14 (~17 min)                   |
@@ -103,8 +103,8 @@ build needs a working C++17 toolchain (Apple clang 21+ or any modern gcc / clang
 | ✅  | 4-way oracle lockstep (mine + superzazu + chips + suzukiplan)   | identical, 7,022,691 instr.         |
 | ✅  | Real KC85 silicon — sync   capture (`make silicon_cycles`)      | 50 / 50 OK,  0 emu mismatches       |
 | ✅  | Real KC85 silicon — 20 MHz capture (`make silicon_async`)       | CPU ≈ 1.767 MHz, pins ✓             |
-| ✅  | Gate-level signal trace vs perfectz80 (Visual Z80 netlist)      | 100 % control-pin perfect, 8 programs |
-| 🚧  | Pin-scenario programs vs perfectz80 (INT-ack / HALT-NMI / WAIT) | informational; surfaces real audit findings |
+| ✅  | Gate-level signal trace vs perfectz80 (Visual Z80 netlist)      | 100 % control-pin perfect, 8 programs; `data_o` 100 % bus-match (informational) |
+| 🚧  | Pin-scenario programs vs perfectz80 (12 programs, INT/NMI/WAIT/BUSREQ/RESET/EI/DI/block-op) | informational; surfaces real audit findings |
 
 Legend: ✅ pass / 100 % &nbsp; 🟡 ≥ 95 % (close, known artifacts) &nbsp; 🚧 < 95 % (work in progress).
 

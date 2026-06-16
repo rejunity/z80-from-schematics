@@ -66,6 +66,22 @@ the pin, `<pin>` is one of `nmi`, `int`, `wait`, `busreq`, `reset`, and
 | `prog9_inta_im1.hex`          | IM 1 INT acceptance — `EI` + NOP loop, INT pulsed at phase 50; expects an INTA M-cycle (`M1` + `IORQ` together, 7 T-states), then RST 38h to the IM1 vector, then `HALT`. |
 | `prog10_halt_nmi.hex`         | `HALT` self-refetch loop entered at boot, exited by an NMI pulse at phase 35; expects the NMI-ack 5-T M1, PC push, jump to `0x0066`, then a terminating `HALT`. |
 | `prog11_wait_mem.hex`         | WAIT-state insertion on a memory read — `LD A,(0x0100)` triggers an MRD whose T2.N sample lands inside a `wait_n` low window (phases 30..38); expects extra Tw states until WAIT releases. |
+| `prog12_inta_im2.hex`         | IM 2 INT acceptance — `IM 2`, `I = 0x80`, `EI`, NOP loop. INT pulse forms `addr = {I, vector}`; expects a 2-byte MRD of the ISR pointer at `0x80??`, push PC, jump to the loaded ISR address. |
+| `prog13_halt_int.hex`         | HALT exit on **INT** (vs NMI in prog10). IM 1 + EI + HALT loop; INT pulsed mid-loop. Expects HALT release, PC advanced past the HALT byte, INTA + RST 38h, terminating `HALT`. |
+| `prog14_wait_io.hex`          | WAIT-state insertion on an **I/O write** — `OUT (0x20),A` triggers an IOWR whose Tw.N sample lands inside a `wait_n` low window (phases 28..38); expects extra Tw states beyond the automatic one until WAIT releases. |
+| `prog15_busreq_m1.hex`        | BUSREQ / BUSACK handshake — NOP loop, `busreq_n` asserted mid-loop (phases 30..70). Expects `busack_n` to go low at the next M-cycle boundary, bus to tri-state, then execution to resume when BUSREQ releases. |
+| `prog16_ei_delay.hex`         | EI's one-instruction shadow window — `IM 1 + EI + NOP + NOP + loop`. INT pulsed inside the first post-EI NOP; expects INT acceptance to be **deferred** until the second NOP (not the first), per the silicon-faithful EI delay rule. |
+| `prog17_reset.hex`            | `RESET` mid-execution — `LD HL,nn + INC HL + ...` advances PC / HL / I / R past reset state; `reset_n` then asserted (phases 50..70). Expects PC/I/R/IFF reset to 0 and the first post-reset M1 to fetch at `addr = 0x0000`. |
+| `prog18_di_then_int.hex`      | INT held while DI cleared IFF1 — `IM 1 + DI + NOP loop`. INT pulsed for a long window (phases 40..80); expects **no** INTA M-cycle (no `M1` + `IORQ` combo) anywhere in the trace. |
+| `prog19_nmi_in_int.hex`       | NMI arrives during an INTA cycle. INT pulse, then NMI pulse a few phases later — inside the would-be INTA M-cycle. Expects INTA to complete first, then NMI ack to fire immediately after (edge-triggered NMI is latched). |
+| `prog20_block_int.hex`        | INT during a block move — `LDIR` of 16 bytes. INT pulsed mid-iteration; expects the current iteration to complete, PC to be **rewound** to the LDIR opcode (so the block-op resumes after the ISR), then INTA + RST 38h. |
+
+`scripts/compare_signal_timing.py` now also compares `addr` (where
+`mreq`||`iorq` is low on both sides) and `data_o` (where `wr` is low on
+both sides) — reported as **informational** findings per-program. Only
+the 7 control pins gate `make perfectz80`'s exit code; the bus diff is
+visible but doesn't gate. Set `BUS_STRICT=1` in the environment to
+promote bus mismatches to gating too.
 
 `make pin_scenarios` is **informational** today (the make target exits 0 even
 on divergence) — every divergence between our model and perfectz80 surfaces
