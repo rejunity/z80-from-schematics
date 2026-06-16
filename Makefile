@@ -44,7 +44,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
-.PHONY: all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 pin_scenarios basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests z80test_runner z80test
+.PHONY: all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl pin_scenarios basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests z80test_runner z80test
 
 all: cmodel ctest
 
@@ -149,9 +149,20 @@ silicon_async: tracegen
 # Gate-level signal-timing diff vs perfectz80 (Brian Silverman et al's
 # transistor-level netlist port of the Visual Z80 die scan). Compares
 # per-half-cycle control pins (mreq/iorq/rd/wr/m1/rfsh/halt) between our
-# C model and the gate-level simulator across the trace programs.
+# C model and the gate-level simulator across the trace programs (8 hand-
+# crafted + 4 seeded-random from scripts/gen_random_trace_progs.py).
 perfectz80: tracegen $(BIN)/perfectz80_runner
 	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py 200
+
+# Same gate but driving the iverilog RTL testbench (build/tb_z80.vvp) as
+# the trace source instead of the C model. This is the silicon-faithful
+# leg of the perfectz80 comparison — every cycle simulated at RTL
+# fidelity, diffed against the gate-level netlist per-half-cycle. The
+# iverilog testbench only understands the legacy `+nmi=<phase>`
+# shorthand, not the full `.events` sidecar, so programs that need
+# INT / WAIT / BUSREQ / RESET events still go through the C-only path.
+perfectz80_rtl: iverilog $(BIN)/perfectz80_runner
+	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --rtl=iverilog 200
 
 # Pin-scenario programs (prog9..prog20). Each drives a specific external-
 # pin event sequence via the .events sidecar (INT pulse, NMI pulse, WAIT

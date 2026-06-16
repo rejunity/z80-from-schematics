@@ -68,8 +68,17 @@ static void load_hex(const char *path) {
     FILE *f = fopen(path, "r"); if (!f) { perror(path); exit(2); }
     unsigned addr = 0; char tok[64];
     while (fscanf(f, "%63s", tok) == 1) {
-        if (tok[0] == '@') addr = (unsigned)strtoul(tok + 1, NULL, 16) & 0xFFFF;
-        else { cpu_memory[addr & 0xFFFF] = (unsigned char)strtoul(tok, NULL, 16); addr++; }
+        if (tok[0] == '@') {
+            addr = (unsigned)strtoul(tok + 1, NULL, 16) & 0xFFFF;
+        } else if (tok[0] == '/' || tok[0] == '#' || tok[0] == ';') {
+            /* Skip the rest of the comment line. Matches the C tracegen
+             * loader in scripts/tracegen.c so the same .hex file produces
+             * identical memory images on both sides. */
+            int ch; while ((ch = fgetc(f)) != '\n' && ch != EOF) {}
+        } else {
+            cpu_memory[addr & 0xFFFF] = (unsigned char)strtoul(tok, NULL, 16);
+            addr++;
+        }
     }
     fclose(f);
 }

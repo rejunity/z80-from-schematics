@@ -69,7 +69,8 @@ interactive controls (Enter, Backspace, Ctrl-C / Ctrl-Space = BREAK, Ctrl-\\ = e
     make zexall          # full ZEXALL                                 (~16 min)
     make silicon_cycles  # per-opcode T-state check vs real KC85 silicon (sigrok)
     make silicon_async   # real CPU clock + sub-T-state pin offsets from 20 MHz capture
-    make perfectz80      # gate-level signal-trace diff vs the perfectz80 Visual-Z80 netlist
+    make perfectz80      # gate-level signal-trace diff vs the perfectz80 Visual-Z80 netlist (C model)
+    make perfectz80_rtl  # same, but trace source is the iverilog RTL testbench (silicon-faithful leg)
     make basic           # NASCOM BASIC 4.7 on the C model
     make tinybasic       # 1 KiB Tiny BASIC on the C model
     make basic_c_tests   # canned-script BASIC ROM regression via C model    (~0.5 s)
@@ -99,11 +100,12 @@ build needs a working C++17 toolchain (Apple clang 21+ or any modern gcc / clang
 | 🟡  | Patrik Rak z80test (doc / memptr / full)                        | 158 / 158 / 150 (within baselines)  |
 | ✅  | BASIC ROM via C model (NASCOM + Tiny BASIC, canned scripts)     | 4 / 4 subtests                      |
 | ✅  | BASIC ROM via Verilator RTL (NASCOM + Tiny BASIC)               | 4 / 4 subtests                      |
-| ✅  | C ↔ iverilog ↔ Verilator, phase-by-phase                        | identical, 8 trace programs         |
+| ✅  | C ↔ iverilog ↔ Verilator, phase-by-phase                        | identical, 8 hand + 4 random trace programs |
 | ✅  | 4-way oracle lockstep (mine + superzazu + chips + suzukiplan)   | identical, 7,022,691 instr.         |
 | ✅  | Real KC85 silicon — sync   capture (`make silicon_cycles`)      | 50 / 50 OK,  0 emu mismatches       |
 | ✅  | Real KC85 silicon — 20 MHz capture (`make silicon_async`)       | CPU ≈ 1.767 MHz, pins ✓             |
-| ✅  | Gate-level signal trace vs perfectz80 (Visual Z80 netlist)      | 100 % control-pin perfect, 8 programs; `data_o` 100 % bus-match (informational) |
+| ✅  | Gate-level signal trace vs perfectz80 — **C model** path        | 100 % control-pin perfect, 8 hand + 4 random programs; `data_o` 100 % bus-match (informational) |
+| ✅  | Gate-level signal trace vs perfectz80 — **iverilog RTL** path   | 100 % control-pin perfect, same 8 hand + 4 random programs |
 | 🚧  | Pin-scenario programs vs perfectz80 (12 programs, INT/NMI/WAIT/BUSREQ/RESET/EI/DI/block-op) | informational; surfaces real audit findings |
 
 Legend: ✅ pass / 100 % &nbsp; 🟡 ≥ 95 % (close, known artifacts) &nbsp; 🚧 < 95 % (work in progress).

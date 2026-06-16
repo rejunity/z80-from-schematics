@@ -124,15 +124,24 @@ jobs:
             build-essential python3 iverilog verilator
       - name: Build Verilator sim (sim_z80) so compare actually exercises it
         run: make verilator
-      - name: C vs iverilog vs Verilator parity (8 trace programs)
+      - name: C vs iverilog vs Verilator parity (8 hand + 4 random trace programs)
         run: make compare
       - name: C model vs perfectz80 gate-level netlist (signal-timing)
         run: make perfectz80
+      - name: iverilog RTL vs perfectz80 gate-level netlist (signal-timing)
+        # Same 12 trace programs, but the trace source is the iverilog RTL
+        # testbench (build/tb_z80.vvp) rather than the C model. This is the
+        # silicon-faithful leg — every cycle simulated at RTL fidelity,
+        # diffed against the gate-level netlist per-half-cycle. Random
+        # programs (prog_rnd_01..04 from scripts/gen_random_trace_progs.py)
+        # give opcode-mix coverage no hand-written program would have.
+        run: make perfectz80_rtl
       - name: Pin-scenario programs vs perfectz80 (INFORMATIONAL)
-        # New trace programs (prog9..prog11) that drive INT / NMI / WAIT via
-        # the .events sidecar. Currently surface real silicon-faithfulness
-        # divergences vs gate-level — the make target is informational and
-        # exits 0 even on divergences. CI shows the findings without going red.
+        # 12 trace programs (prog9..prog20) that drive INT / NMI / WAIT /
+        # BUSREQ / RESET via the .events sidecar. Currently surface real
+        # silicon-faithfulness divergences vs gate-level — the make target
+        # is informational and exits 0 even on divergences. CI shows the
+        # findings without going red.
         run: make pin_scenarios
 
   # =====================================================================
