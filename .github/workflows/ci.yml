@@ -239,10 +239,11 @@ jobs:
   librelane-basic-netlist:
     name: LibreLane gate-level BASIC (NASCOM 4.7c + Tiny BASIC)
     runs-on: ubuntu-latest
-    if: >-
-      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'))
-      || github.event_name == 'schedule'
-      || github.event_name == 'workflow_dispatch'
+    # Runs on every push. Measured wall clock on a warm-cache runner is
+    # ~9 min: nix install (~1 min) + Verilator gate-level build (~4 min)
+    # + 4 canned BASIC subtests on the synthesised netlist (~3 min). The
+    # synth output is cached on hash(rtl/*.v + librelane/config.json +
+    # run_synth.sh) so most pushes skip the ~3 min synthesis step.
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
@@ -268,11 +269,29 @@ jobs:
           path: build/synth
           key: synth-${{ hashFiles('rtl/*.v', 'librelane/config.json', 'librelane/run_synth.sh') }}
 
-      - name: Install C toolchain + Verilator
+      - name: Install C toolchain (no apt verilator — see below)
+        # apt's Verilator on Ubuntu 24.04 is 5.020 which lacks Verilog-1995
+        # UDP table parsing. The sky130 FUNCTIONAL cell models instantiate
+        # UDP primitives (sky130_fd_sc_hd__udp_dff$P etc.) as their DFF
+        # storage elements — without UDP table support the cells become
+        # empty modules and the gate-level Z80 doesn't store state.
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential python3 verilator
+            build-essential python3
+
+      - name: Install Verilator from nixpkgs (≥ 5.030, UDP-table capable)
+        # LibreLane's own `nix profile install github:librelane/librelane`
+        # does NOT put Verilator on PATH — librelane is a Python CLI that
+        # references its bundled tools by absolute /nix/store paths. We
+        # need a top-level Verilator on PATH explicitly. nixpkgs ships a
+        # current Verilator (5.030+) which handles UDP tables.
+        run: nix profile install nixpkgs#verilator
+
+      - name: Verify Verilator version (must be UDP-table capable)
+        run: |
+          which verilator
+          verilator --version
 
       - name: Run LibreLane synthesis (skipped on cache hit)
         if: steps.synth-cache.outputs.cache-hit != 'true'
