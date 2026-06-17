@@ -203,33 +203,61 @@ The current INI/IND flag computation matches Sean Young's spec exactly
 …and yet Patrik Rak's `z80test`:
 - z80doc tests 098 (INI) and 099 (IND) fail CRC.
 - z80memptr tests 102 (INIR→NOP') and 103 (INDR→NOP') fail CRC.
-- z80full tests 089 (LDIR→NOP'), 090 (LDDR→NOP'), 098, 099, 102, 103
-  fail CRC.
+- z80full tests 001 (SCF), 002 (CCF), 089 (LDIR→NOP'), 090 (LDDR→NOP'),
+  098, 099, 102, 103 fail CRC.
 
-FUSE's 1356-case INI/IND tests pass on our model, so the formula in
-isolation is right. Rak's tests fuzz over many more input combinations
-and CRC the post-state — the divergence is in some corner case I
-couldn't pinpoint without dumping Rak's per-test-case inputs.
+**Oracle triangulation** (commit `<this-commit>`): a separate
+`scripts/superzazu_z80test_runner.c` runs the same `.tap` files through
+the **superzazu/z80** reference emulator (a well-respected open-source
+Z80 in `scripts/refs/superzazu_z80.c`). The findings:
 
-**False lead** (commit `093f95b`, reverted in commit `<this-commit>`):
-I once theorised the bug was that Q resets to 0 between non-F-modifying
+| Test                   | Our CRC     | superzazu CRC | Expected    |
+|------------------------|-------------|---------------|-------------|
+| z80full 001 SCF        | `45FC79B5`  | `45FC79B5`    | `D841BD8A`  |
+| z80full 002 CCF        | `A206B5E3`  | `A206B5E3`    | `3FBB71DC`  |
+| z80full 089 LDIR→NOP'  | `9DC743B5`  | `9DC743B5`    | `CC93B5EC`  |
+| z80full 090 LDDR→NOP'  | `9C1DEA50`  | `9C1DEA50`    | `CD491C09`  |
+| z80full 098 INI        | `A7F6C1B0`  | `DA84C3B3`    | `03DA7534`  |
+| z80full 099 IND        | `E81CDF03`  | `E093F698`    | `4C306B87`  |
+
+**SCF / CCF / LDIR→NOP' / LDDR→NOP'**: our model and superzazu produce
+**identical CRCs**, and both differ from Rak's silicon-derived expected.
+This is strong evidence the gap is NOT a bug in our model relative to
+the open-source emulator community — it's a real silicon-faithfulness
+quirk that two well-respected emulators miss the same way. Fixing
+would require careful study of the silicon's exact behaviour (probably
+involving the gate-level INTERNAL Q-mux exposure during the M-cycle
+sequence, not just the per-instruction commit).
+
+**INI / IND**: both fail but with different CRCs. Two different
+implementation choices, neither matching silicon. Slightly different
+class of bug — independently introduced rather than a shared
+community-wide flaw.
+
+Overall, our model has **10 z80full failures** vs superzazu's **20** —
+we're significantly more silicon-faithful than a widely-cited reference,
+just not perfect on these specific Rak tests.
+
+**False lead** (commit `093f95b`, reverted in commit `b4f5aca`): I
+once theorised the bug was that Q resets to 0 between non-F-modifying
 instructions instead of "persisting from the previous F-modifying
-instruction" (a reading of Patrik Rak's doc). I changed Q to persist in
-both C and RTL. FUSE / ctest / z80test all still passed locally — but
-the change **broke ZEXALL's `<daa,cpl,scf,ccf>` subtest** in CI (run
-`27650481834`). Per Sean Young's *Undocumented Z80 Documented* §4.1
-(and confirmed by ZEXALL CRC, which was derived from real silicon),
-**Q DOES reset to 0** after any instruction that doesn't modify F. Our
-original behaviour was correct. Reverted.
-
-So the Rak failures are NOT a Q-persistence issue. The actual root
-cause remains unknown without instrumenting one of Rak's test cases.
+instruction" (a reading of Patrik Rak's doc). Changing Q to persist
+broke ZEXALL's `<daa,cpl,scf,ccf>` CRC (run `27650481834`). Per Sean
+Young §4.1, Q DOES reset to 0 after any non-F-modifying instruction.
+Original behaviour was correct.
 
 **Fix path**: build a tiny instrumented harness that runs ONE Rak test
 case from `z80full.tap` with full register dumps after each instruction
-and diff against expected. Substantial work; tracked under
+and diff against expected. Or extract per-test-state from the Rak source
+to identify the exact failing inputs. Substantial work; tracked under
 [known-differences.md](known-differences.md) rows 12, 13 at
 `make z80test` baselines 2 / 2 / 10.
+
+**perfectz80 as ground truth**: running z80test through the perfectz80
+gate-level netlist would be the ultimate verification, but at ~10K
+phases/sec it would take hours per variant — not practical for routine
+use. A subset of just the failing tests, extracted from the Rak source,
+might be tractable; tracked for future work.
 
 ### F2. SCF / CCF "ST" variants (Toshiba CMOS)
 
