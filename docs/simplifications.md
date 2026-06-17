@@ -208,18 +208,28 @@ The current INI/IND flag computation matches Sean Young's spec exactly
 
 FUSE's 1356-case INI/IND tests pass on our model, so the formula in
 isolation is right. Rak's tests fuzz over many more input combinations
-and CRC the post-state — the divergence is in some corner case (likely
-the **`->NOP'` chain** family where Q-leak from the block-op's final
-iteration propagates into a subsequent NOP and then a SCF/CCF). The
-specific silicon-faithful Q-leak timing for block-op repeat
-termination isn't captured by our "set f_modified once per instruction"
-model.
+and CRC the post-state — the divergence is in some corner case I
+couldn't pinpoint without dumping Rak's per-test-case inputs.
 
-**Fix path**: build a per-iteration Q tracker that mirrors the
-silicon's M-cycle-internal Q exposure during repeat termination.
-Substantial work; requires either Rak test-case dumps or careful
-silicon-spec study. Tracked under [known-differences.md](known-differences.md)
-rows 12, 13 at `make z80test` baselines 2 / 2 / 10.
+**False lead** (commit `093f95b`, reverted in commit `<this-commit>`):
+I once theorised the bug was that Q resets to 0 between non-F-modifying
+instructions instead of "persisting from the previous F-modifying
+instruction" (a reading of Patrik Rak's doc). I changed Q to persist in
+both C and RTL. FUSE / ctest / z80test all still passed locally — but
+the change **broke ZEXALL's `<daa,cpl,scf,ccf>` subtest** in CI (run
+`27650481834`). Per Sean Young's *Undocumented Z80 Documented* §4.1
+(and confirmed by ZEXALL CRC, which was derived from real silicon),
+**Q DOES reset to 0** after any instruction that doesn't modify F. Our
+original behaviour was correct. Reverted.
+
+So the Rak failures are NOT a Q-persistence issue. The actual root
+cause remains unknown without instrumenting one of Rak's test cases.
+
+**Fix path**: build a tiny instrumented harness that runs ONE Rak test
+case from `z80full.tap` with full register dumps after each instruction
+and diff against expected. Substantial work; tracked under
+[known-differences.md](known-differences.md) rows 12, 13 at
+`make z80test` baselines 2 / 2 / 10.
 
 ### F2. SCF / CCF "ST" variants (Toshiba CMOS)
 

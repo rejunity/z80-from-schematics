@@ -1053,15 +1053,14 @@ static void advance(z80_t *c)
     if (c->t_state > c->m_len) {
         z80_exec_step(c);                    /* set up next M-cycle / finish */
         if (c->instr_done) {
-            /* Commit Q: updates to current F ONLY if THIS instruction wrote
-               F. Otherwise Q PERSISTS from the previous F-modifying
-               instruction — this is the "Q-leak chain" silicon-faithful
-               behaviour. SCF/CCF in a LATER instruction read it to derive
-               X/Y from (A | Q). Patrik Rak's z80full tests 89/90 (LDIR/
-               LDDR → NOP') and 102/103 (INIR/INDR → NOP') depend on this
-               persistence: the NOP' between the block-op and the SCF/CCF
-               must NOT reset Q. */
-            if (c->f_modified) c->q = z80_F(c);
+            /* Commit Q: holds F if THIS instruction wrote F, else 0. SCF/CCF
+               in the NEXT instruction read it to derive X/Y from (A | Q).
+               Per Sean Young's "Undocumented Z80 Documented" §4.1: Q resets
+               to 0 after any instruction that does NOT modify F. Verified
+               against real-silicon CRC by ZEXALL's <daa,cpl,scf,ccf> test;
+               an earlier attempt to make Q persist across non-F-modifying
+               instructions broke that CRC (run 27650481834). */
+            c->q = c->f_modified ? z80_F(c) : 0;
             c->f_modified = false;
             c->instr_count++;
             c->prefix = PFX_NONE;
