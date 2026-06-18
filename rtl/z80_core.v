@@ -248,19 +248,26 @@ module z80_core (
         begin
             t = bk[7:0];
             hcf = bk[8];
+            // redcode's INXR_OTXR_COMMON: PF_PARITY(p ^ ((B +/- 1) & 7))
+            // where p = (t & 7) ^ newB. Earlier this missed the `^ newB`
+            // term, which broke RTL z80full 102/103 INIR/INDR -> NOP'
+            // (CRC 62B504C4 / 21477131 vs expected 454E3531 / 06BC40C4).
             if (hcf) begin
                 cf = 1'b1;
                 if (data[7]) begin
                     hf     = (newB[3:0] == 4'h0) ? 1'b1 : 1'b0;
-                    pf_arg = (t & 8'h07) ^ ((newB - 8'd1) & 8'h07);
+                    pf_arg = ((t & 8'h07) ^ newB)
+                           ^ ((newB - 8'd1) & 8'h07);
                 end else begin
                     hf     = (newB[3:0] == 4'hF) ? 1'b1 : 1'b0;
-                    pf_arg = (t & 8'h07) ^ ((newB + 8'd1) & 8'h07);
+                    pf_arg = ((t & 8'h07) ^ newB)
+                           ^ ((newB + 8'd1) & 8'h07);
                 end
             end else begin
                 cf     = 1'b0;
                 hf     = 1'b0;
-                pf_arg = (t & 8'h07) ^ (newB & 8'h07);
+                pf_arg = ((t & 8'h07) ^ newB)
+                       ^ (newB & 8'h07);
             end
             pf_bit = ~(^pf_arg);
             banks_io_rep_f =
@@ -399,6 +406,18 @@ module z80_core (
         prefix_n = prefix; iff1_n = iff1; iff2_n = iff2; im_n = im; halted_n = halted;
         tmp8_n = tmp8; tmpl_n = tmpl; tmph_n = tmph; tmp16_n = tmp16;
         reg_q_n = reg_q; f_modified_n = f_modified;
+        // Detect F-write THIS M-cycle. Mirrors cmodel/z80_core.c's
+        // z80_setF() which sets c->f_modified = true on every F write.
+        // alu_md != FLAG_NONE means the ALU is computing flags and the
+        // resulting alu_fout will be written to rf_n[RFP_AF][7:0] by
+        // one of the EXEC handlers below. Set f_modified_n=1 so the
+        // Q-update at instruction-done picks the new F (silicon-
+        // faithful per Sean Young §4.1) instead of zeroing it -- the
+        // earlier `rf_n != rf` comparator zero'd Q whenever an F-write
+        // happened to leave F bit-identical (e.g. SCF chained with no
+        // prior CF set), which is the wrong semantic and broke z80full
+        // 007 SCF+CCF + 102/103 INIR/INDR -> NOP'.
+        if (alu_md != `FLAG_NONE) f_modified_n = 1'b1;
         cycle_n = cycle + 32'd1; instr_count_n = instr_count; decoded_n = decoded;
         fin = 1'b0;
         add16 = 17'd0; f16 = 8'd0;
@@ -1078,17 +1097,18 @@ module z80_core (
                 if (fin) begin
                     instr_count_n = instr_count + 32'd1;
                     prefix_n = `PFX_NONE;
-                    // Commit Q: F if THIS instruction wrote F, else 0. Detect
-                    // F-modification by comparing rf_n[AF][7:0] vs rf[AF][7:0]
-                    // at instruction end. Per Sean Young §4.1 + ZEXALL
-                    // <daa,cpl,scf,ccf> CRC (real-silicon-derived): Q must
-                    // RESET to 0 after any instruction that doesn't modify
-                    // F. An earlier attempt at persistence broke that ZEXALL
-                    // test — see cmodel/z80_core.c commit history.
-                    if (rf_n[`RFP_AF][7:0] != rf[`RFP_AF][7:0])
-                        reg_q_n = rf_n[`RFP_AF][7:0];
-                    else
-                        reg_q_n = 8'h0;
+                    // Commit Q: F if THIS instruction wrote F, else 0.
+                    // Per Sean Young §4.1 + ZEXALL <daa,cpl,scf,ccf>
+                    // CRC: Q resets to 0 after any non-F-modifying instr.
+                    // Earlier this branch compared rf_n[AF] != rf[AF],
+                    // which mis-detects "F written to same value" (e.g.
+                    // SCF chained when CF was already 1) as no-write and
+                    // zero'd Q. Now uses f_modified_n which was set to 1
+                    // upstream whenever this instruction's M-cycle invoked
+                    // the ALU with a flag mode -- mirrors c->f_modified
+                    // in cmodel/z80_core.c. Fixes z80full 007 SCF+CCF
+                    // and 102/103 INIR/INDR -> NOP' RTL regressions.
+                    reg_q_n = f_modified_n ? rf_n[`RFP_AF][7:0] : 8'h00;
                     f_modified_n = 1'b0;
                     // begin_next: decide bus grant / NMI / INT / HALT / next opcode
                     if (!busreq_n) begin
