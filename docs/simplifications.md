@@ -206,58 +206,111 @@ The current INI/IND flag computation matches Sean Young's spec exactly
 - z80full tests 001 (SCF), 002 (CCF), 089 (LDIR→NOP'), 090 (LDDR→NOP'),
   098, 099, 102, 103 fail CRC.
 
-**Oracle triangulation** (commit `<this-commit>`): a separate
-`scripts/superzazu_z80test_runner.c` runs the same `.tap` files through
-the **superzazu/z80** reference emulator (a well-respected open-source
-Z80 in `scripts/refs/superzazu_z80.c`). The findings:
+**Oracle triangulation**: separate runners (`scripts/superzazu_z80test_runner.c`
+and `scripts/chips_z80test_runner.c`) run the same `.tap` files through
+the **superzazu/z80** and **floooh/chips/z80.h** reference emulators
+(both in `scripts/refs/`).
 
-| Test                   | Our CRC     | superzazu CRC | Expected    |
-|------------------------|-------------|---------------|-------------|
-| z80full 001 SCF        | `45FC79B5`  | `45FC79B5`    | `D841BD8A`  |
-| z80full 002 CCF        | `A206B5E3`  | `A206B5E3`    | `3FBB71DC`  |
-| z80full 089 LDIR→NOP'  | `9DC743B5`  | `9DC743B5`    | `CC93B5EC`  |
-| z80full 090 LDDR→NOP'  | `9C1DEA50`  | `9C1DEA50`    | `CD491C09`  |
-| z80full 098 INI        | `A7F6C1B0`  | `DA84C3B3`    | `03DA7534`  |
-| z80full 099 IND        | `E81CDF03`  | `E093F698`    | `4C306B87`  |
+Summary by variant:
 
-**SCF / CCF / LDIR→NOP' / LDDR→NOP'**: our model and superzazu produce
-**identical CRCs**, and both differ from Rak's silicon-derived expected.
-This is strong evidence the gap is NOT a bug in our model relative to
-the open-source emulator community — it's a real silicon-faithfulness
-quirk that two well-respected emulators miss the same way. Fixing
-would require careful study of the silicon's exact behaviour (probably
-involving the gate-level INTERNAL Q-mux exposure during the M-cycle
-sequence, not just the per-instruction commit).
+| Variant     | Ours fails | superzazu | chips | redcode |
+|-------------|-----------:|----------:|------:|--------:|
+| z80doc      | 2          | 3         | 2     | 2       |
+| z80memptr   | 2          | 16        | **0** | **0**   |
+| z80full     | 10         | 20        | 10    | **6**   |
 
-**INI / IND**: both fail but with different CRCs. Two different
-implementation choices, neither matching silicon. Slightly different
-class of bug — independently introduced rather than a shared
-community-wide flaw.
+redcode (Manuel Sainz de Baranda's `github.com/redcode/Z80`) was added
+as a 4th oracle on 2026-06-18 via `scripts/redcode_z80test_runner.c` +
+`scripts/lockstep_quint.c` (5-way lockstep). It advertises explicit
+MEMPTR + Q-factor modelling. Vendored under
+`scripts/refs/redcode_z80/` with the Zeta C utility library.
 
-Overall, our model has **10 z80full failures** vs superzazu's **20** —
-we're significantly more silicon-faithful than a widely-cited reference,
-just not perfect on these specific Rak tests.
+CRC details for the contested tests:
 
-**False lead** (commit `093f95b`, reverted in commit `b4f5aca`): I
-once theorised the bug was that Q resets to 0 between non-F-modifying
-instructions instead of "persisting from the previous F-modifying
-instruction" (a reading of Patrik Rak's doc). Changing Q to persist
-broke ZEXALL's `<daa,cpl,scf,ccf>` CRC (run `27650481834`). Per Sean
-Young §4.1, Q DOES reset to 0 after any non-F-modifying instruction.
-Original behaviour was correct.
+| Test                    | Our CRC     | superzazu CRC | chips CRC   | Expected    |
+|-------------------------|-------------|---------------|-------------|-------------|
+| z80doc 098 INI          | `505701FA`  | `658766F9`    | `505701FA`  | `07D1B0D1`  |
+| z80doc 099 IND          | `6A4034D1`  | `5F9053D2`    | `6A4034D1`  | `3DC685FA`  |
+| z80full 001 SCF         | `45FC79B5`  | `45FC79B5`    | `45FC79B5`  | `D841BD8A`  |
+| z80full 002 CCF         | `A206B5E3`  | `A206B5E3`    | `A206B5E3`  | `3FBB71DC`  |
+| z80full 089 LDIR→NOP'   | `9DC743B5`  | `9DC743B5`    | `9DC743B5`  | `CC93B5EC`  |
+| z80full 090 LDDR→NOP'   | `9C1DEA50`  | `9C1DEA50`    | `9C1DEA50`  | `CD491C09`  |
+| z80full 098 INI         | `A7F6C1B0`  | `DA84C3B3`    | `A7F6C1B0`  | `03DA7534`  |
+| z80full 099 IND         | `E81CDF03`  | `E093F698`    | `E81CDF03`  | `4C306B87`  |
+| z80memptr 102 INIR→NOP' | `0A537B63`  | `4A74FCE9`    | **PASS**    | `F3B1BE2F`  |
+| z80memptr 103 INDR→NOP' | `0A537B63`  | `4A74FCE9`    | **PASS**    | `F3B1BE2F`  |
 
-**Fix path**: build a tiny instrumented harness that runs ONE Rak test
-case from `z80full.tap` with full register dumps after each instruction
-and diff against expected. Or extract per-test-state from the Rak source
-to identify the exact failing inputs. Substantial work; tracked under
+**Findings**:
+
+1. **SCF/CCF/LDIR→NOP'/LDDR→NOP' (z80full 1/2/89/90)** — all three
+   emulators produce **bit-identical CRCs**, all differing from Rak's
+   silicon-derived expected the same way. Strong evidence this is a
+   real silicon-faithfulness quirk that THE ENTIRE open-source emulator
+   community misses the same way. Probably gate-level INTERNAL Q-mux
+   exposure during the block-op M-cycle sequence, not the
+   per-instruction commit the emulators model.
+
+2. **INI/IND (z80doc/z80full 98/99)** — ours and chips produce
+   **identical CRCs**; superzazu differs. We agree with chips, superzazu
+   is the outlier — but neither chips's nor our CRC matches Rak's
+   expected. So we have a chips-compatible bug, and Rak expects
+   something else entirely.
+
+3. **z80memptr 102/103 INIR→NOP', INDR→NOP'** — **chips AND redcode
+   both pass these.** Investigation found the difference: chips's INIR
+   (scripts/refs/chips_z80.h line 1541) and redcode's INIR/INDR both
+   set `WZ = PC + 1` during the repeat iteration's internal M-cycle
+   (rewinding PC by 2 first). Our model does the same `WZ = PC + 1`
+   for LDIR/LDDR/CPIR/CPDR repeats but NOT for INIR/INDR/OTIR/OTDR.
+
+   **Attempted fix** (earlier session, reverted): applied the
+   `WZ = PC + 1` on repeat to both INIR/INDR and OTIR/OTDR. Result:
+   - z80memptr: 2 failures → **0 failures** (clean 160/160). ✓
+   - **BUT FUSE broke** on `edba_1` (INDR) and `edbb_1` (OTDR): FUSE
+     expects `WZ = BC ± 1` (the M2 setting), not `WZ = PC + 1`.
+
+   **redcode probe** (`/tmp/redcode_fuse_probe.c`, 2026-06-18) confirmed
+   this is universal: redcode produces `WZ = PC + 1 = 0x0001` on FUSE
+   edba_1 / edb2_1 (final iteration of INDR/INIR with BC=1), matching
+   chips and Rak z80memptr expectations, NOT matching FUSE's
+   `0x069E` / `0x0A41`. For single-shot ED A2 (INI) and ED AA (IND),
+   redcode matches FUSE exactly.
+
+   So FUSE and Rak disagree on what silicon does for INIR/INDR/OTIR/OTDR
+   end-state WZ when the repeat aborts (BC=1→0). All silicon-faithful
+   modern emulators (chips, redcode) — including redcode which has
+   explicit Q-factor and MEMPTR engineering — produce `WZ = PC + 1`,
+   matching Rak. FUSE's `WZ = BC ± 1` expected values for these
+   specific 4 cases appear to be pre-2013 outliers.
+
+   **Current state**: model holds at FUSE-matching behavior (`WZ = BC ± 1`),
+   `make fuse` at 1356/1356, z80memptr at 158/160. The Rak-matching
+   change would flip the score: FUSE 1354/1356, z80memptr 160/160.
+   Code site is `cmodel/z80_core.c:854` (comment documents the
+   trade-off).
+
+4. **Overall scoreboard** with our model:
+   - **10 z80full failures**, vs superzazu **20**, vs chips **10**, vs redcode **6**.
+   - **2 z80memptr failures**, vs superzazu **16**, vs chips **0**, vs redcode **0**.
+   - **2 z80doc failures**, vs superzazu **3**, vs chips **2**, vs redcode **2**.
+   - We're significantly more silicon-faithful than superzazu; chips and
+     redcode beat us on z80memptr by accepting the FUSE↔Rak trade-off
+     the other direction. redcode wins z80full outright (-4 vs us),
+     suggesting it gets at least one of the SCF/CCF/INI/IND undocumented
+     cases right that we still miss — worth a follow-up close-read of
+     redcode's SCF/CCF flag logic.
+
+**False lead** (commit `093f95b`, reverted in commit `b4f5aca`): once
+theorised Q-leak persistence. Broke ZEXALL's `<daa,cpl,scf,ccf>` CRC
+(run `27650481834`). Per Sean Young §4.1, Q DOES reset to 0 after any
+non-F-modifying instruction. Original behaviour was correct.
+
+**Remaining fix path**: items (1), (2), and the Rak-vs-FUSE WZ trade-off
+in (3) are all silicon-faithfulness corners that need careful study of
+the gate-level netlist (perfectz80) or instrumented per-test-case
+runs of the Rak suite to disambiguate. Tracked under
 [known-differences.md](known-differences.md) rows 12, 13 at
 `make z80test` baselines 2 / 2 / 10.
-
-**perfectz80 as ground truth**: running z80test through the perfectz80
-gate-level netlist would be the ultimate verification, but at ~10K
-phases/sec it would take hours per variant — not practical for routine
-use. A subset of just the failing tests, extracted from the Rak source,
-might be tractable; tracked for future work.
 
 ### F2. SCF / CCF "ST" variants (Toshiba CMOS)
 
