@@ -852,13 +852,16 @@ static void z80_exec_step(z80_t *c)
                 c->rf[RFP_HL] = (uint16_t)(c->rf[RFP_HL] + (dec ? -1 : 1));
                 z80_setF(c, alu_fout);
                 if (rep && newB != 0) { z80_setPC(c, (uint16_t)(z80_PC(c) - 2));
-                    /* WZ trade-off on INIR/INDR repeat — documented in
-                     * docs/simplifications.md F1. Sided with FUSE
-                     * (1356/1356) over Rak z80memptr (-2 = 158/160).
-                     * floooh/chips overwrites WZ here (= PC+1) which
-                     * makes z80memptr pass but ALSO fails FUSE — verified
-                     * by tracing chips on FUSE edba_1's exact scenario.
-                     * No emulator can pass both. */
+                    /* INIR/INDR repeat: overwrite WZ = PC + 1 during the
+                     * 5-T internal M-cycle. Silicon-faithful per
+                     * boo-boo et al. 2006 MEMPTR paper + Patrik Rak's
+                     * z80memptr (validated on real Spectrum) + Chandler's
+                     * NEC + Visual Z80 Remix retest (z80test v1.2a).
+                     * Matches chips/z80.h and redcode/Z80. FUSE's
+                     * edba_1/edb2_1 expected WZ = BC ± 1 is incorrect vs
+                     * silicon — see docs/simplifications.md F1 and
+                     * tests/fuse/known-fuse-wrong.txt. */
+                    c->rf[RFP_WZ] = (uint16_t)(z80_PC(c) + 1);
                     z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 5); }
                 else finish(c);
             }
@@ -878,14 +881,11 @@ static void z80_exec_step(z80_t *c)
                 uint8_t newB = getr(c, REG_B);
                 z80_setF(c, alu_fout);
                 if (rep && newB != 0) { z80_setPC(c, (uint16_t)(z80_PC(c) - 2));
-                    /* OTIR/OTDR repeat: do NOT overwrite WZ here. The
-                     * M3 setting of WZ = BC ± 1 is the silicon-faithful
-                     * value per FUSE's edbb_1 expectation. chips_z80.h
-                     * line 1554 sets WZ = PC + 1 here matching its INIR
-                     * pattern, but that breaks FUSE — divergence between
-                     * Rak (which both pass either way for OUT-block) and
-                     * FUSE (which requires WZ = BC ± 1). We side with
-                     * FUSE since both agree elsewhere. */
+                    /* OTIR/OTDR repeat: overwrite WZ = PC + 1 during the
+                     * 5-T internal M-cycle. Same silicon-faithful basis
+                     * as INIR/INDR above. FUSE's edbb_1/edb3_1 expected
+                     * WZ = BC ± 1 is incorrect vs silicon. */
+                    c->rf[RFP_WZ] = (uint16_t)(z80_PC(c) + 1);
                     z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 5); }
                 else finish(c);
             }

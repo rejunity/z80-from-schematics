@@ -144,7 +144,12 @@ int main(int argc, char **argv) {
     cpu.retn         = NULL;
     cpu.hook         = NULL;
     cpu.illegal      = NULL;
-    cpu.options      = 0;
+    /* Zilog NMOS model preset: LD_A_IR_BUG + XQ + YQ. The Q (X/Y leak)
+     * factors are essential for matching Patrik Rak's z80full SCF/CCF
+     * expectations on Zilog silicon. Without them redcode behaves like
+     * NEC and z80full 1/2 (SCF/CCF) fail while 3/4 (SCF NEC/CCF NEC)
+     * pass -- the opposite of what we want for a Zilog Z80 reference. */
+    cpu.options      = Z80_MODEL_ZILOG_NMOS;
     cpu.int_line     = 0;
 
     z80_power(&cpu, 1);

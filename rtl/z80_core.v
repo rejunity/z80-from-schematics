@@ -948,7 +948,17 @@ module z80_core (
                             rf_n[`RFP_HL] = rf[`RFP_HL] + (aux_w[0] ? 16'hFFFF : 16'h1);
                             rf_n[`RFP_AF][7:0] = alu_fout;
                             if (aux_w[3] && bnewB != 8'h0) begin
+                                /* INIR/INDR repeat: overwrite WZ = PC + 1
+                                 * (= (PC-2)+1 = PC-1 after rewind) during
+                                 * the 5-T internal M-cycle. Silicon-faithful
+                                 * per boo-boo 2006 MEMPTR / Rak z80memptr /
+                                 * Chandler v1.2a NEC retest. Matches
+                                 * chips/z80.h + redcode/Z80. FUSE's
+                                 * edba_1/edb2_1 expected WZ = BC ± 1 is
+                                 * incorrect vs silicon — see
+                                 * tests/fuse/known-fuse-wrong.txt. */
                                 rf_n[`RFP_PC] = rf[`RFP_PC] - 16'd2;
+                                rf_n[`RFP_WZ] = rf[`RFP_PC] - 16'd1;
                                 startm(`BUSOP_INTERNAL, rf[`RFP_PC] - 16'd2, 8'h0, 4'd5);
                             end else fin = 1'b1;
                         end else fin = 1'b1;
@@ -965,7 +975,12 @@ module z80_core (
                             bnewB = getr8(3'd0);
                             rf_n[`RFP_AF][7:0] = alu_fout;
                             if (aux_w[3] && bnewB != 8'h0) begin
+                                /* OTIR/OTDR repeat: same silicon-faithful
+                                 * WZ = PC + 1 overwrite. FUSE's
+                                 * edbb_1/edb3_1 expected WZ = BC ± 1 is
+                                 * incorrect vs silicon. */
                                 rf_n[`RFP_PC] = rf[`RFP_PC] - 16'd2;
+                                rf_n[`RFP_WZ] = rf[`RFP_PC] - 16'd1;
                                 startm(`BUSOP_INTERNAL, rf[`RFP_PC] - 16'd2, 8'h0, 4'd5);
                             end else fin = 1'b1;
                         end else fin = 1'b1;
