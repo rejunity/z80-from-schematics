@@ -305,10 +305,46 @@ theorised Q-leak persistence. Broke ZEXALL's `<daa,cpl,scf,ccf>` CRC
 (run `27650481834`). Per Sean Young §4.1, Q DOES reset to 0 after any
 non-F-modifying instruction. Original behaviour was correct.
 
+**Cross-check: redcode end-to-end on FUSE** (2026-06-18, via
+`scripts/redcode_fuse_runner.c`): **1348 / 1356 PASS**. The 8 failures
+break down as:
+
+- 4 `INxR`/`OTxR` BC=1→0 WZ cases (`edb2_1`, `edb3_1`, `edba_1`, `edbb_1`)
+  — exactly the FUSE↔Rak disagreement above; redcode sides with Rak.
+- 2 SCF/CCF Q-leak X/Y bits (`37_1`, `3f`).
+- 1 CPDR X-flag bit (`edb9_2`).
+- 1 HALT PC convention (`76`) — FUSE expects PC stays at HALT addr,
+  redcode advances PC past it (the more common modern model).
+
+**FUSE corpus provenance** (researched 2026-06-18):
+- The 1356-case `tests.in` / `tests.expected` was **authored by Philip
+  Kendall in 2006** for FUSE, **not by Frank D. Cringle**. Cringle's
+  separate `zexall.com` / `zexdoc.com` CP/M exercisers are a different
+  corpus (those WERE silicon-checksummed against a real Z80).
+- No FUSE README, commit message, or Changelog entry documents the
+  methodology used to produce `tests.expected`. The community consensus
+  is that it is **emulator-derived (FUSE-self-referential)**, not
+  silicon-captured.
+- floooh/chips's own `z80-fuse.c` test harness already blacklists FUSE
+  `BIT n,(HL)` X/Y expectations as "FUSE handles those wrong" —
+  community-acknowledged FUSE errors on undocumented bits.
+- The "`WZ = PC+1` during the extra 5-T repeat M-cycle" behavior was
+  discovered on real silicon via boo-boo et al.'s 2006 MEMPTR paper
+  (Zilog chips, multiple testers), confirmed by Patrik Rak's 2012
+  validation on a real 48K Spectrum, and refined by Richard Chandler
+  on NEC Z80 + Visual Z80 Remix in Rak's v1.2a (z80test PR #3).
+- Bottom line: FUSE `tests.expected` is emulator-derived and stale on
+  `INxR`/`OTxR`; Rak (post-v1.2a) reflects real hardware. We
+  document this in `tests/fuse/README.md` and accept that our
+  FUSE 1356/1356 score includes 4 cases where FUSE itself is wrong
+  vs silicon.
+
 **Remaining fix path**: items (1), (2), and the Rak-vs-FUSE WZ trade-off
-in (3) are all silicon-faithfulness corners that need careful study of
-the gate-level netlist (perfectz80) or instrumented per-test-case
-runs of the Rak suite to disambiguate. Tracked under
+in (3) are all silicon-faithfulness corners. (3) is now well-evidenced:
+3 independent silicon-faithful oracles (chips, redcode, Rak z80memptr)
+agree FUSE is the outlier. The next concrete step is flipping our
+INxR/OTxR repeat WZ to `PC+1`, accepting FUSE 1352/1356 and gaining
+Rak z80memptr 160/160. Tracked under
 [known-differences.md](known-differences.md) rows 12, 13 at
 `make z80test` baselines 2 / 2 / 10.
 
