@@ -27,3 +27,17 @@ edba_1    # INDR with BC=0x069F -> 0   FUSE expects WZ=0x069E, silicon=PC+1
 edb2_1    # INIR with BC=0x0A40 -> 0   FUSE expects WZ=0x0A41, silicon=PC+1
 edbb_1    # OTDR with BC=...           FUSE expects WZ=BC-1,   silicon=PC+1
 edb3_1    # OTIR with BC=...           FUSE expects WZ=BC+1,   silicon=PC+1
+
+# -----------------------------------------------------------------------------
+# SCF / CCF Zilog NMOS Q-leak (Sean Young, Undocumented Z80 Documented, §4.1).
+#
+# Real Zilog NMOS silicon computes SCF/CCF Y/X as A | (F XOR Q), where Q is
+# the F-left-by-the-previous-F-modifying-instr (or 0 if the prior instruction
+# was not F-modifying). FUSE's expected for tests 37_1 (SCF) and 3f (CCF)
+# does NOT model this Q-leak -- it expects pure Y/X from A only, matching
+# NEC NMOS behavior rather than Zilog NMOS.
+# Modern silicon-faithful emulators (chips, redcode) all implement the Zilog
+# leak. redcode's z80full 001 SCF / 002 CCF tests would not pass without it
+# (Rak's expected CRC was captured from real Zilog Spectrum silicon).
+37_1      # SCF Zilog NMOS Q-leak: FUSE expects AF=00ed, silicon=00c5
+3f        # CCF Zilog NMOS Q-leak: FUSE expects AF=0058, silicon=0050

@@ -114,7 +114,7 @@ z80test: z80test_runner
 	@set -e; \
 	stdbuf -oL $(BIN)/z80test_runner $(TESTS)/z80test/z80doc.tap     5000000000  0; \
 	stdbuf -oL $(BIN)/z80test_runner $(TESTS)/z80test/z80memptr.tap  5000000000  0; \
-	stdbuf -oL $(BIN)/z80test_runner $(TESTS)/z80test/z80full.tap    8000000000  8
+	stdbuf -oL $(BIN)/z80test_runner $(TESTS)/z80test/z80full.tap    8000000000  4
 
 # FUSE z80-test harness (Frank D. Cringle test corpus, 1356 cases)
 fuse_runner: cmodel $(BIN)/fuse_runner
