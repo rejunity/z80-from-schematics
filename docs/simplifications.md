@@ -211,13 +211,16 @@ and `scripts/chips_z80test_runner.c`) run the same `.tap` files through
 the **superzazu/z80** and **floooh/chips/z80.h** reference emulators
 (both in `scripts/refs/`).
 
-Summary by variant:
+Summary by variant (current — post the 2026-06-18 WZ flip + redcode
+ZILOG_NMOS preset):
 
 | Variant     | Ours fails | superzazu | chips | redcode |
 |-------------|-----------:|----------:|------:|--------:|
 | z80doc      | 2          | 3         | 2     | 2       |
-| z80memptr   | 2          | 16        | **0** | **0**   |
-| z80full     | 10         | 20        | 10    | **6**   |
+| z80memptr   | **0**      | 16        | **0** | **0**   |
+| z80full     | 10         | 20        | 10    | 2       |
+
+Pre-flip baseline (for reference): ours = 2 / 2 / 10, redcode = 2 / 0 / 6.
 
 redcode (Manuel Sainz de Baranda's `github.com/redcode/Z80`) was added
 as a 4th oracle on 2026-06-18 via `scripts/redcode_z80test_runner.c` +
@@ -283,22 +286,63 @@ CRC details for the contested tests:
    matching Rak. FUSE's `WZ = BC ± 1` expected values for these
    specific 4 cases appear to be pre-2013 outliers.
 
-   **Current state**: model holds at FUSE-matching behavior (`WZ = BC ± 1`),
-   `make fuse` at 1356/1356, z80memptr at 158/160. The Rak-matching
-   change would flip the score: FUSE 1354/1356, z80memptr 160/160.
-   Code site is `cmodel/z80_core.c:854` (comment documents the
-   trade-off).
+   **Resolution (2026-06-18, commit `b654110`)**: Flipped to
+   silicon-faithful `WZ = PC + 1`. Trade as expected:
+   - `make fuse` 1356/1356 → 1352/1356 + 4 known-FUSE-wrong
+     (edba_1, edbb_1, edb2_1, edb3_1 enumerated in
+     `tests/fuse/known-fuse-wrong.txt`). `fuse_runner.c` +
+     `compare_fuse_rtl.py` skip these so make fuse / make fuse_rtl
+     stay green.
+   - `make z80test` z80memptr 158/160 → **160/160**.
+   - C model + RTL synced (`cmodel/z80_core.c:854`, `:884`;
+     `rtl/z80_core.v:950`, `:967`).
 
-4. **Overall scoreboard** with our model:
-   - **10 z80full failures**, vs superzazu **20**, vs chips **10**, vs redcode **6**.
-   - **2 z80memptr failures**, vs superzazu **16**, vs chips **0**, vs redcode **0**.
+4. **Overall scoreboard** (current, post-flip):
+   - **10 z80full failures**, vs superzazu **20**, vs chips **10**, vs redcode **2**.
+   - **0 z80memptr failures**, vs superzazu **16**, vs chips **0**, vs redcode **0**.
    - **2 z80doc failures**, vs superzazu **3**, vs chips **2**, vs redcode **2**.
-   - We're significantly more silicon-faithful than superzazu; chips and
-     redcode beat us on z80memptr by accepting the FUSE↔Rak trade-off
-     the other direction. redcode wins z80full outright (-4 vs us),
-     suggesting it gets at least one of the SCF/CCF/INI/IND undocumented
-     cases right that we still miss — worth a follow-up close-read of
-     redcode's SCF/CCF flag logic.
+   - Significantly more silicon-faithful than superzazu; we tie chips on
+     z80doc/z80memptr but redcode wins z80full outright (-8 vs us). The
+     redcode advantage comes from its `Z80_MODEL_ZILOG_NMOS` preset
+     (`LD_A_IR_BUG | XQ | YQ`) — the XQ/YQ bits implement a per-instruction
+     SCF/CCF Q-leak that fixes z80full 001/002 + ST-variant skips
+     5/6, which is the closest match to Patrik's silicon-derived expectations.
+
+5. **redcode INI / IND remaining failures (z80doc + z80full 098/099)** —
+   2026-06-18 investigation. With `Z80_MODEL_ZILOG_NMOS` enabled, redcode
+   fails exactly the same INI/IND CRC as we do and as chips does:
+   - z80doc 098 INI:  redcode/chips/ours produce **identical** `505701FA`; Rak expects `07D1B0D1`.
+   - z80doc 099 IND:  redcode/chips/ours produce **identical** `6A4034D1`; Rak expects `3DC685FA`.
+   - z80full 098 INI: redcode/chips/ours produce **identical** `A7F6C1B0`; Rak expects `03DA7534`.
+   - z80full 099 IND: redcode/chips/ours produce **identical** `E81CDF03`; Rak expects `4C306B87`.
+
+   Three independent implementations of Sean Young's documented INI/IND
+   formula (`PF = parity((data + (C ± 1)) & 7) ^ B_new`, `HF/CF = k & 0x100`,
+   `SF/ZF/X/Y from B_new`, `NF = data[7]`) converge on the same CRC and
+   the same disagreement with Rak's expected.
+
+   **Lead investigated and ruled out**: Rak's `tests.asm:10, :1008-1022`
+   tags `.ini` / `.ind` with `db incheck` — meaning the test runner
+   first issues `IN A, (0xFE)` and aborts the test if the byte != `0xBF`
+   (the Spectrum ULA idle-state return). One hypothesis was that Rak's
+   expected CRC was captured with IN data = `0xBF` for ALL ports during
+   the loop, and our runners' "0xFF except port 0xFE" returned different
+   bytes. Verified empirically: pinning ALL ports to `0xBF` in the
+   redcode runner produced the **same CRC** as the default config
+   (`505701FA`), and pinning ALL ports to `0x42` aborted the test at
+   the incheck guard before any CRC was computed. So Rak's INI / IND
+   test only ever issues INs to port `0xFE` (already returning `0xBF`
+   in our setup), and the CRC discrepancy is therefore NOT IN-data-driven.
+
+   The Banks/Helcmanovsky/rofl0r/Sainz de Baranda 2018-2023 reverse-
+   engineering work covers INIR/INDR/OTIR/OTDR **repeat-iteration**
+   flags (PCi.13/PCi.11 fold-ins during the extra 5-T M-cycle) but not
+   the **single-shot** INI/IND CRC. Either Rak's silicon captured a
+   chip variant whose single-shot INI/IND formula nobody has decoded,
+   or Rak's test threads in a Q-leak / state-dependent fold-in we
+   haven't found. **Not fixable via redcode options alone.** Documented
+   as an industry-wide silicon-faithfulness gap; pursuit deferred to
+   when somebody decodes the missing piece.
 
 **False lead** (commit `093f95b`, reverted in commit `b4f5aca`): once
 theorised Q-leak persistence. Broke ZEXALL's `<daa,cpl,scf,ccf>` CRC

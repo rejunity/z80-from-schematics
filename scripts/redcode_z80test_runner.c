@@ -116,6 +116,15 @@ int main(int argc, char **argv) {
     /* Same ROM stubs + port-FE convention as scripts/z80test_runner.c. */
     mem[0x0010] = 0xC9;
     mem[0x1601] = 0xC9;
+    /* Spectrum ULA-style port semantics for Patrik Rak's tests: tests
+     * 098 INI and 099 IND have an `incheck` guard (raxoft/z80test
+     * src/tests.asm:10, :1008-1022) that runs `IN A,(0xFE)` first and
+     * aborts the test if the byte != 0xBF (the ULA idle-state return on
+     * a real 48K Spectrum). Empirically the INI/IND test sequences only
+     * issue INs to port 0xFE so the existing setup (high byte 0xFF
+     * elsewhere, 0xBF on (?<<8)|0xFE) satisfies incheck. We tried
+     * pinning every port to 0xBF -- CRC was unchanged, confirming the
+     * CRC formula gap is NOT IO-data-byte-driven. */
     memset(io_table, 0xFF, sizeof io_table);
     for (int hi = 0; hi < 256; hi++)
         io_table[(hi << 8) | 0xFE] = 0xBF;
