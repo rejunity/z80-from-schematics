@@ -127,6 +127,30 @@ jobs:
       - name: Run Rak's z80doc + z80memptr + z80full and check baselines
         run: make z80test
 
+  z80test-rtl:
+    name: Patrik Rak z80test through Verilator RTL (doc / memptr / full)
+    runs-on: ubuntu-latest
+    # Verilator is ~20x slower than the C model on Rak's workload.
+    # z80doc ~5 min, z80memptr ~3 min, z80full ~5 min on ubuntu-latest.
+    # Together ~13-18 min wall clock; budget 30 min for cold-start +
+    # Verilator build (~1-2 min) and machine variance.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install C + Verilator
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential python3 verilator
+      - name: Build Verilator sim_z80test
+        run: make verilator_z80test
+      - name: Run Rak z80doc through RTL
+        run: stdbuf -oL build/obj_dir_z80test/sim_z80test tests/z80test/z80doc.tap 5000000000 0
+      - name: Run Rak z80memptr through RTL
+        run: stdbuf -oL build/obj_dir_z80test/sim_z80test tests/z80test/z80memptr.tap 5000000000 0
+      - name: Run Rak z80full through RTL
+        run: stdbuf -oL build/obj_dir_z80test/sim_z80test tests/z80test/z80full.tap 8000000000 0
+
   parity-tests:
     name: Parity (C vs iverilog vs Verilator + perfectz80)
     runs-on: ubuntu-latest

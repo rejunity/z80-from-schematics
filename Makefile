@@ -44,7 +44,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
-.PHONY: all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test
+.PHONY: all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test verilator_z80test z80test_rtl
 
 all: cmodel ctest
 
@@ -434,6 +434,33 @@ zexall_subset_c: zexrunner tests/zex/zexall_subset.com
 
 zexall_subset_rtl: verilator_zex tests/zex/zexall_subset.com
 	@$(BUILD)/obj_dir_zex/sim_zex tests/zex/zexall_subset.com 1000000000
+
+# Patrik Rak z80test through the Verilated RTL. Mirrors verilator_zex /
+# zexall_subset_rtl shape: a single sim_z80test binary loads any of the
+# z80doc / z80memptr / z80full .tap variants and reports pass/fail.
+# Verilator is ~20x slower than the C model -- locally each variant
+# runs in 6-15 min. Gate to CI's silicon-faithfulness job (`z80test_rtl`).
+verilator_z80test: dirs
+	@if [ ! -f $(TESTS)/verilator/sim_z80test.cpp ]; then echo "sim_z80test.cpp not present."; exit 0; fi; \
+	printf '#include <cstdio>\nint main(){return 0;}\n' > $(BUILD)/.cxxcheck.cpp; \
+	if ! c++ -std=gnu++17 -c $(BUILD)/.cxxcheck.cpp -o $(BUILD)/.cxxcheck.o >/dev/null 2>&1; then \
+	  echo "SKIP verilator_z80test: host C++17 toolchain cannot compile libc++ headers."; \
+	  exit 0; \
+	fi; \
+	echo "== building verilator sim_z80test =="; \
+	$(VERILATOR) --cc --exe --build -j 0 -O3 -Wall \
+	  -Wno-fatal -Wno-WIDTH -Wno-CASEINCOMPLETE -Wno-UNUSEDSIGNAL \
+	  --Mdir $(BUILD)/obj_dir_z80test --top-module z80_core \
+	  -I$(RTL) $(RTL_SRCS) $(abspath $(TESTS)/verilator/sim_z80test.cpp) -o sim_z80test && \
+	echo "Built $(BUILD)/obj_dir_z80test/sim_z80test"
+
+# Run all 3 Rak variants through the RTL. Tolerances mirror `z80test`
+# (the C-model target): 0 / 0 / 0 -- the model is silicon-faithful.
+z80test_rtl: verilator_z80test
+	@set -e; \
+	stdbuf -oL $(BUILD)/obj_dir_z80test/sim_z80test $(TESTS)/z80test/z80doc.tap    5000000000 0; \
+	stdbuf -oL $(BUILD)/obj_dir_z80test/sim_z80test $(TESTS)/z80test/z80memptr.tap 5000000000 0; \
+	stdbuf -oL $(BUILD)/obj_dir_z80test/sim_z80test $(TESTS)/z80test/z80full.tap   8000000000 0
 
 # BASIC ROM driver through the Verilated RTL (sim_basic). Builds the
 # Verilator harness analogously to verilator_zex. Same C++17 self-check
