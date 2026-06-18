@@ -107,6 +107,16 @@ int main(int argc, char** argv) {
     z80_sys_init(M);
     memcpy(M->mem, MMEM, 65536);
     z80_set_pc(&M->cpu, 0x100); M->cpu.rf[RFP_SP] = 0xFFFE;
+    /* Normalize register file to 0xFFFF to match the other 3 oracles.
+       z80_reset() now initializes to 0x5555 (matches perfectz80 silicon
+       boot pattern) but the other oracles all start at 0xFFFF — align
+       explicitly so register-init choice doesn't trip lockstep. */
+    M->cpu.rf[RFP_AF]  = 0xFFFF; M->cpu.rf[RFP_BC]  = 0xFFFF;
+    M->cpu.rf[RFP_DE]  = 0xFFFF; M->cpu.rf[RFP_HL]  = 0xFFFF;
+    M->cpu.rf[RFP_AF2] = 0xFFFF; M->cpu.rf[RFP_BC2] = 0xFFFF;
+    M->cpu.rf[RFP_DE2] = 0xFFFF; M->cpu.rf[RFP_HL2] = 0xFFFF;
+    M->cpu.rf[RFP_IX]  = 0xFFFF; M->cpu.rf[RFP_IY]  = 0xFFFF;
+    M->cpu.rf[RFP_WZ]  = 0xFFFF;
 
     /* superzazu */
     sz80 S; sz80_init(&S);

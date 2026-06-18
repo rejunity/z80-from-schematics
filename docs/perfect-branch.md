@@ -66,7 +66,7 @@ Plus, well outside the original plan:
     | 1 | C1 reset register init 0xFFFF → 0x5555     | **DONE**   | make perfectz80 4 informational diffs + prog19 SP-init |
     | 2 | RFSH-pin late-deassert (bound to T3..T4)   | **DONE**   | prog10 5→3, prog19 3→1 ctrl-pin   |
     | 3 | HALT-pin assertion at T4.N of HALT M1      | **DONE**   | prog10 3→1, prog19 1→**PASS**     |
-    | 4 | Reset deferral until M-cycle completion    | pending ⚠  | prog17 (131) — needs reset state machine rework |
+    | 4 | Reset deferral until M-cycle completion    | attempted ⚠ | prog17 (131) — first "freeze immediately on reset_n" attempt didn't help; pz80 continues the in-flight M-cycle before freezing. Needs reset_pending flag + M-cycle-boundary deferral + frozen-idle hold state. |
     | 5 | BUSREQ M1 abort ordering                   | pending ⚠  | prog15 (154) — needs M-cycle abort rework |
     | 6 | WAIT-insertion sub-T-state phasing         | pending ⚠  | prog11 (142), prog14 (147) — touches every memory/IO access |
 
@@ -78,6 +78,14 @@ Plus, well outside the original plan:
     halt2int, lockstep, gate-level netlist), these residual
     informational diffs are documented as a follow-up branch
     rather than blocking the current branch's merge.
+
+    **Bonus discovery during Step 1**: the `test_timing` IN A,(n)
+    unit test was implicitly depending on the OLD reset register-init
+    value of 0xFFFF (it used the post-reset A=0xFF to derive
+    port = 0xFF10). After the reset flip to 0x5555, the test broke
+    in CI. Fixed in commit `1da7356` by setting A explicitly via
+    `z80_set_r8` rather than relying on the reset default — all 135
+    unit tests PASS again.
 
     Functional behaviour is verified via Rak + FUSE + `make halt2int`;
     this 6-step plan addresses gate-level timing fidelity vs the
