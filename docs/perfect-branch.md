@@ -118,6 +118,58 @@ Plus, well outside the original plan:
     items (prog11/13/14/15/17) each need a careful pin-driving rework
     that's out of scope for a single iteration without regression risk;
     a dedicated follow-up branch could close them one at a time.
+
+    **prog17 silicon-behavior analysis (2026-06-19)** — captured
+    here so the follow-up branch starts from concrete findings rather
+    than guesses. Trace observation (`scripts/pin_scenarios_diff.py
+    tests/traces/pin_scenarios/prog17_reset.hex`):
+
+    | pz80 phase | Behavior                                                                |
+    |-----------:|-------------------------------------------------------------------------|
+    | 50         | reset_n asserted — **no immediate effect**. M1 refresh of `INC HL @ 0003` continues. |
+    | 51         | refresh phase ends, T4 done.                                            |
+    | 52         | starts **fresh M1 at PC=0006** — chip is still executing.                |
+    | 53         | T1.N of that M1: `m1=0 mreq=0 rd=0` actively fetching.                   |
+    | 54         | **`m1` deasserts mid-fetch** — reset just got recognized.                |
+    | 55–73      | full idle hold at `addr=0006` (frozen at the address where reset hit).   |
+    | 74         | reset_n released → fresh M1 at PC=0 begins.                              |
+
+    So the silicon-faithful model for reset_n falling edge is a
+    **~3-clock filter** (matching Zilog UM0080's spec: reset_n must be
+    held low for "≥ 3 clock periods" to be recognized), with the chip
+    continuing normal execution during the filter window — including
+    starting fresh M-cycles — and only freezing when the recognition
+    fires. Similarly, the rising edge takes ~4 phases of internal
+    settling before the post-reset M1 fetch starts.
+
+    The C model currently freezes immediately when reset_n=0, missing
+    both the assert-filter (closes ~5 ctrl-pin diffs at the top of the
+    reset window) AND the release-filter (closes another ~4 at the
+    bottom). The hard part is mid-window: pz80 starts a real M1 fetch
+    to `PC+0x06` (the natural next instruction-fetch address after a
+    few aborted in-flight cycles), then freezes mid-T2. Modeling that
+    requires the reset state machine to know about M-cycle abort
+    points (same machinery Step 5 BUSREQ needs).
+
+    Implementation sketch for the follow-up branch:
+
+      1. Add `reset_assert_filter` (uint8) and `reset_release_filter`
+         (uint8) and `in_reset_hold` (bool) fields to `z80_t` and
+         mirror in `rtl/z80_core.v`.
+      2. On reset_n=0: increment `reset_assert_filter`. If &lt;5
+         continue normal phase execution. If ≥5 enter hold: call
+         `reset_state()`, set `in_reset_hold`, drive pins idle.
+      3. In hold + reset_n=0: stay frozen, don't advance.
+      4. On reset_n=1 + in_reset_hold: increment
+         `reset_release_filter`. If &lt;4 stay frozen. If ≥4 exit hold
+         and start fresh M1 from PC=0.
+      5. Run `make pin_scenarios`, `make pin_scenarios_rtl`, AND
+         `make compare` after each C/RTL change to catch divergence
+         early.
+
+    Estimated work: 0.5-1 day for the filter halves (closes ~10
+    ctrl diffs); 1-2 days for the M-cycle-abort behavior shared
+    with Step 5 (closes most of the remaining ~120).
   - **A-Z80 as second gate-level oracle** — **dropped.** With LibreLane
     providing an independent sky130-synthesised gate-level reference
     alongside perfectz80's Visual-Z80 port, the third oracle is no
