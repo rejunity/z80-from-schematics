@@ -98,7 +98,16 @@ static uint8_t cb_fetch_opcode(void *ctx, uint16_t addr) {
 static uint8_t cb_fetch(void *ctx, uint16_t addr)    { (void)ctx; return mem[addr]; }
 static uint8_t cb_read (void *ctx, uint16_t addr)    { (void)ctx; return mem[addr]; }
 static void    cb_write(void *ctx, uint16_t addr, uint8_t v) { (void)ctx; mem[addr] = v; }
-static uint8_t cb_in   (void *ctx, uint16_t addr)    { (void)ctx; return io_table[addr]; }
+static uint8_t cb_in   (void *ctx, uint16_t addr)    {
+    (void)ctx;
+    /* Match redcode's own test-Z80.c convention exactly: even ports
+     * return 0xBF (ULA idle), odd ports return 0xFF (no device, floating
+     * bus on a 48K Spectrum without peripherals). Rak's INI/IND CRC was
+     * captured against this pattern. Differs from a fixed "always 0xBF"
+     * by half the port space, and from our previous "0xFF except low
+     * byte 0xFE" by all even ports whose low byte != 0xFE. */
+    return (addr & 1) ? 0xFF : 0xBF;
+}
 static void    cb_out  (void *ctx, uint16_t addr, uint8_t v) { (void)ctx; io_table[addr] = v; }
 
 int main(int argc, char **argv) {
