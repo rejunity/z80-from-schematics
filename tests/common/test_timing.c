@@ -415,7 +415,10 @@ static void test_in_a_n(void) {
     /* IN A,(0x10) : M1 + MREAD (port n) + IORD. */
     uint8_t prog[] = { 0xDB, 0x10, 0x00 };
     load(prog, sizeof prog);
-    /* High byte of port = A. Reset leaves A=0xFF, so port = 0xFF10. */
+    /* High byte of port = A. Explicitly set A=0xFF so port = 0xFF10
+     * (independent of reset register-init value, which since
+     * commit 54f9173 is 0x5555 rather than 0xFFFF). */
+    z80_set_r8(&S.cpu, REG_A, 0xFF);
     S.io[0xFF10] = 0xA5;
     CHECK(walk_m1_cycle(),     "IN A,(n) : M1");
     CHECK(walk_mread_cycle(),  "IN A,(n) : MREAD for n");
