@@ -113,13 +113,43 @@ only rebuilt the library, leaving stale runner binaries on disk).
   superzazu C + chips/z80 + suzukiplan/z80 + redcode/Z80 all report
   identical PC/AF/BC/DE/HL/IX/IY/SP after every one of **7,022,691
   instructions** of ZEXDOC3.
-- **Gate-level signal trace** (`scripts/compare_signal_timing.py`, `make perfectz80`):
-  perfectz80 (pure-C Visual Z80 netlist port, no Qt) vs C model on 200 phases of
-  prog1/prog2/prog3_cb: **100% control-pin-perfect** across all three programs. The
-  C model and the Verilog RTL now deassert MREQ/RD/IORQ/WR at the falling-edge of
-  the bus cycle's last T-state (T3.N for MRD/MWR, T4.N for IORD/IOWR) — matching
-  the silicon transition observed at the gate level. Read latch is at T_last.P, one
-  phase before the deassert. The previous sub-cycle-convention gap is closed.
+- **Gate-level signal trace** (`scripts/compare_signal_timing.py`,
+  `make perfectz80`): perfectz80 (pure-C Visual Z80 netlist port, no
+  Qt) vs C model on 200 phases of all 12 trace programs
+  (`prog1..prog8` + `prog_rnd_01..04`): **12 / 12 PASS, 100 %
+  control-pin parity**, with informational addr / data_o diffs on
+  three random programs traceable to C1 (reset register init at
+  `0xFFFF` vs perfectz80's `0x5555`). Same per-phase parity through
+  the iverilog RTL (`make perfectz80_rtl`, 12/12 PASS) and through
+  the LibreLane sky130-synthesised netlist
+  (`make perfectz80_netlist`, 12/12 PASS — the "ultimate test"). CI
+  uploads per-program `.vcd` files (both our pins at top scope and
+  perfectz80's pins under `perfectz80.*` scope in the same file) as
+  the `parity-vcds` + `netlist-vcds` artifacts (14-day retention).
+- **Pin-scenario programs** (`make pin_scenarios` /
+  `pin_scenarios_rtl` / `pin_scenarios_netlist`): 12 INT / NMI /
+  WAIT / BUSREQ / RESET scenarios driven through the `.events`
+  sidecar. **5 / 12 PASS cleanly** (`prog9_inta_im1`,
+  `prog12_inta_im2`, `prog16_ei_delay`, `prog18_di_then_int`,
+  `prog20_block_int`); **7 / 12 surface informational ctrl-pin
+  timing diffs** vs perfectz80 — HALT-pin sub-T-state assertion
+  (`prog10_halt_nmi`, `prog13_halt_int`), WAIT-insertion
+  (`prog11_wait_mem`, `prog14_wait_io`), BUSREQ-during-M1
+  (`prog15_busreq_m1`), post-reset M-cycle sequence (`prog17_reset`),
+  and reset-register-init via SP (`prog19_nmi_in_int`). All make
+  targets are informational gates; functional behaviour on all 12 is
+  verified by Rak + FUSE + `make halt2int` even where the per-phase
+  pin trace differs from gate-level. Full diff list in
+  `docs/known-differences.md` row 14.
+- **HALT-to-INT timing probe** (`make halt2int`): focused regression
+  inspired by Mark Woodmass's HALT2INT v3 (2021). Sweeps INT-pulse
+  timing across the HALT NOP M-cycle and verifies the INT-to-INTA
+  delay stays in the silicon-faithful 3..8 T-state range (per
+  Brewer 2014 + Z80 datasheet). Output on the current model: all 10
+  sweep samples in 4..7 T (PASS). Complements the HALT-PC
+  convention flip — together they cover the silicon properties
+  HALT2INT v3 measures on real hardware without depending on
+  Spectrum ULA contention modeling.
 - **Speed**: C model 6.56 Minstr/s, Verilator 0.31 Minstr/s, perfectz80 ~10 kphases/s.
 
 ### Verilator

@@ -379,38 +379,56 @@ so most pushes skip the ~3 min synthesis step.
 
 Most former gaps were closed in the 2026-06-18 silicon-faithfulness
 sweep (see [`docs/simplifications.md`](../docs/simplifications.md)
-§F1). Remaining items, sorted by effort × impact:
+§F1). The new HALT-PC convention flip (Brewer 2014 / Woodmass
+HALT2INT 2021) and the Banks-2018 block-repeat fold-in are silicon-
+faithful in both C and RTL. Functional coverage:
+
+  - FUSE corpus C + RTL: **1348 PASS + 8 known-FUSE-wrong (silicon-
+    faithful — see [`tests/fuse/known-fuse-wrong.txt`](fuse/known-fuse-wrong.txt))**
+  - Patrik Rak z80doc / z80memptr / z80full C + RTL: **160 / 160 / 160**
+  - ZEXDOC / ZEXALL: PASS
+  - BASIC ROM on C / Verilator / sky130 gate-level: 4/4 subtests each
+  - 5-way oracle lockstep over 7 M instructions: clean
+  - `make halt2int`: HALT-to-INT timing probe PASS across full
+    M-cycle sweep
+
+Remaining items, sorted by effort × impact:
 
   - **C1 — reset state un-force** (small). Currently our model forces
     `rf=0xFFFF` on reset; perfectz80's netlist resets to 0x5555. The
     delta surfaces via PUSH on `prog_rnd_02` / `prog_rnd_03`
     (`make perfectz80` shows 95-98 % addr match instead of 100 %).
-    Changing one constant closes [known-differences.md](../docs/known-differences.md) row 1.
-  - **Mark Woodmass Z80 Test Suite** (medium). HALT2INT / EIHALT /
-    IFF2 Bug / Super HALT Invaders cover INT-during-HALT and
-    EI-shadow timing — orthogonal to Rak's instruction-level focus.
-    Vendor under `tests/woodmass/`; needs ZX Spectrum ROM (Amstrad
-    permits non-commercial redistribution). Tracked as a planned
-    CI job.
-  - **Rak suite on RTL** (medium). Currently the Rak suite runs
-    against the C model only. An iverilog/Verilator harness like
-    the FUSE RTL one would catch C/RTL divergence on the cases
-    Rak covers (block-instruction Banks fold-in, SCF/CCF Q-leak,
-    MEMPTR/WZ). Planned as a separate CI job.
+    Changing one constant closes
+    [known-differences.md](../docs/known-differences.md) row 1.
+  - **Pin-scenario HALT / WAIT / BUSREQ / RESET timing diffs vs
+    perfectz80** (medium). 5/12 pin_scenarios PASS clean
+    (`prog9_inta_im1`, `prog12_inta_im2`, `prog16_ei_delay`,
+    `prog18_di_then_int`, `prog20_block_int`); 7/12 have ctrl-pin
+    timing diffs informational. The PC convention bug that was
+    `prog13_halt_int`'s biggest contributor (145/200 phases) is fixed
+    by the Brewer 2014 HALT-PC flip; the residual is sub-T-state
+    HALT pin and WAIT-insertion timing that needs case-by-case
+    cleanup. Functional behavior on every one of these is verified
+    by Rak + FUSE + the `make halt2int` probe.
+  - **Mark Woodmass HALT2INT v3 end-to-end** (medium-large). v3 is
+    silicon-validated for ZX Spectrum 48K's ULA timing, which we
+    don't model. The CPU-only property it tests (HALT exit + INT
+    accept T-state) is covered by `make halt2int`. Full v3 run
+    requires either Spectrum ULA emulation or a ROM-hooking
+    harness more elaborate than the current `scripts/woodmass_runner.c`.
+    Notes in [`tests/woodmass/README.md`](woodmass/README.md).
   - **B2 / B3 — NMI / INT sample-point precision** (medium). Would
-    tighten the `pin_scenarios` parity on INT-ack / NMI-acceptance
-    scenarios (`prog9_inta_im1`, `prog12_inta_im2`,
-    `prog16_ei_delay`, `prog19_nmi_in_int`).
+    tighten any residual pin-trace fidelity on the remaining 7/12
+    pin_scenarios (`prog10_halt_nmi` etc.); see B2/B3 in
+    [`docs/simplifications.md`](../docs/simplifications.md).
 
 Other deferred items:
 
-  - **A-Z80 as a second gate-level oracle**. Design sketch in
-    [docs/ring3-az80-oracle.md](../docs/ring3-az80-oracle.md) — would
-    cross-check perfectz80's Visual-Z80 netlist itself against an
-    independent schematic-driven Verilog Z80. With LibreLane's
-    sky130-synthesised netlist now adding a third independent gate-
-    level reference, A-Z80 becomes less critical but still useful for
-    cross-validation. Deferred until needed.
+<!-- A-Z80 as a second gate-level oracle: dropped. With LibreLane's
+sky130-synthesised netlist providing an independent gate-level
+reference alongside perfectz80's Visual-Z80 port, the third oracle
+is no longer worth the integration cost. -->
+
   - **NMOS vs Toshiba CMOS Q-leak switch**. The current C model + RTL
     implement Zilog NMOS Q-leak behaviour in SCF / CCF X / Y flags
     (well-documented silicon-faithful default). A Toshiba CMOS variant

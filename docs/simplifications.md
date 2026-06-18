@@ -135,6 +135,13 @@ Used to combine `data latch` and `MREQ/RD deassert` at T3.N. Fixed in
 deterministic C↔RTL compare". Real silicon leaves these UNDEFINED at power-up
 (though reset does force `PC=0, I=0, R=0, IFF1=IFF2=0, IM=0` per Zilog UM0080).
 
+perfectz80's Visual-Z80 netlist comes up at `0x5555` (the silicon-faithful
+value). Our `0xFFFF` makes `make perfectz80` show informational addr / data
+diffs on `prog_rnd_02` (`ffff` vs `5555`), `prog_rnd_03` (`feff` vs `5455`
+after `DEC BC`), `prog_rnd_04` (`data_o ff` vs `55` from PUSH AF). The
+diffs are gated as informational because the trace programs PASS overall
+(100% control-pin parity).
+
 **Fix**: in RTL, leave undefined regs at `'X` (synthesis-friendly default). In
 C, leave them at whatever `z80_init()` (which is `memset` 0) gave them.
 External test harnesses (FUSE / lockstep / compare) explicitly poke their start

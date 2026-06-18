@@ -125,10 +125,11 @@ fossi-foundation substituter configured (see [docs/librelane-flow.md](docs/libre
 | ✅  | 5-way oracle lockstep (mine + superzazu + chips + suzukiplan + redcode) | identical, 7,022,691 instr.    |
 | ✅  | Real KC85 silicon — sync   capture (`make silicon_cycles`)      | 50 / 50 OK,  0 emu mismatches       |
 | ✅  | Real KC85 silicon — 20 MHz capture (`make silicon_async`)       | CPU ≈ 1.767 MHz, pins ✓             |
-| ✅  | Gate-level vs perfectz80 — **C model** path                     | 100 % ctrl pins; `addr` 100 % on 10/12 (don't-care tolerance); `data_o` 100 % |
-| ✅  | Gate-level vs perfectz80 — **iverilog RTL** path                | 100 % ctrl pins, same 12 programs    |
-| ✅  | Gate-level vs perfectz80 — **LibreLane sky130 netlist** path    | 100 % ctrl pins, same 12 programs ("ultimate test") |
-| 🚧  | Pin-scenario programs vs perfectz80 (12 programs across C / RTL / netlist paths) | informational; surfaces real audit findings |
+| ✅  | HALT-to-INT T-state timing (`make halt2int`)                    | 10/10 sweep samples in silicon range (Brewer 2014 / Woodmass HALT2INT 2021) |
+| ✅  | Gate-level vs perfectz80 — **C model** path                     | 12/12 PASS; ctrl pins 100 %; `addr` 100 % on 10/12 (reset-init informational on 2); `data_o` informational on `prog_rnd_04` |
+| ✅  | Gate-level vs perfectz80 — **iverilog RTL** path                | 12/12 PASS, same 12 programs        |
+| ✅  | Gate-level vs perfectz80 — **LibreLane sky130 netlist** path    | 12/12 PASS, same 12 programs ("ultimate test") |
+| 🚧  | Pin-scenario programs vs perfectz80 (12 INT/NMI/WAIT/BUSREQ/RESET scenarios) | 5/12 PASS clean (`prog9, 12, 16, 18, 20`); 7/12 have HALT-pin / WAIT-insertion / BUSREQ / RESET timing diffs vs gate-level (informational; functional behavior verified by Rak + FUSE + HALT2INT probe) |
 
 Legend: ✅ pass / 100 % &nbsp; 🟡 ≥ 95 % (close, known artifacts) &nbsp; 🚧 < 95 % (work in progress).
 
@@ -173,8 +174,6 @@ Tests and ROMs:
     result, and links to the per-subdirectory READMEs (`tests/common/`,
     `tests/fuse/`, `tests/zex/`, `tests/z80test/`, `tests/basic/`,
     `tests/traces/`, `tests/sigrok/`).
-  - [docs/ring3-az80-oracle.md](docs/ring3-az80-oracle.md) — design sketch
-    for the deferred second gate-level oracle (gdevic/A-Z80).
   - [docs/simplifications.md](docs/simplifications.md) — silicon-faithfulness
     audit (A1, A3, A4, B, C1, D, E1, F) — the source of truth for the
     deliberate vs unintended divergences from gate-level Z80.

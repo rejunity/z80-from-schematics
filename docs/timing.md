@@ -103,9 +103,30 @@ copies `IFF1→IFF2`, clears `IFF1`.
 
 ## HALT
 
-`HALT` repeatedly executes M1 fetches of the opcode at `PC` (PC not advanced past the
-HALT) with `pin_halt_n ← 0`, until an interrupt/NMI/reset releases it. Refresh
-continues during HALT.
+`HALT` is the only Z80 instruction whose M1 cycle is allowed to be
+"aborted" by an external event. Silicon-faithful convention per Brewer
+2014 ("Z80 Special Reset") and verified by Mark Woodmass's HALT2INT v3
+(2021):
+
+  - HALT's M1 commits with PC ALREADY past the HALT byte (`PC =
+    halt_addr + 1`). No decrement.
+  - The HALT-state loop runs internal NOP M-cycles of 4 T-states each,
+    each re-fetching at PC (= post-HALT-byte). PC is NOT incremented
+    further during the loop.
+  - `pin_halt_n` asserts low while halted; refresh continues every NOP
+    M1.
+  - INT / NMI sampled at the rising edge of the last T-state of each
+    NOP M-cycle. When sampled active (and IFF1=1 for INT), the next
+    M-cycle is the ack (INTA = 7 T, NMI ack = 5 T). PC stays put —
+    the ack's saved return address is `halt_addr + 1`, which is what
+    RETN must restore.
+
+`make halt2int` runs a focused CPU-only probe that sweeps INT-assert
+timing across the HALT NOP M-cycle and verifies the INT-to-INTA delay
+stays in the silicon-faithful 3..8 T-state range. FUSE's test `76`
+(`PC=halt_addr` after HALT) reflects the pre-Brewer convention and
+lives in `tests/fuse/known-fuse-wrong.txt`; our model and redcode/Z80
+both side with silicon.
 
 ## BUSREQ / BUSACK
 

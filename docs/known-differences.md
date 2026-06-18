@@ -127,13 +127,33 @@ Notes for each row:
      `pin_scenarios_rtl` / `pin_scenarios_netlist`) — twelve trace
      programs (`prog9_inta_im1`..`prog20_block_int`) drive INT / NMI /
      WAIT / BUSREQ / RESET through the `.events` sidecar and diff
-     against perfectz80 per-half-cycle. `.events` is now consumed by
-     all paths — C tracegen, iverilog RTL, Verilator, LibreLane gate-
-     level netlist — via per-pin `+<pin>_lo / +<pin>_hi` plusargs.
-     Make targets are informational (exit 0 even on divergence);
-     current divergences are folded into the simplifications-audit list
-     rather than gating CI. When all twelve reach control-pin parity,
-     this row flips to `resolved` and the gates become hard.
+     against perfectz80 per-half-cycle. **Current status
+     (2026-06-18)**: 5 / 12 PASS cleanly:
+     - `prog9_inta_im1` ✓
+     - `prog12_inta_im2` ✓
+     - `prog16_ei_delay` ✓
+     - `prog18_di_then_int` ✓
+     - `prog20_block_int` ✓
+
+     7 / 12 have informational ctrl-pin timing diffs:
+     - `prog10_halt_nmi` (5 / 200 phases differ)
+     - `prog11_wait_mem` (142 / 200) — WAIT insertion timing
+     - `prog13_halt_int` (145 / 200) — HALT pin assertion timing
+       during NOP loop; PC convention part fixed by item 9 flip
+     - `prog14_wait_io` (147 / 200) — WAIT IO timing
+     - `prog15_busreq_m1` (154 / 200) — BUSREQ M1 timing
+     - `prog17_reset` (131 / 200) — reset sequence pin timing
+     - `prog19_nmi_in_int` (3 / 200)
+
+     `.events` is now consumed by all paths — C tracegen, iverilog
+     RTL, Verilator, LibreLane gate-level netlist — via per-pin
+     `+<pin>_lo / +<pin>_hi` plusargs. Make targets are informational
+     (exit 0 even on divergence); current divergences are folded into
+     the simplifications-audit list rather than gating CI. Functional
+     behaviour on all of these is verified by Rak + FUSE +
+     `make halt2int` even where the per-phase pin trace differs.
+     When all twelve reach control-pin parity, this row flips to
+     `resolved` and the gates become hard.
 
      Additionally, `scripts/compare_signal_timing.py` (used by
      `make perfectz80` / `_rtl` / `_netlist`) compares `addr` and

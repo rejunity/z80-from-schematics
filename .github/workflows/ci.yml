@@ -191,6 +191,19 @@ jobs:
         # (compare_signal_timing.py encodes the sidecar). Same
         # informational status.
         run: make pin_scenarios_rtl
+      - name: Upload per-program VCDs as artifact (open in GTKWave / Surfer)
+        # compare_signal_timing.py + the pin-scenario runner emit
+        # build/vcd/<prog>.<source>.vcd containing both our pins (top
+        # scope) and perfectz80's pins (perfectz80.* scope) so the two
+        # render side-by-side from one file. Keep them for ~14 days
+        # post-CI for offline inspection of any informational diffs.
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: parity-vcds
+          path: build/vcd/
+          if-no-files-found: warn
+          retention-days: 14
 
   # =====================================================================
   # LIBRELANE GATE-LEVEL — "ultimate test". Synthesise rtl/*.v via
@@ -277,6 +290,18 @@ jobs:
           name: synth-netlist
           path: build/synth/z80_core.nl.v
           retention-days: 30
+      - name: Upload gate-level netlist per-program VCDs
+        # build/vcd/<prog>.netlist.vcd from perfectz80_netlist +
+        # pin_scenarios_netlist. Each contains our synthesised-netlist
+        # pins + perfectz80's gate-level pins under perfectz80.* scope
+        # for direct comparison.
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: netlist-vcds
+          path: build/vcd/
+          if-no-files-found: warn
+          retention-days: 14
 
   # =====================================================================
   # LIBRELANE GATE-LEVEL + BASIC — same synthesised netlist as
