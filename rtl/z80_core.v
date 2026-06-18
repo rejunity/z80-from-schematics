@@ -918,6 +918,12 @@ module z80_core (
                             if (aux_w[3] && bbc != 16'd0) begin
                                 rf_n[`RFP_PC] = rf[`RFP_PC] - 16'd2;
                                 rf_n[`RFP_WZ] = rf[`RFP_PC] - 16'd1;
+                                /* Banks-2018 LDIR/LDDR repeat YF/XF fold-in:
+                                 * overwrite YF=PC.13, XF=PC.11 (high byte of
+                                 * post-rewind PC = rf[PC]-2). See
+                                 * cmodel/z80_core.c LDI/LDIR repeat block. */
+                                rf_n[`RFP_AF][7:0] = (alu_fout & ~(`Z80_YF | `Z80_XF))
+                                    | ((rf[`RFP_PC][15:8] - 8'd0) & (`Z80_YF | `Z80_XF));
                                 startm(`BUSOP_INTERNAL, rf[`RFP_PC] - 16'd2, 8'h0, 4'd5);
                             end else fin = 1'b1;
                         end else fin = 1'b1;
@@ -933,6 +939,11 @@ module z80_core (
                             if (aux_w[3] && rf[`RFP_BC] != 16'd0 && !(F_cur & `Z80_ZF)) begin
                                 rf_n[`RFP_PC] = rf[`RFP_PC] - 16'd2;
                                 rf_n[`RFP_WZ] = rf[`RFP_PC] - 16'd1;
+                                /* Banks-2018 CPIR/CPDR repeat YF/XF fold-in:
+                                 * overwrite YF=PC.13, XF=PC.11. F_cur is the
+                                 * current F from CPI's BLOCK_CP result. */
+                                rf_n[`RFP_AF][7:0] = (F_cur & ~(`Z80_YF | `Z80_XF))
+                                    | ((rf[`RFP_PC][15:8] - 8'd0) & (`Z80_YF | `Z80_XF));
                                 startm(`BUSOP_INTERNAL, rf[`RFP_PC] - 16'd2, 8'h0, 4'd5);
                             end else fin = 1'b1;
                         end else fin = 1'b1;

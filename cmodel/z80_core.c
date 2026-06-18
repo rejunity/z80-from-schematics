@@ -818,6 +818,20 @@ static void z80_exec_step(z80_t *c)
                 z80_setF(c, alu_fout);
                 if (rep && bc != 0) { z80_setPC(c, (uint16_t)(z80_PC(c) - 2));
                     c->rf[RFP_WZ] = (uint16_t)(z80_PC(c) + 1);
+                    /* LDIR/LDDR Banks-2018 repeat-M-cycle flag fold-in:
+                     * YF = PC.13, XF = PC.11 (high byte of post-rewind
+                     * PC). See redcode INSN(ldir) macro LDXR. Without
+                     * this, Rak z80full 089 LDIR->NOP' / 090 LDDR->NOP'
+                     * fail because the Q value the subsequent SCF
+                     * leaks from carries our stale (A+val).{1,3} YX
+                     * bits instead of silicon's PC.13/PC.11. */
+                    {
+                        uint8_t f = z80_F(c);
+                        f = (uint8_t)((f & (uint8_t)~(Z80_YF | Z80_XF))
+                                       | ((uint8_t)(z80_PC(c) >> 8)
+                                          & (uint8_t)(Z80_YF | Z80_XF)));
+                        z80_setF(c, f);
+                    }
                     z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 5); }
                 else finish(c);
             }
@@ -836,6 +850,16 @@ static void z80_exec_step(z80_t *c)
                 if (rep && (c->rf[RFP_BC] != 0) && !(z80_F(c) & Z80_ZF)) {
                     z80_setPC(c, (uint16_t)(z80_PC(c) - 2));
                     c->rf[RFP_WZ] = (uint16_t)(z80_PC(c) + 1);
+                    /* CPIR/CPDR Banks fold-in: YF = PC.13, XF = PC.11.
+                     * Mirrors redcode CPXR. SF/ZF/HF/PF/NF/CF stay as
+                     * the CPI/CPD result; only Y/X are overwritten. */
+                    {
+                        uint8_t f = z80_F(c);
+                        f = (uint8_t)((f & (uint8_t)~(Z80_YF | Z80_XF))
+                                       | ((uint8_t)(z80_PC(c) >> 8)
+                                          & (uint8_t)(Z80_YF | Z80_XF)));
+                        z80_setF(c, f);
+                    }
                     z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 5);
                 } else finish(c);
             }
@@ -852,16 +876,45 @@ static void z80_exec_step(z80_t *c)
                 c->rf[RFP_HL] = (uint16_t)(c->rf[RFP_HL] + (dec ? -1 : 1));
                 z80_setF(c, alu_fout);
                 if (rep && newB != 0) { z80_setPC(c, (uint16_t)(z80_PC(c) - 2));
-                    /* INIR/INDR repeat: overwrite WZ = PC + 1 during the
-                     * 5-T internal M-cycle. Silicon-faithful per
-                     * boo-boo et al. 2006 MEMPTR paper + Patrik Rak's
-                     * z80memptr (validated on real Spectrum) + Chandler's
-                     * NEC + Visual Z80 Remix retest (z80test v1.2a).
-                     * Matches chips/z80.h and redcode/Z80. FUSE's
-                     * edba_1/edb2_1 expected WZ = BC ± 1 is incorrect vs
-                     * silicon — see docs/simplifications.md F1 and
-                     * tests/fuse/known-fuse-wrong.txt. */
                     c->rf[RFP_WZ] = (uint16_t)(z80_PC(c) + 1);
+                    /* INIR/INDR Banks-2018 repeat-M-cycle flag fold-in.
+                     * Replicates redcode's INXR_OTXR_COMMON exactly so
+                     * Rak z80full 102 INIR->NOP / 103 INDR->NOP pass.
+                     * data = tmpl (port byte just read), newB = decremented B.
+                     * t = data + ((C +/- 1) & 0xFF), with carry into bit 8.
+                     * nf = data.7; hcf = (t > 255).
+                     * SF = newB.7, YF = PC.13, XF = PC.11, ZF = 0.
+                     * HF / PF / CF: see formula below per Banks 2018. */
+                    {
+                        uint8_t data = c->tmpl;
+                        uint16_t tw = (uint16_t)data + (uint16_t)(uint8_t)(
+                            getr(c, REG_C) + (dec ? -1 : 1));
+                        uint8_t  t = (uint8_t)tw;
+                        bool     hcf = (tw > 255);
+                        uint8_t  nf  = (uint8_t)((data >> 6) & Z80_NF);
+                        uint8_t  p   = (uint8_t)((t & 7) ^ newB);
+                        uint8_t  pch = (uint8_t)(z80_PC(c) >> 8);
+
+                        uint8_t f = (uint8_t)((newB & Z80_SF)
+                                              | (pch & (Z80_YF | Z80_XF))
+                                              | nf);
+                        if (hcf) {
+                            f |= Z80_CF;
+                            if (nf) {
+                                if ((newB & 0xF) == 0) f |= Z80_HF;
+                                if (z80_parity((uint8_t)(p ^ ((newB - 1) & 7))))
+                                    f |= Z80_PF;
+                            } else {
+                                if ((newB & 0xF) == 0xF) f |= Z80_HF;
+                                if (z80_parity((uint8_t)(p ^ ((newB + 1) & 7))))
+                                    f |= Z80_PF;
+                            }
+                        } else {
+                            if (z80_parity((uint8_t)(p ^ (newB & 7))))
+                                f |= Z80_PF;
+                        }
+                        z80_setF(c, f);
+                    }
                     z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 5); }
                 else finish(c);
             }
@@ -881,11 +934,41 @@ static void z80_exec_step(z80_t *c)
                 uint8_t newB = getr(c, REG_B);
                 z80_setF(c, alu_fout);
                 if (rep && newB != 0) { z80_setPC(c, (uint16_t)(z80_PC(c) - 2));
-                    /* OTIR/OTDR repeat: overwrite WZ = PC + 1 during the
-                     * 5-T internal M-cycle. Same silicon-faithful basis
-                     * as INIR/INDR above. FUSE's edbb_1/edb3_1 expected
-                     * WZ = BC ± 1 is incorrect vs silicon. */
                     c->rf[RFP_WZ] = (uint16_t)(z80_PC(c) + 1);
+                    /* OTIR/OTDR Banks-2018 repeat-M-cycle flag fold-in.
+                     * Same shape as INIR/INDR above but t = data + L
+                     * (low byte of post-increment HL) rather than
+                     * data + (C +/- 1). Mirrors redcode OTXR. */
+                    {
+                        uint8_t data = c->tmpl;
+                        uint8_t lreg = getr(c, REG_L);
+                        uint16_t tw = (uint16_t)data + (uint16_t)lreg;
+                        uint8_t  t = (uint8_t)tw;
+                        bool     hcf = (tw > 255);
+                        uint8_t  nf  = (uint8_t)((data >> 6) & Z80_NF);
+                        uint8_t  p   = (uint8_t)((t & 7) ^ newB);
+                        uint8_t  pch = (uint8_t)(z80_PC(c) >> 8);
+
+                        uint8_t f = (uint8_t)((newB & Z80_SF)
+                                              | (pch & (Z80_YF | Z80_XF))
+                                              | nf);
+                        if (hcf) {
+                            f |= Z80_CF;
+                            if (nf) {
+                                if ((newB & 0xF) == 0) f |= Z80_HF;
+                                if (z80_parity((uint8_t)(p ^ ((newB - 1) & 7))))
+                                    f |= Z80_PF;
+                            } else {
+                                if ((newB & 0xF) == 0xF) f |= Z80_HF;
+                                if (z80_parity((uint8_t)(p ^ ((newB + 1) & 7))))
+                                    f |= Z80_PF;
+                            }
+                        } else {
+                            if (z80_parity((uint8_t)(p ^ (newB & 7))))
+                                f |= Z80_PF;
+                        }
+                        z80_setF(c, f);
+                    }
                     z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 5); }
                 else finish(c);
             }

@@ -41,3 +41,22 @@ edb3_1    # OTIR with BC=...           FUSE expects WZ=BC+1,   silicon=PC+1
 # (Rak's expected CRC was captured from real Zilog Spectrum silicon).
 37_1      # SCF Zilog NMOS Q-leak: FUSE expects AF=00ed, silicon=00c5
 3f        # CCF Zilog NMOS Q-leak: FUSE expects AF=0058, silicon=0050
+
+# -----------------------------------------------------------------------------
+# Block instruction repeat M-cycle YF/XF fold-in (Banks 2018).
+#
+# When LDIR/LDDR/CPIR/CPDR/INIR/INDR/OTIR/OTDR loops back for another
+# iteration, the internal 5-T M-cycle overwrites F bits YF (bit 5) and XF
+# (bit 3) with bits 13 and 11 of the post-rewind PC (= LDIR opcode addr).
+# David Banks discovered this on real silicon in 2018 via the Z80Decoder
+# project; Helcmanovsky's "Z80 Block Flags Test" verifies it on a ZX
+# Spectrum. INIR/INDR/OTIR/OTDR additionally modify HF and PF via a
+# complex Banks formula. FUSE's expected for these block-repeat cases
+# (edb9_2 CPDR) predates the discovery and tests for the LDI/CPI
+# single-shot YF/XF formula.
+#
+# Implemented in cmodel/z80_core.c LDI/CPI/INI/OUT cat blocks under the
+# `if (rep && newB != 0)` / `if (rep && bc != 0)` branches. Matches
+# redcode/Z80's INSN(ldir)/CPXR/INXR/OTXR macros (which also fail
+# FUSE edb9_2 the same way).
+edb9_2    # CPDR with BC > 1 looping: FUSE expects AF=ffa7, silicon=ffaf
