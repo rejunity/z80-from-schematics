@@ -131,10 +131,13 @@ jobs:
     name: Patrik Rak z80test through Verilator RTL (doc / memptr / full)
     runs-on: ubuntu-latest
     # Verilator is ~20x slower than the C model on Rak's workload.
-    # z80doc ~5 min, z80memptr ~3 min, z80full ~5 min on ubuntu-latest.
-    # Together ~13-18 min wall clock; budget 30 min for cold-start +
-    # Verilator build (~1-2 min) and machine variance.
-    timeout-minutes: 30
+    # Healthy ubuntu-latest run: ~18 min total wall clock (z80doc ~5,
+    # z80memptr ~3, z80full ~5, plus ~2 build/setup). Slow CI runners
+    # have been seen at ~30 min total (Verilator at 0.26 vs 0.55 Mi/s),
+    # so previous 30-min budget killed the job 10s before z80full's
+    # PASS line printed. Bumped to 60 to keep healthy + slow runs both
+    # green.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
       - name: Install C + Verilator
