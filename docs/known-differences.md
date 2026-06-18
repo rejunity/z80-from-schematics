@@ -135,15 +135,15 @@ Notes for each row:
      - `prog18_di_then_int` ✓
      - `prog20_block_int` ✓
 
-     7 / 12 have informational ctrl-pin timing diffs:
-     - `prog10_halt_nmi` (5 / 200 phases differ)
-     - `prog11_wait_mem` (142 / 200) — WAIT insertion timing
-     - `prog13_halt_int` (145 / 200) — HALT pin assertion timing
-       during NOP loop; PC convention part fixed by item 9 flip
-     - `prog14_wait_io` (147 / 200) — WAIT IO timing
-     - `prog15_busreq_m1` (154 / 200) — BUSREQ M1 timing
-     - `prog17_reset` (131 / 200) — reset sequence pin timing
-     - `prog19_nmi_in_int` (3 / 200)
+     7 / 12 have informational ctrl-pin timing diffs (post the
+     2026-06-18 C1 reset + RFSH-edge fixes):
+     - `prog19_nmi_in_int` (**1** / 200, was 3) — sub-T-state HALT-pin transition
+     - `prog10_halt_nmi`   (**3** / 200, was 5) — HALT-pin assertion timing (T3 vs T4)
+     - `prog17_reset`      (131 / 200) — reset deferral (silicon completes current M-cycle before applying reset state)
+     - `prog11_wait_mem`   (142 / 200) — WAIT-insertion sub-T-state phasing
+     - `prog13_halt_int`   (145 / 200) — HALT-pin during NOP-loop M-cycles
+     - `prog14_wait_io`    (147 / 200) — IORQ + WAIT timing during IN/OUT
+     - `prog15_busreq_m1`  (154 / 200) — BUSREQ-aborts-M1 M-cycle ordering
 
      `.events` is now consumed by all paths — C tracegen, iverilog
      RTL, Verilator, LibreLane gate-level netlist — via per-pin

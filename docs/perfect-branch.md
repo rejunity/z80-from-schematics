@@ -54,17 +54,37 @@ Plus, well outside the original plan:
 
 ## Deferred to a future branch
 
-  - **Sub-T-state pin timing fidelity** on the 7 / 12 still-informational
-    pin_scenarios (HALT-pin assertion phasing, WAIT / BUSREQ M-cycle
-    abort ordering, post-reset M-cycle sequence). Functional behaviour
-    is verified via Rak + FUSE + `make halt2int`; the residual is gate-
-    level timing fidelity. Tracked under items B2 / B3 in
-    [docs/simplifications.md](simplifications.md).
-  - **C1 — reset register init**. Our `0xFFFF` vs perfectz80's
-    `0x5555` surfaces as informational diffs on `prog_rnd_02`,
-    `prog_rnd_03`, `prog_rnd_04`, `prog19_nmi_in_int`. One-constant
-    change; was deferred for the silicon-faithfulness sweep
-    (`make z80test` was the priority).
+  - **Sub-T-state pin timing fidelity** on the still-informational
+    pin_scenarios. Functional behaviour is verified via Rak + FUSE +
+    `make halt2int`; the residual is gate-level timing fidelity. Two
+    quick fixes already landed (2026-06-18 continuation):
+    - **C1 reset init flipped 0xFFFF → 0x5555** to match perfectz80's
+      gate-level boot pattern. Closed all 4 informational diffs on
+      `make perfectz80` (`prog_rnd_02/03/04` now clean) and 11 of
+      `prog19_nmi_in_int`'s bus-only diffs.
+    - **RFSH-pin late-deassert fix** in `cmodel/z80_timing.c` +
+      `rtl/z80_timing.v`. RFSH was held asserted into T5+ of extended-
+      length M1 cycles (NMI ack 5T, INTA 7T). Now bounded to T3..T4
+      exactly. Closed `prog10_halt_nmi` 5→3 and `prog19_nmi_in_int`
+      3→1 ctrl-pin diffs.
+
+    Pin_scenarios current state (post-fix):
+    | Program | Ctrl diffs | Root cause |
+    |---|---:|---|
+    | prog9, 12, 16, 18, 20 | **0** | (PASS) |
+    | prog19_nmi_in_int     | **1** | sub-T-state HALT-pin transition |
+    | prog10_halt_nmi       | **3** | HALT-pin assertion timing (T3 vs T4) |
+    | prog17_reset          | 131   | reset deferral (defer reset_state until current M-cycle ends) |
+    | prog11_wait_mem       | 142   | WAIT-insertion sub-T-state phasing |
+    | prog13_halt_int       | 145   | HALT-pin during NOP-loop M-cycles |
+    | prog14_wait_io        | 147   | IORQ + WAIT timing during IN/OUT |
+    | prog15_busreq_m1      | 154   | BUSREQ-aborts-M1 M-cycle ordering |
+
+    Tracked under items B2 / B3 in
+    [docs/simplifications.md](simplifications.md). The four high-count
+    items (prog11/13/14/15/17) each need a careful pin-driving rework
+    that's out of scope for a single iteration without regression risk;
+    a dedicated follow-up branch could close them one at a time.
   - **A-Z80 as second gate-level oracle** — **dropped.** With LibreLane
     providing an independent sky130-synthesised gate-level reference
     alongside perfectz80's Visual-Z80 port, the third oracle is no

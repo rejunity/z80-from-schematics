@@ -1218,9 +1218,18 @@ static void reset_state(z80_t *c)
 
 void z80_reset(z80_t *c)
 {
-    /* programmer-visible registers are undefined on real silicon; force a
-       deterministic state for C<->RTL comparison (docs/known-differences.md). */
-    for (int i = 0; i < RFP_COUNT; i++) c->rf[i] = 0xFFFF;
+    /* Programmer-visible registers are undefined on real silicon. We
+     * force a deterministic state for C<->RTL compare AND for parity
+     * with perfectz80's gate-level Visual-Z80 netlist, which boots
+     * with rf = 0x5555 (alternating-bit pattern from die-level
+     * reset). Previously this was 0xFFFF; that surfaced as informational
+     * bus diffs on prog_rnd_02/03/04 (`make perfectz80`) and on
+     * prog19_nmi_in_int (`make pin_scenarios`). Switching to 0x5555
+     * closes those without touching any functional behaviour --
+     * external test harnesses (FUSE / Rak / lockstep) explicitly poke
+     * their start state. See docs/simplifications.md §C1 +
+     * docs/known-differences.md row 1. */
+    for (int i = 0; i < RFP_COUNT; i++) c->rf[i] = 0x5555;
     reset_state(c);
 }
 

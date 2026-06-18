@@ -1169,7 +1169,9 @@ module z80_core (
     // ---- registers ----
     always @(posedge clk or negedge reset_n) begin
         if (!reset_n) begin
-            for (i = 0; i < 13; i = i + 1) rf[i] <= 16'hFFFF;
+            // 0x5555 matches perfectz80's gate-level Visual-Z80 netlist
+            // boot pattern; see cmodel/z80_core.c z80_reset() comment.
+            for (i = 0; i < 13; i = i + 1) rf[i] <= 16'h5555;
             rf[`RFP_PC] <= 16'h0000;
             reg_i <= 8'h00; reg_r <= 8'h00; ir <= 8'h00;
             phi <= 1'b0; t_state <= 4'd1; m_cycle <= 3'd1;
