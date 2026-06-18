@@ -377,12 +377,25 @@ static void z80_exec_step(z80_t *c)
     case EXEC_DI: c->iff1 = c->iff2 = false; finish(c); break;
     case EXEC_EI: c->iff1 = c->iff2 = true; c->ei_delay = true; finish(c); break;
     case EXEC_HALT:
-        /* Real Z80: PC stays at the HALT byte (re-fetched each M1 until
-           interrupt). Our M1 already incremented PC; back it up so external
-           observers see PC at the HALT opcode. begin_next() re-advances PC
-           by 1 when an NMI/INT exits the halted state. */
+        /* Silicon-faithful per Brewer 2014 ("Z80 Special Reset") and
+         * Woodmass 2021 HALT2INT: PC is incremented past the HALT byte
+         * during the HALT M1's normal fetch and STAYS there during the
+         * HALT NOP loop. Each HALT-internal NOP re-fetches at PC (now
+         * post-HALT-byte) without further increment. INT/NMI then
+         * accept that PC as the return address — RETN from an IM 1
+         * service routine returns to PC = HALT_addr + 1, which is the
+         * documented Z80 HALT-then-INT semantic.
+         *
+         * Our earlier convention decremented PC back to the HALT byte
+         * (matching FUSE test `76`'s pre-Brewer expectation) and then
+         * re-incremented in begin_next() on NMI/INT acceptance. That
+         * gave the correct final state but the *intermediate* PC + halt
+         * pin trace diverged from perfectz80 by 145 / 200 phases on
+         * prog13_halt_int. The silicon-faithful convention agrees with
+         * perfectz80 exactly. FUSE's test `76` (expecting PC at HALT
+         * byte) becomes another known-FUSE-wrong case alongside the
+         * Banks fold-in / SCF Q-leak / INxR WZ cases. */
         c->halted = true;
-        c->rf[RFP_PC] = (uint16_t)(c->rf[RFP_PC] - 1);
         finish(c);
         break;
 
@@ -1120,14 +1133,18 @@ static void begin_next(z80_t *c)
     if (c->nmi_sampled) {
         c->nmi_sampled = false;
         c->nmi_pending = false;
-        if (c->halted) { c->rf[RFP_PC] = (uint16_t)(c->rf[RFP_PC] + 1); c->halted = false; }
+        /* Silicon-faithful HALT exit: PC is ALREADY past the HALT byte
+         * (set when HALT's M1 committed; see EXEC_HALT). Just clear the
+         * halted flag and start the NMI ack sequence -- no PC bump. */
+        if (c->halted) c->halted = false;
         c->iff2 = c->iff1; c->iff1 = false;        /* IFF1->IFF2, disable */
         start_seq_m1(c, EXEC_NMI, 5, true);        /* 5T ack, opcode discarded */
         return;
     }
     if (allow_int && c->int_sampled && c->iff1) {
         c->int_sampled = false;
-        if (c->halted) { c->rf[RFP_PC] = (uint16_t)(c->rf[RFP_PC] + 1); c->halted = false; }
+        /* Same: HALT exit without PC bump. */
+        if (c->halted) c->halted = false;
         c->iff1 = c->iff2 = false;
         start_seq_inta(c, 7);                      /* INTA ack (IM0/1/2) */
         return;

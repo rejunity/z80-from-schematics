@@ -62,7 +62,7 @@ interactive controls (Enter, Backspace, Ctrl-C / Ctrl-Space = BREAK, Ctrl-\\ = e
     make verilator       # build the Verilator simulation
     make traces          # emit shared-format bus-cycle traces
     make compare         # diff C, iverilog, Verilator traces phase-by-phase
-    make fuse            # FUSE 1356-case suite on C model (1349 PASS + 7 known-FUSE-wrong)
+    make fuse            # FUSE 1356-case suite on C model (1348 PASS + 8 known-FUSE-wrong)
     make fuse_rtl        # FUSE 1356-case suite through RTL via iverilog (matches C)
     make prelim          # prelim.com CP/M instruction test
     make zexdoc          # full ZEXDOC                                 (~1  min)
@@ -114,8 +114,8 @@ fossi-foundation substituter configured (see [docs/librelane-flow.md](docs/libre
 | ✅  | ZEXDOC                                                          | 67 / 67                             |
 | ✅  | ZEXALL                                                          | 67 / 67                             |
 | ✅  | ZEXALL 14-test subset via Verilator RTL (main + nightly)        | 14 / 14 (~17 min)                   |
-| ✅  | FUSE corpus, C model                                            | **1349 / 1356 + 7 known-FUSE-wrong** (100 %) |
-| ✅  | FUSE corpus, through RTL (iverilog)                             | **1349 / 1356 + 7 known-FUSE-wrong** (100 %) |
+| ✅  | FUSE corpus, C model                                            | **1348 / 1356 + 8 known-FUSE-wrong** (100 %) |
+| ✅  | FUSE corpus, through RTL (iverilog)                             | **1348 / 1356 + 8 known-FUSE-wrong** (100 %) |
 | ✅  | Patrik Rak z80test (doc / memptr / full)                        | **160 / 160 / 160** (100 %)         |
 | ✅  | BASIC ROM via C model (NASCOM + Tiny BASIC, canned scripts)     | 4 / 4 subtests                      |
 | ✅  | BASIC ROM via Verilator RTL (NASCOM + Tiny BASIC)               | 4 / 4 subtests                      |

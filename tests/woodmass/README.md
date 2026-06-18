@@ -60,3 +60,36 @@ once we have the ROM dependency settled.
     Woodmass's published expected hashes (see redcode's
     `sources/test-Z80.c` for the canonical table).
   - Wire as a separate CI job once the hash check is in place.
+
+## HALT2INT v3 — investigated 2026-06-18
+
+HALT2INT v3 is Mark Woodmass's 2021 follow-up that specifically
+tests HALT-to-INT acceptance timing on a real 48K Spectrum.
+Downloaded from
+[zxe.io](https://zxe.io/depot/software/ZX%20Spectrum/HALT2INT%20v3%20%282022-01-04%29%28Woodmass%2C%20Mark%29%20%5B%21%5D.zip)
+(GPLv2, source `.asm` included).
+
+The v3 test is **not a clean CPU-only test**:
+  - calls `0x0D6B` (CLS) and `0x1601` (OPEN-CHAN) → needs Spectrum ROM
+  - reads ULA contended memory at addresses 14335, 14336, 22528, etc.
+    → needs ULA contention timing modeling (board-level, not CPU)
+  - distinguishes between early-issue and late-issue 48K models
+
+The CORE silicon behavior HALT2INT verifies (HALT M1 commits with
+PC past the HALT byte; HALT-NOP loop re-fetches at that PC; INT/NMI
+accept that PC unchanged) **was missing from our model and the RTL
+and is now fixed** (commits referenced in
+`docs/known-differences.md` item 9). The verification ran through
+two layers:
+  1. `tests/traces/pin_scenarios/prog13_halt_int.hex` — a focused
+     Z80-level HALT→INT scenario, now agreeing with perfectz80 on
+     address bus throughout the HALT loop (was 107/200, now 110/200
+     match after the convention flip).
+  2. FUSE test `76` (HALT instruction) — now in `tests/fuse/
+     known-fuse-wrong.txt` because FUSE's expected reflects the
+     pre-Brewer 2014 convention.
+
+That gives us the same silicon-faithful HALT-PC convention HALT2INT
+v3 was designed to verify, without depending on the Spectrum
+ULA / ROM. A future full HALT2INT v3 run remains a possible
+follow-up if we wire the ULA contention model and ROM dependencies.

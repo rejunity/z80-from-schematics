@@ -26,16 +26,16 @@ treated by the Z80 community as the de-facto opcode-level reference.
 
 We run it two ways:
 
-  - `make fuse`     — through our C model    → **1349 PASS + 7 known-FUSE-wrong**
-  - `make fuse_rtl` — through the Verilog RTL via iverilog → **1349 PASS + 7 known-FUSE-wrong (matches C)**
+  - `make fuse`     — through our C model    → **1348 PASS + 8 known-FUSE-wrong**
+  - `make fuse_rtl` — through the Verilog RTL via iverilog → **1348 PASS + 8 known-FUSE-wrong (matches C)**
 
-The 7 known-FUSE-wrong cases are enumerated in
+The 8 known-FUSE-wrong cases are enumerated in
 [`known-fuse-wrong.txt`](known-fuse-wrong.txt) — `tests.expected` has
 the wrong value for them vs real Z80 silicon (boo-boo MEMPTR 2006,
-Rak's z80memptr 1.2a, Banks 2018, Sean Young §4.1 Q-leak).
-`scripts/fuse_runner.c` and `scripts/compare_fuse_rtl.py` both load
-that list and tally those as "known-FUSE-wrong" rather than FAIL,
-so both targets exit 0.
+Rak's z80memptr 1.2a, Banks 2018, Sean Young §4.1 Q-leak, Brewer 2014
+HALT-PC + Woodmass 2021 HALT2INT).  `scripts/fuse_runner.c` and
+`scripts/compare_fuse_rtl.py` both load that list and tally those as
+"known-FUSE-wrong" rather than FAIL, so both targets exit 0.
 
 
 ## Files

@@ -540,9 +540,15 @@ module z80_core (
                 `EXEC_DI: begin iff1_n = 1'b0; iff2_n = 1'b0; fin = 1'b1; end
                 `EXEC_EI: begin iff1_n = 1'b1; iff2_n = 1'b1; ei_delay_n = 1'b1; fin = 1'b1; end
                 `EXEC_HALT: begin
+                    // Silicon-faithful per Brewer 2014 + Woodmass HALT2INT:
+                    // PC stays past the HALT byte (M1 fetch already
+                    // incremented it; do NOT decrement). HALT NOP M-cycles
+                    // re-fetch at PC (= post-HALT-byte); NMI/INT exit
+                    // doesn't bump PC further (it was already correct).
+                    // Mirrors cmodel/z80_core.c EXEC_HALT after the
+                    // 2026-06-18 PC-convention flip; FUSE test 76 enters
+                    // known-fuse-wrong as a result.
                     halted_n = 1'b1;
-                    // back PC up to the HALT opcode (mirrors cmodel/z80_control.c)
-                    rf_n[`RFP_PC] = rf_n[`RFP_PC] - 16'd1;
                     fin = 1'b1;
                 end
 
@@ -1123,8 +1129,10 @@ module z80_core (
                         if (nmi_sampled_n) begin
                             nmi_sampled_n = 1'b0;
                             nmi_pending_n = 1'b0;
-                            // exiting HALT: re-advance PC past the HALT byte
-                            if (halted_n) rf_n[`RFP_PC] = rf_n[`RFP_PC] + 16'd1;
+                            // Silicon-faithful HALT exit (Brewer 2014 /
+                            // Woodmass HALT2INT): PC is ALREADY past the
+                            // HALT byte (left there by EXEC_HALT). Just
+                            // clear halted_n; no PC bump.
                             halted_n = 1'b0;
                             iff2_n = iff1_n; iff1_n = 1'b0;
                             irq_seq_n = 2'd1;
@@ -1133,7 +1141,7 @@ module z80_core (
                             decoded_n = 1'b1; suppress_decode_n = 1'b1;
                         end else if (allow_int && int_sampled_n && iff1_n) begin
                             int_sampled_n = 1'b0;
-                            if (halted_n) rf_n[`RFP_PC] = rf_n[`RFP_PC] + 16'd1;
+                            // Same: silicon-faithful HALT exit, no PC bump.
                             halted_n = 1'b0; iff1_n = 1'b0; iff2_n = 1'b0;
                             irq_seq_n = 2'd2;
                             bus_op_n = `BUSOP_INTA; m_addr_n = rf_n[`RFP_PC]; m_wdata_n = 8'h0;

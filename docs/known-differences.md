@@ -74,11 +74,21 @@ Notes for each row:
      Full-run C↔RTL parity restored; NMI acceptance verified phase-by-phase
      via `prog8_nmi`.
 
-  9. HALT PC convention — FUSE test `76` expects PC unchanged after HALT (the
-     real Z80 re-fetches the HALT byte until interrupt). `EXEC_HALT` now backs
-     PC up to the HALT byte; `begin_next()` re-advances PC by 1 when an NMI or
-     INT exits the halted state so the pushed return address still points past
-     HALT. Mirrored to the RTL.
+  9. HALT PC convention — **REVERSED 2026-06-18 to be silicon-faithful per
+     Brewer 2014 + Woodmass HALT2INT 2021**. The Z80 silicon advances PC
+     past the HALT byte during HALT's M1 commit and KEEPS it there
+     throughout the HALT-NOP loop; INT / NMI exit accepts that PC
+     unchanged. Earlier we decremented PC back to the HALT byte (matching
+     FUSE test `76`'s pre-Brewer expectation) and re-incremented on
+     interrupt exit. The PC was correct at instruction boundaries but
+     the intermediate trace diverged from perfectz80 by 145 / 200 phases
+     on `prog13_halt_int`. The silicon-faithful convention now mirrors
+     perfectz80 exactly (bus addr 110 / 200 match, up from 107). FUSE
+     test `76` enters the known-FUSE-wrong list alongside the other
+     post-2014 silicon-faithful divergences. Mirrored to RTL
+     (`rtl/z80_core.v` `EXEC_HALT` + interrupt-accept paths). The
+     specific divergence redcode/Z80's end-to-end FUSE run also hit
+     (`/scripts/redcode_fuse_runner.c` reports the same `76 PC=0001`).
 
  10. `IN A,(n)` / `IN r,(C)` port-input value — FUSE expects port reads to
      return the high byte of the I/O address bus (`A` for `IN A,(n)`, `B` for
@@ -151,8 +161,8 @@ test that pins the chosen behaviour or escalates it.
 | chips/z80.h pure-C (`scripts/lockstep_triple.c`)           | 7.0 M instr (ZEXDOC3)                               | identical regs (with chips's overlap-PC adjustment)       |
 | suzukiplan/z80 C++ (`scripts/lockstep_quad.c`)             | 7.0 M instr (ZEXDOC3)                               | identical regs across all four emulators                  |
 | redcode/Z80 (`scripts/lockstep_quint.c`)                   | 7.0 M instr (ZEXDOC3)                               | identical regs across all five emulators                  |
-| FUSE corpus (Kendall 2006) (`make fuse`)                   | 1356 cases                                          | **1349 PASS + 7 known-FUSE-wrong (silicon-faithful)**     |
-| FUSE through RTL via iverilog (`make fuse_rtl`)            | 1356 cases                                          | **1349 PASS + 7 known-FUSE-wrong (matches C)**            |
+| FUSE corpus (Kendall 2006) (`make fuse`)                   | 1356 cases                                          | **1348 PASS + 8 known-FUSE-wrong (silicon-faithful)**     |
+| FUSE through RTL via iverilog (`make fuse_rtl`)            | 1356 cases                                          | **1348 PASS + 8 known-FUSE-wrong (matches C)**            |
 | Patrik Rak z80test (`make z80test`)                        | doc / memptr / full (~470 micro-tests across three)  | **160 / 160 / 160 PASS** (all silicon-faithful)           |
 | ZEXALL 14-test subset via Verilator RTL (`make zexall_subset_rtl`) | 550 M instr through Verilator                 | **14 / 14** PASS; ~17 min on CI                            |
 | Real KC85 silicon — sync   (`make silicon_cycles`)         | 50 classified opcodes (kc85-cpuclk.sr)              | **50 OK** (4 with /WAIT attribution); 0 emu mismatches    |

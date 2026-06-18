@@ -92,14 +92,15 @@ only rebuilt the library, leaving stale runner binaries on disk).
 - **C ↔ iverilog ↔ Verilator parity** (`make compare`): all 8 trace programs (prog1,
   prog2, prog3_cb, prog4_ed, prog5_ddfd, prog6_block, prog7_ddcb, prog8_nmi) produce
   identical phase-by-phase traces across all three (400 phases each).
-- **FUSE corpus** (`make fuse`): **1349 PASS + 7 known-FUSE-wrong**. The 7
+- **FUSE corpus** (`make fuse`): **1348 PASS + 8 known-FUSE-wrong**. The 8
   exceptions all live in `tests/fuse/known-fuse-wrong.txt` with
   silicon-validation citations: Banks-2018 block fold-in (edb9_2 CPDR
   repeat), Sean Young §4.1 Q-leak SCF/CCF (37_1 / 3f), boo-boo 2006
   MEMPTR (edba_1 INDR / edbb_1 OTDR / edb2_1 INIR / edb3_1 OTIR with
-  BC=1). We deliberately sit on the silicon-faithful side; the
-  pre-Banks/pre-MEMPTR FUSE expecteds are the outliers.
-- **FUSE through RTL** (`make fuse_rtl`): **1349 PASS + 7 known-FUSE-wrong
+  BC=1), Brewer 2014 / Woodmass HALT2INT 2021 HALT-PC convention
+  (test `76`). We deliberately sit on the silicon-faithful side; the
+  pre-Banks/pre-MEMPTR/pre-Brewer FUSE expecteds are the outliers.
+- **FUSE through RTL** (`make fuse_rtl`): **1348 PASS + 8 known-FUSE-wrong
   (matches C model)**. The earlier 14 testbench-init artifacts (post-reset
   M1 with stale m_addr) and the iverilog-12 sensitivity bug on `rf[hlp]`
   through `always @*` function calls were fixed earlier in the project.

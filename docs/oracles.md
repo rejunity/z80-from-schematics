@@ -77,7 +77,7 @@ parity, not "0xBF when low byte is 0xFE"). Fix landed in commit
   | **Rak z80doc**     | **0**    | 3         | 2        | n/a *      | **0**    |
   | **Rak z80memptr**  | **0**    | 16        | **0**    | n/a *      | **0**    |
   | **Rak z80full**    | **0**    | 20        | 10       | n/a *      | **0**    |
-  | FUSE corpus †      | 1349 + 7 | n/a       | n/a      | n/a        | 1348 ‡   |
+  | FUSE corpus †      | 1348 + 8 | n/a       | n/a      | n/a        | 1348 ‡   |
   | ZEXDOC             | PASS     | (oracle)  | (oracle) | (oracle)   | (oracle) |
   | ZEXALL             | PASS     | (oracle)  | (oracle) | (oracle)   | (oracle) |
 
@@ -85,15 +85,16 @@ parity, not "0xBF when low byte is 0xFE"). Fix landed in commit
   test sequence; we run it only through the 5-way lockstep
   (`scripts/lockstep_quint.c`) rather than the Rak harness.
 
-  † FUSE corpus: 1356 cases. "1349 + 7" means 1349 PASS, 7 of the
+  † FUSE corpus: 1356 cases. "1348 + 8" means 1348 PASS, 8 of the
   remaining listed in `tests/fuse/known-fuse-wrong.txt` as cases
   where FUSE's expected output is incorrect vs. real silicon (see §5
-  below). 0 unexpected fails.
+  below). 0 unexpected fails. Our model and redcode now both produce
+  PC = HALT_addr + 1 after a HALT (Brewer 2014); test `76` is the
+  newest addition to the known-FUSE-wrong list.
 
   ‡ redcode end-to-end on FUSE (via `scripts/redcode_fuse_runner.c`)
-  produces 1348 PASS, 8 FAIL: the same 7 known-FUSE-wrong cases plus
-  test `76` (HALT-PC convention — redcode keeps PC at the instr after
-  HALT; FUSE expects PC at HALT itself).
+  produces the same 1348 PASS, 8 FAIL pattern (same cases on both
+  sides).
 
 ## 4. Distinctive strengths
 

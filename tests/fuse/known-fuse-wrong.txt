@@ -60,3 +60,10 @@ edb3_1    # OTIR with BC=...           FUSE expects WZ=BC+1,   silicon=PC+1
 # redcode/Z80's INSN(ldir)/CPXR/INXR/OTXR macros (which also fail
 # FUSE edb9_2 the same way).
 edb9_2    # CPDR with BC > 1 looping: FUSE expects AF=ffa7, silicon=ffaf
+
+# HALT instruction PC convention (Brewer 2014; Woodmass HALT2INT 2021).
+# Silicon advances PC past the HALT byte during the HALT M1 commit and
+# keeps it there throughout the HALT NOP loop; INT/NMI accept that PC.
+# FUSE expected PC at the HALT byte address. Our model and redcode/Z80
+# both follow Brewer's silicon-faithful convention.
+76        # HALT: FUSE expects PC=0000 (HALT byte); silicon=0001 (past HALT byte)
