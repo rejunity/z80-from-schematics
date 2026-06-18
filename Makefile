@@ -44,7 +44,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
-.PHONY: all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test verilator_z80test z80test_rtl
+.PHONY: all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test verilator_z80test z80test_rtl halt2int halt2int_probe
 
 all: cmodel ctest
 
@@ -145,6 +145,20 @@ silicon_cycles: tracegen
 # from the cpuclk synchronous capture.
 silicon_async: tracegen
 	@$(PYTHON) $(SCRIPTS)/sigrok_async_timing.py tests/sigrok/kc85-20mhz.sr --silicon-check
+
+# HALT-to-INT acceptance T-state timing probe inspired by Mark Woodmass's
+# HALT2INT v3 (2021). Sweeps INT-pulse timing across the HALT NOP M-cycle
+# and verifies the INT-to-INTA delay stays in the silicon-faithful 3-8 T
+# range (per Brewer 2014 + Z80 datasheet). HALT2INT v3 itself depends on
+# Spectrum ULA contention timing we don't model; this probe extracts the
+# CPU-only silicon property HALT2INT verifies.
+halt2int_probe: cmodel $(BIN)/halt2int_probe
+$(BIN)/halt2int_probe: $(SCRIPTS)/halt2int_probe.c $(CMODEL_LIB) $(CMODEL_HDRS)
+	@mkdir -p $(BIN)
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(CMODEL_LIB) -o $@
+
+halt2int: halt2int_probe
+	@$(BIN)/halt2int_probe
 
 # Gate-level signal-timing diff vs perfectz80 (Brian Silverman et al's
 # transistor-level netlist port of the Visual Z80 die scan). Compares

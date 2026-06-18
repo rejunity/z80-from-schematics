@@ -69,6 +69,7 @@ interactive controls (Enter, Backspace, Ctrl-C / Ctrl-Space = BREAK, Ctrl-\\ = e
     make zexall          # full ZEXALL                                 (~16 min)
     make silicon_cycles  # per-opcode T-state check vs real KC85 silicon (sigrok)
     make silicon_async   # real CPU clock + sub-T-state pin offsets from 20 MHz capture
+    make halt2int        # HALT-to-INT acceptance T-state timing probe (Brewer 2014 / Woodmass HALT2INT)
     make perfectz80          # gate-level signal-trace diff vs perfectz80 Visual-Z80 netlist (C model)
     make perfectz80_rtl      # same, but trace source is the iverilog RTL testbench
     make synth               # LibreLane (yosys) synthesis → build/synth/z80_core.nl.v

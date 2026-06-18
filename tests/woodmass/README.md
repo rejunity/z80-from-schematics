@@ -93,3 +93,27 @@ That gives us the same silicon-faithful HALT-PC convention HALT2INT
 v3 was designed to verify, without depending on the Spectrum
 ULA / ROM. A future full HALT2INT v3 run remains a possible
 follow-up if we wire the ULA contention model and ROM dependencies.
+
+## `make halt2int` — focused HALT-INT timing probe
+
+[`scripts/halt2int_probe.c`](../../scripts/halt2int_probe.c) is a
+small, focused regression that exercises the CPU-only silicon
+property HALT2INT v3 verifies: the T-state delay between an INT pin
+going low during the HALT loop and the INTA M-cycle starting.
+
+The probe sweeps INT-assert timing across an 8-phase (4 T-state) HALT
+NOP window and verifies the delay stays in the silicon-faithful range
+(3..8 T-states; the exact value depends on where in the M-cycle INT
+goes low, per Z80 datasheet's "INT sampled at last T-state of current
+M-cycle" rule). Output:
+
+    INT @halt+ 2 phases (~T1): delta = 5 T-states OK
+    INT @halt+ 4 phases (~T2): delta = 4 T-states OK
+    INT @halt+ 6 phases (~T3): delta = 7 T-states OK
+    ...
+    range observed: 4..7 T-states (silicon range: 3..8)
+    verdict: PASS (silicon-faithful)
+
+The pattern repeats every 4 T-states (8 phases) — each step within
+the M-cycle shifts the relative position of the sample window by one
+T-state, sliding through the 4..7 range cyclically.
