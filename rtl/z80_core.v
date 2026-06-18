@@ -123,7 +123,16 @@ module z80_core (
         .m1_n(m1_n), .mreq_n(mreq_n), .iorq_n(iorq_n),
         .rd_n(rd_n), .wr_n(wr_n), .rfsh_n(rfsh_n)
     );
-    assign halt_n   = halted ? 1'b0 : 1'b1;
+    // Silicon-faithful halt pin: assert at T4.N of the HALT instruction's
+    // M1 (one half-T-state before instruction-done flips `halted`), so
+    // the pin LEADS the flag by one phase -- matches perfectz80's
+    // gate-level trace on prog10_halt_nmi / prog19_nmi_in_int. After
+    // instruction-done, the `halted` register takes over. Mirrors
+    // cmodel/z80_core.c halt_n driving.
+    wire exec_halt_in_m1 = (exec_w == `EXEC_HALT)
+                        && (bus_op == `BUSOP_M1)
+                        && (t_state == 4'd4) && (phi == 1'b1);
+    assign halt_n   = (halted || exec_halt_in_m1) ? 1'b0 : 1'b1;
     assign busack_n = bus_granted ? 1'b0 : 1'b1;
     assign dbg_t = t_state; assign dbg_phi = phi; assign dbg_m = m_cycle;
 

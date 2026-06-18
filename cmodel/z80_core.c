@@ -1319,6 +1319,25 @@ void z80_phase_step(z80_t *c)
                &c->pins.m1_n, &c->pins.mreq_n, &c->pins.iorq_n,
                &c->pins.rd_n, &c->pins.wr_n,   &c->pins.rfsh_n);
 
-    /* HALT/refresh pin level: halt_n reflects halted state. */
-    c->pins.halt_n = c->halted ? 0 : 1;
+    /* HALT pin level. Silicon-faithful per perfectz80's gate-level
+     * trace (prog10_halt_nmi phase 27, prog13_halt_int):
+     *   - asserts during T3 of the HALT instruction's M1 (not at T4
+     *     end / instruction-done as our `c->halted` flag flips).
+     *     We pre-assert via a decoded EXEC_HALT predicate so the pin
+     *     leads the flag by one T-state, matching gate-level.
+     *   - then stays asserted while c->halted is true (HALT NOP loop)
+     *   - deasserts at the M-cycle boundary where c->halted clears
+     *     (NMI / INT acceptance path; see begin_next()).
+     *
+     * The two clauses are OR'd so that, during HALT's M1 T3..T4,
+     * halt_n is low; the c->halted flag then takes over from
+     * instruction-done onwards. */
+    /* Silicon transition observed (prog10 pz80 trace): halt asserts
+     * at T4.P of the HALT instruction's M1 (one T-state before
+     * instruction-done flips c->halted). Mirror by gating on
+     * t_state == 4 within the HALT-decoded M1. */
+    bool exec_halt_in_m1 = (c->ctl.exec == EXEC_HALT &&
+                            c->bus_op == BUSOP_M1 &&
+                            c->t_state == 4 && c->phi == 1);
+    c->pins.halt_n = (c->halted || exec_halt_in_m1) ? 0 : 1;
 }

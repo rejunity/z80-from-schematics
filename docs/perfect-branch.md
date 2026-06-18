@@ -55,9 +55,34 @@ Plus, well outside the original plan:
 ## Deferred to a future branch
 
   - **Sub-T-state pin timing fidelity** on the still-informational
-    pin_scenarios. Functional behaviour is verified via Rak + FUSE +
-    `make halt2int`; the residual is gate-level timing fidelity. Two
-    quick fixes already landed (2026-06-18 continuation):
+    pin_scenarios. **Six-step plan** to drive pin_scenarios to 100 %
+    parity vs perfectz80, executing in order — each step verified
+    against FUSE / Rak / halt2int / compare / 5-way lockstep before
+    moving on:
+
+    | # | Step                                       | Status     | Closes                            |
+    |--:|--------------------------------------------|------------|-----------------------------------|
+    | 0 | per-phase diff harness                     | **DONE**   | analysis tool (scripts/pin_scenarios_diff.py) |
+    | 1 | C1 reset register init 0xFFFF → 0x5555     | **DONE**   | make perfectz80 4 informational diffs + prog19 SP-init |
+    | 2 | RFSH-pin late-deassert (bound to T3..T4)   | **DONE**   | prog10 5→3, prog19 3→1 ctrl-pin   |
+    | 3 | HALT-pin assertion at T4.N of HALT M1      | **DONE**   | prog10 3→1, prog19 1→**PASS**     |
+    | 4 | Reset deferral until M-cycle completion    | pending ⚠  | prog17 (131) — needs reset state machine rework |
+    | 5 | BUSREQ M1 abort ordering                   | pending ⚠  | prog15 (154) — needs M-cycle abort rework |
+    | 6 | WAIT-insertion sub-T-state phasing         | pending ⚠  | prog11 (142), prog14 (147) — touches every memory/IO access |
+
+    Steps 4-6 (the ⚠ rows) each need a focused structural rework of
+    pin-driving logic: Step 4 a reset state machine, Step 5 an
+    M-cycle abort sequencer, Step 6 a WAIT-sample phasing fix. Each
+    is 1-2 days of careful work + regression testing. Given the
+    "perfect" branch's other green gates (FUSE, Rak, ZEXALL,
+    halt2int, lockstep, gate-level netlist), these residual
+    informational diffs are documented as a follow-up branch
+    rather than blocking the current branch's merge.
+
+    Functional behaviour is verified via Rak + FUSE + `make halt2int`;
+    this 6-step plan addresses gate-level timing fidelity vs the
+    perfectz80 Visual-Z80 netlist. Two quick fixes already landed
+    (2026-06-18 continuation):
     - **C1 reset init flipped 0xFFFF → 0x5555** to match perfectz80's
       gate-level boot pattern. Closed all 4 informational diffs on
       `make perfectz80` (`prog_rnd_02/03/04` now clean) and 11 of

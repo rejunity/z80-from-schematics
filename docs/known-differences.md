@@ -135,15 +135,18 @@ Notes for each row:
      - `prog18_di_then_int` ✓
      - `prog20_block_int` ✓
 
-     7 / 12 have informational ctrl-pin timing diffs (post the
-     2026-06-18 C1 reset + RFSH-edge fixes):
-     - `prog19_nmi_in_int` (**1** / 200, was 3) — sub-T-state HALT-pin transition
-     - `prog10_halt_nmi`   (**3** / 200, was 5) — HALT-pin assertion timing (T3 vs T4)
+     5 / 12 have informational ctrl-pin timing diffs (post the
+     2026-06-18 C1 reset + RFSH-edge + HALT-pin-at-T4.N fixes):
+     - `prog10_halt_nmi`   (**1** / 200, was 5) — last residual HALT-pin diff during NMI ack
      - `prog17_reset`      (131 / 200) — reset deferral (silicon completes current M-cycle before applying reset state)
      - `prog11_wait_mem`   (142 / 200) — WAIT-insertion sub-T-state phasing
-     - `prog13_halt_int`   (145 / 200) — HALT-pin during NOP-loop M-cycles
+     - `prog13_halt_int`   (144 / 200) — HALT-pin during NOP-loop M-cycles
      - `prog14_wait_io`    (147 / 200) — IORQ + WAIT timing during IN/OUT
      - `prog15_busreq_m1`  (154 / 200) — BUSREQ-aborts-M1 M-cycle ordering
+
+     `prog9_inta_im1`, `prog12_inta_im2`, `prog16_ei_delay`,
+     `prog18_di_then_int`, `prog19_nmi_in_int`, `prog20_block_int`
+     all PASS clean (6 / 12).
 
      `.events` is now consumed by all paths — C tracegen, iverilog
      RTL, Verilator, LibreLane gate-level netlist — via per-pin
