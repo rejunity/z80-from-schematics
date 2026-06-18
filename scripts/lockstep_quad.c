@@ -172,8 +172,19 @@ int main(int argc, char** argv) {
         uint16_t phl = (uint16_t)((P.reg.pair.H << 8) | P.reg.pair.L);
         uint16_t pix = P.reg.IX, piy = P.reg.IY, psp = P.reg.SP, ppc = P.reg.PC;
 
+        /* Mask undocumented YF (bit 5) + XF (bit 3) of F before
+         * comparing AF: our model implements Banks-2018 block-instr
+         * repeat YF/XF fold-in (YF=PC.13, XF=PC.11), while
+         * superzazu/chips/suzukiplan all predate Banks and still
+         * compute these as (A+val).{1,3}. See lockstep_quint.c +
+         * docs/oracles.md §5. */
+        const uint16_t AF_MASK = 0xFFD7u;
+        uint16_t maf_m = maf & AF_MASK;
+        uint16_t saf_m = saf & AF_MASK;
+        uint16_t caf_m = C.af & AF_MASK;
+        uint16_t paf_m = paf & AF_MASK;
         bool diverge = (mpc2 != spc || mpc2 != cpc || mpc2 != ppc ||
-                        maf != saf || maf != C.af || maf != paf ||
+                        maf_m != saf_m || maf_m != caf_m || maf_m != paf_m ||
                         mbc != sbc || mbc != C.bc || mbc != pbc ||
                         mde != sde || mde != C.de || mde != pde ||
                         mhl != shl || mhl != C.hl || mhl != phl ||

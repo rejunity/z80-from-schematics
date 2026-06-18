@@ -43,12 +43,27 @@ jobs:
         run: make silicon_cycles
       - name: Real-silicon sub-T-state timing (sigrok 20 MHz capture)
         run: make silicon_async
-      - name: 4-way lockstep on ZEXDOC3 (mine + superzazu + chips + suzukiplan)
+      - name: 5-way lockstep on ZEXDOC3 (mine + superzazu + chips + suzukiplan + redcode)
         run: |
           make tracegen
+          # Vendored redcode/Z80 is built as a separate .o (C, not C++)
+          # with the features Rak triangulation needs.
+          cc -std=gnu11 -O2 -w \
+            -Iscripts/refs/redcode_z80 -Iscripts/refs/redcode_z80/Zeta \
+            -DZ80_STATIC -DZ80_WITH_LOCAL_HEADER -DZ80_WITH_EXECUTE \
+            -DZ80_WITH_Q -DZ80_WITH_PARITY_COMPUTATION \
+            -DZ80_WITH_SPECIAL_RESET -DZ80_WITH_FULL_IM0 \
+            -DZ80_WITH_UNOFFICIAL_RETI \
+            -c scripts/refs/redcode_z80/Z80.c -o build/redcode_Z80.o
           c++ -std=gnu++17 -O2 -w -Iscripts -Icmodel \
-            scripts/lockstep_quad.c build/libz80.a -o build/bin/lockstep_quad
-          build/bin/lockstep_quad tests/zex/zexdoc3.com 20000000
+            -Iscripts/refs/redcode_z80 -Iscripts/refs/redcode_z80/Zeta \
+            -DZ80_STATIC -DZ80_WITH_LOCAL_HEADER -DZ80_WITH_EXECUTE \
+            -DZ80_WITH_Q -DZ80_WITH_PARITY_COMPUTATION \
+            -DZ80_WITH_SPECIAL_RESET -DZ80_WITH_FULL_IM0 \
+            -DZ80_WITH_UNOFFICIAL_RETI \
+            scripts/lockstep_quint.c build/redcode_Z80.o build/libz80.a \
+            -o build/bin/lockstep_quint
+          build/bin/lockstep_quint tests/zex/zexdoc3.com 20000000
 
   rtl-tests:
     name: RTL (iverilog elaboration + FUSE through RTL)

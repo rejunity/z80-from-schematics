@@ -215,12 +215,25 @@ int main(int argc, char** argv) {
                  op2 = MMEM[(mpc+2)&0xFFFF], op3 = MMEM[(mpc+3)&0xFFFF];
         if (mpc == 0) break;
 
+        /* Snapshot our model's cycle counter before stepping so we can
+         * give redcode exactly the same T-state budget. Our model's
+         * `cycle` field is in HALF-T-states (phases) -- divide by 2
+         * to get T-states. */
+        uint64_t mc_before = M->cpu.cycle;
         z80_sys_step_instr(M);
         sz80_step(&S);
         cpins = cz_step_one(&C, cpins);
         P.execute(1);
-        z80_execute(&R, 1);   /* redcode: at least 1 cycle, returns when an
-                                   instruction has completed */
+        /* redcode: step by exactly the T-states our model just took.
+         * z80_execute(N) is a per-call budget: cpu.cycle_limit = N,
+         * cpu.cycles resets to 0 at start of call, loops until
+         * cpu.cycles >= cycle_limit. So pass mc_delta_t directly --
+         * NOT R.cycles + mc_delta_t (the absolute-target reading was
+         * wrong; verified via /tmp/redcode_step_probe.c). */
+        {
+            uint64_t mc_delta_t = (M->cpu.cycle - mc_before) / 2;
+            z80_execute(&R, mc_delta_t);
+        }
 
         uint16_t maf = M->cpu.rf[RFP_AF], mbc = M->cpu.rf[RFP_BC], mde = M->cpu.rf[RFP_DE];
         uint16_t mhl = M->cpu.rf[RFP_HL], mix = M->cpu.rf[RFP_IX], miy = M->cpu.rf[RFP_IY];
@@ -238,8 +251,26 @@ int main(int argc, char** argv) {
         uint16_t rix = R.ix_iy[0].uint16_value, riy = R.ix_iy[1].uint16_value;
         uint16_t rsp = R.sp.uint16_value, rpc = R.pc.uint16_value;
 
+        /* Mask the undocumented YF (bit 5) and XF (bit 3) of F before
+         * comparing AF across the five oracles. Our model and
+         * redcode/Z80 both implement David Banks' 2018 LDIR/LDDR/CPIR/
+         * CPDR/INIR/INDR/OTIR/OTDR repeat-M-cycle Y/X fold-in
+         * (YF=PC.13, XF=PC.11). superzazu, chips/z80.h and suzukiplan's
+         * cores predate that work and still use the LDI / CPI / INI /
+         * OUT single-shot Y/X formula during the repeat. The two
+         * conventions disagree by exactly bits 5+3 in F at the boundary
+         * right after a repeat aborts. Masking 0x28 lets the lockstep
+         * keep catching real architectural drift (all the documented
+         * bits + every other register) without firing on this known
+         * Banks-vs-pre-Banks oracle gap. See docs/oracles.md §5. */
+        const uint16_t AF_MASK = 0xFFD7u;   /* clear YF | XF in F */
+        uint16_t maf_m = maf & AF_MASK;
+        uint16_t saf_m = saf & AF_MASK;
+        uint16_t caf_m = C.af & AF_MASK;
+        uint16_t paf_m = paf & AF_MASK;
+        uint16_t raf_m = raf & AF_MASK;
         bool diverge = (mpc2 != spc || mpc2 != cpc || mpc2 != ppc || mpc2 != rpc ||
-                        maf != saf || maf != C.af || maf != paf || maf != raf ||
+                        maf_m != saf_m || maf_m != caf_m || maf_m != paf_m || maf_m != raf_m ||
                         mbc != sbc || mbc != C.bc || mbc != pbc || mbc != rbc ||
                         mde != sde || mde != C.de || mde != pde || mde != rde ||
                         mhl != shl || mhl != C.hl || mhl != phl || mhl != rhl ||
