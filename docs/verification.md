@@ -12,11 +12,21 @@ Living record of the verification state. Updated at each checkpoint.
    r/w, I/O r/w, refresh, INTA, WAIT, HALT, BUSREQ/BUSACK, NMI, IM0/1/2.
 5. **C ↔ RTL comparison** (`make compare`): same programs through the C model, iverilog
    sim, AND Verilator sim; traces diffed phase-by-phase across all three.
-6. **FUSE / Frank D. Cringle suite** (`make fuse`): 1356 per-opcode tests with
-   register / flag / IFF / IM / HALTED / cycle-count / memory diff per case.
-7. **Multi-oracle lockstep** (`scripts/lockstep_quad.c`): our C model vs the
-   superzazu, chips/z80, and suzukiplan/z80 industry references, comparing register
-   state after every instruction on a CP/M `.com`.
+6. **FUSE corpus** (`make fuse`): 1356 per-opcode tests with register / flag
+   / IFF / IM / HALTED / cycle-count / memory diff per case. **Note**: FUSE's
+   `tests.expected` was authored by Philip Kendall in 2006 for FUSE itself
+   and was never silicon-validated; 7 cases differ from real silicon (see
+   `tests/fuse/known-fuse-wrong.txt`). The runner tallies those as
+   "known-FUSE-wrong" rather than FAIL so the gate stays at 100 % on the
+   silicon-faithful side.
+7. **Multi-oracle lockstep** (`scripts/lockstep_quint.c`): our C model vs the
+   superzazu, chips/z80, suzukiplan/z80 and redcode/Z80 industry references —
+   five-way register diff after every instruction on a CP/M `.com`. See
+   [docs/oracles.md](oracles.md) for the per-oracle lineage and matrix.
+8. **Patrik Rak z80test** (`make z80test`): doc / memptr / full ~470 tests
+   covering documented + undocumented behavior, MEMPTR / WZ, SCF / CCF Q-leak,
+   Banks block-instruction repeat fold-in. All silicon-validated (Rak on real
+   48K Spectrum; Chandler on NEC + Visual Z80 Remix). **160 / 160 / 160 PASS.**
 8. **Gate-level signal trace** (`scripts/perfectz80_runner.c` + `scripts/compare_signal_timing.py`):
    our C model vs the Brian Silverman / Visual Z80 netlist port (perfectz80), pin
    trace at every clock half-cycle.
@@ -82,19 +92,26 @@ only rebuilt the library, leaving stale runner binaries on disk).
 - **C ↔ iverilog ↔ Verilator parity** (`make compare`): all 8 trace programs (prog1,
   prog2, prog3_cb, prog4_ed, prog5_ddfd, prog6_block, prog7_ddcb, prog8_nmi) produce
   identical phase-by-phase traces across all three (400 phases each).
-- **FUSE / Cringle** (`make fuse`): **1356/1356 PASS (100%)**. The SCF/CCF NMOS
-  Q-variant (X/Y from `(A | Q)`), the DD/FD `36` cycle count fix (22T → 19T), and
-  the HALT-PC convention fix (PC stays at the HALT byte) all landed during
-  integration; see `docs/known-differences.md` rows 2, 9 and 11.
-- **FUSE through RTL** (`make fuse_rtl`): **1356/1356 (100%)**. The earlier
-  testbench-init artifacts (post-reset M1 with stale m_addr) are fixed by poking
-  `dut.m_addr` alongside `dut.rf[PC]` — mirroring what `z80_set_pc()` does on the
-  C side. A related iverilog-12 sensitivity bug on `rf[hlp]` reads through function
-  calls in `always @*` (which let DD/FD-prefixed ALU ops decode as their unprefixed
-  variant) was fixed by exposing the index-aware byte read as a continuous wire.
-- **4-oracle lockstep** (`scripts/lockstep_quad.c`): our C model + superzazu C + chips/z80
-  + suzukiplan/z80 all report identical PC/AF/BC/DE/HL/IX/IY/SP after every one of
-  **7,022,691 instructions** of ZEXDOC3 (chips's PC is overlap-adjusted).
+- **FUSE corpus** (`make fuse`): **1349 PASS + 7 known-FUSE-wrong**. The 7
+  exceptions all live in `tests/fuse/known-fuse-wrong.txt` with
+  silicon-validation citations: Banks-2018 block fold-in (edb9_2 CPDR
+  repeat), Sean Young §4.1 Q-leak SCF/CCF (37_1 / 3f), boo-boo 2006
+  MEMPTR (edba_1 INDR / edbb_1 OTDR / edb2_1 INIR / edb3_1 OTIR with
+  BC=1). We deliberately sit on the silicon-faithful side; the
+  pre-Banks/pre-MEMPTR FUSE expecteds are the outliers.
+- **FUSE through RTL** (`make fuse_rtl`): **1349 PASS + 7 known-FUSE-wrong
+  (matches C model)**. The earlier 14 testbench-init artifacts (post-reset
+  M1 with stale m_addr) and the iverilog-12 sensitivity bug on `rf[hlp]`
+  through `always @*` function calls were fixed earlier in the project.
+- **Patrik Rak z80test** (`make z80test`): **160 / 160 / 160 PASS** since
+  the 2026-06-18 silicon-faithfulness sweep: ULA-idle port-parity, SCF/CCF
+  Q-leak formula correction, Banks-2018 LDIR/LDDR/CPIR/CPDR/INIR/INDR/
+  OTIR/OTDR repeat-M-cycle YF/XF (and HF/PF/CF for IO-block) fold-in. All
+  three variants (z80doc, z80memptr, z80full) clean.
+- **5-oracle lockstep** (`scripts/lockstep_quint.c`): our C model +
+  superzazu C + chips/z80 + suzukiplan/z80 + redcode/Z80 all report
+  identical PC/AF/BC/DE/HL/IX/IY/SP after every one of **7,022,691
+  instructions** of ZEXDOC3.
 - **Gate-level signal trace** (`scripts/compare_signal_timing.py`, `make perfectz80`):
   perfectz80 (pure-C Visual Z80 netlist port, no Qt) vs C model on 200 phases of
   prog1/prog2/prog3_cb: **100% control-pin-perfect** across all three programs. The

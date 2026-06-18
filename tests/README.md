@@ -19,9 +19,9 @@ stack.
 | Test                                              | Where                          | Make target                              | Wall clock      | What it covers |
 |---------------------------------------------------|--------------------------------|------------------------------------------|-----------------|----------------|
 | C unit tests (11 binaries)                        | `tests/common/`                | `make ctest`                             | ~2 s            | Per-instruction state + per-T-state pin sequence |
-| FUSE / Frank D. Cringle 1356-case                 | `tests/fuse/`                  | `make fuse`, `make fuse_rtl`             | ~5 s / ~30 s    | Per-T-state event list + final state for every documented + undocumented opcode |
+| FUSE 1356-case (Kendall 2006, **not silicon-validated**) | `tests/fuse/`                  | `make fuse`, `make fuse_rtl`             | ~5 s / ~30 s    | Per-T-state event list + final state. 1349 PASS + 7 known-FUSE-wrong (Banks fold-in + Q-leak SCF/CCF + INxR/OTxR WZ — silicon-faithful vs FUSE expected). |
 | Cringle ZEX (prelim / zexdoc / zexall / subset)   | `tests/zex/`                   | `make prelim` / `zexdoc` / `zexall` / `zexall_subset_*` | ~1 s / ~1 min / ~16 min / ~17 min RTL | CRC-based exhaustive flag-exact instruction exerciser |
-| Patrik Rak z80test (doc / memptr / full)          | `tests/z80test/`               | `make z80test`                           | ~2 min          | Documented + undocumented behaviour, MEMPTR / WZ, SCF / CCF Q-leak — things ZEX misses |
+| Patrik Rak z80test (doc / memptr / full)          | `tests/z80test/`               | `make z80test`                           | ~2 min          | Documented + undocumented behaviour, MEMPTR / WZ, SCF / CCF Q-leak. **160 / 160 / 160 PASS** since the 2026-06-18 Banks / Q-leak / ULA-port-parity work. |
 | BASIC ROM canned-script regression                | `tests/basic/`                 | `make basic_c_tests`, `make basic_rtl_tests` | ~0.5 s / ~2 s | NASCOM 4.7c + 1 KiB Tiny BASIC running "real software" via stdin scripts |
 | C ↔ iverilog ↔ Verilator phase parity             | `tests/traces/`                | `make compare`                           | ~3 s            | Per-half-cycle bus-cycle trace identity across all three harnesses |
 | Gate-level vs perfectz80 (C model path)           | `tests/traces/`                | `make perfectz80`                        | ~10 s           | Per-half-cycle 7-pin parity + bus addr/data informational findings |
@@ -33,7 +33,7 @@ stack.
 | Pin-scenario programs vs perfectz80 — sky130 netlist | `tests/traces/pin_scenarios/` | `make pin_scenarios_netlist`           | ~30 s           | Same 12 scenarios through the LibreLane gate-level netlist (informational) |
 | Real KC85 silicon sync capture                    | `tests/sigrok/`                | `make silicon_cycles`                    | ~1 s            | Per-opcode T-state count vs a real Z80 logic-analyzer capture |
 | Real KC85 silicon 20 MHz capture                  | `tests/sigrok/`                | `make silicon_async`                     | ~3 s            | Real CPU clock + sub-T-state pin-edge offsets |
-| Lockstep 4-way oracle on ZEXDOC3                  | `scripts/lockstep_quad.c`      | (inline, see CI)                         | ~3 s            | Instruction-by-instruction regs + memory match across 4 emulators |
+| Lockstep 5-way oracle on ZEXDOC3                  | `scripts/lockstep_quint.c`     | (inline, see CI)                         | ~3 s            | Instruction-by-instruction regs + memory match across all 5 emulators (mine + superzazu + chips + suzukiplan + redcode). See [`docs/oracles.md`](../docs/oracles.md). |
 
 `make all-tests` runs every gate above in sequence.
 
@@ -304,21 +304,35 @@ See [docs/real-silicon-traces.md](../docs/real-silicon-traces.md) for the
 full decode + interpretation notes.
 
 
-### 9. 4-way oracle lockstep
+### 9. 5-way oracle lockstep
 
 Not a `make` target — runs inline in CI's `c-tests` job. The driver
-`scripts/lockstep_quad.c` loads `tests/zex/zexdoc3.com` and steps four
-emulators instruction-by-instruction:
+`scripts/lockstep_quint.c` loads `tests/zex/zexdoc3.com` and steps
+five emulators instruction-by-instruction:
 
   - our C model
   - superzazu's `z80.c`
   - floooh's `chips/z80.h`
   - suzukiplan's `z80.h`
+  - redcode's `Z80` (Manuel Sainz de Baranda, 2023+) — most thorough
+    silicon-citation FOSS Z80 emulator at time of writing
 
-All four must agree on PC, AF, BC, DE, HL, IX, IY, SP after every
+All five must agree on PC, AF, BC, DE, HL, IX, IY, SP after every
 instruction. Result: **7,022,691 instructions identical** across all
-four. Catches any architectural-correctness divergence independent of
+five. Catches any architectural-correctness divergence independent of
 Cringle's CRCs.
+
+Per-oracle Rak runners are also available for targeted investigation:
+
+  - `scripts/chips_z80test_runner.c`
+  - `scripts/superzazu_z80test_runner.c`
+  - `scripts/suzukiplan_z80test_runner.cpp`
+  - `scripts/redcode_z80test_runner.c`
+  - `scripts/redcode_fuse_runner.c` (drives all 1356 FUSE cases
+    through redcode end-to-end)
+
+See [`docs/oracles.md`](../docs/oracles.md) for the full per-oracle
+pass/fail matrix and how we triangulate when they disagree.
 
 
 ## Testbench files (not directly invoked)
@@ -363,21 +377,26 @@ so most pushes skip the ~3 min synthesis step.
 
 ## Forward-looking — what's not yet here
 
-The main remaining test gaps are silicon-faithfulness items catalogued
-in [docs/simplifications.md](../docs/simplifications.md). Highest
-leverage, sorted by effort × test impact:
+Most former gaps were closed in the 2026-06-18 silicon-faithfulness
+sweep (see [`docs/simplifications.md`](../docs/simplifications.md)
+§F1). Remaining items, sorted by effort × impact:
 
   - **C1 — reset state un-force** (small). Currently our model forces
     `rf=0xFFFF` on reset; perfectz80's netlist resets to 0x5555. The
     delta surfaces via PUSH on `prog_rnd_02` / `prog_rnd_03`
     (`make perfectz80` shows 95-98 % addr match instead of 100 %).
     Changing one constant closes [known-differences.md](../docs/known-differences.md) row 1.
-  - **F — block-op M-cycle ordering** (medium-large). The blocker for
-    the Patrik Rak z80test baselines (rows 12 / 13 in
-    known-differences). Currently 2 / 2 / ~10 failures held at
-    baseline; fixing this would bring z80test to a clean ~160 / 160 /
-    160.
-  - **D1 — Q after EX AF,AF'** (small). May close one z80full case.
+  - **Mark Woodmass Z80 Test Suite** (medium). HALT2INT / EIHALT /
+    IFF2 Bug / Super HALT Invaders cover INT-during-HALT and
+    EI-shadow timing — orthogonal to Rak's instruction-level focus.
+    Vendor under `tests/woodmass/`; needs ZX Spectrum ROM (Amstrad
+    permits non-commercial redistribution). Tracked as a planned
+    CI job.
+  - **Rak suite on RTL** (medium). Currently the Rak suite runs
+    against the C model only. An iverilog/Verilator harness like
+    the FUSE RTL one would catch C/RTL divergence on the cases
+    Rak covers (block-instruction Banks fold-in, SCF/CCF Q-leak,
+    MEMPTR/WZ). Planned as a separate CI job.
   - **B2 / B3 — NMI / INT sample-point precision** (medium). Would
     tighten the `pin_scenarios` parity on INT-ack / NMI-acceptance
     scenarios (`prog9_inta_im1`, `prog12_inta_im2`,

@@ -62,8 +62,8 @@ interactive controls (Enter, Backspace, Ctrl-C / Ctrl-Space = BREAK, Ctrl-\\ = e
     make verilator       # build the Verilator simulation
     make traces          # emit shared-format bus-cycle traces
     make compare         # diff C, iverilog, Verilator traces phase-by-phase
-    make fuse            # FUSE / Frank D. Cringle 1356-case suite on the C model
-    make fuse_rtl        # FUSE 1356-case suite driven through the RTL via iverilog
+    make fuse            # FUSE 1356-case suite on C model (1349 PASS + 7 known-FUSE-wrong)
+    make fuse_rtl        # FUSE 1356-case suite through RTL via iverilog (matches C)
     make prelim          # prelim.com CP/M instruction test
     make zexdoc          # full ZEXDOC                                 (~1  min)
     make zexall          # full ZEXALL                                 (~16 min)
@@ -114,14 +114,14 @@ fossi-foundation substituter configured (see [docs/librelane-flow.md](docs/libre
 | ✅  | ZEXDOC                                                          | 67 / 67                             |
 | ✅  | ZEXALL                                                          | 67 / 67                             |
 | ✅  | ZEXALL 14-test subset via Verilator RTL (main + nightly)        | 14 / 14 (~17 min)                   |
-| ✅  | FUSE / Cringle (C)                                              | **1356 / 1356**  (100 %)            |
-| ✅  | FUSE / Cringle (through RTL via iverilog)                       | **1356 / 1356**  (100 %)            |
-| 🟡  | Patrik Rak z80test (doc / memptr / full)                        | 158 / 158 / 150 (within baselines)  |
+| ✅  | FUSE corpus, C model                                            | **1349 / 1356 + 7 known-FUSE-wrong** (100 %) |
+| ✅  | FUSE corpus, through RTL (iverilog)                             | **1349 / 1356 + 7 known-FUSE-wrong** (100 %) |
+| ✅  | Patrik Rak z80test (doc / memptr / full)                        | **160 / 160 / 160** (100 %)         |
 | ✅  | BASIC ROM via C model (NASCOM + Tiny BASIC, canned scripts)     | 4 / 4 subtests                      |
 | ✅  | BASIC ROM via Verilator RTL (NASCOM + Tiny BASIC)               | 4 / 4 subtests                      |
 | ✅  | BASIC ROM on yosys-synthesised sky130 gate-level netlist        | 4 / 4 subtests (~9 min)             |
 | ✅  | C ↔ iverilog ↔ Verilator, phase-by-phase                        | identical, 8 hand + 4 random programs |
-| ✅  | 4-way oracle lockstep (mine + superzazu + chips + suzukiplan)   | identical, 7,022,691 instr.         |
+| ✅  | 5-way oracle lockstep (mine + superzazu + chips + suzukiplan + redcode) | identical, 7,022,691 instr.    |
 | ✅  | Real KC85 silicon — sync   capture (`make silicon_cycles`)      | 50 / 50 OK,  0 emu mismatches       |
 | ✅  | Real KC85 silicon — 20 MHz capture (`make silicon_async`)       | CPU ≈ 1.767 MHz, pins ✓             |
 | ✅  | Gate-level vs perfectz80 — **C model** path                     | 100 % ctrl pins; `addr` 100 % on 10/12 (don't-care tolerance); `data_o` 100 % |
@@ -154,6 +154,11 @@ Verification and reverse-engineering background:
     acceptance gates, results.
   - [docs/known-differences.md](docs/known-differences.md) — every deliberate or
     watching divergence from reference behavior, plus the multi-oracle status table.
+  - [docs/oracles.md](docs/oracles.md) — the four Z80 emulators
+    (chips, superzazu, suzukiplan, redcode) used as oracles, their
+    authorship, lineage, strengths, and how we triangulate against
+    them. Includes the pass/fail matrix on Patrik Rak's z80test and
+    the FUSE corpus.
   - [docs/research-notes.md](docs/research-notes.md) — catalog of sources that informed
     this core, with trust levels and source-conflict precedence.
   - [docs/real-silicon-traces.md](docs/real-silicon-traces.md) — how the sigrok KC85

@@ -229,6 +229,50 @@ module z80_core (
     wire [8:0] bk_ini = {1'b0, tmpl} + {1'b0, (rf[`RFP_BC][7:0] + (aux_w[0] ? 8'hFF : 8'h1))};
     wire [8:0] bk_out = {1'b0, tmpl} + {1'b0, (rf[`RFP_HL][7:0] + (aux_w[0] ? 8'hFF : 8'h1))};
 
+    // Banks-2018 INIR/INDR/OTIR/OTDR repeat-M-cycle flag fold-in.
+    // Mirrors redcode INXR_OTXR_COMMON exactly (see scripts/refs/
+    // redcode_z80/Z80.c line 1233). Inputs: data byte (tmpl after the
+    // IN/MRD M-cycle), newB (B post-decrement), bk = {hcf, t[7:0]}
+    // 9-bit sum (bk_ini for INxR, bk_out for OTxR), pch = high byte of
+    // post-rewind PC (= (PC-2)[15:8]) used for YF/XF fold-in.
+    function [7:0] banks_io_rep_f;
+        input [7:0] data;
+        input [7:0] newB;
+        input [8:0] bk;
+        input [7:0] pch;
+        reg [7:0] t;
+        reg hcf;
+        reg [7:0] pf_arg;
+        reg pf_bit;
+        reg hf, cf;
+        begin
+            t = bk[7:0];
+            hcf = bk[8];
+            if (hcf) begin
+                cf = 1'b1;
+                if (data[7]) begin
+                    hf     = (newB[3:0] == 4'h0) ? 1'b1 : 1'b0;
+                    pf_arg = (t & 8'h07) ^ ((newB - 8'd1) & 8'h07);
+                end else begin
+                    hf     = (newB[3:0] == 4'hF) ? 1'b1 : 1'b0;
+                    pf_arg = (t & 8'h07) ^ ((newB + 8'd1) & 8'h07);
+                end
+            end else begin
+                cf     = 1'b0;
+                hf     = 1'b0;
+                pf_arg = (t & 8'h07) ^ (newB & 8'h07);
+            end
+            pf_bit = ~(^pf_arg);
+            banks_io_rep_f =
+                  (newB & `Z80_SF)               // SF = newB.7
+                | (pch & (`Z80_YF | `Z80_XF))    // YF=PCi.13; XF=PCi.11
+                | (data[7] ? `Z80_NF : 8'h00)    // NF = data.7
+                | (hf      ? `Z80_HF : 8'h00)
+                | (pf_bit  ? `Z80_PF : 8'h00)
+                | (cf      ? `Z80_CF : 8'h00);   // ZF = 0
+        end
+    endfunction
+
     always @* begin
         alu_a = A_cur;
         alu_b = 8'h00;
@@ -959,17 +1003,16 @@ module z80_core (
                             rf_n[`RFP_HL] = rf[`RFP_HL] + (aux_w[0] ? 16'hFFFF : 16'h1);
                             rf_n[`RFP_AF][7:0] = alu_fout;
                             if (aux_w[3] && bnewB != 8'h0) begin
-                                /* INIR/INDR repeat: overwrite WZ = PC + 1
-                                 * (= (PC-2)+1 = PC-1 after rewind) during
-                                 * the 5-T internal M-cycle. Silicon-faithful
-                                 * per boo-boo 2006 MEMPTR / Rak z80memptr /
-                                 * Chandler v1.2a NEC retest. Matches
-                                 * chips/z80.h + redcode/Z80. FUSE's
-                                 * edba_1/edb2_1 expected WZ = BC ± 1 is
-                                 * incorrect vs silicon — see
-                                 * tests/fuse/known-fuse-wrong.txt. */
                                 rf_n[`RFP_PC] = rf[`RFP_PC] - 16'd2;
                                 rf_n[`RFP_WZ] = rf[`RFP_PC] - 16'd1;
+                                /* INIR/INDR Banks-2018 fold-in: full F
+                                 * recompute via banks_io_rep_f using
+                                 * bk_ini (= data + (C +/- 1), 9-bit).
+                                 * pch source is the high byte of the
+                                 * post-rewind PC. */
+                                rf_n[`RFP_AF][7:0] = banks_io_rep_f(
+                                    tmpl, bnewB, bk_ini,
+                                    (rf[`RFP_PC] - 16'd2) >> 8);
                                 startm(`BUSOP_INTERNAL, rf[`RFP_PC] - 16'd2, 8'h0, 4'd5);
                             end else fin = 1'b1;
                         end else fin = 1'b1;
@@ -986,12 +1029,15 @@ module z80_core (
                             bnewB = getr8(3'd0);
                             rf_n[`RFP_AF][7:0] = alu_fout;
                             if (aux_w[3] && bnewB != 8'h0) begin
-                                /* OTIR/OTDR repeat: same silicon-faithful
-                                 * WZ = PC + 1 overwrite. FUSE's
-                                 * edbb_1/edb3_1 expected WZ = BC ± 1 is
-                                 * incorrect vs silicon. */
                                 rf_n[`RFP_PC] = rf[`RFP_PC] - 16'd2;
                                 rf_n[`RFP_WZ] = rf[`RFP_PC] - 16'd1;
+                                /* OTIR/OTDR Banks-2018 fold-in: same
+                                 * formula as INIR/INDR but addend = L
+                                 * (post-increment HL low byte), embedded
+                                 * in bk_out. */
+                                rf_n[`RFP_AF][7:0] = banks_io_rep_f(
+                                    tmpl, bnewB, bk_out,
+                                    (rf[`RFP_PC] - 16'd2) >> 8);
                                 startm(`BUSOP_INTERNAL, rf[`RFP_PC] - 16'd2, 8'h0, 4'd5);
                             end else fin = 1'b1;
                         end else fin = 1'b1;
