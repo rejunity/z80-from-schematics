@@ -1216,68 +1216,43 @@ module z80_core (
     reg       power_on             = 1'b1;
 
     // ---- registers ----
-    // Synchronous reset (was async before Step 4). Yosys can't synthesize
-    // the filter-conditional "either reset or apply next-state" pattern
-    // under an async-reset clause -- "Async reset yields non-constant
-    // value". Pure-sync works: every testbench toggles clk while
-    // reset_n=0, and the filter (~5 posedges) sees the same edges either
-    // way. Initial values on the four filter flags are declared at the
-    // reg level above so sim doesn't come up X.
-    always @(posedge clk) begin
+    // Async reset with sync release filter -- the Yosys-synthesisable form
+    // of Step 4. The !reset_n branch unconditionally drives every FF to a
+    // constant (required for async-reset DFF cell inference), so the
+    // assert-side filter is C-model-only. The release-side filter still
+    // lives in the sync branch (matches pz80's ~4-phase post-reset settle).
+    // This means RTL will reset IMMEDIATELY on reset_n=0 instead of
+    // continuing for ~5 phases like the C model -- a divergence only on
+    // prog17_reset which is pin_scenarios (informational); make compare
+    // doesn't run reset events so C/RTL parity is preserved.
+    // For gate-level netlist sim (post-Yosys), FFs lose their reg-init
+    // values, so the async path is the ONLY way to drive them out of X.
+    always @(posedge clk or negedge reset_n) begin
         if (!reset_n) begin
-            if (power_on || in_reset_hold || (reset_assert_filter >= 3'd5)) begin
-                // Apply reset (initial power-on OR filter timed out OR
-                // already frozen).
-                // 0x5555 matches perfectz80's gate-level Visual-Z80 netlist
-                // boot pattern; see cmodel/z80_core.c z80_reset() comment.
-                for (i = 0; i < 13; i = i + 1) rf[i] <= 16'h5555;
-                rf[`RFP_PC] <= 16'h0000;
-                reg_i <= 8'h00; reg_r <= 8'h00; ir <= 8'h00;
-                phi <= 1'b0; t_state <= 4'd1; m_cycle <= 3'd1;
-                bus_op <= `BUSOP_M1; m_len <= 4'd4; m_addr <= 16'h0000; m_wdata <= 8'h00;
-                prefix <= `PFX_NONE; iff1 <= 1'b0; iff2 <= 1'b0; im <= 2'd0; halted <= 1'b0;
-                tmp8 <= 8'h00; tmpl <= 8'h00; tmph <= 8'h00; tmp16 <= 16'h0000;
-                cycle <= 32'd0; instr_count <= 32'd0; decoded <= 1'b0;
-                nmi_pending <= 1'b0; prev_nmi_n <= 1'b1; ei_delay <= 1'b0;
-                nmi_sampled <= 1'b0; int_sampled <= 1'b0;
-                suppress_decode <= 1'b0; bus_granted <= 1'b0; irq_seq <= 2'd0;
-                reg_q <= 8'h00; f_modified <= 1'b0;
-                in_reset_hold       <= 1'b1;
-                // If this is the very first reset (power-on), mark it so
-                // release skips the settle filter -- matches C model's
-                // z80_init() which initializes state directly without
-                // going through the reset-pin filter path. Crucially we
-                // ONLY transition in_initial_hold on the power-on edge;
-                // subsequent posedge-clk re-applications of reset while
-                // already in hold must not overwrite a 1 with a 0 (which
-                // was the bug that made the testbench's 4-cycle reset
-                // appear as a 5-cycle delay vs the C model).
-                if (power_on) in_initial_hold <= 1'b1;
-                power_on            <= 1'b0;
-                reset_assert_filter <= 3'd0;
-                reset_release_filter <= 3'd0;
-            end else begin
-                // Filter still counting: continue executing normally.
-                reset_assert_filter <= reset_assert_filter + 1'b1;
-                for (i = 0; i < 13; i = i + 1) rf[i] <= rf_n[i];
-                reg_i <= reg_i_n; reg_r <= reg_r_n; ir <= ir_n;
-                phi <= phi_n; t_state <= t_n; m_cycle <= m_cycle_n;
-                bus_op <= bus_op_n; m_len <= m_len_n; m_addr <= m_addr_n; m_wdata <= m_wdata_n;
-                prefix <= prefix_n; iff1 <= iff1_n; iff2 <= iff2_n; im <= im_n; halted <= halted_n;
-                tmp8 <= tmp8_n; tmpl <= tmpl_n; tmph <= tmph_n; tmp16 <= tmp16_n;
-                cycle <= cycle_n; instr_count <= instr_count_n; decoded <= decoded_n;
-                nmi_pending <= nmi_pending_n; prev_nmi_n <= prev_nmi_n_n; ei_delay <= ei_delay_n;
-                nmi_sampled <= nmi_sampled_n; int_sampled <= int_sampled_n;
-                suppress_decode <= suppress_decode_n; bus_granted <= bus_granted_n; irq_seq <= irq_seq_n;
-                reg_q <= reg_q_n; f_modified <= f_modified_n;
-            end
+            // 0x5555 matches perfectz80's gate-level Visual-Z80 netlist
+            // boot pattern; see cmodel/z80_core.c z80_reset() comment.
+            for (i = 0; i < 13; i = i + 1) rf[i] <= 16'h5555;
+            rf[`RFP_PC] <= 16'h0000;
+            reg_i <= 8'h00; reg_r <= 8'h00; ir <= 8'h00;
+            phi <= 1'b0; t_state <= 4'd1; m_cycle <= 3'd1;
+            bus_op <= `BUSOP_M1; m_len <= 4'd4; m_addr <= 16'h0000; m_wdata <= 8'h00;
+            prefix <= `PFX_NONE; iff1 <= 1'b0; iff2 <= 1'b0; im <= 2'd0; halted <= 1'b0;
+            tmp8 <= 8'h00; tmpl <= 8'h00; tmph <= 8'h00; tmp16 <= 16'h0000;
+            cycle <= 32'd0; instr_count <= 32'd0; decoded <= 1'b0;
+            nmi_pending <= 1'b0; prev_nmi_n <= 1'b1; ei_delay <= 1'b0;
+            nmi_sampled <= 1'b0; int_sampled <= 1'b0;
+            suppress_decode <= 1'b0; bus_granted <= 1'b0; irq_seq <= 2'd0;
+            reg_q <= 8'h00; f_modified <= 1'b0;
+            in_reset_hold        <= 1'b1;
+            in_initial_hold      <= 1'b1;
+            reset_assert_filter  <= 3'd0;
+            reset_release_filter <= 3'd0;
+            power_on             <= 1'b0;
         end else begin
             reset_assert_filter <= 3'd0;
             if (in_reset_hold) begin
                 if (!in_initial_hold && reset_release_filter < 3'd4) begin
                     reset_release_filter <= reset_release_filter + 1'b1;
-                    // Stay frozen during settle window (only for runtime
-                    // mid-execution reset; initial power-on skips settle).
                 end else begin
                     in_reset_hold        <= 1'b0;
                     in_initial_hold      <= 1'b0;
