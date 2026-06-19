@@ -66,9 +66,9 @@ Plus, well outside the original plan:
     | 1 | C1 reset register init 0xFFFF → 0x5555     | **DONE**   | make perfectz80 4 informational diffs + prog19 SP-init |
     | 2 | RFSH-pin late-deassert (bound to T3..T4)   | **DONE**   | prog10 5→3, prog19 3→1 ctrl-pin   |
     | 3 | HALT-pin assertion at T4.N of HALT M1      | **DONE**   | prog10 3→1, prog19 1→**PASS**     |
-    | 4 | Reset deferral until M-cycle completion    | attempted ⚠ | prog17 (131) — first "freeze immediately on reset_n" attempt didn't help; pz80 continues the in-flight M-cycle before freezing. Needs reset_pending flag + M-cycle-boundary deferral + frozen-idle hold state. |
-    | 5 | BUSREQ M1 abort ordering                   | pending ⚠  | prog15 (154) — needs M-cycle abort rework |
-    | 6 | WAIT-insertion sub-T-state phasing         | pending ⚠  | prog11 (142), prog14 (147) — touches every memory/IO access |
+    | 4 | Reset state machine (filter + frozen hold) | **DONE**   | prog17 131→**1** + prog10 3→1     |
+    | 5 | BUSREQ — wire pz80 + 2-phase release filter| **DONE**   | prog15 154→**PASS**               |
+    | 6 | WAIT-insertion sub-T-state phasing         | pending ⚠  | prog11 (142), prog14 (147) — needs initial-settle alignment, not WAIT-sample shift |
 
     Steps 4-6 (the ⚠ rows) each need a focused structural rework of
     pin-driving logic: Step 4 a reset state machine, Step 5 an
@@ -101,17 +101,14 @@ Plus, well outside the original plan:
       exactly. Closed `prog10_halt_nmi` 5→3 and `prog19_nmi_in_int`
       3→1 ctrl-pin diffs.
 
-    Pin_scenarios current state (post-fix):
+    Pin_scenarios current state (post-Step-5):
     | Program | Ctrl diffs | Root cause |
     |---|---:|---|
-    | prog9, 12, 16, 18, 20 | **0** | (PASS) |
-    | prog19_nmi_in_int     | **1** | sub-T-state HALT-pin transition |
-    | prog10_halt_nmi       | **3** | HALT-pin assertion timing (T3 vs T4) |
-    | prog17_reset          | 131   | reset deferral (defer reset_state until current M-cycle ends) |
-    | prog11_wait_mem       | 142   | WAIT-insertion sub-T-state phasing |
-    | prog13_halt_int       | 145   | HALT-pin during NOP-loop M-cycles |
-    | prog14_wait_io        | 147   | IORQ + WAIT timing during IN/OUT |
-    | prog15_busreq_m1      | 154   | BUSREQ-aborts-M1 M-cycle ordering |
+    | prog9, 12, 15, 16, 17, 18, 19, 20 | **0** | (PASS — 8 of 12) |
+    | prog10_halt_nmi       | **1** | sub-T-state HALT-pin transition |
+    | prog11_wait_mem       | 142   | 1-phase initial offset → WAIT sample alignment |
+    | prog13_halt_int       | 144   | HALT-pin during NOP-loop M-cycles |
+    | prog14_wait_io        | 147   | 1-phase initial offset → WAIT sample alignment |
 
     Tracked under items B2 / B3 in
     [docs/simplifications.md](simplifications.md). The four high-count
