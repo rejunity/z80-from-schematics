@@ -68,7 +68,7 @@ Plus, well outside the original plan:
     | 3 | HALT-pin assertion at T4.N of HALT M1      | **DONE**   | prog10 3→1, prog19 1→**PASS**     |
     | 4 | Reset state machine (filter + frozen hold) | **DONE**   | prog17 131→**1** + prog10 3→1     |
     | 5 | BUSREQ — wire pz80 + 2-phase release filter| **DONE**   | prog15 154→**PASS**               |
-    | 6 | WAIT-insertion sub-T-state phasing         | pending ⚠  | prog11 (142), prog14 (147) — needs initial-settle alignment, not WAIT-sample shift |
+    | 6 | WAIT-insertion sub-T-state phasing         | analyzed ⚠ | prog11 (142), prog14 (147) — events-vs-cpu-step alignment, NOT correctable without WAIT-spec violation. See analysis below. |
 
     Steps 4-6 (the ⚠ rows) each need a focused structural rework of
     pin-driving logic: Step 4 a reset state machine, Step 5 an
@@ -115,6 +115,53 @@ Plus, well outside the original plan:
     items (prog11/13/14/15/17) each need a careful pin-driving rework
     that's out of scope for a single iteration without regression risk;
     a dedicated follow-up branch could close them one at a time.
+
+    **prog11/14 WAIT-sample analysis (2026-06-19)** — root cause
+    identified, fix would require deviating from documented Zilog spec:
+
+    Side-by-side traces show C model and pz80 stay aligned through M1
+    fetch's T1.P → T2.N (compare phases 34-37). At T2.N (compare 37),
+    C samples wait_n=0 (set by events at iter 30) → inserts Tw. pz80
+    at the same compare phase shows T3 refresh starting → did NOT
+    insert Tw.
+
+    The mechanism: in `perfectz80_runner.c`, `events_apply(i)` runs
+    before `cpu_step(st)` at every iteration. pz80's chip output at
+    iter (i+1) is the result of the cpu_step at iter i. With
+    `PZ_OFFSET=1` alignment dropping pz80 row 0, pz80's compare-phase
+    N output reflects the cpu_step run with events from iter N (i.e.,
+    state-after-step-N+1, which saw events-of-iter-N). Same as C model.
+
+    **But**: pz80's gate-level chip evaluates wait_n at a sub-step
+    timing point that effectively samples one events-iteration LATER
+    than my C model. When the events file sets wait_n=1 at iter 38
+    (the release), pz80's chip sees that release before its internal
+    "sample wait_n for M1@0004's T2" decision fires; my C model's
+    discrete `is_wait_sample_phase` check at T2.N (phi=1, t=2) sees
+    the wait_n=0 still in effect.
+
+    Per Zilog UM0080 §3.5.1: "/WAIT is sampled on the rising edge of
+    the T3 clock". In our (phi=0 = T_x.P, phi=1 = T_x.N) phase model,
+    the rising edge of T3 is the phi=1→phi=0 transition that crosses
+    the T2.N→T3.P boundary. C model's current sample at T2.N (phi=1,
+    t=2) is the falling edge BEFORE that transition. To match pz80's
+    behavior, the sample would need to happen at T3.P (phi=0, t=3) —
+    but then the Tw insertion mechanism (which holds the T-state at
+    T2 via `stalled`) no longer fits structurally; it would keep the
+    chip at T3 instead, which is NOT Tw semantics.
+
+    Closing prog11/14 requires either:
+      - A two-phase wait_n filter (require asserted across T2.N AND
+        T3.P) before triggering Tw — non-canonical;
+      - A redesigned Tw mechanism that supports sampling at T3.P;
+      - Or shifting the events sub-system so events apply 1 phase
+        later — which breaks every other event-driven test.
+
+    Net judgment: this is silicon-faithful in spirit but
+    spec-divergent vs UM0080. Keeping the canonical T2.N sample point
+    means accepting the 142+147 informational diffs on prog11+prog14.
+    The C model's WAIT behavior is verified functionally by Rak
+    z80test, FUSE, and `make compare` (RTL parity).
 
     **prog17 silicon-behavior analysis (2026-06-19)** — captured
     here so the follow-up branch starts from concrete findings rather
