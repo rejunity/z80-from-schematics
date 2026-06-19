@@ -116,13 +116,35 @@ module z80_core (
                           (irq_seq == 2'd3) ? `EXEC_NOP : exec_w;
 
     // ---- timing pin drive (combinational from registered state) ----
+    wire [15:0] tim_addr;
+    wire [7:0]  tim_data_out;
+    wire        tim_data_drive, tim_m1_n, tim_mreq_n, tim_iorq_n;
+    wire        tim_rd_n, tim_wr_n, tim_rfsh_n;
     z80_timing u_timing (
         .bus_op(bus_op), .t_state(t_state[2:0]), .phi(phi), .m_len(m_len),
         .m_addr(m_addr), .m_wdata(m_wdata), .reg_i(reg_i), .reg_r(reg_r),
-        .addr(addr), .data_out(data_out), .data_drive(data_drive),
-        .m1_n(m1_n), .mreq_n(mreq_n), .iorq_n(iorq_n),
-        .rd_n(rd_n), .wr_n(wr_n), .rfsh_n(rfsh_n)
+        .addr(tim_addr), .data_out(tim_data_out), .data_drive(tim_data_drive),
+        .m1_n(tim_m1_n), .mreq_n(tim_mreq_n), .iorq_n(tim_iorq_n),
+        .rd_n(tim_rd_n), .wr_n(tim_wr_n), .rfsh_n(tim_rfsh_n)
     );
+    // During in_reset_hold, force all pins to idle -- matches C model
+    // (reset_state() sets pins idle and phase_step returns early so
+    // z80_timing doesn't overwrite them).
+    // Exception: when reset_n=1 AND in_initial_hold, drive normal pins
+    // combinationally. This matches the C model's z80_init() which sets
+    // up state without going through the reset-pin filter, so phase 0
+    // shows post-release pins (T1.P of M1 fetch from PC=0). The
+    // synchronous transition out of hold happens on the next posedge.
+    wire hold_pins = in_reset_hold && !(reset_n && in_initial_hold);
+    assign addr       = hold_pins ? 16'h0000 : tim_addr;
+    assign data_out   = hold_pins ? 8'h00    : tim_data_out;
+    assign data_drive = hold_pins ? 1'b0     : tim_data_drive;
+    assign m1_n       = hold_pins ? 1'b1     : tim_m1_n;
+    assign mreq_n     = hold_pins ? 1'b1     : tim_mreq_n;
+    assign iorq_n     = hold_pins ? 1'b1     : tim_iorq_n;
+    assign rd_n       = hold_pins ? 1'b1     : tim_rd_n;
+    assign wr_n       = hold_pins ? 1'b1     : tim_wr_n;
+    assign rfsh_n     = hold_pins ? 1'b1     : tim_rfsh_n;
     // Silicon-faithful halt pin: assert at T4.N of the HALT instruction's
     // M1 (one half-T-state before instruction-done flips `halted`), so
     // the pin LEADS the flag by one phase -- matches perfectz80's
@@ -1175,35 +1197,110 @@ module z80_core (
         end
     end
 
+    // ---- reset state machine (mirrors cmodel/z80_core.c z80_phase_step) ----
+    // Silicon-faithful per perfectz80 prog17_reset trace:
+    //   - reset_n falling edge: NOT recognized immediately. Filter ~5 phases
+    //     (~3 clocks, matches Zilog UM0080 spec). During the filter window
+    //     the chip continues executing, including starting fresh M-cycles.
+    //   - Filter elapsed: enter frozen-idle hold (reset all registers).
+    //   - reset_n rising edge while in hold: settle for ~4 phases before
+    //     starting the post-reset M1 fetch at PC=0.
+    // `power_on` is a one-shot flag (initialized via reg-initializer) so the
+    // very first reset_n=0 still does an immediate state init -- otherwise
+    // the testbench's brief reset pulse wouldn't drive registers out of X.
+    // See docs/perfect-branch.md "prog17 silicon-behavior analysis".
+    reg [2:0] reset_assert_filter  = 3'd0;
+    reg [2:0] reset_release_filter = 3'd0;
+    reg       in_reset_hold        = 1'b0;
+    reg       in_initial_hold      = 1'b1;   // distinguishes power-on from runtime reset
+    reg       power_on             = 1'b1;
+
     // ---- registers ----
     always @(posedge clk or negedge reset_n) begin
         if (!reset_n) begin
-            // 0x5555 matches perfectz80's gate-level Visual-Z80 netlist
-            // boot pattern; see cmodel/z80_core.c z80_reset() comment.
-            for (i = 0; i < 13; i = i + 1) rf[i] <= 16'h5555;
-            rf[`RFP_PC] <= 16'h0000;
-            reg_i <= 8'h00; reg_r <= 8'h00; ir <= 8'h00;
-            phi <= 1'b0; t_state <= 4'd1; m_cycle <= 3'd1;
-            bus_op <= `BUSOP_M1; m_len <= 4'd4; m_addr <= 16'h0000; m_wdata <= 8'h00;
-            prefix <= `PFX_NONE; iff1 <= 1'b0; iff2 <= 1'b0; im <= 2'd0; halted <= 1'b0;
-            tmp8 <= 8'h00; tmpl <= 8'h00; tmph <= 8'h00; tmp16 <= 16'h0000;
-            cycle <= 32'd0; instr_count <= 32'd0; decoded <= 1'b0;
-            nmi_pending <= 1'b0; prev_nmi_n <= 1'b1; ei_delay <= 1'b0;
-            nmi_sampled <= 1'b0; int_sampled <= 1'b0;
-            suppress_decode <= 1'b0; bus_granted <= 1'b0; irq_seq <= 2'd0;
-            reg_q <= 8'h00; f_modified <= 1'b0;
+            if (power_on || in_reset_hold || (reset_assert_filter >= 3'd5)) begin
+                // Apply reset (initial power-on OR filter timed out OR
+                // already frozen).
+                // 0x5555 matches perfectz80's gate-level Visual-Z80 netlist
+                // boot pattern; see cmodel/z80_core.c z80_reset() comment.
+                for (i = 0; i < 13; i = i + 1) rf[i] <= 16'h5555;
+                rf[`RFP_PC] <= 16'h0000;
+                reg_i <= 8'h00; reg_r <= 8'h00; ir <= 8'h00;
+                phi <= 1'b0; t_state <= 4'd1; m_cycle <= 3'd1;
+                bus_op <= `BUSOP_M1; m_len <= 4'd4; m_addr <= 16'h0000; m_wdata <= 8'h00;
+                prefix <= `PFX_NONE; iff1 <= 1'b0; iff2 <= 1'b0; im <= 2'd0; halted <= 1'b0;
+                tmp8 <= 8'h00; tmpl <= 8'h00; tmph <= 8'h00; tmp16 <= 16'h0000;
+                cycle <= 32'd0; instr_count <= 32'd0; decoded <= 1'b0;
+                nmi_pending <= 1'b0; prev_nmi_n <= 1'b1; ei_delay <= 1'b0;
+                nmi_sampled <= 1'b0; int_sampled <= 1'b0;
+                suppress_decode <= 1'b0; bus_granted <= 1'b0; irq_seq <= 2'd0;
+                reg_q <= 8'h00; f_modified <= 1'b0;
+                in_reset_hold       <= 1'b1;
+                // If this is the very first reset (power-on), mark it so
+                // release skips the settle filter -- matches C model's
+                // z80_init() which initializes state directly without
+                // going through the reset-pin filter path. Crucially we
+                // ONLY transition in_initial_hold on the power-on edge;
+                // subsequent posedge-clk re-applications of reset while
+                // already in hold must not overwrite a 1 with a 0 (which
+                // was the bug that made the testbench's 4-cycle reset
+                // appear as a 5-cycle delay vs the C model).
+                if (power_on) in_initial_hold <= 1'b1;
+                power_on            <= 1'b0;
+                reset_assert_filter <= 3'd0;
+                reset_release_filter <= 3'd0;
+            end else begin
+                // Filter still counting: continue executing normally.
+                reset_assert_filter <= reset_assert_filter + 1'b1;
+                for (i = 0; i < 13; i = i + 1) rf[i] <= rf_n[i];
+                reg_i <= reg_i_n; reg_r <= reg_r_n; ir <= ir_n;
+                phi <= phi_n; t_state <= t_n; m_cycle <= m_cycle_n;
+                bus_op <= bus_op_n; m_len <= m_len_n; m_addr <= m_addr_n; m_wdata <= m_wdata_n;
+                prefix <= prefix_n; iff1 <= iff1_n; iff2 <= iff2_n; im <= im_n; halted <= halted_n;
+                tmp8 <= tmp8_n; tmpl <= tmpl_n; tmph <= tmph_n; tmp16 <= tmp16_n;
+                cycle <= cycle_n; instr_count <= instr_count_n; decoded <= decoded_n;
+                nmi_pending <= nmi_pending_n; prev_nmi_n <= prev_nmi_n_n; ei_delay <= ei_delay_n;
+                nmi_sampled <= nmi_sampled_n; int_sampled <= int_sampled_n;
+                suppress_decode <= suppress_decode_n; bus_granted <= bus_granted_n; irq_seq <= irq_seq_n;
+                reg_q <= reg_q_n; f_modified <= f_modified_n;
+            end
         end else begin
-            for (i = 0; i < 13; i = i + 1) rf[i] <= rf_n[i];
-            reg_i <= reg_i_n; reg_r <= reg_r_n; ir <= ir_n;
-            phi <= phi_n; t_state <= t_n; m_cycle <= m_cycle_n;
-            bus_op <= bus_op_n; m_len <= m_len_n; m_addr <= m_addr_n; m_wdata <= m_wdata_n;
-            prefix <= prefix_n; iff1 <= iff1_n; iff2 <= iff2_n; im <= im_n; halted <= halted_n;
-            tmp8 <= tmp8_n; tmpl <= tmpl_n; tmph <= tmph_n; tmp16 <= tmp16_n;
-            cycle <= cycle_n; instr_count <= instr_count_n; decoded <= decoded_n;
-            nmi_pending <= nmi_pending_n; prev_nmi_n <= prev_nmi_n_n; ei_delay <= ei_delay_n;
-            nmi_sampled <= nmi_sampled_n; int_sampled <= int_sampled_n;
-            suppress_decode <= suppress_decode_n; bus_granted <= bus_granted_n; irq_seq <= irq_seq_n;
-            reg_q <= reg_q_n; f_modified <= f_modified_n;
+            reset_assert_filter <= 3'd0;
+            if (in_reset_hold) begin
+                if (!in_initial_hold && reset_release_filter < 3'd4) begin
+                    reset_release_filter <= reset_release_filter + 1'b1;
+                    // Stay frozen during settle window (only for runtime
+                    // mid-execution reset; initial power-on skips settle).
+                end else begin
+                    in_reset_hold        <= 1'b0;
+                    in_initial_hold      <= 1'b0;
+                    reset_release_filter <= 3'd0;
+                    for (i = 0; i < 13; i = i + 1) rf[i] <= rf_n[i];
+                    reg_i <= reg_i_n; reg_r <= reg_r_n; ir <= ir_n;
+                    phi <= phi_n; t_state <= t_n; m_cycle <= m_cycle_n;
+                    bus_op <= bus_op_n; m_len <= m_len_n; m_addr <= m_addr_n; m_wdata <= m_wdata_n;
+                    prefix <= prefix_n; iff1 <= iff1_n; iff2 <= iff2_n; im <= im_n; halted <= halted_n;
+                    tmp8 <= tmp8_n; tmpl <= tmpl_n; tmph <= tmph_n; tmp16 <= tmp16_n;
+                    cycle <= cycle_n; instr_count <= instr_count_n; decoded <= decoded_n;
+                    nmi_pending <= nmi_pending_n; prev_nmi_n <= prev_nmi_n_n; ei_delay <= ei_delay_n;
+                    nmi_sampled <= nmi_sampled_n; int_sampled <= int_sampled_n;
+                    suppress_decode <= suppress_decode_n; bus_granted <= bus_granted_n; irq_seq <= irq_seq_n;
+                    reg_q <= reg_q_n; f_modified <= f_modified_n;
+                end
+            end else begin
+                reset_release_filter <= 3'd0;
+                for (i = 0; i < 13; i = i + 1) rf[i] <= rf_n[i];
+                reg_i <= reg_i_n; reg_r <= reg_r_n; ir <= ir_n;
+                phi <= phi_n; t_state <= t_n; m_cycle <= m_cycle_n;
+                bus_op <= bus_op_n; m_len <= m_len_n; m_addr <= m_addr_n; m_wdata <= m_wdata_n;
+                prefix <= prefix_n; iff1 <= iff1_n; iff2 <= iff2_n; im <= im_n; halted <= halted_n;
+                tmp8 <= tmp8_n; tmpl <= tmpl_n; tmph <= tmph_n; tmp16 <= tmp16_n;
+                cycle <= cycle_n; instr_count <= instr_count_n; decoded <= decoded_n;
+                nmi_pending <= nmi_pending_n; prev_nmi_n <= prev_nmi_n_n; ei_delay <= ei_delay_n;
+                nmi_sampled <= nmi_sampled_n; int_sampled <= int_sampled_n;
+                suppress_decode <= suppress_decode_n; bus_granted <= bus_granted_n; irq_seq <= irq_seq_n;
+                reg_q <= reg_q_n; f_modified <= f_modified_n;
+            end
         end
     end
 

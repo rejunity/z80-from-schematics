@@ -99,6 +99,9 @@ module tb_z80;
         // reset_n stays asserted (1) here — the reset block above already
         // released it. A `reset_lo` event would re-assert it (drive 0).
         if (0 == reset_lo) reset_n = 1'b0;
+        #0;                                   // iverilog delta-cycle settle so
+                                              // the in_reset_hold combinational
+                                              // mux sees reset_n=1 before dump
         dump;                                 // line 1 = reset state (T1.P)
         for (i = 1; i < phases; i = i + 1) begin
             @(negedge clk);
