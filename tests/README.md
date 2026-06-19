@@ -200,11 +200,12 @@ breakdown.
 | Make target              | What it diffs                                                     | Status |
 |--------------------------|-------------------------------------------------------------------|--------|
 | `make compare`           | C model ↔ iverilog ↔ Verilator (all three identical, every phase) | **PASS** on all 12 programs (8 hand + 4 random) |
-| `make perfectz80`        | C model vs perfectz80 gate-level netlist (7 control pins + bus addr/data) | **PASS** on control pins, all 12 programs; **100 % `addr` match** with don't-care tolerance on 10/12, ~95-98 % on prog_rnd_02/03 (reset-register-init delta surfacing via PUSH) |
-| `make perfectz80_rtl`    | iverilog RTL vs perfectz80 (same 12 programs, RTL trace source)   | **PASS** on all 12 programs — silicon-faithful leg |
-| `make pin_scenarios`     | C model vs perfectz80 on the 12 pin-scenario programs             | **Informational**; divergences are real audit findings, not regressions |
-| `make pin_scenarios_rtl` | iverilog RTL vs perfectz80 on the 12 pin-scenarios                | **Informational**; same root causes as `make pin_scenarios` plus any RTL-only deltas |
-| `make pin_scenarios_netlist` | LibreLane sky130 gate-level netlist vs perfectz80 on the 12 pin-scenarios | **Informational**; same as above plus any synth-introduced deltas |
+| `make perfectz80`        | C model vs perfectz80 gate-level netlist (7 control pins + bus addr/data) | **12 / 12 PASS** (ctrl pins 100 %, addr 100 %, data_o 100 % across the board after Step 1 reset-init flip) |
+| `make perfectz80_rtl`    | iverilog RTL vs perfectz80 (same 12 programs, RTL trace source)   | **12 / 12 PASS** — silicon-faithful leg |
+| `make perfectz80_netlist`| LibreLane sky130 gate-level netlist vs perfectz80 (same 12 programs) | **12 / 12 PASS** — the "ultimate test" |
+| `make pin_scenarios`     | C model vs perfectz80 on the 12 pin-scenario programs             | **8 / 12 PASS** clean (informational gate; the remaining 4 are documented in [docs/known-differences.md](../docs/known-differences.md) row 14 and broken down per-pin in [docs/perfect-branch.md](../docs/perfect-branch.md)) |
+| `make pin_scenarios_rtl` | iverilog RTL vs perfectz80 on the 12 pin-scenarios                | **6 / 12 PASS** clean (informational); same root causes as `make pin_scenarios` plus a testbench-side 1-phase event-application offset that adds residual diffs to prog15/prog17 — Step 4/5 closures are C-model-only on those |
+| `make pin_scenarios_netlist` | LibreLane sky130 gate-level netlist vs perfectz80 on the 12 pin-scenarios | **Informational**; identical RTL feeds synthesis, so the per-program counts match `pin_scenarios_rtl` modulo any sky130-cell mapping deltas (none observed currently) |
 
 `compare_signal_timing.py` (the driver for `make perfectz80` / `_rtl` /
 `_netlist`) reports informational bus-value parity — `data_o` (where wr

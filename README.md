@@ -126,10 +126,10 @@ fossi-foundation substituter configured (see [docs/librelane-flow.md](docs/libre
 | ✅  | Real KC85 silicon — sync   capture (`make silicon_cycles`)      | 50 / 50 OK,  0 emu mismatches       |
 | ✅  | Real KC85 silicon — 20 MHz capture (`make silicon_async`)       | CPU ≈ 1.767 MHz, pins ✓             |
 | ✅  | HALT-to-INT T-state timing (`make halt2int`)                    | 10/10 sweep samples in silicon range (Brewer 2014 / Woodmass HALT2INT 2021) |
-| ✅  | Gate-level vs perfectz80 — **C model** path                     | 12/12 PASS; ctrl pins 100 %; `addr` 100 % on 10/12 (reset-init informational on 2); `data_o` informational on `prog_rnd_04` |
-| ✅  | Gate-level vs perfectz80 — **iverilog RTL** path                | 12/12 PASS, same 12 programs        |
-| ✅  | Gate-level vs perfectz80 — **LibreLane sky130 netlist** path    | 12/12 PASS, same 12 programs ("ultimate test") |
-| 🚧  | Pin-scenario programs vs perfectz80 (12 INT/NMI/WAIT/BUSREQ/RESET scenarios) | 5/12 PASS clean (`prog9, 12, 16, 18, 20`); 7/12 have HALT-pin / WAIT-insertion / BUSREQ / RESET timing diffs vs gate-level (informational; functional behavior verified by Rak + FUSE + HALT2INT probe) |
+| ✅  | Gate-level vs perfectz80 — **C model** path                     | **12 / 12 PASS** (ctrl pins 100 %; addr 100 %; data_o 100 %) |
+| ✅  | Gate-level vs perfectz80 — **iverilog RTL** path                | **12 / 12 PASS** (same 12 programs) |
+| ✅  | Gate-level vs perfectz80 — **LibreLane sky130 netlist** path    | **12 / 12 PASS** (same 12 programs — "ultimate test") |
+| 🟡  | Pin-scenario programs vs perfectz80 (12 INT/NMI/WAIT/BUSREQ/RESET scenarios) | **8 / 12 PASS** clean (`prog9, 12, 15, 16, 17, 18, 19, 20`); 1 / 12 with 1-diff (prog10 sub-T-state HALT pin); 3 / 12 (prog11/13/14) with informational WAIT-window / HALT-NOP-loop diffs — see [docs/perfect-branch.md](docs/perfect-branch.md) for per-pin breakdown |
 
 Legend: ✅ pass / 100 % &nbsp; 🟡 ≥ 95 % (close, known artifacts) &nbsp; 🚧 < 95 % (work in progress).
 

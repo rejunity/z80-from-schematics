@@ -46,11 +46,43 @@ Plus, well outside the original plan:
 
 | Gate                          | Was                                | Now                                                                 |
 |-------------------------------|------------------------------------|---------------------------------------------------------------------|
-| `make perfectz80` (`addr`)    | 60–100 % match                     | **100 % control pins; 10 / 12 progs at 100 % addr; 2 / 12 with informational reset-init diffs (C1)** |
-| `make pin_scenarios`          | Informational (C-only divergences) | **5 / 12 PASS clean** (`prog9, 12, 16, 18, 20`); 7 / 12 with HALT-pin / WAIT / BUSREQ / RESET / SP-init informational diffs (still informational gates) |
+| `make perfectz80` (12 trace progs, C model)  | 60–100 % match     | **12 / 12 PASS clean** (100 % ctrl pins, 100 % addr, 100 % data_o)  |
+| `make perfectz80_rtl` (iverilog RTL)         | Same as C          | **12 / 12 PASS clean**                                              |
+| `make perfectz80_netlist` (sky130 gate-level)| —                  | **12 / 12 PASS clean**                                              |
+| `make pin_scenarios` (12 event-driven progs, C model) | 5 / 12 PASS | **8 / 12 PASS clean** (`prog9, 12, 15, 17, 16, 18, 19, 20`); 1 / 12 with 1-diff (prog10); 3 / 12 with WAIT/HALT-NOP informational diffs (prog11/13/14) |
+| `make pin_scenarios_rtl` (iverilog RTL)      | All informational  | **6 / 12 PASS clean**; same root causes as C path plus testbench-side event timing offset on prog15+prog17 (Step 4/5 partially RTL-side) |
+| `make pin_scenarios_netlist` (sky130 gate-level) | —              | Same as `_rtl` (RTL is the source feeding synthesis) |
 | `make z80test` (Rak)          | 158 / 158 / 150 within baseline 2/2/10 | **160 / 160 / 160 PASS — clean across all three variants**         |
 | `make fuse`                   | 1356/1356 (with pre-Banks / pre-Brewer expecteds) | **1348 + 8 known-FUSE-wrong (silicon-faithful)** |
+| `make fuse_rtl` (iverilog)    | —                                  | **1348 + 8 known-FUSE-wrong** (identical to C)                      |
+| `make compare` (C ↔ iverilog ↔ Verilator)    | PASS              | **PASS** — 12 programs, all phase-by-phase identical                |
+| `make halt2int` (Brewer/Woodmass HALT2INT)   | —                  | **PASS** silicon-faithful (3..6T observed within 3..8T silicon range) |
+| 5-way lockstep (mine + superzazu + chips + suzukiplan + redcode) on ZEXDOC3 | 4-way | **Clean across 7M instructions**                       |
 | `make zexall_rtl` (Verilator) | Known fails                        | **Passing the 14-test subset on CI; full ZEXALL is local-only**     |
+
+### Per-pin compatibility vs perfectz80
+
+Table is across `make perfectz80` (12 hand+random trace programs) AND
+`make pin_scenarios` (12 event-driven scenarios). C and RTL paths are
+verified phase-identical by `make compare` on the 12 trace programs
+(no events). On pin_scenarios, C is the canonical reference; RTL has
+a few extra diffs due to testbench event-application semantics noted
+below.
+
+| Pin     | C model vs pz80                                          | RTL vs pz80                                             | Notes |
+|---------|----------------------------------------------------------|---------------------------------------------------------|-------|
+| `m1_n`  | 100 % across all 24 programs                              | 100 % on 12 trace progs; 100 % on 6/12 pin_scenarios + 4 with diffs | Step 3 closed HALT M1 T4.N assertion timing |
+| `mreq_n`| 100 % on 12 trace + 9/12 pin_scenarios                    | 100 % on 12 trace + 8/12 pin_scenarios                  | Residual diffs all in WAIT-window / post-reset zones |
+| `iorq_n`| 100 % on 12 trace + 11/12 pin_scenarios                   | 100 % on 12 trace + 10/12 pin_scenarios                 | prog14 WAIT-on-IO has phasing diffs |
+| `rd_n`  | 100 % on 12 trace + 9/12 pin_scenarios                    | 100 % on 12 trace + 8/12 pin_scenarios                  | Couples with mreq_n / iorq_n |
+| `wr_n`  | 100 % on 12 trace + 11/12 pin_scenarios                   | 100 % on 12 trace + 10/12 pin_scenarios                 | Mostly affected by WAIT-on-IO (prog14) |
+| `rfsh_n`| 100 % on 12 trace + 11/12 pin_scenarios                   | Same                                                    | Step 2 closed late-deassert on extended M1s (NMI ack 5T, INTA 7T) |
+| `halt_n`| 100 % on 12 trace + 10/12 pin_scenarios                   | Same                                                    | Step 3 closed; prog13_halt_int residual is NOP-loop M-cycle phasing |
+| `reset_n`<br/>(state-machine response) | **prog17 1 ctrl diff** (was 131) | prog17 129 ctrl diffs (RTL omits assert-side filter — non-synthesizable under Yosys's async-reset DFF inference) | Step 4 — C-only filter pair; RTL has release-side filter + pin mux |
+| `busreq_n` / `busack_n` | **prog15 PASS** (was 154 ctrl diffs) | prog15 75 ctrl diffs (was 115; Step 5 RTL mirror cut it; residual is testbench event-application offset, not a behavioural gap) | Step 5 — 2-phase release filter + pin mux during bus_granted |
+| `wait_n`<br/>(Tw insertion) | prog11 142 + prog14 147 ctrl diffs | prog11 161 + prog14 147 | Step 6 deferred — C sample point IS UM0080 spec; divergence is on the pz80 oracle-harness side. See "prog11/14 WAIT-sample analysis" below |
+| `addr` (bus, informational) | 100 % on 12 trace progs (post-Step-1 reset-init flip)     | Same                                                    | Don't-care during refresh windows is honored by compare_signal_timing.py |
+| `data_out` (bus, informational) | 100 % on 12 trace progs                              | Same                                                    | |
 
 ## Deferred to a future branch
 

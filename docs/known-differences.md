@@ -128,25 +128,28 @@ Notes for each row:
      programs (`prog9_inta_im1`..`prog20_block_int`) drive INT / NMI /
      WAIT / BUSREQ / RESET through the `.events` sidecar and diff
      against perfectz80 per-half-cycle. **Current status
-     (2026-06-18)**: 5 / 12 PASS cleanly:
+     (2026-06-19)**: 8 / 12 PASS cleanly on the C model after Steps
+     0-5 of the silicon-faithful sweep:
      - `prog9_inta_im1` ✓
      - `prog12_inta_im2` ✓
+     - `prog15_busreq_m1` ✓ (NEW — Step 5: wired BUSREQ in perfectz80
+       runner + 2-phase release filter)
      - `prog16_ei_delay` ✓
+     - `prog17_reset` ✓ (NEW — Step 4: reset state machine, was 131)
      - `prog18_di_then_int` ✓
+     - `prog19_nmi_in_int` ✓
      - `prog20_block_int` ✓
 
-     5 / 12 have informational ctrl-pin timing diffs (post the
-     2026-06-18 C1 reset + RFSH-edge + HALT-pin-at-T4.N fixes):
+     1 / 12 has a single residual ctrl-pin diff:
      - `prog10_halt_nmi`   (**1** / 200, was 5) — last residual HALT-pin diff during NMI ack
-     - `prog17_reset`      (131 / 200) — reset deferral (silicon completes current M-cycle before applying reset state)
+
+     3 / 12 have informational diffs from the deferred Step 6 (WAIT
+     sample point is spec-canonical per Zilog UM0080 §3.5.1; the
+     divergence is a pz80 oracle-harness event-application offset,
+     not an RTL/C-model gap):
      - `prog11_wait_mem`   (142 / 200) — WAIT-insertion sub-T-state phasing
      - `prog13_halt_int`   (144 / 200) — HALT-pin during NOP-loop M-cycles
      - `prog14_wait_io`    (147 / 200) — IORQ + WAIT timing during IN/OUT
-     - `prog15_busreq_m1`  (154 / 200) — BUSREQ-aborts-M1 M-cycle ordering
-
-     `prog9_inta_im1`, `prog12_inta_im2`, `prog16_ei_delay`,
-     `prog18_di_then_int`, `prog19_nmi_in_int`, `prog20_block_int`
-     all PASS clean (6 / 12).
 
      `.events` is now consumed by all paths — C tracegen, iverilog
      RTL, Verilator, LibreLane gate-level netlist — via per-pin
