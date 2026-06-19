@@ -60,6 +60,9 @@ module z80_core (
     reg        nmi_pending, prev_nmi_n, ei_delay, suppress_decode, bus_granted;
     reg        nmi_sampled, int_sampled;  // latched at T_last.P per UM0080
     reg [1:0]  irq_seq;        // 0 none, 1 NMI, 2 INT, 3 HALT-nop
+    // Step 5: busreq release settle (~2 phases between busreq_n=1 and the
+    // post-grant M1 fetch). Mirrors cmodel/z80_core.c.
+    reg [1:0]  busreq_release_filter;
 
     // ---- next-state ----
     reg [15:0] rf_n [0:12];
@@ -82,6 +85,7 @@ module z80_core (
     reg        nmi_pending_n, prev_nmi_n_n, ei_delay_n, suppress_decode_n, bus_granted_n;
     reg        nmi_sampled_n, int_sampled_n;
     reg [1:0]  irq_seq_n;
+    reg [1:0]  busreq_release_filter_n;
     reg        allow_int;
     reg        fin;
 
@@ -127,15 +131,18 @@ module z80_core (
         .m1_n(tim_m1_n), .mreq_n(tim_mreq_n), .iorq_n(tim_iorq_n),
         .rd_n(tim_rd_n), .wr_n(tim_wr_n), .rfsh_n(tim_rfsh_n)
     );
-    // During in_reset_hold, force all pins to idle -- matches C model
-    // (reset_state() sets pins idle and phase_step returns early so
-    // z80_timing doesn't overwrite them).
+    // Force all pins to idle when:
+    //   - in_reset_hold (post-reset frozen state) -- matches C model's
+    //     reset_state() pin setup + phase_step early return
+    //   - bus_granted (DMA owns the bus) -- matches C model's bus_granted
+    //     branch which drives idle pins and returns before z80_timing
     // Exception: when reset_n=1 AND in_initial_hold, drive normal pins
     // combinationally. This matches the C model's z80_init() which sets
     // up state without going through the reset-pin filter, so phase 0
     // shows post-release pins (T1.P of M1 fetch from PC=0). The
     // synchronous transition out of hold happens on the next posedge.
-    wire hold_pins = in_reset_hold && !(reset_n && in_initial_hold);
+    wire hold_pins = (in_reset_hold && !(reset_n && in_initial_hold))
+                  || bus_granted;
     assign addr       = hold_pins ? 16'h0000 : tim_addr;
     assign data_out   = hold_pins ? 8'h00    : tim_data_out;
     assign data_drive = hold_pins ? 1'b0     : tim_data_drive;
@@ -454,6 +461,7 @@ module z80_core (
         add16 = 17'd0; f16 = 8'd0;
         ei_delay_n = ei_delay; suppress_decode_n = suppress_decode;
         bus_granted_n = bus_granted; irq_seq_n = irq_seq;
+        busreq_release_filter_n = busreq_release_filter;
         nmi_sampled_n = nmi_sampled; int_sampled_n = int_sampled;
         allow_int = 1'b0;
 
@@ -486,14 +494,26 @@ module z80_core (
             end
         end
 
-        // bus grant (DMA): idle while BUSREQ held
+        // bus grant (DMA): idle while BUSREQ held.
+        // Step 5: 2-phase release filter mirrors cmodel/z80_core.c so pz80
+        // and our model both wait ~2 phases between busreq_n=1 and the
+        // post-grant M1 fetch starting. busack stays asserted across the
+        // settle window.
         if (bus_granted) begin
-            if (busreq_n) begin                  // released: resume with a fresh M1
-                bus_granted_n = 1'b0;
-                bus_op_n = `BUSOP_M1; m_addr_n = rf[`RFP_PC]; m_len_n = 4'd4;
-                t_n = 4'd1; phi_n = 1'b0; m_cycle_n = 3'd1; decoded_n = 1'b0;
+            if (busreq_n) begin                  // released: settle, then resume
+                if (busreq_release_filter < 2'd2) begin
+                    busreq_release_filter_n = busreq_release_filter + 2'd1;
+                    // hold idle for the settle window
+                end else begin
+                    bus_granted_n = 1'b0;
+                    busreq_release_filter_n = 2'd0;
+                    bus_op_n = `BUSOP_M1; m_addr_n = rf[`RFP_PC]; m_len_n = 4'd4;
+                    t_n = 4'd1; phi_n = 1'b0; m_cycle_n = 3'd1; decoded_n = 1'b0;
+                end
+            end else begin                       // busreq still asserted
+                busreq_release_filter_n = 2'd0;
+                // hold all state (idle)
             end
-            // else: hold all state (idle)
         end
         // advance phase
         else if (phi == 1'b0) begin
@@ -1243,6 +1263,7 @@ module z80_core (
             nmi_sampled <= 1'b0; int_sampled <= 1'b0;
             suppress_decode <= 1'b0; bus_granted <= 1'b0; irq_seq <= 2'd0;
             reg_q <= 8'h00; f_modified <= 1'b0;
+            busreq_release_filter <= 2'd0;
             in_reset_hold        <= 1'b1;
             in_initial_hold      <= 1'b1;
             reset_assert_filter  <= 3'd0;
@@ -1267,6 +1288,7 @@ module z80_core (
                     nmi_pending <= nmi_pending_n; prev_nmi_n <= prev_nmi_n_n; ei_delay <= ei_delay_n;
                     nmi_sampled <= nmi_sampled_n; int_sampled <= int_sampled_n;
                     suppress_decode <= suppress_decode_n; bus_granted <= bus_granted_n; irq_seq <= irq_seq_n;
+                    busreq_release_filter <= busreq_release_filter_n;
                     reg_q <= reg_q_n; f_modified <= f_modified_n;
                 end
             end else begin
@@ -1281,6 +1303,7 @@ module z80_core (
                 nmi_pending <= nmi_pending_n; prev_nmi_n <= prev_nmi_n_n; ei_delay <= ei_delay_n;
                 nmi_sampled <= nmi_sampled_n; int_sampled <= int_sampled_n;
                 suppress_decode <= suppress_decode_n; bus_granted <= bus_granted_n; irq_seq <= irq_seq_n;
+                busreq_release_filter <= busreq_release_filter_n;
                 reg_q <= reg_q_n; f_modified <= f_modified_n;
             end
         end
