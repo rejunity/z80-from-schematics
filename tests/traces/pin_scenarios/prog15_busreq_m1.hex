@@ -1,10 +1,10 @@
-# BUSREQ / BUSACK handshake. busreq_n sampled at the rising edge of the last
-# phase of any M-cycle. When granted, after the current M-cycle the core
-# asserts busack_n and tri-states. We assert busreq mid-NOP-loop; expect
-# busack to go low at the end of the current M-cycle and stay low until
-# busreq releases. After release, the core resumes execution.
+// BUSREQ / BUSACK handshake. busreq_n sampled at the rising edge of the last
+// phase of any M-cycle. When granted, after the current M-cycle the core
+// asserts busack_n and tri-states. We assert busreq mid-NOP-loop; expect
+// busack to go low at the end of the current M-cycle and stay low until
+// busreq releases. After release, the core resumes execution.
 @0000
-00 00 00 00 00     # NOPs (loop)
-C3 00 00           # JP 0x0000
+00 00 00 00 00     // NOPs (loop)
+C3 00 00           // JP 0x0000
 @0066
-00                 # NMI vector (unused but safe)
+00                 // NMI vector (unused but safe)

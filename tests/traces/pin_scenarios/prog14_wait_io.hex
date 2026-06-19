@@ -1,8 +1,8 @@
-# WAIT-state insertion on an I/O write. OUT (0x20),A triggers an IOWR cycle
-# whose Tw.N lands inside a wait_n low window — should force extra Tw states
-# beyond the automatic one until WAIT releases.
+// WAIT-state insertion on an I/O write. OUT (0x20),A triggers an IOWR cycle
+// whose Tw.N lands inside a wait_n low window — should force extra Tw states
+// beyond the automatic one until WAIT releases.
 @0000
-3E 55              # LD A,0x55
-D3 20              # OUT (0x20),A
-00 00              # NOPs
-76                 # HALT
+3E 55              // LD A,0x55
+D3 20              // OUT (0x20),A
+00 00              // NOPs
+76                 // HALT

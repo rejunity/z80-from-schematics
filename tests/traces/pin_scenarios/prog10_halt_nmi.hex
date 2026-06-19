@@ -1,9 +1,9 @@
-# HALT entry then NMI exit. The HALT cycle re-fetches the HALT byte every
-# M1 with halt_n=0. NMI pulse forces an NMI ack M-cycle, then PC push + jump
-# to 0x66.
+// HALT entry then NMI exit. The HALT cycle re-fetches the HALT byte every
+// M1 with halt_n=0. NMI pulse forces an NMI ack M-cycle, then PC push + jump
+// to 0x66.
 @0000
-31 F0 FF           # LD SP,0xFFF0
-76                 # HALT
+31 F0 FF           // LD SP,0xFFF0
+76                 // HALT
 @0066
-00                 # NOP at the NMI vector
-76                 # HALT (terminate trace deterministically)
+00                 // NOP at the NMI vector
+76                 // HALT (terminate trace deterministically)

@@ -1,17 +1,17 @@
-# INT during a block-op (LDIR). LDIR is interruptible — the silicon-faithful
-# behaviour is that an INT during an LDIR iteration takes effect at the END
-# of the current iteration, PC is rewound to the LDIR opcode address (so
-# the block op resumes after the ISR), and only THEN does the INTA M-cycle
-# fire. After RST 38h, the IM1 ISR runs to HALT.
+// INT during a block-op (LDIR). LDIR is interruptible — the silicon-faithful
+// behaviour is that an INT during an LDIR iteration takes effect at the END
+// of the current iteration, PC is rewound to the LDIR opcode address (so
+// the block op resumes after the ISR), and only THEN does the INTA M-cycle
+// fire. After RST 38h, the IM1 ISR runs to HALT.
 @0000
-ED 56              # IM 1
-FB                 # EI
-21 00 02           # LD HL,0x0200      (source)
-11 00 03           # LD DE,0x0300      (destination)
-01 10 00           # LD BC,0x0010      (16 bytes)
-ED B0              # LDIR              (interruptible block move)
-76                 # HALT
+ED 56              // IM 1
+FB                 // EI
+21 00 02           // LD HL,0x0200      (source)
+11 00 03           // LD DE,0x0300      (destination)
+01 10 00           // LD BC,0x0010      (16 bytes)
+ED B0              // LDIR              (interruptible block move)
+76                 // HALT
 @0038
-76                 # HALT (IM1 vector)
+76                 // HALT (IM1 vector)
 @0200
 00 11 22 33 44 55 66 77 88 99 AA BB CC DD EE FF

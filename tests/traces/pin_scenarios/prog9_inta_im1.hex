@@ -1,10 +1,10 @@
-# IM 1 INT acceptance. EI then NOP loop; INT pulse mid-loop forces an
-# INTA M-cycle (M1+IORQ together) then RST 38h to the IM1 vector at 0x38.
-# At 0x38, a HALT so the trace stays well-defined after the ack.
+// IM 1 INT acceptance. EI then NOP loop; INT pulse mid-loop forces an
+// INTA M-cycle (M1+IORQ together) then RST 38h to the IM1 vector at 0x38.
+// At 0x38, a HALT so the trace stays well-defined after the ack.
 @0000
-ED 56              # IM 1
-FB                 # EI                       (one-instruction INT-mask)
-00 00 00 00        # NOPs (loop)
-C3 04 00           # JP 0x0004                (back into the NOP loop)
+ED 56              // IM 1
+FB                 // EI                       (one-instruction INT-mask)
+00 00 00 00        // NOPs (loop)
+C3 04 00           // JP 0x0004                (back into the NOP loop)
 @0038
-76                 # HALT
+76                 // HALT

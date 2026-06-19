@@ -384,15 +384,20 @@ jobs:
         run: make basic_netlist_tests
 
   # =====================================================================
-  # ZEX TIER (C model) — runs on every event, including every push.
-  # ZEXDOC and ZEXALL are independent jobs so they run in parallel
-  # (~18 + 19 min serial -> ~19 min parallel wall clock). Neither
-  # depends on the fast tier — each has its own self-contained build
-  # (no iverilog/verilator needed).
+  # ZEX TIER (C model) — runs only on main pushes + nightly + manual
+  # dispatch. Rak z80test (~3 min, runs on every push) covers the same
+  # flag/instruction functionality. ZEXDOC + ZEXALL are the deeper but
+  # redundant gates; their ~19 min wall clock per push isn't worth the
+  # delta vs Rak on feature branches.
   # =====================================================================
 
   zexdoc:
     name: ZEXDOC (~18 min via C model)
+    # Rak z80test (under 3 min) covers the same flag/instruction
+    # functionality and runs on every push; ZEXDOC is the deeper but
+    # redundant gate. Only run on pushes to main, scheduled (nightly),
+    # and manual dispatch -- skip on feature-branch pushes and PRs.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -426,6 +431,11 @@ jobs:
 
   zexall:
     name: ZEXALL (~19 min via C model)
+    # Rak z80test (under 3 min) covers the same flag/instruction
+    # functionality and runs on every push; ZEXALL is the deeper but
+    # redundant gate. Only run on pushes to main, scheduled (nightly),
+    # and manual dispatch -- skip on feature-branch pushes and PRs.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:

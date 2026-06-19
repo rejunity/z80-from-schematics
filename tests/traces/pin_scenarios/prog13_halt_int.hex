@@ -1,10 +1,10 @@
-# HALT exit on INT (vs NMI). IFF1=1 (via EI). HALT is entered, then an INT
-# pulse forces an INTA M-cycle that pops the HALT (PC unchanged past HALT
-# byte), then RST 38h in IM 1. After the ack, the test runs into a final
-# HALT for trace termination.
+// HALT exit on INT (vs NMI). IFF1=1 (via EI). HALT is entered, then an INT
+// pulse forces an INTA M-cycle that pops the HALT (PC unchanged past HALT
+// byte), then RST 38h in IM 1. After the ack, the test runs into a final
+// HALT for trace termination.
 @0000
-ED 56              # IM 1
-FB                 # EI
-76                 # HALT
+ED 56              // IM 1
+FB                 // EI
+76                 // HALT
 @0038
-76                 # HALT (IM1 vector — terminate trace)
+76                 // HALT (IM1 vector — terminate trace)
