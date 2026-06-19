@@ -330,6 +330,11 @@ typedef struct {
     uint8_t      reset_assert_filter;   /* phases of reset_n=0 before hold      */
     uint8_t      reset_release_filter;  /* phases of reset_n=1 before unfreeze  */
     bool         in_reset_hold;         /* true => frozen at idle pins, PC=0    */
+
+    /* BUSREQ release filter: pz80 settles for ~2 phases between busreq_n=1
+       and the post-grant M1 fetch (prog15_busreq_m1 trace). Bus_granted
+       entry edge is not filtered (pz80 enters bus grant promptly). */
+    uint8_t      busreq_release_filter; /* phases of busreq_n=1 during grant    */
 } z80_t;
 
 typedef enum {
