@@ -1261,9 +1261,42 @@ void z80_phase_step(z80_t *c)
 {
     c->cycle++;
 
+    /* Reset state machine. Silicon-faithful per perfectz80 prog17_reset trace:
+     *   - reset_n falling edge: NOT recognized immediately. Filter ~5 phases
+     *     (~3 clocks, matches Zilog UM0080 spec). During the filter the chip
+     *     continues normal execution, including starting fresh M-cycles.
+     *   - Filter elapsed: enter frozen-idle hold (reset_state() clears
+     *     registers, sets all pins to idle, t_state=1, m_cycle=1).
+     *   - reset_n rising edge while in hold: settle for ~4 phases before
+     *     beginning the post-reset M1 fetch at PC=0.
+     * See docs/perfect-branch.md "prog17 silicon-behavior analysis".
+     */
     if (!c->pins.reset_n) {
-        reset_state(c);
-        return;
+        c->reset_release_filter = 0;
+        if (!c->in_reset_hold) {
+            if (c->reset_assert_filter < 5) {
+                c->reset_assert_filter++;
+                /* Continue normal phase below. */
+            } else {
+                reset_state(c);
+                c->in_reset_hold = true;
+                c->reset_assert_filter = 0;
+                return;
+            }
+        } else {
+            return;                  /* Stay frozen while reset_n=0 */
+        }
+    } else {
+        c->reset_assert_filter = 0;
+        if (c->in_reset_hold) {
+            if (c->reset_release_filter < 4) {
+                c->reset_release_filter++;
+                return;              /* Stay frozen during settle window */
+            }
+            c->in_reset_hold = false;
+            c->reset_release_filter = 0;
+            /* Fall through: begin normal phase from M1 T1.P0 at PC=0. */
+        }
     }
 
     /* NMI is edge-triggered: latch a falling edge on nmi_n */

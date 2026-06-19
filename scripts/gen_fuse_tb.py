@@ -166,7 +166,16 @@ module tb_fuse;
         begin
             cycle_count = 0;
             reset_n = 0;
-            @(posedge clk); @(posedge clk); @(posedge clk);
+            // Silicon-faithful reset filter: hold reset_n=0 for >=5
+            // posedges so the chip recognizes it (Zilog UM0080:
+            // "reset_n must be held low for >= 3 clock periods").
+            // Each FUSE test calls this once; total cost is ~5 extra
+            // posedges × 1356 tests = 6780 phases. Trivial.
+            repeat (6) @(posedge clk);
+            // Bypass the 4-phase release settle filter via direct poke
+            // (unit-test convenience -- the settle is silicon behavior
+            // for mid-execution reset, irrelevant to per-test setup).
+            dut.in_initial_hold = 1'b1;
             @(negedge clk);
             reset_n = 1;
             @(negedge clk);
