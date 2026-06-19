@@ -377,12 +377,25 @@ static void z80_exec_step(z80_t *c)
     case EXEC_DI: c->iff1 = c->iff2 = false; finish(c); break;
     case EXEC_EI: c->iff1 = c->iff2 = true; c->ei_delay = true; finish(c); break;
     case EXEC_HALT:
-        /* Real Z80: PC stays at the HALT byte (re-fetched each M1 until
-           interrupt). Our M1 already incremented PC; back it up so external
-           observers see PC at the HALT opcode. begin_next() re-advances PC
-           by 1 when an NMI/INT exits the halted state. */
+        /* Silicon-faithful per Brewer 2014 ("Z80 Special Reset") and
+         * Woodmass 2021 HALT2INT: PC is incremented past the HALT byte
+         * during the HALT M1's normal fetch and STAYS there during the
+         * HALT NOP loop. Each HALT-internal NOP re-fetches at PC (now
+         * post-HALT-byte) without further increment. INT/NMI then
+         * accept that PC as the return address — RETN from an IM 1
+         * service routine returns to PC = HALT_addr + 1, which is the
+         * documented Z80 HALT-then-INT semantic.
+         *
+         * Our earlier convention decremented PC back to the HALT byte
+         * (matching FUSE test `76`'s pre-Brewer expectation) and then
+         * re-incremented in begin_next() on NMI/INT acceptance. That
+         * gave the correct final state but the *intermediate* PC + halt
+         * pin trace diverged from perfectz80 by 145 / 200 phases on
+         * prog13_halt_int. The silicon-faithful convention agrees with
+         * perfectz80 exactly. FUSE's test `76` (expecting PC at HALT
+         * byte) becomes another known-FUSE-wrong case alongside the
+         * Banks fold-in / SCF Q-leak / INxR WZ cases. */
         c->halted = true;
-        c->rf[RFP_PC] = (uint16_t)(c->rf[RFP_PC] - 1);
         finish(c);
         break;
 
@@ -818,6 +831,20 @@ static void z80_exec_step(z80_t *c)
                 z80_setF(c, alu_fout);
                 if (rep && bc != 0) { z80_setPC(c, (uint16_t)(z80_PC(c) - 2));
                     c->rf[RFP_WZ] = (uint16_t)(z80_PC(c) + 1);
+                    /* LDIR/LDDR Banks-2018 repeat-M-cycle flag fold-in:
+                     * YF = PC.13, XF = PC.11 (high byte of post-rewind
+                     * PC). See redcode INSN(ldir) macro LDXR. Without
+                     * this, Rak z80full 089 LDIR->NOP' / 090 LDDR->NOP'
+                     * fail because the Q value the subsequent SCF
+                     * leaks from carries our stale (A+val).{1,3} YX
+                     * bits instead of silicon's PC.13/PC.11. */
+                    {
+                        uint8_t f = z80_F(c);
+                        f = (uint8_t)((f & (uint8_t)~(Z80_YF | Z80_XF))
+                                       | ((uint8_t)(z80_PC(c) >> 8)
+                                          & (uint8_t)(Z80_YF | Z80_XF)));
+                        z80_setF(c, f);
+                    }
                     z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 5); }
                 else finish(c);
             }
@@ -836,6 +863,16 @@ static void z80_exec_step(z80_t *c)
                 if (rep && (c->rf[RFP_BC] != 0) && !(z80_F(c) & Z80_ZF)) {
                     z80_setPC(c, (uint16_t)(z80_PC(c) - 2));
                     c->rf[RFP_WZ] = (uint16_t)(z80_PC(c) + 1);
+                    /* CPIR/CPDR Banks fold-in: YF = PC.13, XF = PC.11.
+                     * Mirrors redcode CPXR. SF/ZF/HF/PF/NF/CF stay as
+                     * the CPI/CPD result; only Y/X are overwritten. */
+                    {
+                        uint8_t f = z80_F(c);
+                        f = (uint8_t)((f & (uint8_t)~(Z80_YF | Z80_XF))
+                                       | ((uint8_t)(z80_PC(c) >> 8)
+                                          & (uint8_t)(Z80_YF | Z80_XF)));
+                        z80_setF(c, f);
+                    }
                     z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 5);
                 } else finish(c);
             }
@@ -852,6 +889,45 @@ static void z80_exec_step(z80_t *c)
                 c->rf[RFP_HL] = (uint16_t)(c->rf[RFP_HL] + (dec ? -1 : 1));
                 z80_setF(c, alu_fout);
                 if (rep && newB != 0) { z80_setPC(c, (uint16_t)(z80_PC(c) - 2));
+                    c->rf[RFP_WZ] = (uint16_t)(z80_PC(c) + 1);
+                    /* INIR/INDR Banks-2018 repeat-M-cycle flag fold-in.
+                     * Replicates redcode's INXR_OTXR_COMMON exactly so
+                     * Rak z80full 102 INIR->NOP / 103 INDR->NOP pass.
+                     * data = tmpl (port byte just read), newB = decremented B.
+                     * t = data + ((C +/- 1) & 0xFF), with carry into bit 8.
+                     * nf = data.7; hcf = (t > 255).
+                     * SF = newB.7, YF = PC.13, XF = PC.11, ZF = 0.
+                     * HF / PF / CF: see formula below per Banks 2018. */
+                    {
+                        uint8_t data = c->tmpl;
+                        uint16_t tw = (uint16_t)data + (uint16_t)(uint8_t)(
+                            getr(c, REG_C) + (dec ? -1 : 1));
+                        uint8_t  t = (uint8_t)tw;
+                        bool     hcf = (tw > 255);
+                        uint8_t  nf  = (uint8_t)((data >> 6) & Z80_NF);
+                        uint8_t  p   = (uint8_t)((t & 7) ^ newB);
+                        uint8_t  pch = (uint8_t)(z80_PC(c) >> 8);
+
+                        uint8_t f = (uint8_t)((newB & Z80_SF)
+                                              | (pch & (Z80_YF | Z80_XF))
+                                              | nf);
+                        if (hcf) {
+                            f |= Z80_CF;
+                            if (nf) {
+                                if ((newB & 0xF) == 0) f |= Z80_HF;
+                                if (z80_parity((uint8_t)(p ^ ((newB - 1) & 7))))
+                                    f |= Z80_PF;
+                            } else {
+                                if ((newB & 0xF) == 0xF) f |= Z80_HF;
+                                if (z80_parity((uint8_t)(p ^ ((newB + 1) & 7))))
+                                    f |= Z80_PF;
+                            }
+                        } else {
+                            if (z80_parity((uint8_t)(p ^ (newB & 7))))
+                                f |= Z80_PF;
+                        }
+                        z80_setF(c, f);
+                    }
                     z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 5); }
                 else finish(c);
             }
@@ -871,6 +947,41 @@ static void z80_exec_step(z80_t *c)
                 uint8_t newB = getr(c, REG_B);
                 z80_setF(c, alu_fout);
                 if (rep && newB != 0) { z80_setPC(c, (uint16_t)(z80_PC(c) - 2));
+                    c->rf[RFP_WZ] = (uint16_t)(z80_PC(c) + 1);
+                    /* OTIR/OTDR Banks-2018 repeat-M-cycle flag fold-in.
+                     * Same shape as INIR/INDR above but t = data + L
+                     * (low byte of post-increment HL) rather than
+                     * data + (C +/- 1). Mirrors redcode OTXR. */
+                    {
+                        uint8_t data = c->tmpl;
+                        uint8_t lreg = getr(c, REG_L);
+                        uint16_t tw = (uint16_t)data + (uint16_t)lreg;
+                        uint8_t  t = (uint8_t)tw;
+                        bool     hcf = (tw > 255);
+                        uint8_t  nf  = (uint8_t)((data >> 6) & Z80_NF);
+                        uint8_t  p   = (uint8_t)((t & 7) ^ newB);
+                        uint8_t  pch = (uint8_t)(z80_PC(c) >> 8);
+
+                        uint8_t f = (uint8_t)((newB & Z80_SF)
+                                              | (pch & (Z80_YF | Z80_XF))
+                                              | nf);
+                        if (hcf) {
+                            f |= Z80_CF;
+                            if (nf) {
+                                if ((newB & 0xF) == 0) f |= Z80_HF;
+                                if (z80_parity((uint8_t)(p ^ ((newB - 1) & 7))))
+                                    f |= Z80_PF;
+                            } else {
+                                if ((newB & 0xF) == 0xF) f |= Z80_HF;
+                                if (z80_parity((uint8_t)(p ^ ((newB + 1) & 7))))
+                                    f |= Z80_PF;
+                            }
+                        } else {
+                            if (z80_parity((uint8_t)(p ^ (newB & 7))))
+                                f |= Z80_PF;
+                        }
+                        z80_setF(c, f);
+                    }
                     z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 5); }
                 else finish(c);
             }
@@ -1022,14 +1133,18 @@ static void begin_next(z80_t *c)
     if (c->nmi_sampled) {
         c->nmi_sampled = false;
         c->nmi_pending = false;
-        if (c->halted) { c->rf[RFP_PC] = (uint16_t)(c->rf[RFP_PC] + 1); c->halted = false; }
+        /* Silicon-faithful HALT exit: PC is ALREADY past the HALT byte
+         * (set when HALT's M1 committed; see EXEC_HALT). Just clear the
+         * halted flag and start the NMI ack sequence -- no PC bump. */
+        if (c->halted) c->halted = false;
         c->iff2 = c->iff1; c->iff1 = false;        /* IFF1->IFF2, disable */
         start_seq_m1(c, EXEC_NMI, 5, true);        /* 5T ack, opcode discarded */
         return;
     }
     if (allow_int && c->int_sampled && c->iff1) {
         c->int_sampled = false;
-        if (c->halted) { c->rf[RFP_PC] = (uint16_t)(c->rf[RFP_PC] + 1); c->halted = false; }
+        /* Same: HALT exit without PC bump. */
+        if (c->halted) c->halted = false;
         c->iff1 = c->iff2 = false;
         start_seq_inta(c, 7);                      /* INTA ack (IM0/1/2) */
         return;
@@ -1054,7 +1169,12 @@ static void advance(z80_t *c)
         z80_exec_step(c);                    /* set up next M-cycle / finish */
         if (c->instr_done) {
             /* Commit Q: holds F if THIS instruction wrote F, else 0. SCF/CCF
-               in the NEXT instruction read it to derive X/Y from (A | Q). */
+               in the NEXT instruction read it to derive X/Y from (A | Q).
+               Per Sean Young's "Undocumented Z80 Documented" §4.1: Q resets
+               to 0 after any instruction that does NOT modify F. Verified
+               against real-silicon CRC by ZEXALL's <daa,cpl,scf,ccf> test;
+               an earlier attempt to make Q persist across non-F-modifying
+               instructions broke that CRC (run 27650481834). */
             c->q = c->f_modified ? z80_F(c) : 0;
             c->f_modified = false;
             c->instr_count++;
@@ -1098,9 +1218,18 @@ static void reset_state(z80_t *c)
 
 void z80_reset(z80_t *c)
 {
-    /* programmer-visible registers are undefined on real silicon; force a
-       deterministic state for C<->RTL comparison (docs/known-differences.md). */
-    for (int i = 0; i < RFP_COUNT; i++) c->rf[i] = 0xFFFF;
+    /* Programmer-visible registers are undefined on real silicon. We
+     * force a deterministic state for C<->RTL compare AND for parity
+     * with perfectz80's gate-level Visual-Z80 netlist, which boots
+     * with rf = 0x5555 (alternating-bit pattern from die-level
+     * reset). Previously this was 0xFFFF; that surfaced as informational
+     * bus diffs on prog_rnd_02/03/04 (`make perfectz80`) and on
+     * prog19_nmi_in_int (`make pin_scenarios`). Switching to 0x5555
+     * closes those without touching any functional behaviour --
+     * external test harnesses (FUSE / Rak / lockstep) explicitly poke
+     * their start state. See docs/simplifications.md §C1 +
+     * docs/known-differences.md row 1. */
+    for (int i = 0; i < RFP_COUNT; i++) c->rf[i] = 0x5555;
     reset_state(c);
 }
 
@@ -1190,6 +1319,25 @@ void z80_phase_step(z80_t *c)
                &c->pins.m1_n, &c->pins.mreq_n, &c->pins.iorq_n,
                &c->pins.rd_n, &c->pins.wr_n,   &c->pins.rfsh_n);
 
-    /* HALT/refresh pin level: halt_n reflects halted state. */
-    c->pins.halt_n = c->halted ? 0 : 1;
+    /* HALT pin level. Silicon-faithful per perfectz80's gate-level
+     * trace (prog10_halt_nmi phase 27, prog13_halt_int):
+     *   - asserts during T3 of the HALT instruction's M1 (not at T4
+     *     end / instruction-done as our `c->halted` flag flips).
+     *     We pre-assert via a decoded EXEC_HALT predicate so the pin
+     *     leads the flag by one T-state, matching gate-level.
+     *   - then stays asserted while c->halted is true (HALT NOP loop)
+     *   - deasserts at the M-cycle boundary where c->halted clears
+     *     (NMI / INT acceptance path; see begin_next()).
+     *
+     * The two clauses are OR'd so that, during HALT's M1 T3..T4,
+     * halt_n is low; the c->halted flag then takes over from
+     * instruction-done onwards. */
+    /* Silicon transition observed (prog10 pz80 trace): halt asserts
+     * at T4.P of the HALT instruction's M1 (one T-state before
+     * instruction-done flips c->halted). Mirror by gating on
+     * t_state == 4 within the HALT-decoded M1. */
+    bool exec_halt_in_m1 = (c->ctl.exec == EXEC_HALT &&
+                            c->bus_op == BUSOP_M1 &&
+                            c->t_state == 4 && c->phi == 1);
+    c->pins.halt_n = (c->halted || exec_halt_in_m1) ? 0 : 1;
 }

@@ -26,9 +26,9 @@ silicon-faithfulness gaps we already track in
 
 | File              | Baseline | What it covers                                                                                                          |
 |-------------------|---------:|-------------------------------------------------------------------------------------------------------------------------|
-| `z80doc.tap`      | 2        | **Documented** flag behavior only — XF / YF masked. Our 2 documented failures are `INI` / `IND` and trace back to the audit's block-I/O sub-cycle item (`F-block-op-M-cycle`). |
-| `z80memptr.tap`   | 2        | MEMPTR / WZ exposure via `BIT n,(HL)` and `BIT n,(IX+d)` style probes. Our 2 failures are `INIR -> NOP` / `INDR -> NOP` Q-leak interactions. |
-| `z80full.tap`     | 10       | Full **undocumented** behaviour (XF, YF, MEMPTR, Q-flag carry-over into SCF/CCF). Our 10 failures break down as ~8 SCF/CCF ST-variant differences (we model Zilog NMOS Q, not Toshiba) + 2 LDIR/LDDR -> NOP Q-leaks. |
+| `z80doc.tap`      | **0**    | **Documented** flag behavior only — XF / YF masked. All 160 tests pass since the 2026-06-18 ULA-idle port-parity fix.  |
+| `z80memptr.tap`   | **0**    | MEMPTR / WZ exposure via `BIT n,(HL)` and `BIT n,(IX+d)` style probes. All 160 pass since the silicon-faithful `WZ = PC + 1` flip for INxR/OTxR repeat. |
+| `z80full.tap`     | **0**    | Full **undocumented** behaviour (XF, YF, MEMPTR, Q-flag carry-over into SCF/CCF). All 160 pass since the 2026-06-18 Banks-2018 block-repeat fold-in (YF=PC.13 / XF=PC.11 for LDIR/LDDR/CPIR/CPDR; full HF/PF/CF Banks formula for INIR/INDR/OTIR/OTDR). Combined with the SCF/CCF Q-leak fix and the ULA-idle port-parity, our model now matches redcode/Z80 0/0/0 across the entire Rak suite. |
 | `z80ccf.tap`      | n/a      | SCF/CCF Q-flag-only probes. Variant available for reproducing individual ST-variant cases; not in the `make z80test` rotation today (the same gaps are covered by `z80full`).         |
 | `z80flags.tap`    | n/a      | Per-instruction flag exhaustion. Also not in the `make z80test` rotation; subsumed by `z80doc` + `z80full`.                                                                          |
 

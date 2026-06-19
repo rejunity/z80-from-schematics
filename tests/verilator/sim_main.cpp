@@ -58,11 +58,51 @@ static void load_hex(const char *path) {
     fclose(f);
 }
 
+// Per-pin lo/hi event phases. -1 means "no event". Mirrors the plusargs
+// the iverilog testbenches accept (see tests/iverilog/tb_z80.v).
+struct PinEvents {
+    int nmi_lo = -1,    nmi_hi = -1;
+    int int_lo = -1,    int_hi = -1;
+    int wait_lo = -1,   wait_hi = -1;
+    int busreq_lo = -1, busreq_hi = -1;
+    int reset_lo = -1,  reset_hi = -1;
+};
+
+static int parse_int_kv(const char *arg, const char *key) {
+    // accept either "+key=N" or "--key=N"
+    const char *eq = strchr(arg, '=');
+    if (!eq) return -1;
+    size_t klen = strlen(key);
+    if (strncmp(arg, "+", 1) == 0 && strncmp(arg + 1, key, klen) == 0 && arg[1 + klen] == '=')
+        return atoi(eq + 1);
+    if (strncmp(arg, "--", 2) == 0 && strncmp(arg + 2, key, klen) == 0 && arg[2 + klen] == '=')
+        return atoi(eq + 1);
+    return -1;
+}
+
 int main(int argc, char **argv) {
     Verilated::commandArgs(argc, argv);
-    if (argc < 3) { fprintf(stderr, "usage: %s <prog.hex> <phases> [nmi_phase]\n", argv[0]); return 2; }
+    if (argc < 3) {
+        fprintf(stderr, "usage: %s <prog.hex> <phases> [nmi_phase] "
+                        "[+<pin>_lo=N +<pin>_hi=M ...]\n", argv[0]);
+        return 2;
+    }
     int phases = atoi(argv[2]);
-    int nmi_phase = (argc > 3) ? atoi(argv[3]) : -1;
+    int nmi_phase = (argc > 3 && argv[3][0] != '+' && argv[3][0] != '-') ? atoi(argv[3]) : -1;
+    PinEvents ev;
+    for (int a = 3; a < argc; a++) {
+        int v;
+        if ((v = parse_int_kv(argv[a], "nmi_lo"))    >= 0) ev.nmi_lo = v;
+        if ((v = parse_int_kv(argv[a], "nmi_hi"))    >= 0) ev.nmi_hi = v;
+        if ((v = parse_int_kv(argv[a], "int_lo"))    >= 0) ev.int_lo = v;
+        if ((v = parse_int_kv(argv[a], "int_hi"))    >= 0) ev.int_hi = v;
+        if ((v = parse_int_kv(argv[a], "wait_lo"))   >= 0) ev.wait_lo = v;
+        if ((v = parse_int_kv(argv[a], "wait_hi"))   >= 0) ev.wait_hi = v;
+        if ((v = parse_int_kv(argv[a], "busreq_lo")) >= 0) ev.busreq_lo = v;
+        if ((v = parse_int_kv(argv[a], "busreq_hi")) >= 0) ev.busreq_hi = v;
+        if ((v = parse_int_kv(argv[a], "reset_lo"))  >= 0) ev.reset_lo = v;
+        if ((v = parse_int_kv(argv[a], "reset_hi"))  >= 0) ev.reset_hi = v;
+    }
     memset(mem, 0, sizeof(mem));
     load_hex(argv[1]);
 
@@ -77,12 +117,28 @@ int main(int argc, char **argv) {
     top->reset_n = 1;
 
     // line 1 = reset state (T1.P)
+    if (ev.nmi_lo    == 0) top->nmi_n    = 0;
+    if (ev.int_lo    == 0) top->int_n    = 0;
+    if (ev.wait_lo   == 0) top->wait_n   = 0;
+    if (ev.busreq_lo == 0) top->busreq_n = 0;
+    if (ev.reset_lo  == 0) top->reset_n  = 0;
     present_read(top); top->eval();
     dump(top);
 
     for (int i = 1; i < phases; i++) {
-        // pulse NMI low for one phase at nmi_phase (matches iverilog/tb_z80.v)
-        top->nmi_n = (i == nmi_phase) ? 0 : 1;
+        // Legacy nmi_phase single-pulse + new per-pin lo/hi events.
+        if (i == ev.nmi_hi)    top->nmi_n    = 1;
+        if (i == nmi_phase || i == ev.nmi_lo) top->nmi_n = 0;
+        if (i == ev.int_hi)    top->int_n    = 1;
+        if (i == ev.int_lo)    top->int_n    = 0;
+        if (i == ev.wait_hi)   top->wait_n   = 1;
+        if (i == ev.wait_lo)   top->wait_n   = 0;
+        if (i == ev.busreq_hi) top->busreq_n = 1;
+        if (i == ev.busreq_lo) top->busreq_n = 0;
+        if (i == ev.reset_hi)  top->reset_n  = 1;
+        if (i == ev.reset_lo)  top->reset_n  = 0;
+        // Legacy single-pulse nmi: keep nmi_n high outside that one phase.
+        if (nmi_phase >= 0 && i != nmi_phase && ev.nmi_lo < 0 && ev.nmi_hi < 0) top->nmi_n = 1;
         top->clk = 1; top->eval();      // posedge: latch + next state
         top->clk = 0; top->eval();      // settle new outputs
         if (write_active(top)) mem[top->addr & 0xFFFF] = top->data_out;

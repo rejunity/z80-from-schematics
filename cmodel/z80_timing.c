@@ -39,7 +39,15 @@ void z80_timing(uint8_t   bus_op,     /* z80_busop_t                          */
 
     switch (bus_op) {
     case BUSOP_M1: {
-        bool refresh = (t_state >= 3);
+        /* Refresh strobe is asserted during T3..T4 of every M1 cycle,
+         * including extended-length M1s (NMI ack = 5T, INTA = 7T). Per
+         * perfectz80's gate-level trace, silicon deasserts RFSH at T4
+         * end EVEN IF the M1 continues into T5+. Bound to T3..T4
+         * exactly. (Earlier `t_state >= 3` left RFSH asserted into
+         * T5+, causing 2-phase late deassert on NMI/INT ack M-cycles
+         * vs perfectz80 — `prog10_halt_nmi` phase 52/53 and
+         * `prog17_reset` phase 50/51.) */
+        bool refresh = (t_state == 3 || t_state == 4);
         *addr   = refresh ? (uint16_t)(((uint16_t)reg_i << 8) | reg_r)
                           : m_addr;
         *m1_n   = (t_state <= 2) ? 0 : 1;

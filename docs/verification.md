@@ -12,11 +12,21 @@ Living record of the verification state. Updated at each checkpoint.
    r/w, I/O r/w, refresh, INTA, WAIT, HALT, BUSREQ/BUSACK, NMI, IM0/1/2.
 5. **C ↔ RTL comparison** (`make compare`): same programs through the C model, iverilog
    sim, AND Verilator sim; traces diffed phase-by-phase across all three.
-6. **FUSE / Frank D. Cringle suite** (`make fuse`): 1356 per-opcode tests with
-   register / flag / IFF / IM / HALTED / cycle-count / memory diff per case.
-7. **Multi-oracle lockstep** (`scripts/lockstep_quad.c`): our C model vs the
-   superzazu, chips/z80, and suzukiplan/z80 industry references, comparing register
-   state after every instruction on a CP/M `.com`.
+6. **FUSE corpus** (`make fuse`): 1356 per-opcode tests with register / flag
+   / IFF / IM / HALTED / cycle-count / memory diff per case. **Note**: FUSE's
+   `tests.expected` was authored by Philip Kendall in 2006 for FUSE itself
+   and was never silicon-validated; 7 cases differ from real silicon (see
+   `tests/fuse/known-fuse-wrong.txt`). The runner tallies those as
+   "known-FUSE-wrong" rather than FAIL so the gate stays at 100 % on the
+   silicon-faithful side.
+7. **Multi-oracle lockstep** (`scripts/lockstep_quint.c`): our C model vs the
+   superzazu, chips/z80, suzukiplan/z80 and redcode/Z80 industry references —
+   five-way register diff after every instruction on a CP/M `.com`. See
+   [docs/oracles.md](oracles.md) for the per-oracle lineage and matrix.
+8. **Patrik Rak z80test** (`make z80test`): doc / memptr / full ~470 tests
+   covering documented + undocumented behavior, MEMPTR / WZ, SCF / CCF Q-leak,
+   Banks block-instruction repeat fold-in. All silicon-validated (Rak on real
+   48K Spectrum; Chandler on NEC + Visual Z80 Remix). **160 / 160 / 160 PASS.**
 8. **Gate-level signal trace** (`scripts/perfectz80_runner.c` + `scripts/compare_signal_timing.py`):
    our C model vs the Brian Silverman / Visual Z80 netlist port (perfectz80), pin
    trace at every clock half-cycle.
@@ -82,26 +92,64 @@ only rebuilt the library, leaving stale runner binaries on disk).
 - **C ↔ iverilog ↔ Verilator parity** (`make compare`): all 8 trace programs (prog1,
   prog2, prog3_cb, prog4_ed, prog5_ddfd, prog6_block, prog7_ddcb, prog8_nmi) produce
   identical phase-by-phase traces across all three (400 phases each).
-- **FUSE / Cringle** (`make fuse`): **1356/1356 PASS (100%)**. The SCF/CCF NMOS
-  Q-variant (X/Y from `(A | Q)`), the DD/FD `36` cycle count fix (22T → 19T), and
-  the HALT-PC convention fix (PC stays at the HALT byte) all landed during
-  integration; see `docs/known-differences.md` rows 2, 9 and 11.
-- **FUSE through RTL** (`make fuse_rtl`): **1356/1356 (100%)**. The earlier
-  testbench-init artifacts (post-reset M1 with stale m_addr) are fixed by poking
-  `dut.m_addr` alongside `dut.rf[PC]` — mirroring what `z80_set_pc()` does on the
-  C side. A related iverilog-12 sensitivity bug on `rf[hlp]` reads through function
-  calls in `always @*` (which let DD/FD-prefixed ALU ops decode as their unprefixed
-  variant) was fixed by exposing the index-aware byte read as a continuous wire.
-- **4-oracle lockstep** (`scripts/lockstep_quad.c`): our C model + superzazu C + chips/z80
-  + suzukiplan/z80 all report identical PC/AF/BC/DE/HL/IX/IY/SP after every one of
-  **7,022,691 instructions** of ZEXDOC3 (chips's PC is overlap-adjusted).
-- **Gate-level signal trace** (`scripts/compare_signal_timing.py`, `make perfectz80`):
-  perfectz80 (pure-C Visual Z80 netlist port, no Qt) vs C model on 200 phases of
-  prog1/prog2/prog3_cb: **100% control-pin-perfect** across all three programs. The
-  C model and the Verilog RTL now deassert MREQ/RD/IORQ/WR at the falling-edge of
-  the bus cycle's last T-state (T3.N for MRD/MWR, T4.N for IORD/IOWR) — matching
-  the silicon transition observed at the gate level. Read latch is at T_last.P, one
-  phase before the deassert. The previous sub-cycle-convention gap is closed.
+- **FUSE corpus** (`make fuse`): **1348 PASS + 8 known-FUSE-wrong**. The 8
+  exceptions all live in `tests/fuse/known-fuse-wrong.txt` with
+  silicon-validation citations: Banks-2018 block fold-in (edb9_2 CPDR
+  repeat), Sean Young §4.1 Q-leak SCF/CCF (37_1 / 3f), boo-boo 2006
+  MEMPTR (edba_1 INDR / edbb_1 OTDR / edb2_1 INIR / edb3_1 OTIR with
+  BC=1), Brewer 2014 / Woodmass HALT2INT 2021 HALT-PC convention
+  (test `76`). We deliberately sit on the silicon-faithful side; the
+  pre-Banks/pre-MEMPTR/pre-Brewer FUSE expecteds are the outliers.
+- **FUSE through RTL** (`make fuse_rtl`): **1348 PASS + 8 known-FUSE-wrong
+  (matches C model)**. The earlier 14 testbench-init artifacts (post-reset
+  M1 with stale m_addr) and the iverilog-12 sensitivity bug on `rf[hlp]`
+  through `always @*` function calls were fixed earlier in the project.
+- **Patrik Rak z80test** (`make z80test`): **160 / 160 / 160 PASS** since
+  the 2026-06-18 silicon-faithfulness sweep: ULA-idle port-parity, SCF/CCF
+  Q-leak formula correction, Banks-2018 LDIR/LDDR/CPIR/CPDR/INIR/INDR/
+  OTIR/OTDR repeat-M-cycle YF/XF (and HF/PF/CF for IO-block) fold-in. All
+  three variants (z80doc, z80memptr, z80full) clean.
+- **5-oracle lockstep** (`scripts/lockstep_quint.c`): our C model +
+  superzazu C + chips/z80 + suzukiplan/z80 + redcode/Z80 all report
+  identical PC/AF/BC/DE/HL/IX/IY/SP after every one of **7,022,691
+  instructions** of ZEXDOC3.
+- **Gate-level signal trace** (`scripts/compare_signal_timing.py`,
+  `make perfectz80`): perfectz80 (pure-C Visual Z80 netlist port, no
+  Qt) vs C model on 200 phases of all 12 trace programs
+  (`prog1..prog8` + `prog_rnd_01..04`): **12 / 12 PASS, 100 %
+  control-pin parity**, with informational addr / data_o diffs on
+  three random programs traceable to C1 (reset register init at
+  `0xFFFF` vs perfectz80's `0x5555`). Same per-phase parity through
+  the iverilog RTL (`make perfectz80_rtl`, 12/12 PASS) and through
+  the LibreLane sky130-synthesised netlist
+  (`make perfectz80_netlist`, 12/12 PASS — the "ultimate test"). CI
+  uploads per-program `.vcd` files (both our pins at top scope and
+  perfectz80's pins under `perfectz80.*` scope in the same file) as
+  the `parity-vcds` + `netlist-vcds` artifacts (14-day retention).
+- **Pin-scenario programs** (`make pin_scenarios` /
+  `pin_scenarios_rtl` / `pin_scenarios_netlist`): 12 INT / NMI /
+  WAIT / BUSREQ / RESET scenarios driven through the `.events`
+  sidecar. **5 / 12 PASS cleanly** (`prog9_inta_im1`,
+  `prog12_inta_im2`, `prog16_ei_delay`, `prog18_di_then_int`,
+  `prog20_block_int`); **7 / 12 surface informational ctrl-pin
+  timing diffs** vs perfectz80 — HALT-pin sub-T-state assertion
+  (`prog10_halt_nmi`, `prog13_halt_int`), WAIT-insertion
+  (`prog11_wait_mem`, `prog14_wait_io`), BUSREQ-during-M1
+  (`prog15_busreq_m1`), post-reset M-cycle sequence (`prog17_reset`),
+  and reset-register-init via SP (`prog19_nmi_in_int`). All make
+  targets are informational gates; functional behaviour on all 12 is
+  verified by Rak + FUSE + `make halt2int` even where the per-phase
+  pin trace differs from gate-level. Full diff list in
+  `docs/known-differences.md` row 14.
+- **HALT-to-INT timing probe** (`make halt2int`): focused regression
+  inspired by Mark Woodmass's HALT2INT v3 (2021). Sweeps INT-pulse
+  timing across the HALT NOP M-cycle and verifies the INT-to-INTA
+  delay stays in the silicon-faithful 3..8 T-state range (per
+  Brewer 2014 + Z80 datasheet). Output on the current model: all 10
+  sweep samples in 4..7 T (PASS). Complements the HALT-PC
+  convention flip — together they cover the silicon properties
+  HALT2INT v3 measures on real hardware without depending on
+  Spectrum ULA contention modeling.
 - **Speed**: C model 6.56 Minstr/s, Verilator 0.31 Minstr/s, perfectz80 ~10 kphases/s.
 
 ### Verilator

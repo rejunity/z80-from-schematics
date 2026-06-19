@@ -35,7 +35,9 @@ void z80_sys_phase(z80_system_t *s)
     if (!c->pins.mreq_n && !c->pins.rd_n)
         c->pins.data_in = s->mem[c->pins.addr];
     else if (!c->pins.iorq_n && !c->pins.rd_n)
-        c->pins.data_in = s->io[c->pins.addr];
+        c->pins.data_in = s->io_ula_idle
+            ? ((c->pins.addr & 1) ? 0xFFu : 0xBFu)
+            : s->io[c->pins.addr];
     else
         c->pins.data_in = 0;
 }

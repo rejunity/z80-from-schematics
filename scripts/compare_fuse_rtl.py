@@ -9,6 +9,21 @@ GEN  = os.path.join(ROOT, "scripts/gen_fuse_tb.py")
 TB_V = os.path.join(ROOT, "tests/iverilog/tb_fuse.v")
 VVP  = os.path.join(ROOT, "build/tb_fuse.vvp")
 EXP  = os.path.join(ROOT, "tests/fuse/tests.expected")
+KNOWN_FUSE_WRONG = os.path.join(ROOT, "tests/fuse/known-fuse-wrong.txt")
+
+
+def load_known_fuse_wrong(path):
+    """Names whose FUSE expected values are stale vs real silicon.
+    See tests/fuse/known-fuse-wrong.txt + docs/simplifications.md F1."""
+    if not os.path.exists(path):
+        return set()
+    out = set()
+    with open(path) as f:
+        for line in f:
+            line = line.split("#", 1)[0].strip()
+            if line:
+                out.add(line.split()[0])
+    return out
 
 def parse_expected(path):
     """{name: ((af,bc,de,hl,af2,bc2,de2,hl2,ix,iy,sp,pc,wz),
@@ -87,10 +102,12 @@ def main():
 
     rtl  = parse_rtl_output(text)
     expd = parse_expected(EXP)
+    known_wrong = load_known_fuse_wrong(KNOWN_FUSE_WRONG)
     common = set(rtl) & set(expd)
 
     pass_ct = 0
     fail_ct = 0
+    known_ct = 0
     first_fails = []
     for name in sorted(common):
         r_regs, r_state, r_mem = rtl[name]
@@ -111,6 +128,8 @@ def main():
                 if rb != eb: diff.append(f"M[{a:04x}]=exp{eb:02x}/got{rb:02x}")
         if not diff:
             pass_ct += 1
+        elif name in known_wrong:
+            known_ct += 1
         else:
             fail_ct += 1
             if len(first_fails) < 10:
@@ -118,7 +137,10 @@ def main():
 
     total = len(common)
     print(f"\n=== FUSE through RTL (iverilog) ===")
-    print(f"{total} tests: {pass_ct} PASS, {fail_ct} FAIL")
+    print(f"{total} tests: {pass_ct} PASS, {fail_ct} FAIL, {known_ct} known-FUSE-wrong")
+    if known_ct:
+        print(f"note: {known_ct} cases differ from FUSE on purpose -- see "
+              "tests/fuse/known-fuse-wrong.txt")
     if first_fails:
         print("\nFailures (first 10):")
         for f in first_fails: print(" ", f)

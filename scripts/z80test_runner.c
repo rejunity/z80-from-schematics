@@ -99,16 +99,22 @@ int main(int argc, char **argv)
     s->mem[0x0010] = 0xC9;        /* RET */
     s->mem[0x1601] = 0xC9;        /* RET */
 
-    /* Port-input convention. The z80test IN-block subtests target port 0xFE
-       (the ZX Spectrum ULA) and check that the read value is 0xBF —
-       which is what the ULA returns when no keyboard keys are pressed
-       AND the EAR input is high (the test's earlier "ld a,7 / out (fe),a"
-       configures the ULA so this is true). Make every address whose
-       low byte is 0xFE return 0xBF; everything else returns 0xFF
-       (open-bus convention). */
+    /* Port-input convention -- match redcode/Z80's sources/test-Z80.c
+       (Manuel Sainz de Baranda's reference harness) so we reproduce
+       Patrik Rak's silicon-captured CRCs exactly. The ZX Spectrum ULA
+       sits on every EVEN port and drives 0xBF when no keys pressed;
+       ODD ports are floating bus (0xFF on 48K with no peripherals).
+       Rak's INI / IND test loops over various BC values, so CRC
+       depends on the (port & 1) parity for each iteration.
+       Initialising io[] alone is NOT enough: Rak's outer test loop
+       does OUT to various ports as part of its setup, which would
+       write back into io[] and corrupt the read-side. Use the
+       s->io_ula_idle bypass that ignores io[] for IORDs and always
+       returns the pure parity pattern, matching redcode's static
+       cpu_in callback. With this, z80doc 098 INI / 099 IND and
+       z80full 098 / 099 finally produce Rak's expected CRC. */
     memset(s->io, 0xFF, 65536);
-    for (int hi = 0; hi < 256; hi++)
-        s->io[(hi << 8) | 0xFE] = 0xBF;
+    s->io_ula_idle = 1;
 
     /* Exit sentinel: when the test's outer RET pops a return address of 0,
        we'll see PC == 0 and stop. The cleanest way: leave SP pointing at a

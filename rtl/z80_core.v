@@ -123,7 +123,16 @@ module z80_core (
         .m1_n(m1_n), .mreq_n(mreq_n), .iorq_n(iorq_n),
         .rd_n(rd_n), .wr_n(wr_n), .rfsh_n(rfsh_n)
     );
-    assign halt_n   = halted ? 1'b0 : 1'b1;
+    // Silicon-faithful halt pin: assert at T4.N of the HALT instruction's
+    // M1 (one half-T-state before instruction-done flips `halted`), so
+    // the pin LEADS the flag by one phase -- matches perfectz80's
+    // gate-level trace on prog10_halt_nmi / prog19_nmi_in_int. After
+    // instruction-done, the `halted` register takes over. Mirrors
+    // cmodel/z80_core.c halt_n driving.
+    wire exec_halt_in_m1 = (exec_w == `EXEC_HALT)
+                        && (bus_op == `BUSOP_M1)
+                        && (t_state == 4'd4) && (phi == 1'b1);
+    assign halt_n   = (halted || exec_halt_in_m1) ? 1'b0 : 1'b1;
     assign busack_n = bus_granted ? 1'b0 : 1'b1;
     assign dbg_t = t_state; assign dbg_phi = phi; assign dbg_m = m_cycle;
 
@@ -228,6 +237,57 @@ module z80_core (
     // aux_w[0] (the dec/inc bit), readable here without dependence on rf_n.
     wire [8:0] bk_ini = {1'b0, tmpl} + {1'b0, (rf[`RFP_BC][7:0] + (aux_w[0] ? 8'hFF : 8'h1))};
     wire [8:0] bk_out = {1'b0, tmpl} + {1'b0, (rf[`RFP_HL][7:0] + (aux_w[0] ? 8'hFF : 8'h1))};
+
+    // Banks-2018 INIR/INDR/OTIR/OTDR repeat-M-cycle flag fold-in.
+    // Mirrors redcode INXR_OTXR_COMMON exactly (see scripts/refs/
+    // redcode_z80/Z80.c line 1233). Inputs: data byte (tmpl after the
+    // IN/MRD M-cycle), newB (B post-decrement), bk = {hcf, t[7:0]}
+    // 9-bit sum (bk_ini for INxR, bk_out for OTxR), pch = high byte of
+    // post-rewind PC (= (PC-2)[15:8]) used for YF/XF fold-in.
+    function [7:0] banks_io_rep_f;
+        input [7:0] data;
+        input [7:0] newB;
+        input [8:0] bk;
+        input [7:0] pch;
+        reg [7:0] t;
+        reg hcf;
+        reg [7:0] pf_arg;
+        reg pf_bit;
+        reg hf, cf;
+        begin
+            t = bk[7:0];
+            hcf = bk[8];
+            // redcode's INXR_OTXR_COMMON: PF_PARITY(p ^ ((B +/- 1) & 7))
+            // where p = (t & 7) ^ newB. Earlier this missed the `^ newB`
+            // term, which broke RTL z80full 102/103 INIR/INDR -> NOP'
+            // (CRC 62B504C4 / 21477131 vs expected 454E3531 / 06BC40C4).
+            if (hcf) begin
+                cf = 1'b1;
+                if (data[7]) begin
+                    hf     = (newB[3:0] == 4'h0) ? 1'b1 : 1'b0;
+                    pf_arg = ((t & 8'h07) ^ newB)
+                           ^ ((newB - 8'd1) & 8'h07);
+                end else begin
+                    hf     = (newB[3:0] == 4'hF) ? 1'b1 : 1'b0;
+                    pf_arg = ((t & 8'h07) ^ newB)
+                           ^ ((newB + 8'd1) & 8'h07);
+                end
+            end else begin
+                cf     = 1'b0;
+                hf     = 1'b0;
+                pf_arg = ((t & 8'h07) ^ newB)
+                       ^ (newB & 8'h07);
+            end
+            pf_bit = ~(^pf_arg);
+            banks_io_rep_f =
+                  (newB & `Z80_SF)               // SF = newB.7
+                | (pch & (`Z80_YF | `Z80_XF))    // YF=PCi.13; XF=PCi.11
+                | (data[7] ? `Z80_NF : 8'h00)    // NF = data.7
+                | (hf      ? `Z80_HF : 8'h00)
+                | (pf_bit  ? `Z80_PF : 8'h00)
+                | (cf      ? `Z80_CF : 8'h00);   // ZF = 0
+        end
+    endfunction
 
     always @* begin
         alu_a = A_cur;
@@ -355,6 +415,18 @@ module z80_core (
         prefix_n = prefix; iff1_n = iff1; iff2_n = iff2; im_n = im; halted_n = halted;
         tmp8_n = tmp8; tmpl_n = tmpl; tmph_n = tmph; tmp16_n = tmp16;
         reg_q_n = reg_q; f_modified_n = f_modified;
+        // Detect F-write THIS M-cycle. Mirrors cmodel/z80_core.c's
+        // z80_setF() which sets c->f_modified = true on every F write.
+        // alu_md != FLAG_NONE means the ALU is computing flags and the
+        // resulting alu_fout will be written to rf_n[RFP_AF][7:0] by
+        // one of the EXEC handlers below. Set f_modified_n=1 so the
+        // Q-update at instruction-done picks the new F (silicon-
+        // faithful per Sean Young §4.1) instead of zeroing it -- the
+        // earlier `rf_n != rf` comparator zero'd Q whenever an F-write
+        // happened to leave F bit-identical (e.g. SCF chained with no
+        // prior CF set), which is the wrong semantic and broke z80full
+        // 007 SCF+CCF + 102/103 INIR/INDR -> NOP'.
+        if (alu_md != `FLAG_NONE) f_modified_n = 1'b1;
         cycle_n = cycle + 32'd1; instr_count_n = instr_count; decoded_n = decoded;
         fin = 1'b0;
         add16 = 17'd0; f16 = 8'd0;
@@ -477,9 +549,15 @@ module z80_core (
                 `EXEC_DI: begin iff1_n = 1'b0; iff2_n = 1'b0; fin = 1'b1; end
                 `EXEC_EI: begin iff1_n = 1'b1; iff2_n = 1'b1; ei_delay_n = 1'b1; fin = 1'b1; end
                 `EXEC_HALT: begin
+                    // Silicon-faithful per Brewer 2014 + Woodmass HALT2INT:
+                    // PC stays past the HALT byte (M1 fetch already
+                    // incremented it; do NOT decrement). HALT NOP M-cycles
+                    // re-fetch at PC (= post-HALT-byte); NMI/INT exit
+                    // doesn't bump PC further (it was already correct).
+                    // Mirrors cmodel/z80_core.c EXEC_HALT after the
+                    // 2026-06-18 PC-convention flip; FUSE test 76 enters
+                    // known-fuse-wrong as a result.
                     halted_n = 1'b1;
-                    // back PC up to the HALT opcode (mirrors cmodel/z80_control.c)
-                    rf_n[`RFP_PC] = rf_n[`RFP_PC] - 16'd1;
                     fin = 1'b1;
                 end
 
@@ -918,6 +996,12 @@ module z80_core (
                             if (aux_w[3] && bbc != 16'd0) begin
                                 rf_n[`RFP_PC] = rf[`RFP_PC] - 16'd2;
                                 rf_n[`RFP_WZ] = rf[`RFP_PC] - 16'd1;
+                                /* Banks-2018 LDIR/LDDR repeat YF/XF fold-in:
+                                 * overwrite YF=PC.13, XF=PC.11 (high byte of
+                                 * post-rewind PC = rf[PC]-2). See
+                                 * cmodel/z80_core.c LDI/LDIR repeat block. */
+                                rf_n[`RFP_AF][7:0] = (alu_fout & ~(`Z80_YF | `Z80_XF))
+                                    | ((rf[`RFP_PC][15:8] - 8'd0) & (`Z80_YF | `Z80_XF));
                                 startm(`BUSOP_INTERNAL, rf[`RFP_PC] - 16'd2, 8'h0, 4'd5);
                             end else fin = 1'b1;
                         end else fin = 1'b1;
@@ -933,6 +1017,11 @@ module z80_core (
                             if (aux_w[3] && rf[`RFP_BC] != 16'd0 && !(F_cur & `Z80_ZF)) begin
                                 rf_n[`RFP_PC] = rf[`RFP_PC] - 16'd2;
                                 rf_n[`RFP_WZ] = rf[`RFP_PC] - 16'd1;
+                                /* Banks-2018 CPIR/CPDR repeat YF/XF fold-in:
+                                 * overwrite YF=PC.13, XF=PC.11. F_cur is the
+                                 * current F from CPI's BLOCK_CP result. */
+                                rf_n[`RFP_AF][7:0] = (F_cur & ~(`Z80_YF | `Z80_XF))
+                                    | ((rf[`RFP_PC][15:8] - 8'd0) & (`Z80_YF | `Z80_XF));
                                 startm(`BUSOP_INTERNAL, rf[`RFP_PC] - 16'd2, 8'h0, 4'd5);
                             end else fin = 1'b1;
                         end else fin = 1'b1;
@@ -949,6 +1038,15 @@ module z80_core (
                             rf_n[`RFP_AF][7:0] = alu_fout;
                             if (aux_w[3] && bnewB != 8'h0) begin
                                 rf_n[`RFP_PC] = rf[`RFP_PC] - 16'd2;
+                                rf_n[`RFP_WZ] = rf[`RFP_PC] - 16'd1;
+                                /* INIR/INDR Banks-2018 fold-in: full F
+                                 * recompute via banks_io_rep_f using
+                                 * bk_ini (= data + (C +/- 1), 9-bit).
+                                 * pch source is the high byte of the
+                                 * post-rewind PC. */
+                                rf_n[`RFP_AF][7:0] = banks_io_rep_f(
+                                    tmpl, bnewB, bk_ini,
+                                    (rf[`RFP_PC] - 16'd2) >> 8);
                                 startm(`BUSOP_INTERNAL, rf[`RFP_PC] - 16'd2, 8'h0, 4'd5);
                             end else fin = 1'b1;
                         end else fin = 1'b1;
@@ -966,6 +1064,14 @@ module z80_core (
                             rf_n[`RFP_AF][7:0] = alu_fout;
                             if (aux_w[3] && bnewB != 8'h0) begin
                                 rf_n[`RFP_PC] = rf[`RFP_PC] - 16'd2;
+                                rf_n[`RFP_WZ] = rf[`RFP_PC] - 16'd1;
+                                /* OTIR/OTDR Banks-2018 fold-in: same
+                                 * formula as INIR/INDR but addend = L
+                                 * (post-increment HL low byte), embedded
+                                 * in bk_out. */
+                                rf_n[`RFP_AF][7:0] = banks_io_rep_f(
+                                    tmpl, bnewB, bk_out,
+                                    (rf[`RFP_PC] - 16'd2) >> 8);
                                 startm(`BUSOP_INTERNAL, rf[`RFP_PC] - 16'd2, 8'h0, 4'd5);
                             end else fin = 1'b1;
                         end else fin = 1'b1;
@@ -1006,13 +1112,18 @@ module z80_core (
                 if (fin) begin
                     instr_count_n = instr_count + 32'd1;
                     prefix_n = `PFX_NONE;
-                    // Commit Q: F if THIS instruction wrote F, else 0. Detect
-                    // F-modification by comparing rf_n[AF][7:0] vs rf[AF][7:0]
-                    // at instruction end.
-                    if (rf_n[`RFP_AF][7:0] != rf[`RFP_AF][7:0])
-                        reg_q_n = rf_n[`RFP_AF][7:0];
-                    else
-                        reg_q_n = 8'h0;
+                    // Commit Q: F if THIS instruction wrote F, else 0.
+                    // Per Sean Young §4.1 + ZEXALL <daa,cpl,scf,ccf>
+                    // CRC: Q resets to 0 after any non-F-modifying instr.
+                    // Earlier this branch compared rf_n[AF] != rf[AF],
+                    // which mis-detects "F written to same value" (e.g.
+                    // SCF chained when CF was already 1) as no-write and
+                    // zero'd Q. Now uses f_modified_n which was set to 1
+                    // upstream whenever this instruction's M-cycle invoked
+                    // the ALU with a flag mode -- mirrors c->f_modified
+                    // in cmodel/z80_core.c. Fixes z80full 007 SCF+CCF
+                    // and 102/103 INIR/INDR -> NOP' RTL regressions.
+                    reg_q_n = f_modified_n ? rf_n[`RFP_AF][7:0] : 8'h00;
                     f_modified_n = 1'b0;
                     // begin_next: decide bus grant / NMI / INT / HALT / next opcode
                     if (!busreq_n) begin
@@ -1027,8 +1138,10 @@ module z80_core (
                         if (nmi_sampled_n) begin
                             nmi_sampled_n = 1'b0;
                             nmi_pending_n = 1'b0;
-                            // exiting HALT: re-advance PC past the HALT byte
-                            if (halted_n) rf_n[`RFP_PC] = rf_n[`RFP_PC] + 16'd1;
+                            // Silicon-faithful HALT exit (Brewer 2014 /
+                            // Woodmass HALT2INT): PC is ALREADY past the
+                            // HALT byte (left there by EXEC_HALT). Just
+                            // clear halted_n; no PC bump.
                             halted_n = 1'b0;
                             iff2_n = iff1_n; iff1_n = 1'b0;
                             irq_seq_n = 2'd1;
@@ -1037,7 +1150,7 @@ module z80_core (
                             decoded_n = 1'b1; suppress_decode_n = 1'b1;
                         end else if (allow_int && int_sampled_n && iff1_n) begin
                             int_sampled_n = 1'b0;
-                            if (halted_n) rf_n[`RFP_PC] = rf_n[`RFP_PC] + 16'd1;
+                            // Same: silicon-faithful HALT exit, no PC bump.
                             halted_n = 1'b0; iff1_n = 1'b0; iff2_n = 1'b0;
                             irq_seq_n = 2'd2;
                             bus_op_n = `BUSOP_INTA; m_addr_n = rf_n[`RFP_PC]; m_wdata_n = 8'h0;
@@ -1065,7 +1178,9 @@ module z80_core (
     // ---- registers ----
     always @(posedge clk or negedge reset_n) begin
         if (!reset_n) begin
-            for (i = 0; i < 13; i = i + 1) rf[i] <= 16'hFFFF;
+            // 0x5555 matches perfectz80's gate-level Visual-Z80 netlist
+            // boot pattern; see cmodel/z80_core.c z80_reset() comment.
+            for (i = 0; i < 13; i = i + 1) rf[i] <= 16'h5555;
             rf[`RFP_PC] <= 16'h0000;
             reg_i <= 8'h00; reg_r <= 8'h00; ir <= 8'h00;
             phi <= 1'b0; t_state <= 4'd1; m_cycle <= 3'd1;

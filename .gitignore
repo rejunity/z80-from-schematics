@@ -34,3 +34,11 @@ __pycache__/
 # Z80 tooling virtualenv
 .venv-z80/
 /tests/iverilog/tb_fuse.v
+
+# ZX Spectrum 48K ROM. Amstrad permits non-commercial redistribution
+# (Cliff Lawson, 1999) but we don't currently vendor it in-tree; the
+# Woodmass runner accepts --rom <path> so any locally available 48.rom
+# can be used. Pull from FUSE-emulator or ZEsarUX installs, or extract
+# from FUSE.app/Contents/Resources/48.rom on macOS.
+spec48.rom
+48.rom

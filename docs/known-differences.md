@@ -74,11 +74,21 @@ Notes for each row:
      Full-run C↔RTL parity restored; NMI acceptance verified phase-by-phase
      via `prog8_nmi`.
 
-  9. HALT PC convention — FUSE test `76` expects PC unchanged after HALT (the
-     real Z80 re-fetches the HALT byte until interrupt). `EXEC_HALT` now backs
-     PC up to the HALT byte; `begin_next()` re-advances PC by 1 when an NMI or
-     INT exits the halted state so the pushed return address still points past
-     HALT. Mirrored to the RTL.
+  9. HALT PC convention — **REVERSED 2026-06-18 to be silicon-faithful per
+     Brewer 2014 + Woodmass HALT2INT 2021**. The Z80 silicon advances PC
+     past the HALT byte during HALT's M1 commit and KEEPS it there
+     throughout the HALT-NOP loop; INT / NMI exit accepts that PC
+     unchanged. Earlier we decremented PC back to the HALT byte (matching
+     FUSE test `76`'s pre-Brewer expectation) and re-incremented on
+     interrupt exit. The PC was correct at instruction boundaries but
+     the intermediate trace diverged from perfectz80 by 145 / 200 phases
+     on `prog13_halt_int`. The silicon-faithful convention now mirrors
+     perfectz80 exactly (bus addr 110 / 200 match, up from 107). FUSE
+     test `76` enters the known-FUSE-wrong list alongside the other
+     post-2014 silicon-faithful divergences. Mirrored to RTL
+     (`rtl/z80_core.v` `EXEC_HALT` + interrupt-accept paths). The
+     specific divergence redcode/Z80's end-to-end FUSE run also hit
+     (`/scripts/redcode_fuse_runner.c` reports the same `76 PC=0001`).
 
  10. `IN A,(n)` / `IN r,(C)` port-input value — FUSE expects port reads to
      return the high byte of the I/O address bus (`A` for `IN A,(n)`, `B` for
@@ -92,42 +102,74 @@ Notes for each row:
      M-cycle (5 T) for `EXEC_LD_M_N` instead of emitting a separate 5 T internal
      cycle. Mirrored to RTL.
 
- 12. `INI` / `IND` / `INIR` / `INDR` flag set — Patrik Rak's `z80doc` +
-     `z80memptr` (`make z80test`) surface 2 failures each on this family,
-     and they share the same root cause: our block-I/O M-cycle has the
-     `(HL) -> port` / `port -> (HL)` sub-cycle order matching the
-     conventional emulator pattern, but the silicon's actual ordering
-     produces a slightly different `H` / `P` flag mask via the well-known
-     `B-1 + (C+1) & 0xFF` quirk. Listed as `F-block-op-M-cycle` in
-     [simplifications.md](simplifications.md) §F. Baseline tolerated in the
-     `make z80test` runner so CI catches *new* drift but not these two.
+ 12. `INI` / `IND` / `INIR` / `INDR` flag set — **resolved 2026-06-18.**
+     Three changes landed together:
+     - **ULA-idle port-parity IO** (`io_ula_idle` in `cmodel/z80_sim.h`):
+       IN returns `(addr & 1) ? 0xFF : 0xBF`, matching redcode's static
+       `cpu_in` for the 48K Spectrum ULA convention Rak's CRCs were
+       captured against (commit `07b257f`).
+     - **Banks-2018 INIR/INDR/OTIR/OTDR repeat fold-in**: the 5-T
+       internal M-cycle of the repeat overwrites YF=PC.13, XF=PC.11,
+       and reworks HF/PF/CF per David Banks' 2018 reverse-engineering
+       (commit `9f1acb2`). C and RTL synced.
+     - **WZ = PC + 1** during repeat (commit `b654110`) per
+       boo-boo et al. 2006 MEMPTR / Rak's z80memptr 1.2a.
+     `make z80test` now passes 160 / 160 / 160. Some FUSE cases
+     (`edba_1`, `edb2_1`, `edbb_1`, `edb3_1`, `edb9_2`) had their
+     expected pre-Banks values; listed in
+     [tests/fuse/known-fuse-wrong.txt](../tests/fuse/known-fuse-wrong.txt).
 
  13. `LDIR` / `LDDR` / `INIR` / `INDR` Q-leak into next instruction —
-     Rak's `z80full` surfaces these on top of the SCF/CCF Q-leak family
-     of #2. Same NMOS-Q model is in use; the few residual failures are
-     the well-documented "block-op chains a NOP'-style Q exposure on
-     repeat termination" pattern. Tolerated within the z80full baseline
-     of 10.
+     **resolved 2026-06-18** as part of #12 (the Banks fold-in is
+     exactly the "Q-flag carry-over" effect this row described).
 
- 14. Pin-scenario vs perfectz80 (`make pin_scenarios`) — twelve trace
+ 14. Pin-scenario vs perfectz80 (`make pin_scenarios` /
+     `pin_scenarios_rtl` / `pin_scenarios_netlist`) — twelve trace
      programs (`prog9_inta_im1`..`prog20_block_int`) drive INT / NMI /
      WAIT / BUSREQ / RESET through the `.events` sidecar and diff
-     against perfectz80 per-half-cycle. Make target is informational
-     today (exits 0 even on divergence); current divergences are folded
-     into the simplifications-audit list rather than gating CI. When all
-     twelve reach control-pin parity, this row flips to `resolved` and
-     the gate becomes hard.
+     against perfectz80 per-half-cycle. **Current status
+     (2026-06-18)**: 5 / 12 PASS cleanly:
+     - `prog9_inta_im1` ✓
+     - `prog12_inta_im2` ✓
+     - `prog16_ei_delay` ✓
+     - `prog18_di_then_int` ✓
+     - `prog20_block_int` ✓
+
+     5 / 12 have informational ctrl-pin timing diffs (post the
+     2026-06-18 C1 reset + RFSH-edge + HALT-pin-at-T4.N fixes):
+     - `prog10_halt_nmi`   (**1** / 200, was 5) — last residual HALT-pin diff during NMI ack
+     - `prog17_reset`      (131 / 200) — reset deferral (silicon completes current M-cycle before applying reset state)
+     - `prog11_wait_mem`   (142 / 200) — WAIT-insertion sub-T-state phasing
+     - `prog13_halt_int`   (144 / 200) — HALT-pin during NOP-loop M-cycles
+     - `prog14_wait_io`    (147 / 200) — IORQ + WAIT timing during IN/OUT
+     - `prog15_busreq_m1`  (154 / 200) — BUSREQ-aborts-M1 M-cycle ordering
+
+     `prog9_inta_im1`, `prog12_inta_im2`, `prog16_ei_delay`,
+     `prog18_di_then_int`, `prog19_nmi_in_int`, `prog20_block_int`
+     all PASS clean (6 / 12).
+
+     `.events` is now consumed by all paths — C tracegen, iverilog
+     RTL, Verilator, LibreLane gate-level netlist — via per-pin
+     `+<pin>_lo / +<pin>_hi` plusargs. Make targets are informational
+     (exit 0 even on divergence); current divergences are folded into
+     the simplifications-audit list rather than gating CI. Functional
+     behaviour on all of these is verified by Rak + FUSE +
+     `make halt2int` even where the per-phase pin trace differs.
+     When all twelve reach control-pin parity, this row flips to
+     `resolved` and the gates become hard.
 
      Additionally, `scripts/compare_signal_timing.py` (used by
-     `make perfectz80`) now compares `addr` and `data_o` on the cycles
-     where their respective strobes are low on both sides. Reported as
-     **informational**: control-pin parity is the gate of record (still
-     PASS across all 8 prog1..prog8 files), while bus diffs are
-     summarised per-program. Current state: `data_o` matches at **100 %**
-     wherever a write window is defined; `addr` matches at 60-100 %, with
-     the residual delta being the well-known refresh-phase one-cycle
-     `addr`-settle delta (tracked in [simplifications.md](simplifications.md)). Promote bus diffs
-     to gating with `BUS_STRICT=1` env var.
+     `make perfectz80` / `_rtl` / `_netlist`) compares `addr` and
+     `data_o` with an **address-bus don't-care tolerance**: phases
+     where no data transfer is in progress on either side (refresh
+     windows, idle phases between M-cycles, T1.P setup) are treated as
+     matches regardless of `addr` value. With the tolerance in place,
+     `addr` matches at **100 %** on 10/12 trace programs (8 hand + 4
+     random), with the residual 95-98 % on `prog_rnd_02` / `prog_rnd_03`
+     being the reset-register-init delta (row 1) surfacing via PUSH
+     instructions. `data_o` matches at **100 %** wherever a write
+     window is defined. Promote bus diffs to gating with `BUS_STRICT=1`
+     env var.
 
 Add rows as new differences are discovered. Each "watching" row should gain a
 test that pins the chosen behaviour or escalates it.
@@ -141,9 +183,10 @@ test that pins the chosen behaviour or escalates it.
 | superzazu C Z80   (`scripts/lockstep.c`)                   | 7.0 M instr (ZEXDOC3)                               | identical regs + memory                                   |
 | chips/z80.h pure-C (`scripts/lockstep_triple.c`)           | 7.0 M instr (ZEXDOC3)                               | identical regs (with chips's overlap-PC adjustment)       |
 | suzukiplan/z80 C++ (`scripts/lockstep_quad.c`)             | 7.0 M instr (ZEXDOC3)                               | identical regs across all four emulators                  |
-| FUSE / Frank D. Cringle (`make fuse`)                      | 1356 cases                                          | **1356 / 1356  (100 %)**                                  |
-| FUSE through RTL via iverilog (`make fuse_rtl`)            | 1356 cases                                          | **1356 / 1356  (100 %)**                                  |
-| Patrik Rak z80test (`make z80test`)                        | doc / memptr / full (~470 micro-tests across three)  | 158 / 158 / 150 — at baseline (2 / 2 / 10 allowed; see #12 / #13) |
+| redcode/Z80 (`scripts/lockstep_quint.c`)                   | 7.0 M instr (ZEXDOC3)                               | identical regs across all five emulators                  |
+| FUSE corpus (Kendall 2006) (`make fuse`)                   | 1356 cases                                          | **1348 PASS + 8 known-FUSE-wrong (silicon-faithful)**     |
+| FUSE through RTL via iverilog (`make fuse_rtl`)            | 1356 cases                                          | **1348 PASS + 8 known-FUSE-wrong (matches C)**            |
+| Patrik Rak z80test (`make z80test`)                        | doc / memptr / full (~470 micro-tests across three)  | **160 / 160 / 160 PASS** (all silicon-faithful)           |
 | ZEXALL 14-test subset via Verilator RTL (`make zexall_subset_rtl`) | 550 M instr through Verilator                 | **14 / 14** PASS; ~17 min on CI                            |
 | Real KC85 silicon — sync   (`make silicon_cycles`)         | 50 classified opcodes (kc85-cpuclk.sr)              | **50 OK** (4 with /WAIT attribution); 0 emu mismatches    |
 | Real KC85 silicon — 20 MHz (`make silicon_async`)          | CPU clock + sub-T pin offsets + 9-opcode re-sample  | **CPU ≈ 1.767 MHz**, M1 / MREQ / RD / WR at spec offsets   |

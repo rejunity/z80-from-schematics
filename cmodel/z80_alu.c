@@ -253,7 +253,14 @@ uint8_t z80_flags_scf(uint8_t a, uint8_t oldF, uint8_t q)
 {
     uint8_t f = oldF & (Z80_SF | Z80_ZF | Z80_PF);
     f |= Z80_CF;                /* HF=0, NF=0 */
-    f |= (uint8_t)((a | q) & XY); /* NMOS Q-variant: X/Y from (A | Q) */
+    /* Zilog NMOS Q-leak per Sean Young §4.1 & redcode:
+     * Y/X = A.Y/X OR (F.Y/X XOR Q.Y/X). Q = F left by the previous
+     * F-modifying instruction or 0. Then F XOR Q vanishes right after
+     * an F-modifying instr (F == Q) and surfaces the unchanged F bits
+     * after a non-F-modifying instr (Q == 0). Our earlier `(A | Q)`
+     * had the leak condition backwards. Verified via redcode INSN(scf)
+     * in scripts/refs/redcode_z80/Z80.c. */
+    f |= (uint8_t)((a | (oldF ^ q)) & XY);
     return f;
 }
 
@@ -263,7 +270,8 @@ uint8_t z80_flags_ccf(uint8_t a, uint8_t oldF, uint8_t q)
     uint8_t f = oldF & (Z80_SF | Z80_ZF | Z80_PF);
     if (oldc) f |= Z80_HF;      /* HF = old CF */
     else      f |= Z80_CF;      /* CF = ~old CF */
-    f |= (uint8_t)((a | q) & XY); /* NMOS Q-variant: X/Y from (A | Q) */
+    /* Same Q-leak formula as SCF -- see comment there. */
+    f |= (uint8_t)((a | (oldF ^ q)) & XY);
     return f;
 }
 

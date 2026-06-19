@@ -43,12 +43,27 @@ jobs:
         run: make silicon_cycles
       - name: Real-silicon sub-T-state timing (sigrok 20 MHz capture)
         run: make silicon_async
-      - name: 4-way lockstep on ZEXDOC3 (mine + superzazu + chips + suzukiplan)
+      - name: 5-way lockstep on ZEXDOC3 (mine + superzazu + chips + suzukiplan + redcode)
         run: |
           make tracegen
+          # Vendored redcode/Z80 is built as a separate .o (C, not C++)
+          # with the features Rak triangulation needs.
+          cc -std=gnu11 -O2 -w \
+            -Iscripts/refs/redcode_z80 -Iscripts/refs/redcode_z80/Zeta \
+            -DZ80_STATIC -DZ80_WITH_LOCAL_HEADER -DZ80_WITH_EXECUTE \
+            -DZ80_WITH_Q -DZ80_WITH_PARITY_COMPUTATION \
+            -DZ80_WITH_SPECIAL_RESET -DZ80_WITH_FULL_IM0 \
+            -DZ80_WITH_UNOFFICIAL_RETI \
+            -c scripts/refs/redcode_z80/Z80.c -o build/redcode_Z80.o
           c++ -std=gnu++17 -O2 -w -Iscripts -Icmodel \
-            scripts/lockstep_quad.c build/libz80.a -o build/bin/lockstep_quad
-          build/bin/lockstep_quad tests/zex/zexdoc3.com 20000000
+            -Iscripts/refs/redcode_z80 -Iscripts/refs/redcode_z80/Zeta \
+            -DZ80_STATIC -DZ80_WITH_LOCAL_HEADER -DZ80_WITH_EXECUTE \
+            -DZ80_WITH_Q -DZ80_WITH_PARITY_COMPUTATION \
+            -DZ80_WITH_SPECIAL_RESET -DZ80_WITH_FULL_IM0 \
+            -DZ80_WITH_UNOFFICIAL_RETI \
+            scripts/lockstep_quint.c build/redcode_Z80.o build/libz80.a \
+            -o build/bin/lockstep_quint
+          build/bin/lockstep_quint tests/zex/zexdoc3.com 20000000
 
   rtl-tests:
     name: RTL (iverilog elaboration + FUSE through RTL)
@@ -112,6 +127,33 @@ jobs:
       - name: Run Rak's z80doc + z80memptr + z80full and check baselines
         run: make z80test
 
+  z80test-rtl:
+    name: Patrik Rak z80test through Verilator RTL (doc / memptr / full)
+    runs-on: ubuntu-latest
+    # Verilator is ~20x slower than the C model on Rak's workload.
+    # Healthy ubuntu-latest run: ~18 min total wall clock (z80doc ~5,
+    # z80memptr ~3, z80full ~5, plus ~2 build/setup). Slow CI runners
+    # have been seen at ~30 min total (Verilator at 0.26 vs 0.55 Mi/s),
+    # so previous 30-min budget killed the job 10s before z80full's
+    # PASS line printed. Bumped to 60 to keep healthy + slow runs both
+    # green.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install C + Verilator
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential python3 verilator
+      - name: Build Verilator sim_z80test
+        run: make verilator_z80test
+      - name: Run Rak z80doc through RTL
+        run: stdbuf -oL build/obj_dir_z80test/sim_z80test tests/z80test/z80doc.tap 5000000000 0
+      - name: Run Rak z80memptr through RTL
+        run: stdbuf -oL build/obj_dir_z80test/sim_z80test tests/z80test/z80memptr.tap 5000000000 0
+      - name: Run Rak z80full through RTL
+        run: stdbuf -oL build/obj_dir_z80test/sim_z80test tests/z80test/z80full.tap 8000000000 0
+
   parity-tests:
     name: Parity (C vs iverilog vs Verilator + perfectz80)
     runs-on: ubuntu-latest
@@ -136,13 +178,32 @@ jobs:
         # programs (prog_rnd_01..04 from scripts/gen_random_trace_progs.py)
         # give opcode-mix coverage no hand-written program would have.
         run: make perfectz80_rtl
-      - name: Pin-scenario programs vs perfectz80 (INFORMATIONAL)
+      - name: Pin-scenario programs vs perfectz80 — C path (INFORMATIONAL)
         # 12 trace programs (prog9..prog20) that drive INT / NMI / WAIT /
         # BUSREQ / RESET via the .events sidecar. Currently surface real
         # silicon-faithfulness divergences vs gate-level — the make target
         # is informational and exits 0 even on divergences. CI shows the
         # findings without going red.
         run: make pin_scenarios
+      - name: Pin-scenario programs vs perfectz80 — iverilog RTL path (INFORMATIONAL)
+        # Same 12 scenarios through the iverilog RTL testbench. .events
+        # is now plumbed via per-pin +<pin>_lo / +<pin>_hi plusargs
+        # (compare_signal_timing.py encodes the sidecar). Same
+        # informational status.
+        run: make pin_scenarios_rtl
+      - name: Upload per-program VCDs as artifact (open in GTKWave / Surfer)
+        # compare_signal_timing.py + the pin-scenario runner emit
+        # build/vcd/<prog>.<source>.vcd containing both our pins (top
+        # scope) and perfectz80's pins (perfectz80.* scope) so the two
+        # render side-by-side from one file. Keep them for ~14 days
+        # post-CI for offline inspection of any informational diffs.
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: parity-vcds
+          path: build/vcd/
+          if-no-files-found: warn
+          retention-days: 14
 
   # =====================================================================
   # LIBRELANE GATE-LEVEL — "ultimate test". Synthesise rtl/*.v via
@@ -215,6 +276,13 @@ jobs:
       - name: Gate-level netlist vs perfectz80 (8 hand + 4 random = 12 programs)
         run: make perfectz80_netlist
 
+      - name: Pin-scenarios vs perfectz80 — gate-level netlist (INFORMATIONAL)
+        # 12 pin-scenario programs (prog9..prog20) driven through the
+        # synthesised sky130 netlist via tb_z80_netlist.v's .events
+        # plusarg support. Informational like the C and iverilog
+        # pin_scenarios* targets.
+        run: make pin_scenarios_netlist
+
       - name: Upload synthesised netlist artifact
         if: always()
         uses: actions/upload-artifact@v6
@@ -222,6 +290,18 @@ jobs:
           name: synth-netlist
           path: build/synth/z80_core.nl.v
           retention-days: 30
+      - name: Upload gate-level netlist per-program VCDs
+        # build/vcd/<prog>.netlist.vcd from perfectz80_netlist +
+        # pin_scenarios_netlist. Each contains our synthesised-netlist
+        # pins + perfectz80's gate-level pins under perfectz80.* scope
+        # for direct comparison.
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: netlist-vcds
+          path: build/vcd/
+          if-no-files-found: warn
+          retention-days: 14
 
   # =====================================================================
   # LIBRELANE GATE-LEVEL + BASIC — same synthesised netlist as

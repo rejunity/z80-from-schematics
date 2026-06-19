@@ -44,7 +44,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
-.PHONY: all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test
+.PHONY: all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test verilator_z80test z80test_rtl halt2int halt2int_probe
 
 all: cmodel ctest
 
@@ -112,9 +112,9 @@ $(BIN)/z80test_runner: $(SCRIPTS)/z80test_runner.c $(CMODEL_LIB) $(CMODEL_HDRS)
 #                    Zilog NMOS Q, not Toshiba) + LDIR/LDDR->NOP'
 z80test: z80test_runner
 	@set -e; \
-	stdbuf -oL $(BIN)/z80test_runner $(TESTS)/z80test/z80doc.tap     5000000000  2; \
-	stdbuf -oL $(BIN)/z80test_runner $(TESTS)/z80test/z80memptr.tap  5000000000  2; \
-	stdbuf -oL $(BIN)/z80test_runner $(TESTS)/z80test/z80full.tap    8000000000 10
+	stdbuf -oL $(BIN)/z80test_runner $(TESTS)/z80test/z80doc.tap     5000000000  0; \
+	stdbuf -oL $(BIN)/z80test_runner $(TESTS)/z80test/z80memptr.tap  5000000000  0; \
+	stdbuf -oL $(BIN)/z80test_runner $(TESTS)/z80test/z80full.tap    8000000000  0
 
 # FUSE z80-test harness (Frank D. Cringle test corpus, 1356 cases)
 fuse_runner: cmodel $(BIN)/fuse_runner
@@ -145,6 +145,20 @@ silicon_cycles: tracegen
 # from the cpuclk synchronous capture.
 silicon_async: tracegen
 	@$(PYTHON) $(SCRIPTS)/sigrok_async_timing.py tests/sigrok/kc85-20mhz.sr --silicon-check
+
+# HALT-to-INT acceptance T-state timing probe inspired by Mark Woodmass's
+# HALT2INT v3 (2021). Sweeps INT-pulse timing across the HALT NOP M-cycle
+# and verifies the INT-to-INTA delay stays in the silicon-faithful 3-8 T
+# range (per Brewer 2014 + Z80 datasheet). HALT2INT v3 itself depends on
+# Spectrum ULA contention timing we don't model; this probe extracts the
+# CPU-only silicon property HALT2INT verifies.
+halt2int_probe: cmodel $(BIN)/halt2int_probe
+$(BIN)/halt2int_probe: $(SCRIPTS)/halt2int_probe.c $(CMODEL_LIB) $(CMODEL_HDRS)
+	@mkdir -p $(BIN)
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(CMODEL_LIB) -o $@
+
+halt2int: halt2int_probe
+	@$(BIN)/halt2int_probe
 
 # Gate-level signal-timing diff vs perfectz80 (Brian Silverman et al's
 # transistor-level netlist port of the Visual Z80 die scan). Compares
@@ -277,8 +291,7 @@ basic_netlist_tests: verilator_basic_netlist
 # between our model and perfectz80 — exit 0 unconditionally so CI shows
 # the findings without flipping red; they're tracked alongside
 # docs/simplifications.md once a concrete fix lands.
-pin_scenarios: tracegen $(BIN)/perfectz80_runner
-	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py 200 \
+PIN_SCENARIOS = \
 	  $(TESTS)/traces/pin_scenarios/prog9_inta_im1.hex \
 	  $(TESTS)/traces/pin_scenarios/prog10_halt_nmi.hex \
 	  $(TESTS)/traces/pin_scenarios/prog11_wait_mem.hex \
@@ -290,8 +303,24 @@ pin_scenarios: tracegen $(BIN)/perfectz80_runner
 	  $(TESTS)/traces/pin_scenarios/prog17_reset.hex \
 	  $(TESTS)/traces/pin_scenarios/prog18_di_then_int.hex \
 	  $(TESTS)/traces/pin_scenarios/prog19_nmi_in_int.hex \
-	  $(TESTS)/traces/pin_scenarios/prog20_block_int.hex \
+	  $(TESTS)/traces/pin_scenarios/prog20_block_int.hex
+
+pin_scenarios: tracegen $(BIN)/perfectz80_runner
+	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py 200 $(PIN_SCENARIOS) \
 	  || echo "(pin_scenarios is informational; failures are expected silicon-faithfulness findings)"
+
+# Same pin-scenarios but driving the iverilog RTL testbench (now that
+# .events is wired into tb_z80.v via per-pin plusargs — see the
+# tests/iverilog/tb_z80.v initial block). Informational.
+pin_scenarios_rtl: iverilog $(BIN)/perfectz80_runner
+	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --rtl=iverilog 200 $(PIN_SCENARIOS) \
+	  || echo "(pin_scenarios_rtl is informational; failures are expected silicon-faithfulness findings)"
+
+# Same pin-scenarios through the LibreLane-synthesised sky130 gate-level
+# netlist (tb_z80_netlist.v consumes the same plusargs). Informational.
+pin_scenarios_netlist: iverilog_netlist $(BIN)/perfectz80_runner
+	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --rtl=netlist 200 $(PIN_SCENARIOS) \
+	  || echo "(pin_scenarios_netlist is informational; failures are expected silicon-faithfulness findings)"
 
 $(BIN)/perfectz80_runner: $(SCRIPTS)/perfectz80_runner.c $(SCRIPTS)/refs/perfectz80/perfectz80.c $(SCRIPTS)/refs/perfectz80/netlist_sim.c
 	@mkdir -p $(BIN)
@@ -419,6 +448,33 @@ zexall_subset_c: zexrunner tests/zex/zexall_subset.com
 
 zexall_subset_rtl: verilator_zex tests/zex/zexall_subset.com
 	@$(BUILD)/obj_dir_zex/sim_zex tests/zex/zexall_subset.com 1000000000
+
+# Patrik Rak z80test through the Verilated RTL. Mirrors verilator_zex /
+# zexall_subset_rtl shape: a single sim_z80test binary loads any of the
+# z80doc / z80memptr / z80full .tap variants and reports pass/fail.
+# Verilator is ~20x slower than the C model -- locally each variant
+# runs in 6-15 min. Gate to CI's silicon-faithfulness job (`z80test_rtl`).
+verilator_z80test: dirs
+	@if [ ! -f $(TESTS)/verilator/sim_z80test.cpp ]; then echo "sim_z80test.cpp not present."; exit 0; fi; \
+	printf '#include <cstdio>\nint main(){return 0;}\n' > $(BUILD)/.cxxcheck.cpp; \
+	if ! c++ -std=gnu++17 -c $(BUILD)/.cxxcheck.cpp -o $(BUILD)/.cxxcheck.o >/dev/null 2>&1; then \
+	  echo "SKIP verilator_z80test: host C++17 toolchain cannot compile libc++ headers."; \
+	  exit 0; \
+	fi; \
+	echo "== building verilator sim_z80test =="; \
+	$(VERILATOR) --cc --exe --build -j 0 -O3 -Wall \
+	  -Wno-fatal -Wno-WIDTH -Wno-CASEINCOMPLETE -Wno-UNUSEDSIGNAL \
+	  --Mdir $(BUILD)/obj_dir_z80test --top-module z80_core \
+	  -I$(RTL) $(RTL_SRCS) $(abspath $(TESTS)/verilator/sim_z80test.cpp) -o sim_z80test && \
+	echo "Built $(BUILD)/obj_dir_z80test/sim_z80test"
+
+# Run all 3 Rak variants through the RTL. Tolerances mirror `z80test`
+# (the C-model target): 0 / 0 / 0 -- the model is silicon-faithful.
+z80test_rtl: verilator_z80test
+	@set -e; \
+	stdbuf -oL $(BUILD)/obj_dir_z80test/sim_z80test $(TESTS)/z80test/z80doc.tap    5000000000 0; \
+	stdbuf -oL $(BUILD)/obj_dir_z80test/sim_z80test $(TESTS)/z80test/z80memptr.tap 5000000000 0; \
+	stdbuf -oL $(BUILD)/obj_dir_z80test/sim_z80test $(TESTS)/z80test/z80full.tap   8000000000 0
 
 # BASIC ROM driver through the Verilated RTL (sim_basic). Builds the
 # Verilator harness analogously to verilator_zex. Same C++17 self-check

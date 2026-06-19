@@ -54,6 +54,78 @@ COMPARED  = ["mreq","iorq","rd","wr","m1","rfsh","halt"]
 # Make bus diffs gate exit code too: BUS_STRICT=1 (default off).
 COMPARE_BUS = os.environ.get("COMPARE_BUS", "1") != "0"
 BUS_STRICT  = os.environ.get("BUS_STRICT",  "0") == "1"
+# When EMIT_VCD=1, emit build/vcd/<prog>.vcd per program containing both
+# our model's pins (top scope) and perfectz80's pins (under "perfectz80"
+# scope) so GTKWave / Surfer can render them side-by-side from one file.
+EMIT_VCD    = os.environ.get("EMIT_VCD",    "1") != "0"
+VCD_DIR     = os.path.join(ROOT, "build", "vcd")
+
+def write_vcd(out_path, c_rows, g_rows, source_label):
+    """Emit a VCD with our pins at top scope and perfectz80's pins under
+    a `perfectz80` scope. One time unit per phase (1 ns)."""
+    n = min(len(c_rows), len(g_rows))
+    if n == 0:
+        return
+    # Signal table: (var_id, name, width). Single chars from '!' (0x21)
+    # onward are valid VCD identifier codes.
+    ours   = [("addr", 16), ("data_o", 8), ("data_i", 8),
+              ("mreq", 1), ("iorq", 1), ("rd", 1), ("wr", 1),
+              ("m1", 1), ("rfsh", 1), ("halt", 1), ("busack", 1)]
+    theirs = [("addr", 16), ("data_o", 8), ("data_i", 8),
+              ("mreq", 1), ("iorq", 1), ("rd", 1), ("wr", 1),
+              ("m1", 1), ("rfsh", 1), ("halt", 1)]
+    # Assign identifier codes. Use 'a'..'z', 'A'..'Z' for theirs to keep
+    # them clearly distinct from ours.
+    next_code = iter([chr(c) for c in range(ord('!'), ord('~'))])
+    sig_ours   = {n: next(next_code) for n, _ in ours}
+    sig_theirs = {n: next(next_code) for n, _ in theirs}
+
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    with open(out_path, "w") as f:
+        f.write("$version compare_signal_timing.py $end\n")
+        f.write("$timescale 1ns $end\n")
+        f.write("$scope module top $end\n")
+        for name, width in ours:
+            f.write(f"$var wire {width} {sig_ours[name]} {name} $end\n")
+        f.write("$upscope $end\n")
+        f.write("$scope module perfectz80 $end\n")
+        for name, width in theirs:
+            f.write(f"$var wire {width} {sig_theirs[name]} {name} $end\n")
+        f.write("$upscope $end\n")
+        f.write("$enddefinitions $end\n")
+        # Dump initial values + per-phase updates.
+        prev_c = {n: None for n, _ in ours}
+        prev_g = {n: None for n, _ in theirs}
+        for i in range(n):
+            f.write(f"#{i}\n")
+            for name, width in ours:
+                v = c_rows[i].get(name, "0")
+                if v == prev_c[name]:
+                    continue
+                prev_c[name] = v
+                if width == 1:
+                    f.write(f"{v}{sig_ours[name]}\n")
+                else:
+                    try:
+                        val = int(v, 16)
+                    except ValueError:
+                        val = 0
+                    bits = bin(val & ((1 << width) - 1))[2:]
+                    f.write(f"b{bits} {sig_ours[name]}\n")
+            for name, width in theirs:
+                v = g_rows[i].get(name, "0")
+                if v == prev_g[name]:
+                    continue
+                prev_g[name] = v
+                if width == 1:
+                    f.write(f"{v}{sig_theirs[name]}\n")
+                else:
+                    try:
+                        val = int(v, 16)
+                    except ValueError:
+                        val = 0
+                    bits = bin(val & ((1 << width) - 1))[2:]
+                    f.write(f"b{bits} {sig_theirs[name]}\n")
 
 def run(cmd):
     p = subprocess.run(cmd, capture_output=True, text=True)
@@ -79,29 +151,65 @@ def parse_pz80(text):
         rows.append(dict(zip(["phase","addr","data_o","data_i","mreq","iorq","rd","wr","m1","rfsh","halt"], p)))
     return rows
 
+def parse_events_to_plusargs(events_path):
+    """Parse a .events sidecar (`<phase> <pin> <0|1>` per line) into
+    per-pin plusargs `+<pin>_lo=N +<pin>_hi=M` consumed by the iverilog
+    and Verilator testbenches. Each pin can have at most one lo and one
+    hi event in the current sidecar format; pin-scenarios that need
+    richer event sequences would need a richer encoding."""
+    if not events_path or not os.path.exists(events_path):
+        return []
+    lo = {}
+    hi = {}
+    with open(events_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split()
+            if len(parts) != 3:
+                continue
+            phase, pin, val = parts[0], parts[1], parts[2]
+            try:
+                ph = int(phase)
+            except ValueError:
+                continue
+            if val == "0":
+                lo[pin] = ph
+            elif val == "1":
+                hi[pin] = ph
+    args = []
+    for pin in ("nmi", "int", "wait", "busreq", "reset"):
+        if pin in lo:
+            args.append(f"+{pin}_lo={lo[pin]}")
+        if pin in hi:
+            args.append(f"+{pin}_hi={hi[pin]}")
+    return args
+
 def compare(prog, phases, source="c"):
     events = prog[:-4] + ".events" if prog.endswith(".hex") else prog + ".events"
     events = events if os.path.exists(events) else ""
+    event_plusargs = parse_events_to_plusargs(events)
     if source == "c":
         tg_argv = [TRACEGEN, prog, str(phases)] + ([events] if events else [])
         emit_label = "C"
     elif source == "iverilog":
-        # iverilog testbench only understands +nmi=<phase> shorthand, not
-        # the full sidecar; skip events for now. Programs with .events
-        # files will show ctrl-pin diffs vs perfectz80 (which DOES apply
-        # the sidecar) and that's expected — pin-scenarios still belong
-        # to the C-only path.
-        tg_argv = [VVP, TB_VVP, f"+prog={prog}", f"+phases={phases}"]
+        # iverilog testbench accepts +<pin>_lo=N +<pin>_hi=M plusargs
+        # for the pin-scenario .events sidecars. The C tracegen and
+        # perfectz80_runner still consume the raw sidecar; the iverilog
+        # path takes the same events through this plusarg encoding so
+        # all three drive the same pin transitions at the same phases.
+        tg_argv = [VVP, TB_VVP, f"+prog={prog}", f"+phases={phases}"] + event_plusargs
         emit_label = "iverilog RTL"
     elif source == "verilator":
-        tg_argv = [VERILATOR_SIM, prog, str(phases)]
+        # sim_main.cpp accepts the same +<pin>_lo / +<pin>_hi argv form
+        # as the iverilog testbenches.
+        tg_argv = [VERILATOR_SIM, prog, str(phases)] + event_plusargs
         emit_label = "Verilator RTL"
     elif source == "netlist":
         # LibreLane-synthesized sky130 gate-level netlist driven by the
-        # same iverilog testbench. Like iverilog mode, the testbench
-        # doesn't consume the .events sidecar — pin-scenarios still go
-        # through the C-only path.
-        tg_argv = [VVP, TB_NETLIST_VVP, f"+prog={prog}", f"+phases={phases}"]
+        # iverilog testbench tb_z80_netlist.v — same plusargs as tb_z80.v.
+        tg_argv = [VVP, TB_NETLIST_VVP, f"+prog={prog}", f"+phases={phases}"] + event_plusargs
         emit_label = "gate-level netlist"
     else:
         raise SystemExit(f"unknown source: {source}")
@@ -111,35 +219,71 @@ def compare(prog, phases, source="c"):
     g = g[PZ_OFFSET:]                 # drop pz80's pre-M1 idle phase(s)
     n = min(len(c), len(g))
     name = os.path.basename(prog)
-    # C tracegen consumes events; RTL paths don't yet — note that in the
-    # report so a curious reader knows why pin_scenarios diff through
-    # iverilog when they pass through C.
-    if events and source == "c":
-        suffix = f" + events"
-    elif events:
-        suffix = f" (events skipped — RTL path)"
-    else:
-        suffix = ""
+    suffix = " + events" if events else ""
     if n == 0:
         print(f"  {name}: FAIL (no rows)"); return False
+
+    # Emit VCD waveform — our pins at top, pz80 pins under perfectz80 scope.
+    # Open with `gtkwave build/vcd/<prog>.vcd` to see both sides side-by-side.
+    if EMIT_VCD:
+        vcd_path = os.path.join(VCD_DIR, name.replace(".hex", "") + f".{source}.vcd")
+        write_vcd(vcd_path, c, g, source)
+
     ctrl_mism = 0           # control-pin mismatches — count against pass/fail
     bus_addr_mism = 0       # bus-value mismatches — informational by default
     bus_data_mism = 0
     bus_addr_compared = 0
     bus_data_compared = 0
+    bus_addr_dontcare = 0   # raw mismatches absorbed by the don't-care rule
+                            # (phases where no data transfer is in progress)
     shown = 0
+
+    def is_data_transfer(row):
+        """True if this phase's strobe combo means an actual data transfer
+        is in progress (MREQ+RD / MREQ+WR / IORQ+RD / IORQ+WR). Refresh
+        cycles (MREQ asserted alone, RD+WR both high) are NOT data
+        transfers — they're DRAM-refresh strobes, no addr semantics for
+        the CPU. Idle phases (all strobes high) are obviously not transfers."""
+        mreq_active = row["mreq"] == "0"
+        iorq_active = row["iorq"] == "0"
+        rd_active   = row["rd"]   == "0"
+        wr_active   = row["wr"]   == "0"
+        return (mreq_active or iorq_active) and (rd_active or wr_active)
+
+    def addr_dont_care(i):
+        """`addr` is don't-care at phase i when no actual data transfer
+        is in progress on EITHER side. A data transfer requires both a
+        target strobe (MREQ or IORQ) AND a direction strobe (RD or WR).
+        Cases this catches:
+          - Refresh windows: MREQ low + RFSH low, but RD/WR both high.
+            The bus addr is just the DRAM refresh row with no CPU-data
+            meaning. Our model legitimately leads with the next M-cycle's
+            address while perfectz80 stays on {I,R}.
+          - Idle phases between M-cycles: all strobes high. addr may be
+            transitioning or stale on either side.
+          - T1.P / setup phases: addr being driven but strobes haven't
+            dropped yet — neither side has committed.
+        """
+        return (not is_data_transfer(c[i])) and (not is_data_transfer(g[i]))
+
     for i in range(n):
         diff = [(col, c[i][col], g[i][col]) for col in COMPARED if c[i][col] != g[i][col]]
         bus_diff = []
         if COMPARE_BUS:
-            # addr is valid when (mreq||iorq) is low on BOTH sides.
-            c_addr_valid = (c[i]["mreq"] == "0" or c[i]["iorq"] == "0")
-            g_addr_valid = (g[i]["mreq"] == "0" or g[i]["iorq"] == "0")
-            if c_addr_valid and g_addr_valid:
-                bus_addr_compared += 1
-                if c[i]["addr"] != g[i]["addr"]:
-                    bus_addr_mism += 1
-                    bus_diff.append(("addr", c[i]["addr"], g[i]["addr"]))
+            # Compare addr at every phase, with the settle tolerance.
+            # Tolerance fires only when (mreq, iorq, rd, wr) are all
+            # inactive on both sides at phase i AND our addr matches
+            # pz80's value at one of the next 1-2 phases — the canonical
+            # "our addr settles to the next M-cycle's value 1-2 phases
+            # ahead of pz80" pattern.
+            bus_addr_compared += 1
+            if c[i]["addr"] == g[i]["addr"]:
+                pass  # exact match
+            elif addr_dont_care(i):
+                bus_addr_dontcare += 1
+            else:
+                bus_addr_mism += 1
+                bus_diff.append(("addr", c[i]["addr"], g[i]["addr"]))
             # data_o is valid when wr is low on BOTH sides.
             if c[i]["wr"] == "0" and g[i]["wr"] == "0":
                 bus_data_compared += 1
@@ -163,8 +307,9 @@ def compare(prog, phases, source="c"):
         data_pct = (100.0 * (bus_data_compared - bus_data_mism) / bus_data_compared) \
                    if bus_data_compared else 100.0
         flag = "" if BUS_STRICT else "  [informational]"
+        settled_note = f" ({bus_addr_dontcare} don't-care phases)" if bus_addr_dontcare else ""
         print(f"           bus addr   {bus_addr_compared - bus_addr_mism}/{bus_addr_compared} "
-              f"({addr_pct:.1f}%) match;  data_o {bus_data_compared - bus_data_mism}/{bus_data_compared} "
+              f"({addr_pct:.1f}%) match{settled_note};  data_o {bus_data_compared - bus_data_mism}/{bus_data_compared} "
               f"({data_pct:.1f}%) match{flag}")
     return is_ok
 

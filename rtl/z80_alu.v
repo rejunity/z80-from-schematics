@@ -103,9 +103,18 @@ module z80_alu (
     wire [7:0] cpl_r = ~a;
     wire [7:0] f_cpl = (oldf & (`Z80_SF | `Z80_ZF | `Z80_PF | `Z80_CF)) | `Z80_HF | `Z80_NF
                      | (cpl_r & (`Z80_YF | `Z80_XF));
-    wire [7:0] f_scf = (oldf & (`Z80_SF | `Z80_ZF | `Z80_PF)) | `Z80_CF | ((a | q) & (`Z80_YF | `Z80_XF));
+    // Zilog NMOS Q-leak per Sean Young §4.1 + redcode's INSN(scf) /
+    // INSN(ccf): Y/X = A.Y/X | (F.Y/X XOR Q.Y/X). Q = F-left-by-the-
+    // previous-F-modifying-instruction (or 0). After a non-F-modifier
+    // Q=0 -> (F XOR 0)=F leaks the prior F bits; after an F-modifier
+    // F=Q -> (F XOR Q)=0 means no leak. Earlier `(A | Q)` had this
+    // reversed and made Rak's variant probe misidentify us as a NEC
+    // Z80 (z80full 003/004 PASS, 001/002 FAIL on Zilog NMOS expected).
+    wire [7:0] f_scf = (oldf & (`Z80_SF | `Z80_ZF | `Z80_PF)) | `Z80_CF
+                     | ((a | (oldf ^ q)) & (`Z80_YF | `Z80_XF));
     wire [7:0] f_ccf = (oldf & (`Z80_SF | `Z80_ZF | `Z80_PF)) | (oldf[0] ? `Z80_HF : 8'h0)
-                     | (oldf[0] ? 8'h0 : `Z80_CF) | ((a | q) & (`Z80_YF | `Z80_XF));
+                     | (oldf[0] ? 8'h0 : `Z80_CF)
+                     | ((a | (oldf ^ q)) & (`Z80_YF | `Z80_XF));
 
     // ---- CB rotates/shifts (operate on b) ----
     reg  [7:0] cbr; reg cbcf;

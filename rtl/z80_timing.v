@@ -34,10 +34,13 @@ module z80_timing (
 
         case (bus_op)
         `BUSOP_M1: begin
-            // refresh address on T3..T4
-            if (t >= 3'd3) addr = {reg_i, reg_r};
+            // refresh address on T3..T4 only -- silicon deasserts RFSH
+            // at T4 end even if the M1 extends into T5+ (NMI/INTA acks).
+            // Mirrors cmodel/z80_timing.c. Closes prog10 phase 52/53 and
+            // prog17 phase 50/51 rfsh-edge diffs vs perfectz80.
+            if ((t == 3'd3) || (t == 3'd4)) addr = {reg_i, reg_r};
             m1_n   = (t <= 3'd2) ? 1'b0 : 1'b1;
-            rfsh_n = (t >= 3'd3) ? 1'b0 : 1'b1;
+            rfsh_n = ((t == 3'd3) || (t == 3'd4)) ? 1'b0 : 1'b1;
             // opcode fetch MREQ/RD: T1.N .. end of T2
             // refresh MREQ: T3.N .. T4.P
             mreq_n = (((t == 3'd1) && (phi == 1'b1)) || (t == 3'd2)

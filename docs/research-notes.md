@@ -112,6 +112,53 @@ because Zilog never specified it. ZEXALL + die analysis are the practical arbite
 - **Type:** Reverse-engineering evidence + tests.
 - **Use here:** `docs/undocumented.md`; WZ update points wired into control sequencing.
 
+### boo-boo et al. — MEMPTR paper (2006) and Patrik Rak's `z80memptr`
+- **URL:** https://raw.githubusercontent.com/floooh/emu-info/master/z80/memptr_eng.txt
+  (boo-boo et al.); https://github.com/raxoft/z80test (Patrik Rak).
+- **Contributes:** WZ behavior on `INxR`/`OTxR` BC=1→0 corner — the silicon
+  overwrites `WZ = PC + 1` during the 5-T internal M-cycle of the repeat.
+  FUSE's pre-2006 expected (`WZ = BC ± 1`) is the outlier. We side with
+  silicon.
+- **Trust:** Very high — corroborated by Richard Chandler on NEC + Visual Z80
+  Remix in Rak's v1.2a (z80test PR #3).
+- **Use here:** `cmodel/z80_core.c` + `rtl/z80_core.v` INIR/INDR/OTIR/OTDR
+  repeat branches; the four affected FUSE cases (`edba_1`, `edb2_1`,
+  `edbb_1`, `edb3_1`) live in `tests/fuse/known-fuse-wrong.txt`.
+
+### Banks 2018 — block-instruction repeat-M-cycle flag fold-in
+- **URLs:**
+  - https://github.com/hoglet67/Z80Decoder/wiki/Undocumented-Flags
+  - https://stardot.org.uk/forums/download/file.php?id=39831
+- **Contributes:** During the 5-T internal M-cycle that fires when LDIR /
+  LDDR / CPIR / CPDR / INIR / INDR / OTIR / OTDR loop, real silicon
+  overwrites YF and XF from PC.13 and PC.11 of the post-rewind PC; INIR /
+  INDR / OTIR / OTDR additionally modify HF and PF via a more elaborate
+  formula. Verified on the ZX Spectrum Next via Peter Helcmanovsky's
+  "Z80 Block Flags Test" (https://github.com/MrKWatkins/ZXSpectrumNextTests).
+- **Trust:** Very high (silicon-traced).
+- **Use here:** Block-repeat branches in `cmodel/z80_core.c` and
+  `rtl/z80_core.v`; mirrors redcode's `INXR_OTXR_COMMON` (`scripts/refs/
+  redcode_z80/Z80.c`). FUSE's `edb9_2` CPDR-repeat case is one of the
+  known-FUSE-wrong entries.
+
+### Brewer 2014 — Z80 HALT-PC convention + Woodmass 2021 HALT2INT verification
+- **URLs:**
+  - http://primrosebank.net/computers/z80/z80_special_reset.htm (Brewer 2014)
+  - https://zxe.io/depot/software/ZX%20Spectrum/HALT2INT%20v3%20%282022-01-04%29%28Woodmass%2C%20Mark%29%20%5B%21%5D.zip (HALT2INT v3, GPLv2)
+- **Contributes:** Silicon advances PC past the HALT byte during the HALT
+  M1 commit and KEEPS it there throughout the HALT-NOP loop; INT and
+  NMI accept that PC unchanged. The earlier "PC stays at HALT byte"
+  convention (matching FUSE test `76`) was a pre-Brewer abstraction.
+  HALT2INT v3 is the real-hardware verification on a 48K Spectrum.
+- **Trust:** Very high.
+- **Use here:** `cmodel/z80_core.c` EXEC_HALT + NMI/INT begin_next paths;
+  `rtl/z80_core.v` likewise. `make halt2int` runs a focused CPU-only
+  HALT-to-INT T-state-timing probe (silicon range 3..8 T-states across
+  the M-cycle window). The Spectrum ULA contention and ROM dependencies
+  that prevent the full HALT2INT v3 from running headless on a CPU-only
+  model are tracked in `tests/woodmass/README.md`. FUSE's `76` is in
+  `tests/fuse/known-fuse-wrong.txt`.
+
 ### SCF/CCF flag behavior (the "flags" investigations)
 - **Contributes:** SCF/CCF set XF/YF from a combination of A and the previous F —
   notably this differs between original NMOS Z80 and CMOS variants and even between
@@ -224,9 +271,29 @@ corrected; the kc85 capture earned its place as the gold standard.
 - **Type:** Emulator cores + test vectors.
 - **Use here:** Candidate import into `tests/generated/` and timing-trace checks.
 
-### Existing Verilog/VHDL Z80 cores (TV80, A-Z80, etc.)
+### redcode/Z80 by Manuel Sainz de Baranda
+- **URL:** https://github.com/redcode/Z80
+- **Contributes:** The most thoroughly cited FOSS Z80 emulator. Explicit
+  per-variant presets (`Z80_MODEL_ZILOG_NMOS`, `_CMOS`, `_NEC_NMOS`,
+  `_ST_CMOS`, `_SHARP_LR35902`); explicit Q-leak `XQ` / `YQ` option bits;
+  cites Brewer 2014 + Woodmass HALT2INT 2021 + Banks 2018 + Sainz de
+  Baranda 2023 INxR/OTxR WZ rediscovery line-by-line in `Z80.c`. The
+  most accurate FOSS Z80 model at time of writing.
+- **Trust:** Highest behavioural oracle.
+- **Type:** Mature emulator with bibliographic citations.
+- **Use here:** Vendored under `scripts/refs/redcode_z80/` plus the Zeta C
+  utility library. Drives the 5-way lockstep
+  (`scripts/lockstep_quint.c`), our Rak runner
+  (`scripts/redcode_z80test_runner.c`), and our FUSE end-to-end runner
+  (`scripts/redcode_fuse_runner.c`).
+
+### Existing Verilog/VHDL Z80 cores (TV80, etc.)
 - **Trust:** Secondary behavioral references only, per the brief — not design authority.
 - **Use here:** Sanity cross-checks for RTL structure ideas, nothing inherited verbatim.
+  A-Z80 was considered as a second gate-level oracle but dropped: LibreLane's
+  sky130-synthesised netlist now provides an independent gate-level reference
+  alongside perfectz80's Visual-Z80 port, so a third oracle isn't worth the
+  integration cost.
 
 ---
 
