@@ -1216,7 +1216,14 @@ module z80_core (
     reg       power_on             = 1'b1;
 
     // ---- registers ----
-    always @(posedge clk or negedge reset_n) begin
+    // Synchronous reset (was async before Step 4). Yosys can't synthesize
+    // the filter-conditional "either reset or apply next-state" pattern
+    // under an async-reset clause -- "Async reset yields non-constant
+    // value". Pure-sync works: every testbench toggles clk while
+    // reset_n=0, and the filter (~5 posedges) sees the same edges either
+    // way. Initial values on the four filter flags are declared at the
+    // reg level above so sim doesn't come up X.
+    always @(posedge clk) begin
         if (!reset_n) begin
             if (power_on || in_reset_hold || (reset_assert_filter >= 3'd5)) begin
                 // Apply reset (initial power-on OR filter timed out OR
