@@ -114,6 +114,10 @@ module tb_z80;
         wait_n   = (0 == wait_lo)   ? 1'b0 : 1'b1;
         busreq_n = (0 == busreq_lo) ? 1'b0 : 1'b1;
         if (0 == reset_lo) reset_n = 1'b0;
+        #0;                                   // iverilog delta-cycle settle so
+                                              // the in_reset_hold combinational
+                                              // mux sees reset_n=1 before dump
+                                              // (mirror of tb_z80.v's fix)
         dump;                                 // line 1 = reset state (T1.P)
         for (i = 1; i < phases; i = i + 1) begin
             @(negedge clk);
