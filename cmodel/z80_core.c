@@ -1303,9 +1303,22 @@ void z80_phase_step(z80_t *c)
     if (c->prev_nmi_n && !c->pins.nmi_n) c->nmi_pending = true;
     c->prev_nmi_n = c->pins.nmi_n;
 
-    /* bus grant (DMA): while BUSREQ held, release the bus and idle */
+    /* bus grant (DMA): while BUSREQ held, release the bus and idle.
+       Silicon-faithful per pz80 prog15_busreq_m1: on busreq_n=1 release,
+       settle for ~2 phases before starting the post-grant M1 fetch. */
     if (c->bus_granted) {
         if (!c->pins.busreq_n) {
+            c->busreq_release_filter = 0;
+            c->pins.busack_n = 0;
+            c->pins.m1_n = c->pins.mreq_n = c->pins.iorq_n = 1;
+            c->pins.rd_n = c->pins.wr_n = c->pins.rfsh_n = 1;
+            c->pins.data_drive = false;
+            c->pins.halt_n = c->halted ? 0 : 1;
+            return;
+        }
+        if (c->busreq_release_filter < 2) {
+            c->busreq_release_filter++;
+            /* Stay in bus-grant idle during settle window. */
             c->pins.busack_n = 0;
             c->pins.m1_n = c->pins.mreq_n = c->pins.iorq_n = 1;
             c->pins.rd_n = c->pins.wr_n = c->pins.rfsh_n = 1;
@@ -1314,6 +1327,7 @@ void z80_phase_step(z80_t *c)
             return;
         }
         c->bus_granted = false;          /* BUSREQ released: resume */
+        c->busreq_release_filter = 0;
         c->pins.busack_n = 1;
         z80_start_m1(c);
         c->phase_primed = false;

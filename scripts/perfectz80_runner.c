@@ -16,10 +16,9 @@
 
    Events file (optional): per-line `<phase> <pin> <value>` events that drive
    the gate-level netlist's input pins via cpu_writeNMI / cpu_writeINT /
-   cpu_writeWAIT / cpu_writeRESET. This is the SAME format consumed by
-   scripts/tracegen.c — a single sidecar exercises both harnesses identically.
-   BUSREQ is currently not wired in perfectz80's public API; busreq events
-   are accepted but printed as a warning and skipped here. */
+   cpu_writeWAIT / cpu_writeRESET / cpu_writeBUSRQ. This is the SAME format
+   consumed by scripts/tracegen.c — a single sidecar exercises both
+   harnesses identically. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -57,8 +56,7 @@ static void events_apply(void *st, int phase) {
         case 0: cpu_writeNMI  (st, high); break;
         case 1: cpu_writeINT  (st, high); break;
         case 2: cpu_writeWAIT (st, high); break;
-        case 3: fprintf(stderr,"events: busreq not wired in perfectz80 API; skipping phase %d\n",
-                        s_events[i].phase); break;
+        case 3: cpu_writeBUSRQ(st, high); break;
         case 4: cpu_writeRESET(st, high); break;
         }
     }
