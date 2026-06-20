@@ -132,17 +132,12 @@ module z80_core (
         .rd_n(tim_rd_n), .wr_n(tim_wr_n), .rfsh_n(tim_rfsh_n)
     );
     // Force all pins to idle when:
-    //   - in_reset_hold (post-reset frozen state) -- matches C model's
-    //     reset_state() pin setup + phase_step early return
-    //   - bus_granted (DMA owns the bus) -- matches C model's bus_granted
-    //     branch which drives idle pins and returns before z80_timing
-    // Exception: when reset_n=1 AND in_initial_hold, drive normal pins
-    // combinationally. This matches the C model's z80_init() which sets
-    // up state without going through the reset-pin filter, so phase 0
-    // shows post-release pins (T1.P of M1 fetch from PC=0). The
-    // synchronous transition out of hold happens on the next posedge.
-    wire hold_pins = (in_reset_hold && !(reset_n && in_initial_hold))
-                  || bus_granted;
+    //   - reset_n=0 (immediate detection -- matches C model's
+    //     phase_step which calls reset_state() and returns early)
+    //   - bus_granted (DMA owns the bus -- matches C model's
+    //     bus_granted branch which drives idle pins and returns
+    //     before z80_timing)
+    wire hold_pins = !reset_n || bus_granted;
     assign addr       = hold_pins ? 16'h0000 : tim_addr;
     assign data_out   = hold_pins ? 8'h00    : tim_data_out;
     assign data_drive = hold_pins ? 1'b0     : tim_data_drive;
@@ -1217,36 +1212,15 @@ module z80_core (
         end
     end
 
-    // ---- reset state machine (mirrors cmodel/z80_core.c z80_phase_step) ----
-    // Silicon-faithful per perfectz80 prog17_reset trace:
-    //   - reset_n falling edge: NOT recognized immediately. Filter ~5 phases
-    //     (~3 clocks, matches Zilog UM0080 spec). During the filter window
-    //     the chip continues executing, including starting fresh M-cycles.
-    //   - Filter elapsed: enter frozen-idle hold (reset all registers).
-    //   - reset_n rising edge while in hold: settle for ~4 phases before
-    //     starting the post-reset M1 fetch at PC=0.
-    // `power_on` is a one-shot flag (initialized via reg-initializer) so the
-    // very first reset_n=0 still does an immediate state init -- otherwise
-    // the testbench's brief reset pulse wouldn't drive registers out of X.
-    // See docs/perfect-branch.md "prog17 silicon-behavior analysis".
-    reg [2:0] reset_assert_filter  = 3'd0;
-    reg [2:0] reset_release_filter = 3'd0;
-    reg       in_reset_hold        = 1'b0;
-    reg       in_initial_hold      = 1'b1;   // distinguishes power-on from runtime reset
-    reg       power_on             = 1'b1;
-
     // ---- registers ----
-    // Async reset with sync release filter -- the Yosys-synthesisable form
-    // of Step 4. The !reset_n branch unconditionally drives every FF to a
-    // constant (required for async-reset DFF cell inference), so the
-    // assert-side filter is C-model-only. The release-side filter still
-    // lives in the sync branch (matches pz80's ~4-phase post-reset settle).
-    // This means RTL will reset IMMEDIATELY on reset_n=0 instead of
-    // continuing for ~5 phases like the C model -- a divergence only on
-    // prog17_reset which is pin_scenarios (informational); make compare
-    // doesn't run reset events so C/RTL parity is preserved.
-    // For gate-level netlist sim (post-Yosys), FFs lose their reg-init
-    // values, so the async path is the ONLY way to drive them out of X.
+    // Async reset: immediate detection on reset_n=0. The Zilog UM0080
+    // "≥ 3 clock recognition delay" is an NMOS dynamic-logic artifact,
+    // not a behavioral requirement -- we reset on the edge, both in C
+    // and RTL. The compare harness tolerates the resulting 5-phase
+    // trace offset vs perfectz80 via reset-window masking in
+    // scripts/compare_signal_timing.py. Yosys infers async-reset DFFs
+    // from this pattern; the !reset_n branch drives every FF to a
+    // constant (required for DFF-with-reset cell inference).
     always @(posedge clk or negedge reset_n) begin
         if (!reset_n) begin
             // 0x5555 matches perfectz80's gate-level Visual-Z80 netlist
@@ -1264,48 +1238,19 @@ module z80_core (
             suppress_decode <= 1'b0; bus_granted <= 1'b0; irq_seq <= 2'd0;
             reg_q <= 8'h00; f_modified <= 1'b0;
             busreq_release_filter <= 2'd0;
-            in_reset_hold        <= 1'b1;
-            in_initial_hold      <= 1'b1;
-            reset_assert_filter  <= 3'd0;
-            reset_release_filter <= 3'd0;
-            power_on             <= 1'b0;
         end else begin
-            reset_assert_filter <= 3'd0;
-            if (in_reset_hold) begin
-                if (!in_initial_hold && reset_release_filter < 3'd4) begin
-                    reset_release_filter <= reset_release_filter + 1'b1;
-                end else begin
-                    in_reset_hold        <= 1'b0;
-                    in_initial_hold      <= 1'b0;
-                    reset_release_filter <= 3'd0;
-                    for (i = 0; i < 13; i = i + 1) rf[i] <= rf_n[i];
-                    reg_i <= reg_i_n; reg_r <= reg_r_n; ir <= ir_n;
-                    phi <= phi_n; t_state <= t_n; m_cycle <= m_cycle_n;
-                    bus_op <= bus_op_n; m_len <= m_len_n; m_addr <= m_addr_n; m_wdata <= m_wdata_n;
-                    prefix <= prefix_n; iff1 <= iff1_n; iff2 <= iff2_n; im <= im_n; halted <= halted_n;
-                    tmp8 <= tmp8_n; tmpl <= tmpl_n; tmph <= tmph_n; tmp16 <= tmp16_n;
-                    cycle <= cycle_n; instr_count <= instr_count_n; decoded <= decoded_n;
-                    nmi_pending <= nmi_pending_n; prev_nmi_n <= prev_nmi_n_n; ei_delay <= ei_delay_n;
-                    nmi_sampled <= nmi_sampled_n; int_sampled <= int_sampled_n;
-                    suppress_decode <= suppress_decode_n; bus_granted <= bus_granted_n; irq_seq <= irq_seq_n;
-                    busreq_release_filter <= busreq_release_filter_n;
-                    reg_q <= reg_q_n; f_modified <= f_modified_n;
-                end
-            end else begin
-                reset_release_filter <= 3'd0;
-                for (i = 0; i < 13; i = i + 1) rf[i] <= rf_n[i];
-                reg_i <= reg_i_n; reg_r <= reg_r_n; ir <= ir_n;
-                phi <= phi_n; t_state <= t_n; m_cycle <= m_cycle_n;
-                bus_op <= bus_op_n; m_len <= m_len_n; m_addr <= m_addr_n; m_wdata <= m_wdata_n;
-                prefix <= prefix_n; iff1 <= iff1_n; iff2 <= iff2_n; im <= im_n; halted <= halted_n;
-                tmp8 <= tmp8_n; tmpl <= tmpl_n; tmph <= tmph_n; tmp16 <= tmp16_n;
-                cycle <= cycle_n; instr_count <= instr_count_n; decoded <= decoded_n;
-                nmi_pending <= nmi_pending_n; prev_nmi_n <= prev_nmi_n_n; ei_delay <= ei_delay_n;
-                nmi_sampled <= nmi_sampled_n; int_sampled <= int_sampled_n;
-                suppress_decode <= suppress_decode_n; bus_granted <= bus_granted_n; irq_seq <= irq_seq_n;
-                busreq_release_filter <= busreq_release_filter_n;
-                reg_q <= reg_q_n; f_modified <= f_modified_n;
-            end
+            for (i = 0; i < 13; i = i + 1) rf[i] <= rf_n[i];
+            reg_i <= reg_i_n; reg_r <= reg_r_n; ir <= ir_n;
+            phi <= phi_n; t_state <= t_n; m_cycle <= m_cycle_n;
+            bus_op <= bus_op_n; m_len <= m_len_n; m_addr <= m_addr_n; m_wdata <= m_wdata_n;
+            prefix <= prefix_n; iff1 <= iff1_n; iff2 <= iff2_n; im <= im_n; halted <= halted_n;
+            tmp8 <= tmp8_n; tmpl <= tmpl_n; tmph <= tmph_n; tmp16 <= tmp16_n;
+            cycle <= cycle_n; instr_count <= instr_count_n; decoded <= decoded_n;
+            nmi_pending <= nmi_pending_n; prev_nmi_n <= prev_nmi_n_n; ei_delay <= ei_delay_n;
+            nmi_sampled <= nmi_sampled_n; int_sampled <= int_sampled_n;
+            suppress_decode <= suppress_decode_n; bus_granted <= bus_granted_n; irq_seq <= irq_seq_n;
+            busreq_release_filter <= busreq_release_filter_n;
+            reg_q <= reg_q_n; f_modified <= f_modified_n;
         end
     end
 

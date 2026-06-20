@@ -100,8 +100,12 @@ module tb_z80;
         // released it. A `reset_lo` event would re-assert it (drive 0).
         if (0 == reset_lo) reset_n = 1'b0;
         #0;                                   // iverilog delta-cycle settle so
-                                              // the in_reset_hold combinational
-                                              // mux sees reset_n=1 before dump
+                                              // the combinational hold_pins
+                                              // mux (!reset_n || bus_granted)
+                                              // sees the just-raised reset_n
+                                              // before the procedural dump
+                                              // reads the wires. Testbench-
+                                              // only; no impact on synth.
         dump;                                 // line 1 = reset state (T1.P)
         for (i = 1; i < phases; i = i + 1) begin
             @(negedge clk);

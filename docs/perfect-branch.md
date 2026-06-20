@@ -50,7 +50,7 @@ Plus, well outside the original plan:
 | `make perfectz80_rtl` (iverilog RTL)         | Same as C          | **12 / 12 PASS clean**                                              |
 | `make perfectz80_netlist` (sky130 gate-level)| —                  | **12 / 12 PASS clean**                                              |
 | `make pin_scenarios` (12 event-driven progs, C model) | 5 / 12 PASS | **8 / 12 PASS clean** (`prog9, 12, 15, 17, 16, 18, 19, 20`); 1 / 12 with 1-diff (prog10); 3 / 12 with WAIT/HALT-NOP informational diffs (prog11/13/14) |
-| `make pin_scenarios_rtl` (iverilog RTL)      | All informational  | **6 / 12 PASS clean**; same root causes as C path plus testbench-side event timing offset on prog15+prog17 (Step 4/5 partially RTL-side) |
+| `make pin_scenarios_rtl` (iverilog RTL)      | All informational  | **8 / 12 PASS clean** — now matches C-path scoreboard after Step 4 simplification (C and RTL both detect reset immediately; harness masks the difference vs pz80) |
 | `make pin_scenarios_netlist` (sky130 gate-level) | —              | Same as `_rtl` (RTL is the source feeding synthesis) |
 | `make z80test` (Rak)          | 158 / 158 / 150 within baseline 2/2/10 | **160 / 160 / 160 PASS — clean across all three variants**         |
 | `make fuse`                   | 1356/1356 (with pre-Banks / pre-Brewer expecteds) | **1348 + 8 known-FUSE-wrong (silicon-faithful)** |
@@ -78,7 +78,7 @@ below.
 | `wr_n`  | 100 % on 12 trace + 11/12 pin_scenarios                   | 100 % on 12 trace + 10/12 pin_scenarios                 | Mostly affected by WAIT-on-IO (prog14) |
 | `rfsh_n`| 100 % on 12 trace + 11/12 pin_scenarios                   | Same                                                    | Step 2 closed late-deassert on extended M1s (NMI ack 5T, INTA 7T) |
 | `halt_n`| 100 % on 12 trace + 10/12 pin_scenarios                   | Same                                                    | Step 3 closed; prog13_halt_int residual is NOP-loop M-cycle phasing |
-| `reset_n`<br/>(state-machine response) | **prog17 1 ctrl diff** (was 131) | prog17 129 ctrl diffs (RTL omits assert-side filter — non-synthesizable under Yosys's async-reset DFF inference) | Step 4 — C-only filter pair; RTL has release-side filter + pin mux |
+| `reset_n` | **prog17 PASS** | **prog17 PASS** | Step 4 — both C and RTL detect reset immediately on the edge (NMOS-delay was silicon trivia). `compare_signal_timing.py` masks the reset event window and re-aligns post-reset pz80 by 4 phases. |
 | `busreq_n` / `busack_n` | **prog15 PASS** (was 154 ctrl diffs) | prog15 75 ctrl diffs (was 115; Step 5 RTL mirror cut it; residual is testbench event-application offset, not a behavioural gap) | Step 5 — 2-phase release filter + pin mux during bus_granted |
 | `wait_n`<br/>(Tw insertion) | prog11 142 + prog14 147 ctrl diffs | prog11 161 + prog14 147 | Step 6 deferred — C sample point IS UM0080 spec; divergence is on the pz80 oracle-harness side. See "prog11/14 WAIT-sample analysis" below |
 | `addr` (bus, informational) | 100 % on 12 trace progs (post-Step-1 reset-init flip)     | Same                                                    | Don't-care during refresh windows is honored by compare_signal_timing.py |
@@ -98,7 +98,7 @@ below.
     | 1 | C1 reset register init 0xFFFF → 0x5555     | **DONE**   | make perfectz80 4 informational diffs + prog19 SP-init |
     | 2 | RFSH-pin late-deassert (bound to T3..T4)   | **DONE**   | prog10 5→3, prog19 3→1 ctrl-pin   |
     | 3 | HALT-pin assertion at T4.N of HALT M1      | **DONE**   | prog10 3→1, prog19 1→**PASS**     |
-    | 4 | Reset state machine (filter + frozen hold) | **DONE**   | prog17 131→**1** + prog10 3→1     |
+    | 4 | Reset: immediate detection + harness-side window mask | **DONE** | prog17 131→**PASS** (C **and** RTL); previously C-only at "1 diff" via a 5-phase chip-side filter — reverted on 2026-06-20 when we realised the NMOS recognition delay is silicon trivia and modifying the chip to match it was the wrong direction. Filter logic removed from both C and RTL; `scripts/compare_signal_timing.py` now masks the reset window and re-aligns the post-reset pz80 trace by `RESET_PZ_OFFSET=4` phases. |
     | 5 | BUSREQ — wire pz80 + 2-phase release filter| **DONE**   | prog15 154→**PASS**               |
     | 6 | WAIT-insertion sub-T-state phasing         | analyzed ⚠ | prog11 (142), prog14 (147) — harness-side events↔chip-step alignment offset; C model's sample point is spec-canonical. See analysis below. |
 

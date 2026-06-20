@@ -320,17 +320,6 @@ typedef struct {
     uint8_t      q;
     bool         f_modified;
 
-    /* Reset state machine (matches perfectz80 prog17_reset trace).
-       Zilog UM0080 spec: reset_n must be held low for "≥ 3 clock periods"
-       to be recognized. The chip continues executing during the filter
-       window (including starting fresh M-cycles), then enters frozen-idle
-       hold. On reset_n rising edge: ~4-phase settle before the post-reset
-       M1 fetch at PC=0 begins. See docs/perfect-branch.md for the
-       trace-derived analysis. */
-    uint8_t      reset_assert_filter;   /* phases of reset_n=0 before hold      */
-    uint8_t      reset_release_filter;  /* phases of reset_n=1 before unfreeze  */
-    bool         in_reset_hold;         /* true => frozen at idle pins, PC=0    */
-
     /* BUSREQ release filter: pz80 settles for ~2 phases between busreq_n=1
        and the post-grant M1 fetch (prog15_busreq_m1 trace). Bus_granted
        entry edge is not filtered (pz80 enters bus grant promptly). */

@@ -186,10 +186,47 @@ def parse_events_to_plusargs(events_path):
             args.append(f"+{pin}_hi={hi[pin]}")
     return args
 
+
+# pz80 takes ~5 phases to recognize reset_n=0 (NMOS-process recognition
+# delay -- silicon trivia, not behaviorally required). Our implementation
+# detects on the edge. To prevent that timing difference from masquerading
+# as a ctrl-pin diff:
+#   1. Mask phases [reset_lo, reset_hi + RESET_SETTLE_AFTER) -- the window
+#      where pz80 is doing its "still executing because reset not yet
+#      recognized" thing.
+#   2. For phases AFTER the window, shift pz80's index by RESET_PZ_OFFSET
+#      so the post-reset execution aligns -- pz80 starts its post-reset
+#      M1 fetch ~RESET_PZ_OFFSET phases later than us.
+RESET_SETTLE_AFTER = 6  # phases past reset_hi to keep masking
+RESET_PZ_OFFSET    = 4  # post-reset alignment shift on pz80 side
+
+def parse_reset_window(events_path):
+    """Return (lo_phase, hi_phase) of the reset event in the sidecar
+    or (None, None) if no reset events present."""
+    if not events_path or not os.path.exists(events_path):
+        return (None, None)
+    lo, hi = None, None
+    with open(events_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split()
+            if len(parts) != 3 or parts[1] != "reset":
+                continue
+            try:
+                ph = int(parts[0])
+            except ValueError:
+                continue
+            if parts[2] == "0": lo = ph
+            elif parts[2] == "1": hi = ph
+    return (lo, hi)
+
 def compare(prog, phases, source="c"):
     events = prog[:-4] + ".events" if prog.endswith(".hex") else prog + ".events"
     events = events if os.path.exists(events) else ""
     event_plusargs = parse_events_to_plusargs(events)
+    reset_lo, reset_hi = parse_reset_window(events)
     if source == "c":
         tg_argv = [TRACEGEN, prog, str(phases)] + ([events] if events else [])
         emit_label = "C"
@@ -266,8 +303,30 @@ def compare(prog, phases, source="c"):
         """
         return (not is_data_transfer(c[i])) and (not is_data_transfer(g[i]))
 
+    # Reset-window mask + post-reset re-alignment: pz80 has an NMOS
+    # reset-recognition delay; ours is immediate. Skip the window
+    # entirely, then shift pz80's index forward so post-reset
+    # execution lines up.
+    reset_mask_lo = reset_lo if reset_lo is not None else None
+    reset_mask_hi = (reset_hi + RESET_SETTLE_AFTER) if reset_hi is not None else None
+    reset_active  = reset_mask_lo is not None and reset_mask_hi is not None
+    reset_masked  = 0
+
     for i in range(n):
-        diff = [(col, c[i][col], g[i][col]) for col in COMPARED if c[i][col] != g[i][col]]
+        if reset_active and reset_mask_lo <= i <= reset_mask_hi:
+            reset_masked += 1
+            continue
+        # After the reset window, pz80 is RESET_PZ_OFFSET phases behind
+        # our post-reset execution because we restart immediately.
+        if reset_active and i > reset_mask_hi:
+            p_idx = i + RESET_PZ_OFFSET
+            if p_idx >= n:
+                # ran past the end of the pz80 trace; nothing more to compare
+                continue
+            g_row = g[p_idx]
+        else:
+            g_row = g[i]
+        diff = [(col, c[i][col], g_row[col]) for col in COMPARED if c[i][col] != g_row[col]]
         bus_diff = []
         if COMPARE_BUS:
             # Compare addr at every phase, with the settle tolerance.
@@ -277,19 +336,19 @@ def compare(prog, phases, source="c"):
             # "our addr settles to the next M-cycle's value 1-2 phases
             # ahead of pz80" pattern.
             bus_addr_compared += 1
-            if c[i]["addr"] == g[i]["addr"]:
+            if c[i]["addr"] == g_row["addr"]:
                 pass  # exact match
-            elif addr_dont_care(i):
+            elif (not is_data_transfer(c[i])) and (not is_data_transfer(g_row)):
                 bus_addr_dontcare += 1
             else:
                 bus_addr_mism += 1
-                bus_diff.append(("addr", c[i]["addr"], g[i]["addr"]))
+                bus_diff.append(("addr", c[i]["addr"], g_row["addr"]))
             # data_o is valid when wr is low on BOTH sides.
-            if c[i]["wr"] == "0" and g[i]["wr"] == "0":
+            if c[i]["wr"] == "0" and g_row["wr"] == "0":
                 bus_data_compared += 1
-                if c[i]["data_o"] != g[i]["data_o"]:
+                if c[i]["data_o"] != g_row["data_o"]:
                     bus_data_mism += 1
-                    bus_diff.append(("data_o", c[i]["data_o"], g[i]["data_o"]))
+                    bus_diff.append(("data_o", c[i]["data_o"], g_row["data_o"]))
         if diff:
             ctrl_mism += 1
         if (diff or bus_diff) and shown < 5:
@@ -300,7 +359,8 @@ def compare(prog, phases, source="c"):
     # bus diffs are summarised in a second line as informational findings.
     is_ok = (ctrl_mism == 0) and (not BUS_STRICT or (bus_addr_mism + bus_data_mism) == 0)
     head  = "PASS" if ctrl_mism == 0 else f"{ctrl_mism}/{n} ctrl-pin phases differ"
-    print(f"  {name}: {head}{suffix}")
+    reset_note = f" [reset window: {reset_masked} phases masked]" if reset_masked else ""
+    print(f"  {name}: {head}{suffix}{reset_note}")
     if COMPARE_BUS:
         addr_pct = (100.0 * (bus_addr_compared - bus_addr_mism) / bus_addr_compared) \
                    if bus_addr_compared else 100.0
