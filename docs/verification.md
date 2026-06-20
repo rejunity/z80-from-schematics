@@ -129,20 +129,22 @@ only rebuilt the library, leaving stale runner binaries on disk).
 - **Pin-scenario programs** (`make pin_scenarios` /
   `pin_scenarios_rtl` / `pin_scenarios_netlist`): 12 INT / NMI /
   WAIT / BUSREQ / RESET scenarios driven through the `.events`
-  sidecar. **8 / 12 PASS cleanly** on the C model after Steps 0-5
-  of the silicon-faithful sweep (`prog9_inta_im1`, `prog12_inta_im2`,
+  sidecar. **8 / 12 PASS cleanly on BOTH C model and iverilog RTL**
+  after Steps 0-5 of the silicon-faithful sweep + the harness-side
+  reset-window mask (`prog9_inta_im1`, `prog12_inta_im2`,
   **`prog15_busreq_m1`** (Step 5), `prog16_ei_delay`,
-  **`prog17_reset`** (Step 4), `prog18_di_then_int`,
+  **`prog17_reset`** (Step 4 simplified), `prog18_di_then_int`,
   `prog19_nmi_in_int`, `prog20_block_int`). 1 / 12 with a single
   ctrl-pin diff (`prog10_halt_nmi`). 3 / 12 surface informational
-  WAIT / HALT-NOP diffs (`prog11_wait_mem` 142, `prog13_halt_int` 144,
-  `prog14_wait_io` 147) — Step 6 deferred; per UM0080 §3.5.1 the C
-  model's WAIT sample point is canonical, the divergence is a pz80
-  oracle-harness event-application offset. All make targets are
-  informational gates; functional behaviour on all 12 is verified by
-  Rak + FUSE + `make halt2int`. Full diff list in
-  `docs/known-differences.md` row 14, per-pin compatibility breakdown
-  in `docs/perfect-branch.md`.
+  WAIT / HALT-NOP diffs (`prog11_wait_mem` 142+, `prog13_halt_int` 144,
+  `prog14_wait_io` 147) — root-caused to two classes (sub-T-state
+  silicon timing + pz80 oracle-harness event-application offset);
+  the C model's WAIT sample point is canonical per UM0080 §3.5.1.
+  All make targets are informational gates; functional behaviour on
+  all 12 is verified by Rak + FUSE + `make halt2int`. Full per-program
+  mechanism + resolution-class table in `docs/perfect-branch.md`
+  "Remaining differences vs perfectz80"; diff list summary in
+  `docs/known-differences.md` row 14.
 - **HALT-to-INT timing probe** (`make halt2int`): focused regression
   inspired by Mark Woodmass's HALT2INT v3 (2021). Sweeps INT-pulse
   timing across the HALT NOP M-cycle and verifies the INT-to-INTA

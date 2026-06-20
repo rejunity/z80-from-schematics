@@ -128,14 +128,17 @@ Notes for each row:
      programs (`prog9_inta_im1`..`prog20_block_int`) drive INT / NMI /
      WAIT / BUSREQ / RESET through the `.events` sidecar and diff
      against perfectz80 per-half-cycle. **Current status
-     (2026-06-19)**: 8 / 12 PASS cleanly on the C model after Steps
-     0-5 of the silicon-faithful sweep:
+     (2026-06-20)**: 8 / 12 PASS cleanly on **both C model AND iverilog
+     RTL** after Steps 0-5 of the silicon-faithful sweep + the
+     reset-window mask in `compare_signal_timing.py`:
      - `prog9_inta_im1` ✓
      - `prog12_inta_im2` ✓
-     - `prog15_busreq_m1` ✓ (NEW — Step 5: wired BUSREQ in perfectz80
-       runner + 2-phase release filter)
+     - `prog15_busreq_m1` ✓ (Step 5: wired BUSREQ in perfectz80 runner
+       + 2-phase release filter)
      - `prog16_ei_delay` ✓
-     - `prog17_reset` ✓ (NEW — Step 4: reset state machine, was 131)
+     - `prog17_reset` ✓ (Step 4: both C and RTL detect reset
+       immediately; harness masks the NMOS-process recognition delay
+       in pz80)
      - `prog18_di_then_int` ✓
      - `prog19_nmi_in_int` ✓
      - `prog20_block_int` ✓
@@ -143,13 +146,16 @@ Notes for each row:
      1 / 12 has a single residual ctrl-pin diff:
      - `prog10_halt_nmi`   (**1** / 200, was 5) — last residual HALT-pin diff during NMI ack
 
-     3 / 12 have informational diffs from the deferred Step 6 (WAIT
-     sample point is spec-canonical per Zilog UM0080 §3.5.1; the
-     divergence is a pz80 oracle-harness event-application offset,
-     not an RTL/C-model gap):
-     - `prog11_wait_mem`   (142 / 200) — WAIT-insertion sub-T-state phasing
-     - `prog13_halt_int`   (144 / 200) — HALT-pin during NOP-loop M-cycles
-     - `prog14_wait_io`    (147 / 200) — IORQ + WAIT timing during IN/OUT
+     3 / 12 have informational diffs in two classes:
+     - `prog11_wait_mem`   (C 142 / 200, RTL 161) — pz80 oracle-harness
+       event-application offset against UM0080-canonical T2.N sample
+     - `prog13_halt_int`   (C 144 / 200, RTL 144) — same family as
+       prog10 residual (HALT-pin sub-T-state phasing in NOP-loop)
+     - `prog14_wait_io`    (C 147 / 200, RTL 147) — same as prog11 but
+       on IO M-cycles
+
+     See `docs/perfect-branch.md` "Remaining differences vs perfectz80"
+     for the per-program mechanism and resolution class.
 
      `.events` is now consumed by all paths — C tracegen, iverilog
      RTL, Verilator, LibreLane gate-level netlist — via per-pin

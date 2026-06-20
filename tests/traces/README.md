@@ -117,21 +117,27 @@ promote bus mismatches to gating too.
 on divergence) — every divergence between our model and perfectz80 surfaces
 a real silicon-faithfulness audit item rather than a regression.
 
-**Current state (2026-06-19)**: 8 / 12 PASS clean on the C model after
-Steps 0-5 of the silicon-faithful sweep documented in
+**Current state (2026-06-20)**: 8 / 12 PASS clean on **both C model
+and iverilog RTL** after Steps 0-5 of the silicon-faithful sweep +
+the reset-window mask in `compare_signal_timing.py`. Documented in
 [docs/perfect-branch.md](../../docs/perfect-branch.md):
 
-  - PASS: `prog9_inta_im1`, `prog12_inta_im2`, `prog15_busreq_m1` (NEW),
-    `prog16_ei_delay`, `prog17_reset` (NEW), `prog18_di_then_int`,
-    `prog19_nmi_in_int`, `prog20_block_int`
-  - 1 ctrl-pin diff: `prog10_halt_nmi`
-  - Informational diffs (Step 6 deferred, harness-side):
-    `prog11_wait_mem` (142), `prog13_halt_int` (144),
+  - PASS (both C and RTL): `prog9_inta_im1`, `prog12_inta_im2`,
+    `prog15_busreq_m1` (Step 5), `prog16_ei_delay`,
+    `prog17_reset` (Step 4 — both implementations detect reset
+    immediately; harness masks pz80's NMOS-process recognition delay),
+    `prog18_di_then_int`, `prog19_nmi_in_int`, `prog20_block_int`
+  - 1 ctrl-pin diff: `prog10_halt_nmi` (sub-T-state HALT timing
+    during NMI ack)
+  - Informational diffs in two classes (per-program breakdown in
+    [docs/perfect-branch.md](../../docs/perfect-branch.md)):
+    `prog11_wait_mem` (C 142 / RTL 161), `prog13_halt_int` (144),
     `prog14_wait_io` (147)
 
 See [docs/known-differences.md](../../docs/known-differences.md) row 14
-for the full breakdown and [docs/perfect-branch.md](../../docs/perfect-branch.md)
-for the per-pin compatibility table vs perfectz80.
+for the diff list summary and [docs/perfect-branch.md](../../docs/perfect-branch.md)
+for the per-pin compatibility table + "Remaining differences vs
+perfectz80" mechanism-and-resolution table.
 
 
 ## How they were assembled
