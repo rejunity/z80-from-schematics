@@ -3,14 +3,18 @@
 //
 // 1:1 port of the C model (cmodel/z80.c + z80_control.c). Single clock, DFF
 // only, no latches, no `initial` in synthesizable logic. The clock runs at 2x
-// the Z80 rate: each Z80 T-state is two clocks (phi 0 then 1). All state is
-// computed combinationally as *_n and registered on posedge clk; async-assert
-// reset. External pin timing is produced by z80_timing from registered state.
+// the Z80 rate: each Z80 T-state is two enabled clocks (phi 0 then 1). All
+// state is computed combinationally as *_n and registered on posedge clk;
+// async-assert reset. USE_CEN optionally makes cen qualify those phase steps.
+// External pin timing is produced by z80_timing from registered state.
 // ===========================================================================
 `include "z80_defs.vh"
 
-module z80_core (
+module z80_core #(
+    parameter USE_CEN = 1'b0
+) (
     input  wire        clk,
+    input  wire        cen,
     input  wire        reset_n,
     // bus
     output wire [15:0] addr,
@@ -1248,7 +1252,7 @@ module z80_core (
             reset_assert_filter  <= 3'd0;
             reset_release_filter <= 3'd0;
             power_on             <= 1'b0;
-        end else begin
+        end else if (!USE_CEN || cen) begin
             reset_assert_filter <= 3'd0;
             if (in_reset_hold) begin
                 if (!in_initial_hold && reset_release_filter < 3'd4) begin
