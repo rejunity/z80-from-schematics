@@ -102,7 +102,8 @@ $(BUILD)/obj_dir/Vtop: $(BUILD)/src sim_top.cpp
 	rm -rf $(BUILD)/obj_dir
 	cd $(BUILD) && $(VERILATOR) --cc --exe --build -j 4 -O2 \
 	  -Wno-fatal -Isrc --Mdir obj_dir --top-module top \
-	  -GCORE_HZ=12500000 -GBAUD=$(SIM_BAUD) -CFLAGS -DSIM_BAUD=$(SIM_BAUD) \
+	  -GCORE_HZ=12500000 -GBAUD=$(SIM_BAUD) -GEXTERNAL_BUS=0 \
+	  -CFLAGS -DSIM_BAUD=$(SIM_BAUD) \
 	  src/top.v src/uart.v src/z80_core.v src/z80_pla.v src/z80_alu.v src/z80_timing.v \
 	  ../sim_top.cpp > verilator.log 2>&1 || (tail -20 verilator.log; exit 1)
 

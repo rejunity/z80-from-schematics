@@ -1,11 +1,19 @@
 // top.v - RZ80 SoC for the Sipeed Tang Primer 25K (Gowin GW5A-LV25MG121)
 //
-// NASCOM BASIC 4.7 (RC2014 build) on the rz80 core, console on the
-// dock's BL616 USB-UART (115200 8N1). Same SoC as fpga/icepi-zero
-// (whose uart.v it shares); board differences only:
+// By default the rz80 core is presented as an external, Z80-like bus on the
+// dock's 2x20 J3 header.  Set EXTERNAL_BUS=0 for the original NASCOM BASIC
+// SoC (64 KiB internal RAM + BL616 USB-UART at 115200 8N1), as the Verilator
+// smoke test does.  The header bus uses 3.3 V signalling and is not 5 V
+// tolerant; use level translators before connecting it to 5 V Z80 hardware.
 //
-//   - 50 MHz crystal on E2; a PLLA generates the 20 MHz core clock
-//     (2x per Z80 clock -> Z80 at 10 MHz). A PLL, not a divider: a
+// Board details:
+//
+//   - 50 MHz crystal on E2. A PLLA generates a 30 MHz sampling clock for
+//     external-bus mode and the 20 MHz core clock for internal-SoC mode.
+//     The sampler detects both edges of external Z80 CLK and enables one
+//     core phase per edge; it does not free-run the CPU. The internal-SoC
+//     clock is 2x its Z80 rate, so 20 MHz gives a 10 MHz CPU. A PLL, not a
+//     divider, is used because a
 //     fabric-FF clock never reaches the BSRAM CLK pins skew-free on
 //     GW5A (-2.9 ns => hold violations); PLLA output is a true global
 //     clock. In simulation the PLLA is a black box, so a /4 divider
@@ -15,21 +23,46 @@
 //     (IcePi's are active-low); key[0] (H10) is the Z80 reset
 //   - the dock has no user LEDs, so no led port
 //
-// Memory map / I/O map / interrupt semantics are identical to the
-// IcePi port: 64 KiB BRAM with the ROM preloaded and write-protected
-// below 0x2000, 68B50 ACIA shim at ports 0x80/0x81 (Tiny BASIC's
-// 0x00/0x01 too), /INT = (RIE & RDRF) | (TIE & TDRE).
+// z80_clk is an external INPUT, like CLK on a physical Z80. A 30 MHz internal
+// sampling clock synchronizes it and advances one core phase on every detected
+// rising or falling edge. Holding z80_clk stops CPU execution. External CLK
+// should not exceed 10 MHz, ensuring each half-cycle is observed reliably.
+//
+// In EXTERNAL_BUS=0 mode, the memory map / I/O map / interrupt semantics
+// are identical to the IcePi port: 64 KiB BRAM with the ROM preloaded and
+// write-protected below 0x2000, 68B50 ACIA shim at ports 0x80/0x81 (Tiny
+// BASIC's 0x00/0x01 too), /INT = (RIE & RDRF) | (TIE & TDRE).
 
 module top #(
     parameter CORE_HZ  = 20_000_000,            // PLLA output; sim overrides to 12_500_000
     parameter BAUD     = 115_200,
     parameter ROM_FILE = "rom.mem",
-    parameter ROM_PROTECT_TOP = 16'h2000        // NASCOM 4.7 ROM is 0x0000-0x1FD9
+    parameter ROM_PROTECT_TOP = 16'h2000,       // NASCOM 4.7 ROM is 0x0000-0x1FD9
+    parameter EXTERNAL_BUS = 1'b1               // 1: J3 is the live CPU bus; 0: internal BASIC SoC
 ) (
     input  wire       clk,       // 50 MHz crystal (E2)
     input  wire       uart_rx,   // BL616 -> FPGA serial (B3)
     output wire       uart_tx,   // FPGA -> BL616 serial (C3)
-    input  wire [1:0] key        // push-buttons, ACTIVE HIGH (H10, H11)
+    input  wire [1:0] key,       // push-buttons, ACTIVE HIGH (H10, H11)
+
+    // Z80-compatible external bus on J3. Address/control/data drivers release
+    // while BUSACK is asserted, and z80_d is also released on reads.
+    input  wire        z80_clk,
+    output wire [15:0] z80_a,
+    inout  wire [7:0]  z80_d,
+    output wire        z80_m1_n,
+    output wire        z80_mreq_n,
+    output wire        z80_iorq_n,
+    output wire        z80_rd_n,
+    output wire        z80_wr_n,
+    output wire        z80_rfsh_n,
+    output wire        z80_halt_n,
+    output wire        z80_busack_n,
+    input  wire        z80_wait_n,
+    input  wire        z80_int_n,
+    input  wire        z80_nmi_n,
+    input  wire        z80_busreq_n,
+    input  wire        z80_reset_n
 );
     // ---- core clock ----
 `ifdef SYNTHESIS
@@ -37,13 +70,14 @@ module top #(
     // = 900 / 45 = 20 MHz. Instantiation and parameter boilerplate
     // follow apicula's examples/gw5a/pll7.v (YosysHQ/apicula, MIT).
     wire clk_cpu;
+    wire clk_sampler;
     wire pll_lock;
     wire gw_gnd = 1'b0;
 
     PLLA PLLA_inst (
         .LOCK(pll_lock),
         .CLKOUT0(clk_cpu),
-        .CLKOUT1(), .CLKOUT2(), .CLKOUT3(), .CLKOUT4(), .CLKOUT5(), .CLKOUT6(),
+        .CLKOUT1(clk_sampler), .CLKOUT2(), .CLKOUT3(), .CLKOUT4(), .CLKOUT5(), .CLKOUT6(),
         .CLKFBOUT(),
         .MDRDO(),
         .CLKIN(clk),
@@ -75,14 +109,14 @@ module top #(
     // Unused outputs still need explicit ODIVs: apycula's defaults for
     // A_ODIV1..6_SEL are the string '8', which its own binary parser
     // rejects (gowin_pack ValueError). Values are don't-care (EN=FALSE).
-    defparam PLLA_inst.ODIV1_SEL = 45;
+    defparam PLLA_inst.ODIV1_SEL = 30;           // 900 / 30 = 30 MHz CLK sampler
     defparam PLLA_inst.ODIV2_SEL = 45;
     defparam PLLA_inst.ODIV3_SEL = 45;
     defparam PLLA_inst.ODIV4_SEL = 45;
     defparam PLLA_inst.ODIV5_SEL = 45;
     defparam PLLA_inst.ODIV6_SEL = 45;
     defparam PLLA_inst.CLKOUT0_EN = "TRUE";
-    defparam PLLA_inst.CLKOUT1_EN = "FALSE";
+    defparam PLLA_inst.CLKOUT1_EN = "TRUE";
     defparam PLLA_inst.CLKOUT2_EN = "FALSE";
     defparam PLLA_inst.CLKOUT3_EN = "FALSE";
     defparam PLLA_inst.CLKOUT4_EN = "FALSE";
@@ -152,6 +186,7 @@ module top #(
     reg [1:0] ckdiv = 0;
     always @(posedge clk) ckdiv <= ckdiv + 1'b1;
     wire clk_cpu = ckdiv[1];
+    wire clk_sampler = clk;
     wire pll_lock = 1'b1;
 `endif
 
@@ -166,7 +201,27 @@ module top #(
         if (btn_sync[1] || !pll_lock)  rst_cnt <= 16'd0;      // pressed / PLL not locked
         else if (rst_cnt != 16'hFFFF)  rst_cnt <= rst_cnt + 1'b1;
     end
-    wire reset_n = (rst_cnt == 16'hFFFF);
+    wire board_reset_n = (rst_cnt == 16'hFFFF);
+
+    // The rz80 engine consumes two phase steps per physical Z80 clock. Sample
+    // the external CLK with the dedicated 30 MHz PLL output and create one clock
+    // enable for each observed edge. CLK is deliberately treated as data here:
+    // J3-21/J2 is not a global-clock pin. Waiting for a synchronized rising
+    // edge before releasing the core aligns reset phi=0 with external CLK=1.
+    reg [2:0] z80_clk_sync = 3'b000;
+    reg       z80_clk_ready = 1'b0;
+    always @(posedge clk_sampler) begin
+        z80_clk_sync <= {z80_clk_sync[1:0], z80_clk};
+        if (!board_reset_n || !z80_reset_n)
+            z80_clk_ready <= 1'b0;
+        else if ((z80_clk_sync[2] ^ z80_clk_sync[1]) && z80_clk_sync[1])
+            z80_clk_ready <= 1'b1;
+    end
+    wire z80_clk_edge = z80_clk_sync[2] ^ z80_clk_sync[1];
+    wire core_host_clk = EXTERNAL_BUS ? clk_sampler : clk_cpu;
+    wire core_ce = EXTERNAL_BUS ? z80_clk_edge : 1'b1;
+    wire cpu_reset_n = board_reset_n &&
+                       (!EXTERNAL_BUS || (z80_reset_n && z80_clk_ready));
 
     // ---- Z80 core ----
     wire [15:0] addr;
@@ -174,11 +229,17 @@ module top #(
     wire        data_drive;
     wire        m1_n, mreq_n, iorq_n, rd_n, wr_n, rfsh_n, halt_n, busack_n;
     reg  [7:0]  data_in;
-    wire        int_n;
+    wire        soc_int_n;
 
-    z80_core cpu (
-        .clk        (clk_cpu),
-        .reset_n    (reset_n),
+    wire core_wait_n   = EXTERNAL_BUS ? z80_wait_n   : 1'b1;
+    wire core_int_n    = EXTERNAL_BUS ? z80_int_n    : soc_int_n;
+    wire core_nmi_n    = EXTERNAL_BUS ? z80_nmi_n    : 1'b1;
+    wire core_busreq_n = EXTERNAL_BUS ? z80_busreq_n : 1'b1;
+
+    z80_core #(.USE_CEN(EXTERNAL_BUS)) cpu (
+        .clk        (core_host_clk),
+        .cen        (core_ce),
+        .reset_n    (cpu_reset_n),
         .addr       (addr),
         .data_in    (data_in),
         .data_out   (data_out),
@@ -191,21 +252,36 @@ module top #(
         .rfsh_n     (rfsh_n),
         .halt_n     (halt_n),
         .busack_n   (busack_n),
-        .wait_n     (1'b1),
-        .int_n      (int_n),
-        .nmi_n      (1'b1),
-        .busreq_n   (1'b1),
+        .wait_n     (core_wait_n),
+        .int_n      (core_int_n),
+        .nmi_n      (core_nmi_n),
+        .busreq_n   (core_busreq_n),
         .dbg_t      (),
         .dbg_phi    (),
         .dbg_m      ()
     );
+
+    // ---- external J3 bus buffers ----
+    // Only HALT and BUSACK remain driven during a DMA grant; address, data and
+    // the cycle-control pins are released.
+    wire header_bus_owned = EXTERNAL_BUS && busack_n;
+    assign z80_a        = header_bus_owned ? addr       : 16'hzzzz;
+    assign z80_d        = (header_bus_owned && data_drive) ? data_out : 8'hzz;
+    assign z80_m1_n     = header_bus_owned ? m1_n       : 1'bz;
+    assign z80_mreq_n   = header_bus_owned ? mreq_n     : 1'bz;
+    assign z80_iorq_n   = header_bus_owned ? iorq_n     : 1'bz;
+    assign z80_rd_n     = header_bus_owned ? rd_n       : 1'bz;
+    assign z80_wr_n     = header_bus_owned ? wr_n       : 1'bz;
+    assign z80_rfsh_n   = header_bus_owned ? rfsh_n     : 1'bz;
+    assign z80_halt_n   = EXTERNAL_BUS ? halt_n         : 1'bz;
+    assign z80_busack_n = EXTERNAL_BUS ? busack_n       : 1'bz;
 
     // ---- 64 KiB block RAM, ROM image preloaded at configuration ----
     reg [7:0] ram [0:65535];
     initial $readmemh(ROM_FILE, ram);
     reg [7:0] ram_dout;
     always @(posedge clk_cpu) begin
-        if (!mreq_n && !wr_n && data_drive && (addr >= ROM_PROTECT_TOP))
+        if (!EXTERNAL_BUS && !mreq_n && !wr_n && data_drive && (addr >= ROM_PROTECT_TOP))
             ram[addr] <= data_out;
         ram_dout <= ram[addr];
     end
@@ -219,11 +295,11 @@ module top #(
     wire       uart_rx_s;
 
     uart_rx #(.CLK_HZ(CORE_HZ), .BAUD(BAUD)) urx (
-        .clk(clk_cpu), .reset_n(reset_n), .rx(uart_rx), .rx_sync(uart_rx_s),
+        .clk(clk_cpu), .reset_n(board_reset_n), .rx(uart_rx), .rx_sync(uart_rx_s),
         .valid(rx_valid), .data(rx_data)
     );
     uart_tx #(.CLK_HZ(CORE_HZ), .BAUD(BAUD)) utx (
-        .clk(clk_cpu), .reset_n(reset_n), .strobe(tx_strobe), .data(tx_data),
+        .clk(clk_cpu), .reset_n(board_reset_n), .strobe(tx_strobe), .data(tx_data),
         .tx(uart_tx), .busy(tx_busy)
     );
 
@@ -254,7 +330,7 @@ module top #(
     wire tie = (acia_ctrl[6:5] == 2'b01);
 
     always @(posedge clk_cpu) begin
-        if (!reset_n) begin
+        if (!board_reset_n) begin
             f_rd <= 0; f_wr <= 0; f_cnt <= 0;
             prev_iord <= 0; prev_iowr <= 0;
             tx_strobe <= 0;
@@ -264,18 +340,18 @@ module top #(
             prev_iowr <= iowr_active;
             tx_strobe <= 1'b0;
 
-            if (fifo_push) begin
+            if (!EXTERNAL_BUS && fifo_push) begin
                 fifo[f_wr] <= rx_data;
                 f_wr <= f_wr + 1'b1;
             end
-            if (fifo_pop) f_rd <= f_rd + 1'b1;
-            case ({fifo_push, fifo_pop})
+            if (!EXTERNAL_BUS && fifo_pop) f_rd <= f_rd + 1'b1;
+            case ({!EXTERNAL_BUS && fifo_push, !EXTERNAL_BUS && fifo_pop})
                 2'b10: f_cnt <= f_cnt + 1'b1;
                 2'b01: f_cnt <= f_cnt - 1'b1;
                 default: ;
             endcase
 
-            if (iord_active && !prev_iord) begin
+            if (!EXTERNAL_BUS && iord_active && !prev_iord) begin
                 case (port)
                     8'h80:   io_dout <= {6'b0, tx_ready, rx_avail};    // NASCOM status
                     8'h00:   io_dout <= rx_avail ? 8'hFF : 8'h00;      // Tiny status
@@ -285,7 +361,7 @@ module top #(
                 endcase
             end
 
-            if (iowr_active && !prev_iowr) begin
+            if (!EXTERNAL_BUS && iowr_active && !prev_iowr) begin
                 if (port == 8'h81 || port == 8'h01) begin
                     tx_data   <= data_out;
                     tx_strobe <= 1'b1;
@@ -297,11 +373,12 @@ module top #(
     end
 
     // 68B50 IRQ: RX byte pending (if RIE) or TX empty (if TIE).
-    assign int_n = ((rie && rx_avail) || (tie && tx_ready)) ? 1'b0 : 1'b1;
+    assign soc_int_n = ((rie && rx_avail) || (tie && tx_ready)) ? 1'b0 : 1'b1;
 
     // Data-bus input mux. INTA in IM 1 ignores the bus; 0xFF = RST 38h.
     always @(*) begin
-        if (inta_active)      data_in = 8'hFF;
+        if (EXTERNAL_BUS)     data_in = z80_d;
+        else if (inta_active) data_in = 8'hFF;
         else if (iord_active) data_in = io_dout;
         else                  data_in = ram_dout;
     end

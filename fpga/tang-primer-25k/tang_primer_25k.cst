@@ -19,4 +19,122 @@ IO_PORT "key[0]" IO_TYPE=LVCMOS33 PULL_MODE=DOWN DRIVE=OFF BANK_VCCIO=3.3;
 IO_LOC  "key[1]" H11;
 IO_PORT "key[1]" IO_TYPE=LVCMOS33 PULL_MODE=DOWN DRIVE=OFF BANK_VCCIO=3.3;
 
+// Z80 bus on the dock's J3 2x20 header.  J3-11 is fixed +5 V and J3-12
+// is fixed GND; neither is an FPGA pin.  All FPGA I/O below is 3.3 V only
+// and is NOT 5 V tolerant.  Use external bidirectional level translators
+// when attaching this header to a 5 V Z80 bus.
+//
+// Header layout, viewed from above with the board's USB connectors at left:
+//
+//       odd pin / signal                 even pin / signal
+//    J3-1  A11                        J3-2  A10
+//       3  A12                           4  A9
+//       5  A13                           6  A8
+//       7  A14                           8  A7
+//       9  A15                          10  A6
+//      11  +5V (fixed power)            12  GND (fixed power)
+//      13  D4                           14  A4
+//      15  D3                           16  A3
+//      17  D5                           18  A2
+//      19  D6                           20  A1
+//      21  CLK (input)                  22  A0
+//      23  D2                           24  A5
+//      25  D7                           26  /RFSH
+//      27  D0                           28  /M1
+//      29  D1                           30  /RESET
+//      31  /INT                         32  /BUSREQ
+//      33  /NMI                         34  /WAIT
+//      35  /HALT                        36  /BUSACK
+//      37  /MREQ                        38  /WR
+//      39  /IORQ                        40  /RD
+//
+// This follows the visual Z80 DIP-40 layout with only the two exchanges
+// forced by the dock's immovable J3-11/J3-12 power row: CLK swaps with +5 V,
+// and A5 swaps with GND.  CLK is supplied by the external system on J3-21.
+
+// Address bus.
+IO_LOC  "z80_a[0]"  J1;
+IO_PORT "z80_a[0]"  IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "z80_a[1]"  E3;
+IO_PORT "z80_a[1]"  IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "z80_a[2]"  E1;
+IO_PORT "z80_a[2]"  IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "z80_a[3]"  F2;
+IO_PORT "z80_a[3]"  IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "z80_a[4]"  B2;
+IO_PORT "z80_a[4]"  IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "z80_a[5]"  G4;
+IO_PORT "z80_a[5]"  IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "z80_a[6]"  L4;
+IO_PORT "z80_a[6]"  IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "z80_a[7]"  G2;
+IO_PORT "z80_a[7]"  IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "z80_a[8]"  J4;
+IO_PORT "z80_a[8]"  IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "z80_a[9]"  L2;
+IO_PORT "z80_a[9]"  IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "z80_a[10]" K1;
+IO_PORT "z80_a[10]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "z80_a[11]" K2;
+IO_PORT "z80_a[11]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "z80_a[12]" L1;
+IO_PORT "z80_a[12]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "z80_a[13]" K4;
+IO_PORT "z80_a[13]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "z80_a[14]" G1;
+IO_PORT "z80_a[14]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "z80_a[15]" L3;
+IO_PORT "z80_a[15]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+
+// Bidirectional data bus.
+IO_LOC  "z80_d[0]" J7;
+IO_PORT "z80_d[0]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "z80_d[1]" L8;
+IO_PORT "z80_d[1]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "z80_d[2]" H4;
+IO_PORT "z80_d[2]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "z80_d[3]" F1;
+IO_PORT "z80_d[3]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "z80_d[4]" C2;
+IO_PORT "z80_d[4]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "z80_d[5]" A1;
+IO_PORT "z80_d[5]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "z80_d[6]" D1;
+IO_PORT "z80_d[6]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "z80_d[7]" H2;
+IO_PORT "z80_d[7]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+
+// External clock input and CPU-driven controls.
+IO_LOC  "z80_clk"      J2;
+IO_LOC  "z80_m1_n"     K7;
+IO_LOC  "z80_mreq_n"   F6;
+IO_LOC  "z80_iorq_n"   J10;
+IO_LOC  "z80_rd_n"     J11;
+IO_LOC  "z80_wr_n"     F7;
+IO_LOC  "z80_rfsh_n"   H1;
+IO_LOC  "z80_halt_n"   K8;
+IO_LOC  "z80_busack_n" J8;
+IO_PORT "z80_clk"      IO_TYPE=LVCMOS33 PULL_MODE=DOWN DRIVE=OFF BANK_VCCIO=3.3;
+IO_PORT "z80_m1_n"     IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_PORT "z80_mreq_n"   IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_PORT "z80_iorq_n"   IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_PORT "z80_rd_n"     IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_PORT "z80_wr_n"     IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_PORT "z80_rfsh_n"   IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_PORT "z80_halt_n"   IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_PORT "z80_busack_n" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+
+// Active-low external inputs.  Weak pull-ups leave them
+// inactive when the header is unplugged; external drivers must pull low.
+IO_LOC  "z80_wait_n"   L9;
+IO_LOC  "z80_int_n"    K10;
+IO_LOC  "z80_nmi_n"    K9;
+IO_LOC  "z80_busreq_n" L10;
+IO_LOC  "z80_reset_n"  L7;
+IO_PORT "z80_wait_n"   IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=OFF BANK_VCCIO=3.3;
+IO_PORT "z80_int_n"    IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=OFF BANK_VCCIO=3.3;
+IO_PORT "z80_nmi_n"    IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=OFF BANK_VCCIO=3.3;
+IO_PORT "z80_busreq_n" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=OFF BANK_VCCIO=3.3;
+IO_PORT "z80_reset_n"  IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=OFF BANK_VCCIO=3.3;
+
 // vim: set et sw=4 ts=4:
