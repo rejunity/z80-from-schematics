@@ -475,7 +475,11 @@ module z80_core #(
         end
 
         // latch on the current phase
-        if (islatch) begin
+        // A memory WAIT holds T2 and revisits its .N phase on every inserted
+        // Tw.  Do not consume read data (or increment PC during M1) until the
+        // release sample; otherwise every Tw re-latches the bus and advances
+        // PC while the externally visible address remains stalled.
+        if (!stall && islatch) begin
             if (bus_op == `BUSOP_M1) begin
                 ir_n   = data_in;
                 tmp8_n = data_in;
