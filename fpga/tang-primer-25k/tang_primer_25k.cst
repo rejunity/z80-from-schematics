@@ -36,7 +36,7 @@ IO_PORT "key[1]" IO_TYPE=LVCMOS33 PULL_MODE=DOWN DRIVE=OFF BANK_VCCIO=3.3;
 //        7  A7      (G1)                   8  A14     (G2)
 //        9  A6      (L3)                  10  A15     (L4)
 //       11  +5V     (fixed power)         12  GND     (fixed power)
-//       13  A4      (C2)                  14  D4      (B2)
+//       13  A4      (C2)                  14  NC      (B2, faulty D4 pin)
 //       15  A3      (F1)                  16  D3      (F2)
 //       17  A2      (A1)                  18  D5      (E1)
 //       19  A1      (D1)                  20  D6      (E3)
@@ -47,13 +47,14 @@ IO_PORT "key[1]" IO_TYPE=LVCMOS33 PULL_MODE=DOWN DRIVE=OFF BANK_VCCIO=3.3;
 //       29  /RESET  (L8)                  30  D1      (L7)
 //       31  /BUSREQ (K10)                 32  /INT    (L10)
 //       33  /WAIT   (K9)                  34  /NMI    (L9)
-//       35  /BUSACK (K8)                  36  /HALT   (J8)
+//       35  D4      (K8, BUSACK reused)   36  /HALT   (J8)
 //       37  /WR     (F6)                  38  /MREQ   (F7)
 //       39  /RD     (J10)                 40  /IORQ   (J11)
 //
 // The dock's immovable J3-11/J3-12 power row still forces two adapter-board
 // exchanges: CLK with +5 V, and A5 with GND. CLK is supplied by the external
-// system on J3-22 (FPGA ball J1).
+// system on J3-22 (FPGA ball J1). D4 is rerouted from faulty ball B2 to
+// J3-35/K8; BUSACK is consequently not exposed on the header.
 
 // Address bus.
 IO_LOC  "z80_a[0]"  J2;
@@ -98,7 +99,7 @@ IO_LOC  "z80_d[2]" G4;
 IO_PORT "z80_d[2]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
 IO_LOC  "z80_d[3]" F2;
 IO_PORT "z80_d[3]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
-IO_LOC  "z80_d[4]" B2;
+IO_LOC  "z80_d[4]" K8;
 IO_PORT "z80_d[4]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
 IO_LOC  "z80_d[5]" E1;
 IO_PORT "z80_d[5]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
@@ -116,7 +117,6 @@ IO_LOC  "z80_rd_n"     J10;
 IO_LOC  "z80_wr_n"     F6;
 IO_LOC  "z80_rfsh_n"   H2;
 IO_LOC  "z80_halt_n"   J8;
-IO_LOC  "z80_busack_n" K8;
 IO_PORT "z80_clk"      IO_TYPE=LVCMOS33 PULL_MODE=DOWN DRIVE=OFF BANK_VCCIO=3.3;
 IO_PORT "z80_m1_n"     IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
 IO_PORT "z80_mreq_n"   IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
@@ -125,7 +125,6 @@ IO_PORT "z80_rd_n"     IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
 IO_PORT "z80_wr_n"     IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
 IO_PORT "z80_rfsh_n"   IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
 IO_PORT "z80_halt_n"   IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
-IO_PORT "z80_busack_n" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
 
 // Active-low external inputs.  Weak pull-ups leave them
 // inactive when the header is unplugged; external drivers must pull low.

@@ -46,7 +46,9 @@ module top #(
     input  wire [1:0] key,       // push-buttons, ACTIVE HIGH (H10, H11)
 
     // Z80-compatible external bus on J3. Address/control/data drivers release
-    // while BUSACK is asserted, and z80_d is also released on reads.
+    // while the core's internal BUSACK is asserted, and z80_d is also released
+    // on reads. BUSACK itself is not exposed: its former K8 header pin is used
+    // as a replacement for the faulty B2/D4 connection.
     input  wire        z80_clk,
     output wire [15:0] z80_a,
     inout  wire [7:0]  z80_d,
@@ -57,7 +59,6 @@ module top #(
     output wire        z80_wr_n,
     output wire        z80_rfsh_n,
     output wire        z80_halt_n,
-    output wire        z80_busack_n,
     input  wire        z80_wait_n,
     input  wire        z80_int_n,
     input  wire        z80_nmi_n,
@@ -262,8 +263,9 @@ module top #(
     );
 
     // ---- external J3 bus buffers ----
-    // Only HALT and BUSACK remain driven during a DMA grant; address, data and
-    // the cycle-control pins are released.
+    // Only HALT remains driven during a DMA grant; address, data and the
+    // cycle-control pins are released. The internal BUSACK still controls
+    // bus release, but is not brought out because K8 carries D4 instead.
     wire header_bus_owned = EXTERNAL_BUS && busack_n;
     assign z80_a        = header_bus_owned ? addr       : 16'hzzzz;
     assign z80_d        = (header_bus_owned && data_drive) ? data_out : 8'hzz;
@@ -274,7 +276,6 @@ module top #(
     assign z80_wr_n     = header_bus_owned ? wr_n       : 1'bz;
     assign z80_rfsh_n   = header_bus_owned ? rfsh_n     : 1'bz;
     assign z80_halt_n   = EXTERNAL_BUS ? halt_n         : 1'bz;
-    assign z80_busack_n = EXTERNAL_BUS ? busack_n       : 1'bz;
 
     // ---- 64 KiB block RAM, ROM image preloaded at configuration ----
     reg [7:0] ram [0:65535];
