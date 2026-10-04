@@ -71,6 +71,15 @@ Active-low signals carry the `_n` suffix (asserted = 0).
 The data bus is modeled as separate `pin_data_in`/`pin_data_out` + `pin_data_drive`
 instead of a tri-state, matching "no internal tri-states; use explicit muxes."
 
+In RTL, `z80_core` registers M1, MREQ, IORQ, RD, WR, RFSH, HALT and data-output
+enable from the **next** timing state, on the same enabled edge as the sequencer.
+This preserves phase timing without exposing intermediate `t_state`/`phi`/`bus_op`
+decodes to external hardware. For example, T4.N → T1.P must not briefly decode
+T1.N and assert RD/MREQ as M1 falls. M1 retains a reset-only output mask to
+preserve its initial T1.P assertion on reset release. Address and data still use
+the current-state decode; BUSACK comes from the registered bus-grant flag.
+`make bus_controls` checks phase parity and injects decoder skew between edges.
+
 ## 3. Internal datapath
 
 A single 8-bit internal data bus (`bus_db`) plus a 16-bit address path. No internal

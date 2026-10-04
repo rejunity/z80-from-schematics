@@ -77,6 +77,8 @@ jobs:
             build-essential python3 iverilog
       - name: RTL elaboration smoke (iverilog)
         run: make rtl
+      - name: Registered bus controls and decoder skew
+        run: make bus_controls
       - name: FUSE / Cringle 1356 cases through iverilog RTL
         run: make fuse_rtl
 

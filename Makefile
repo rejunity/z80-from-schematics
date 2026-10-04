@@ -366,6 +366,15 @@ rtl:
 	  echo "== elaborating RTL with iverilog =="; \
 	  $(IVERILOG) -g2001 -I$(RTL) -t null $(RTL_SRCS) && echo "RTL elaboration OK"; fi
 
+.PHONY: bus_controls
+bus_controls: dirs
+	@set -e; for cen in 0 1; do \
+	  $(IVERILOG) -g2012 -I$(RTL) -s tb_bus_controls \
+	    -Ptb_bus_controls.USE_CEN=$$cen -o $(BUILD)/tb_bus_controls.vvp \
+	    $(RTL_SRCS) $(TESTS)/iverilog/tb_bus_controls.v; \
+	  $(VVP) $(BUILD)/tb_bus_controls.vvp; \
+	done
+
 iverilog: dirs
 	@if [ -f $(TESTS)/iverilog/tb_z80.v ]; then \
 	  echo "== building iverilog sim =="; \
@@ -520,11 +529,11 @@ zexall: zexrunner
 # ----------------------------------------------------------------------------
 # full suite
 # ----------------------------------------------------------------------------
-test: ctest rtl compare
+test: ctest rtl bus_controls compare
 	@echo "== full test suite complete =="
 
 # Run every verification gate. Heavy: ZEXDOC + ZEXALL take ~30 min combined.
-all-tests: ctest rtl compare fuse fuse_rtl perfectz80
+all-tests: ctest rtl bus_controls compare fuse fuse_rtl perfectz80
 	@echo "== running ZEXDOC (~1 min) =="
 	@$(BIN)/zexrunner tests/zex/zexdoc.com 6000000000 2>&1 | tr -d '\r' | grep -E 'OK$$|ERROR|complete|elapsed' | tail -10
 	@echo "== running ZEXALL (~16 min) =="

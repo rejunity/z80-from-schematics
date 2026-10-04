@@ -6,7 +6,8 @@
 // the Z80 rate: each Z80 T-state is two enabled clocks (phi 0 then 1). All
 // state is computed combinationally as *_n and registered on posedge clk;
 // async-assert reset. USE_CEN optionally makes cen qualify those phase steps.
-// External pin timing is produced by z80_timing from registered state.
+// Bus controls are registered from the next timing state, on the same edge
+// as the sequencer. Decoding current state directly onto pins can glitch.
 // ===========================================================================
 `include "z80_defs.vh"
 
@@ -20,14 +21,14 @@ module z80_core #(
     output wire [15:0] addr,
     input  wire [7:0]  data_in,
     output wire [7:0]  data_out,
-    output wire        data_drive,
+    output reg         data_drive,
     output wire        m1_n,
-    output wire        mreq_n,
-    output wire        iorq_n,
-    output wire        rd_n,
-    output wire        wr_n,
-    output wire        rfsh_n,
-    output wire        halt_n,
+    output reg         mreq_n,
+    output reg         iorq_n,
+    output reg         rd_n,
+    output reg         wr_n,
+    output reg         rfsh_n,
+    output reg         halt_n,
     output wire        busack_n,
     // control inputs
     input  wire        wait_n,
@@ -64,6 +65,11 @@ module z80_core #(
     reg        nmi_pending, prev_nmi_n, ei_delay, suppress_decode, bus_granted;
     reg        nmi_sampled, int_sampled;  // latched at T_last.P per UM0080
     reg [1:0]  irq_seq;        // 0 none, 1 NMI, 2 INT, 3 HALT-nop
+    reg [2:0] reset_assert_filter  = 3'd0;
+    reg [2:0] reset_release_filter = 3'd0;
+    reg       in_reset_hold        = 1'b0;
+    reg       in_initial_hold      = 1'b1;   // distinguishes power-on from runtime reset
+    reg       power_on             = 1'b1;
 
     // ---- next-state ----
     reg [15:0] rf_n [0:12];
@@ -119,17 +125,28 @@ module z80_core #(
                           (irq_seq == 2'd2) ? `EXEC_INT :
                           (irq_seq == 2'd3) ? `EXEC_NOP : exec_w;
 
-    // ---- timing pin drive (combinational from registered state) ----
+    // ---- address/data decode and registered bus controls ----
     wire [15:0] tim_addr;
     wire [7:0]  tim_data_out;
-    wire        tim_data_drive, tim_m1_n, tim_mreq_n, tim_iorq_n;
-    wire        tim_rd_n, tim_wr_n, tim_rfsh_n;
     z80_timing u_timing (
         .bus_op(bus_op), .t_state(t_state[2:0]), .phi(phi), .m_len(m_len),
         .m_addr(m_addr), .m_wdata(m_wdata), .reg_i(reg_i), .reg_r(reg_r),
-        .addr(tim_addr), .data_out(tim_data_out), .data_drive(tim_data_drive),
-        .m1_n(tim_m1_n), .mreq_n(tim_mreq_n), .iorq_n(tim_iorq_n),
-        .rd_n(tim_rd_n), .wr_n(tim_wr_n), .rfsh_n(tim_rfsh_n)
+        .addr(tim_addr), .data_out(tim_data_out), .data_drive(),
+        .m1_n(), .mreq_n(), .iorq_n(), .rd_n(), .wr_n(), .rfsh_n()
+    );
+    // At T_last.N -> T1.P, t_state can settle before phi and transiently
+    // decode T1.N, asserting RD/MREQ together with M1. The write/IO
+    // decoders have similar hazards. Decode BEFORE the phase edge and
+    // capture the controls with the state, not one phase after it.
+    wire next_data_drive, next_m1_n, next_mreq_n, next_iorq_n;
+    wire next_rd_n, next_wr_n, next_rfsh_n;
+    reg  m1_pin_n;
+    z80_timing u_timing_next (
+        .bus_op(bus_op_n), .t_state(t_n[2:0]), .phi(phi_n), .m_len(m_len_n),
+        .m_addr(m_addr_n), .m_wdata(m_wdata_n), .reg_i(reg_i_n), .reg_r(reg_r_n),
+        .addr(), .data_out(), .data_drive(next_data_drive),
+        .m1_n(next_m1_n), .mreq_n(next_mreq_n), .iorq_n(next_iorq_n),
+        .rd_n(next_rd_n), .wr_n(next_wr_n), .rfsh_n(next_rfsh_n)
     );
     // During in_reset_hold, force all pins to idle -- matches C model
     // (reset_state() sets pins idle and phase_step returns early so
@@ -142,23 +159,22 @@ module z80_core #(
     wire hold_pins = in_reset_hold && !(reset_n && in_initial_hold);
     assign addr       = hold_pins ? 16'h0000 : tim_addr;
     assign data_out   = hold_pins ? 8'h00    : tim_data_out;
-    assign data_drive = hold_pins ? 1'b0     : tim_data_drive;
-    assign m1_n       = hold_pins ? 1'b1     : tim_m1_n;
-    assign mreq_n     = hold_pins ? 1'b1     : tim_mreq_n;
-    assign iorq_n     = hold_pins ? 1'b1     : tim_iorq_n;
-    assign rd_n       = hold_pins ? 1'b1     : tim_rd_n;
-    assign wr_n       = hold_pins ? 1'b1     : tim_wr_n;
-    assign rfsh_n     = hold_pins ? 1'b1     : tim_rfsh_n;
+    // M1 alone is already active in the reset state's T1.P. Preserve its
+    // existing assertion on initial reset release using a reset-only mask;
+    // no timing-state decode remains after the pin register. All strobes
+    // reset inactive and need no hold mux on their outputs.
+    assign m1_n       = hold_pins ? 1'b1     : m1_pin_n;
     // Silicon-faithful halt pin: assert at T4.N of the HALT instruction's
     // M1 (one half-T-state before instruction-done flips `halted`), so
     // the pin LEADS the flag by one phase -- matches perfectz80's
     // gate-level trace on prog10_halt_nmi / prog19_nmi_in_int. After
     // instruction-done, the `halted` register takes over. Mirrors
     // cmodel/z80_core.c halt_n driving.
-    wire exec_halt_in_m1 = (exec_w == `EXEC_HALT)
-                        && (bus_op == `BUSOP_M1)
-                        && (t_state == 4'd4) && (phi == 1'b1);
-    assign halt_n   = (halted || exec_halt_in_m1) ? 1'b0 : 1'b1;
+    // The opcode/prefix decode is stable when entering T4.N; when a new
+    // opcode is latched (T3.P) or a prefix changes (T1.P), this term is off.
+    wire next_exec_halt_in_m1 = (exec_w == `EXEC_HALT)
+                             && (bus_op_n == `BUSOP_M1)
+                             && (t_n == 4'd4) && (phi_n == 1'b1);
     assign busack_n = bus_granted ? 1'b0 : 1'b1;
     assign dbg_t = t_state; assign dbg_phi = phi; assign dbg_m = m_cycle;
 
@@ -1217,11 +1233,25 @@ module z80_core #(
     // very first reset_n=0 still does an immediate state init -- otherwise
     // the testbench's brief reset pulse wouldn't drive registers out of X.
     // See docs/perfect-branch.md "prog17 silicon-behavior analysis".
-    reg [2:0] reset_assert_filter  = 3'd0;
-    reg [2:0] reset_release_filter = 3'd0;
-    reg       in_reset_hold        = 1'b0;
-    reg       in_initial_hold      = 1'b1;   // distinguishes power-on from runtime reset
-    reg       power_on             = 1'b1;
+    // Exactly the same enable as the sequencer's state updates, including
+    // reset-release holds. WAIT still advances phi while holding t_state.
+    wire advance_state = (!USE_CEN || cen) &&
+                         (!in_reset_hold || in_initial_hold ||
+                          (reset_release_filter >= 3'd4));
+    always @(posedge clk or negedge reset_n) begin
+        if (!reset_n) begin
+            m1_pin_n <= 1'b0; // T1.P, hidden by hold_pins while reset is low
+            mreq_n <= 1'b1; iorq_n <= 1'b1;
+            rd_n <= 1'b1; wr_n <= 1'b1; rfsh_n <= 1'b1;
+            data_drive <= 1'b0; halt_n <= 1'b1;
+        end else if (advance_state) begin
+            m1_pin_n <= next_m1_n;
+            mreq_n <= next_mreq_n; iorq_n <= next_iorq_n;
+            rd_n <= next_rd_n; wr_n <= next_wr_n; rfsh_n <= next_rfsh_n;
+            data_drive <= next_data_drive;
+            halt_n <= !(halted_n || next_exec_halt_in_m1);
+        end
+    end
 
     // ---- registers ----
     // Async reset with sync release filter -- the Yosys-synthesisable form
