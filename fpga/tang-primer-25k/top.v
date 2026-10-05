@@ -210,9 +210,13 @@ module top #(
     // J3-21/J2 is not a global-clock pin. Waiting for a synchronized rising
     // edge before releasing the core aligns reset phi=0 with external CLK=1.
     reg [2:0] z80_clk_sync = 3'b000;
+    // Delay WAIT alongside CLK. When core_ce observes a CLK transition,
+    // bit 1 holds WAIT from the sampler tick that first saw that edge.
+    reg [2:0] z80_wait_sync = 3'b111;
     reg       z80_clk_ready = 1'b0;
     always @(posedge clk_sampler) begin
         z80_clk_sync <= {z80_clk_sync[1:0], z80_clk};
+        z80_wait_sync <= {z80_wait_sync[1:0], z80_wait_n};
         if (!board_reset_n || !z80_reset_n)
             z80_clk_ready <= 1'b0;
         else if ((z80_clk_sync[2] ^ z80_clk_sync[1]) && z80_clk_sync[1])
@@ -232,7 +236,7 @@ module top #(
     reg  [7:0]  data_in;
     wire        soc_int_n;
 
-    wire core_wait_n   = EXTERNAL_BUS ? z80_wait_n   : 1'b1;
+    wire core_wait_n   = EXTERNAL_BUS ? z80_wait_sync[1] : 1'b1;
     wire core_int_n    = EXTERNAL_BUS ? z80_int_n    : soc_int_n;
     wire core_nmi_n    = EXTERNAL_BUS ? z80_nmi_n    : 1'b1;
     wire core_busreq_n = EXTERNAL_BUS ? z80_busreq_n : 1'b1;

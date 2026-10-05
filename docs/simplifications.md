@@ -187,7 +187,9 @@ Resolved: the C model samples `wait_n` on entry to T2.N for M1/MRD/MWR or
 the automatic Tw.N (T3.N in the model) for IORD/IOWR, or the second
 automatic Tw.N (state 4.N) for INTA, then retains that
 decision through the following phase advance. The RTL now registers the
-WAIT decision on the enabled transition into that same `.N` phase.
+WAIT decision on the enabled transition into that same `.N` phase. The Tang
+Primer synchronizes CLK and WAIT together so the delayed edge enable uses
+the WAIT value captured with the detected external falling edge.
 
 **Status**: resolved; `make bus_controls` checks short pulses on either side
 of the falling-edge sample.

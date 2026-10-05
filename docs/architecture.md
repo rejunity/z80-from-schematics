@@ -30,6 +30,12 @@ modern clk tick:^    ^   ^    ^   ^    ^
   assert WR, sample WAIT, deassert MREQ/RD/IORQ/WR at the last T-state, latch the
   M1 opcode at T2.N) take effect on the `posedge clk` that *enters* phi=1.
 
+On the Tang Primer external bus, CLK and `/WAIT` pass through aligned 30 MHz
+sampler pipelines. When a synchronized falling CLK edge enables the phase step
+into `phi=1`, the core captures the corresponding WAIT sample in a register.
+The next rising-edge step uses that saved bit to insert Tw; it does not reread
+the live WAIT pin.
+
 The canonical simulation step is **one phase** (`z80_phase_step()` in C; one `clk`
 edge in RTL). Two phase-steps advance one T-state. Traces are emitted once per phase.
 

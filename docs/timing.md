@@ -6,6 +6,15 @@ All timing is expressed in **phases**. Each Z80 T-state = two phases:
 T_n; "set at T_n.N" means entering phi=1 of T_n. WAIT is sampled at the **.N** of T2
 (and of any inserted Tw). Source: Zilog UM0080 timing diagrams (precedence rule 1).
 
+For the Tang Primer external bus, the 30 MHz sampler detects each external CLK
+edge after synchronization. It pipelines `/WAIT` alongside CLK, so the core
+uses the WAIT value captured at the sampler tick that first observed the
+falling edge. The core latches that value on entry to `phi=1`; the latched
+decision holds T2/Tw at the following rising-edge phase step. Changing `/WAIT`
+after the falling-edge sample does not change that decision. The sampler adds
+latency to the observation of both pins, so this is an edge-aligned digital
+model, not a zero-delay physical latch on the external CLK pin.
+
 Legend: `↓` = assert (drive low for active-low pins), `↑` = deassert.
 
 ## M1 — opcode fetch (4 T-states: T1 T2 T3 T4)
