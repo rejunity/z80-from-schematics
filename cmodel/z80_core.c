@@ -1333,6 +1333,10 @@ void z80_phase_step(z80_t *c)
         c->phase_primed = false;
     }
 
+    /* Tw repeats T2 in memory writes, but its .P half must not regenerate
+       the initial T2.P (WR high). Preserve the already asserted strobe. */
+    bool hold_write_strobe = c->phase_primed && c->phi == 1 && c->stalled &&
+                             c->bus_op == BUSOP_MWR;
     if (c->phase_primed)
         advance(c);
     c->phase_primed = true;
@@ -1365,6 +1369,8 @@ void z80_phase_step(z80_t *c)
                &c->pins.addr, &c->pins.data_out, &c->pins.data_drive,
                &c->pins.m1_n, &c->pins.mreq_n, &c->pins.iorq_n,
                &c->pins.rd_n, &c->pins.wr_n,   &c->pins.rfsh_n);
+
+    if (hold_write_strobe) c->pins.wr_n = 0;
 
     /* HALT pin level. Silicon-faithful per perfectz80's gate-level
      * trace (prog10_halt_nmi phase 27, prog13_halt_int):

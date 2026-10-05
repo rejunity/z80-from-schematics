@@ -73,6 +73,7 @@ void z80_timing(uint8_t   bus_op,     /* z80_busop_t                          */
         break;
     }
     case BUSOP_MWR: {
+        /* The phase engine holds WR low when WAIT repeats T2 as Tw.P. */
         bool active = !(t_state == 1 && phi == 0) &&
                       !(t_state == 3 && phi == 1) && t_state <= 3;
         *mreq_n = active ? 0 : 1;

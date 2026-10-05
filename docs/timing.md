@@ -67,6 +67,19 @@ not part of the read window.
 - **T2.N**: sample `pin_wait_n`; insert `Tw` if asserted. `pin_wr_n ← 0`.
 - **T3.N**: `pin_wr_n ← 1`; `pin_mreq_n ← 1`; `pin_data_drive ← 0`.
 
+Inserted Tw states hold `/WR` continuously low, together with `/MREQ` and
+stable address/data. Internally Tw reuses `t_state=2`; its rising half must
+not be decoded as the initial T2.P before `/WR` first asserts. The RTL keeps
+the registered write strobe across the stalled `.N → .P` transition; the C
+phase engine applies the same rule. `/WR` is released only at final T3.N.
+
+In this implementation, the first `/WR` assertion and the WAIT sample both
+occur at T2.N. A peripheral that starts asserting WAIT only after seeing
+`/WR` low is too late for that write, regardless of how long it then holds
+WAIT. WAIT must already meet the falling-edge sample deadline; preasserting
+WAIT before the write is one way to do that. A late WAIT can instead stall
+the following transaction. The write-strobe hold does not change this rule.
+
 ## I/O read (4 T-states: T1 T2 Tw T3 — one automatic wait state)
 
 - **T1.P**: `pin_addr ← port` (`A` high byte / `B` / `C` depending on instruction).
@@ -141,3 +154,7 @@ release is modeled with output-enable lines on the pin mux.
 WAIT is sampled at `.N` of T2 in memory M-cycles, at `.N` of the automatic Tw in I/O
 cycles, and at `.N` of T2 (and inserted Tw) in M1. While WAIT is low, the M-cycle
 holds its current bus state and re-samples each subsequent `.N` until WAIT releases.
+
+`make bus_controls` tests the sampling edge and continuous memory/IO write
+strobes through 20 inserted wait states, with and without clock enables.
+`tests/common/test_wait_write.c` covers the same write-strobe behavior in C.

@@ -191,15 +191,15 @@ module z80_core #(
                       ((bus_op == `BUSOP_MRD)  && (t_state == 4'd3)) ||
                       ((bus_op == `BUSOP_IORD) && (t_state == 4'd4))
                     ) );
-    // WAIT *sample edge* per Zilog UM0080: T2.N for memory cycles, the
-    // automatic Tw.N for I/O. Silicon latches !wait_n at this single
-    // phase per (T2 or inserted Tw) and inserts a Tw if asserted.
-    wire wait_sample_phase  =  (phi == 1'b1) &&
+    // Capture WAIT on the edge ENTERING T2.N (or the automatic Tw.N for I/O).
+    // phi is still 0 before that edge. The saved decision controls the next
+    // .N -> .P transition, even if WAIT changes during the low clock half.
+    wire wait_capture_phase = (phi == 1'b0) &&
                   ( (((bus_op == `BUSOP_M1) || (bus_op == `BUSOP_MRD) ||
                       (bus_op == `BUSOP_MWR)) && (t_state == 4'd2)) ||
                     (((bus_op == `BUSOP_IORD) || (bus_op == `BUSOP_IOWR)) && (t_state == 4'd3)) );
-    wire wait_sampled = wait_sample_phase && (wait_n == 1'b0);
-    wire stall = wait_sampled;  // hold current T-state as a Tw
+    reg  wait_sampled;
+    wire stall = (phi == 1'b1) && wait_sampled; // hold this T-state as a Tw
     wire [7:0] rbyte = islatch ? data_in : tmp8;
 
     // ---- 8-bit register read ----
@@ -1240,14 +1240,20 @@ module z80_core #(
                           (reset_release_filter >= 3'd4));
     always @(posedge clk or negedge reset_n) begin
         if (!reset_n) begin
+            wait_sampled <= 1'b0;
             m1_pin_n <= 1'b0; // T1.P, hidden by hold_pins while reset is low
             mreq_n <= 1'b1; iorq_n <= 1'b1;
             rd_n <= 1'b1; wr_n <= 1'b1; rfsh_n <= 1'b1;
             data_drive <= 1'b0; halt_n <= 1'b1;
         end else if (advance_state) begin
+            wait_sampled <= wait_capture_phase && (wait_n == 1'b0);
             m1_pin_n <= next_m1_n;
             mreq_n <= next_mreq_n; iorq_n <= next_iorq_n;
-            rd_n <= next_rd_n; wr_n <= next_wr_n; rfsh_n <= next_rfsh_n;
+            rd_n <= next_rd_n; rfsh_n <= next_rfsh_n;
+            // Tw reuses T2 for memory writes. Its .P half is NOT the
+            // initial T2.P before WR asserts: retain WR through that half.
+            // The next .N and the final T3 still use the normal decoder.
+            if (!stall) wr_n <= next_wr_n;
             data_drive <= next_data_drive;
             halt_n <= !(halted_n || next_exec_halt_in_m1);
         end

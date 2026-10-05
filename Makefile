@@ -373,6 +373,14 @@ bus_controls: dirs
 	    -Ptb_bus_controls.USE_CEN=$$cen -o $(BUILD)/tb_bus_controls.vvp \
 	    $(RTL_SRCS) $(TESTS)/iverilog/tb_bus_controls.v; \
 	  $(VVP) $(BUILD)/tb_bus_controls.vvp; \
+	  $(IVERILOG) -g2012 -I$(RTL) -s tb_wait_edge \
+	    -Ptb_wait_edge.USE_CEN=$$cen -o $(BUILD)/tb_wait_edge.vvp \
+	    $(RTL_SRCS) $(TESTS)/iverilog/tb_wait_edge.v; \
+	  $(VVP) $(BUILD)/tb_wait_edge.vvp; \
+	  $(IVERILOG) -g2012 -I$(RTL) -s tb_wait_write \
+	    -Ptb_wait_write.USE_CEN=$$cen -o $(BUILD)/tb_wait_write.vvp \
+	    $(RTL_SRCS) $(TESTS)/iverilog/tb_wait_write.v; \
+	  $(VVP) $(BUILD)/tb_wait_write.vvp; \
 	done
 
 iverilog: dirs

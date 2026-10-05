@@ -78,7 +78,10 @@ decodes to external hardware. For example, T4.N → T1.P must not briefly decode
 T1.N and assert RD/MREQ as M1 falls. M1 retains a reset-only output mask to
 preserve its initial T1.P assertion on reset release. Address and data still use
 the current-state decode; BUSACK comes from the registered bus-grant flag.
-`make bus_controls` checks phase parity and injects decoder skew between edges.
+`make bus_controls` checks phase parity, injects decoder skew between edges,
+and verifies falling-edge WAIT capture and continuous write strobes through Tw.
+The stateless timing decoder describes initial T2.P; the core's WR register
+retains the asserted strobe when a stalled memory write revisits that phase.
 
 ## 3. Internal datapath
 

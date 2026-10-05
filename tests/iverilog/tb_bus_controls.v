@@ -37,8 +37,16 @@ module tb_bus_controls;
     wire ref_halt = !(dut.halted || ((dut.exec_w == `EXEC_HALT) &&
                        (dut.bus_op == `BUSOP_M1) &&
                        (dut.t_state == 4) && dut.phi));
+    // A memory-write Tw.P retains WR; the base timing decoder describes
+    // only the initial T2.P before WR first falls.
+    reg ref_wait_write = 0;
+    always @(posedge clk or negedge reset_n)
+        if (!reset_n) ref_wait_write <= 0;
+        else if (!USE_CEN || cen)
+            ref_wait_write <= dut.stall && dut.bus_op == `BUSOP_MWR;
     wire [8:0] expected = {dut.hold_pins ? 7'b0111111 :
-                          {ref_drive, ref_m1, ref_mreq, ref_iorq, ref_rd, ref_wr, ref_rfsh},
+                          {ref_drive, ref_m1, ref_mreq, ref_iorq, ref_rd,
+                           ref_wait_write ? 1'b0 : ref_wr, ref_rfsh},
                           ref_halt, !dut.bus_granted};
     integer i, steps = 0, waits = 0, grants = 0, halts = 0;
     reg [7:0] bus_seen = 0;

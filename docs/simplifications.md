@@ -181,19 +181,15 @@ gate-level fidelity.
 
 **Status**: pending — large.
 
-### E2. WAIT sample point not phase-precise
+### E2. WAIT sample point
 
-`cmodel/z80_core.c` `is_wait_phase()`: samples `wait_n` at T2.N for M1/MRD/MWR
-and T3.N for IORD/IOWR. Per Zilog UM0080 these match the spec sample
-points. But our implementation samples *every* phase and stalls if wait_n is
-low and the phase predicate matches. The silicon samples ONCE at the spec
-edge and latches the decision until the next sample point.
+Resolved: the C model samples `wait_n` on entry to T2.N for M1/MRD/MWR or
+the automatic Tw.N (T3.N in the model) for IORD/IOWR, then retains that
+decision through the following phase advance. The RTL now registers the
+WAIT decision on the enabled transition into that same `.N` phase.
 
-**Fix**: convert is_wait_phase to a per-cycle latch rather than per-phase
-continuous polling. Probably no observable difference, but the model becomes
-silicon-faithful.
-
-**Status**: pending (low impact, low risk).
+**Status**: resolved; `make bus_controls` checks short pulses on either side
+of the falling-edge sample.
 
 ## F. Other audit candidates
 
@@ -441,7 +437,6 @@ co-phase), D1 (EX AF Q-bump).
    wip branch).
 6. **A4**: register file restructure (large).
 7. **E1**: internal bus segments (largest; defer until A1–A4 done).
-8. **E2**: WAIT sample latch (cleanup — no observable difference).
 
 After each: full gate run (`make all-tests`) — must stay 100 % across every
 existing oracle (FUSE, fuse_rtl, compare, lockstep, silicon_cycles,

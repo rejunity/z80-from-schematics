@@ -57,6 +57,8 @@ module z80_timing (
                 begin mreq_n = 1'b0; rd_n = 1'b0; end
         end
         `BUSOP_MWR: begin
+            // This decodes the initial T2.P. The core's WR register keeps
+            // the strobe low when WAIT repeats T2 as Tw.P.
             if (!((t == 3'd1) && (phi == 1'b0)) && !((t == 3'd3) && (phi == 1'b1)) && (t <= 3'd3))
                 begin mreq_n = 1'b0; data_drive = 1'b1; end
             if (((t == 3'd2) && (phi == 1'b1)) || ((t == 3'd3) && (phi == 1'b0))) wr_n = 1'b0;
