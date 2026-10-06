@@ -184,7 +184,8 @@ gate-level fidelity.
 ### E2. WAIT sample point
 
 Resolved: the C model samples `wait_n` on entry to T2.N for M1/MRD/MWR or
-the automatic Tw.N (T3.N in the model) for IORD/IOWR, then retains that
+the automatic Tw.N (T3.N in the model) for IORD/IOWR, or the second
+automatic Tw.N (state 4.N) for INTA, then retains that
 decision through the following phase advance. The RTL now registers the
 WAIT decision on the enabled transition into that same `.N` phase.
 

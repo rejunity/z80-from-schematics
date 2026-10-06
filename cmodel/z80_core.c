@@ -77,7 +77,7 @@ static uint8_t z80_busop_base_len(uint8_t busop)
         case BUSOP_MWR:  return 3;
         case BUSOP_IORD: return 4; /* T1 T2 Tw T3 */
         case BUSOP_IOWR: return 4;
-        case BUSOP_INTA: return 5; /* M1-like + 2 wait states */
+        case BUSOP_INTA: return 6; /* M1-like + 2 wait states */
         default:         return 0; /* INTERNAL: caller supplies length via extra */
     }
 }
@@ -1043,7 +1043,8 @@ static void z80_exec_step(z80_t *c)
 
 /* The WAIT *sample edge* — the single phase per (T2 or any inserted Tw) at
    which the silicon latches !wait_n. Memory: T2.N. I/O: the automatic Tw.N
-   (= t_state 3 in our IORD/IOWR which has m_len=4 and counts Tw as T3). */
+   (= t_state 3 in our IORD/IOWR which has m_len=4 and counts Tw as T3).
+   INTA: second automatic Tw.N, counted as t_state 4. */
 static bool is_wait_sample_phase(const z80_t *c)
 {
     if (c->phi != 1) return false;
@@ -1053,6 +1054,7 @@ static bool is_wait_sample_phase(const z80_t *c)
         case BUSOP_MWR:  return c->t_state == 2;
         case BUSOP_IORD:
         case BUSOP_IOWR: return c->t_state == 3;
+        case BUSOP_INTA: return c->t_state == 4;
         default:         return false;
     }
 }
@@ -1065,7 +1067,7 @@ static bool is_latch_phase(const z80_t *c)
        gate-level transition observed in perfectz80 / Visual Z80 traces. */
     switch (c->bus_op) {
         case BUSOP_M1:   return c->t_state == 2 && c->phi == 1; /* M1 opcode latched at T2.N */
-        case BUSOP_INTA: return c->t_state == 2 && c->phi == 1;
+        case BUSOP_INTA: return c->t_state == 4 && c->phi == 1;
         case BUSOP_MRD:  return c->t_state == 3 && c->phi == 0; /* MRD data at T3.P */
         case BUSOP_IORD: return c->t_state == 4 && c->phi == 0; /* IORD data at T4.P */
         default:         return false;
@@ -1090,6 +1092,11 @@ static void do_latch(z80_t *c)
         break;
     case BUSOP_INTA:                          /* interrupt-ack: latch bus byte, refresh */
         c->tmp8 = c->pins.data_in;
+        if (c->im == 0) {
+            c->ir = c->pins.data_in;
+            c->ctl = z80_pla(c->prefix, c->ir);
+            c->decoded = true; /* supplied opcode consumes no memory byte */
+        }
         c->reg_r = (uint8_t)((c->reg_r & 0x80u) | ((c->reg_r + 1u) & 0x7Fu));
         break;
     case BUSOP_MRD:
@@ -1146,7 +1153,7 @@ static void begin_next(z80_t *c)
         /* Same: HALT exit without PC bump. */
         if (c->halted) c->halted = false;
         c->iff1 = c->iff2 = false;
-        start_seq_inta(c, 7);                      /* INTA ack (IM0/1/2) */
+        start_seq_inta(c, c->im == 0 ? 6 : 7);                      /* INTA ack (IM0/1/2) */
         return;
     }
     if (c->halted) {

@@ -381,6 +381,10 @@ bus_controls: dirs
 	    -Ptb_wait_write.USE_CEN=$$cen -o $(BUILD)/tb_wait_write.vvp \
 	    $(RTL_SRCS) $(TESTS)/iverilog/tb_wait_write.v; \
 	  $(VVP) $(BUILD)/tb_wait_write.vvp; \
+	  $(IVERILOG) -g2012 -I$(RTL) -s tb_int_ack \
+	    -Ptb_int_ack.USE_CEN=$$cen -o $(BUILD)/tb_int_ack.vvp \
+	    $(RTL_SRCS) $(TESTS)/iverilog/tb_int_ack.v; \
+	  $(VVP) $(BUILD)/tb_int_ack.vvp; \
 	done
 
 iverilog: dirs

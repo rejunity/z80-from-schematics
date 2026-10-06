@@ -181,23 +181,23 @@ module z80_core #(
     // ---- timing-point predicates ----
     // Read-data latch: captured just before MREQ/IORQ deassert at the
     // T_last.N falling edge (matches gate-level / perfectz80 convention).
-    // M1 / INTA still latch at T2.N for backwards compatibility with the
-    // existing M1-cycle data-in window.
+    // M1 latches after T2.N; INTA after the second automatic Tw.N.
     wire islatch =  ( (phi == 1'b1) && (
                       ((bus_op == `BUSOP_M1)   && (t_state == 4'd2)) ||
-                      ((bus_op == `BUSOP_INTA) && (t_state == 4'd2))
+                      ((bus_op == `BUSOP_INTA) && (t_state == 4'd4))
                     ) ) ||
                   ( (phi == 1'b0) && (
                       ((bus_op == `BUSOP_MRD)  && (t_state == 4'd3)) ||
                       ((bus_op == `BUSOP_IORD) && (t_state == 4'd4))
                     ) );
-    // Capture WAIT on the edge ENTERING T2.N (or the automatic Tw.N for I/O).
+    // Capture WAIT entering T2.N, I/O Tw.N, or INTA's second automatic Tw.N.
     // phi is still 0 before that edge. The saved decision controls the next
     // .N -> .P transition, even if WAIT changes during the low clock half.
     wire wait_capture_phase = (phi == 1'b0) &&
                   ( (((bus_op == `BUSOP_M1) || (bus_op == `BUSOP_MRD) ||
                       (bus_op == `BUSOP_MWR)) && (t_state == 4'd2)) ||
-                    (((bus_op == `BUSOP_IORD) || (bus_op == `BUSOP_IOWR)) && (t_state == 4'd3)) );
+                    (((bus_op == `BUSOP_IORD) || (bus_op == `BUSOP_IOWR)) && (t_state == 4'd3)) ||
+                    ((bus_op == `BUSOP_INTA) && (t_state == 4'd4)) );
     reg  wait_sampled;
     wire stall = (phi == 1'b1) && wait_sampled; // hold this T-state as a Tw
     wire [7:0] rbyte = islatch ? data_in : tmp8;
@@ -224,7 +224,7 @@ module z80_core #(
             `BUSOP_MWR:  baselen = 4'd3;
             `BUSOP_IORD: baselen = 4'd4;
             `BUSOP_IOWR: baselen = 4'd4;
-            `BUSOP_INTA: baselen = 4'd5;
+            `BUSOP_INTA: baselen = 4'd6;
             default:     baselen = 4'd0;
         endcase
     endfunction
@@ -504,6 +504,10 @@ module z80_core #(
                 else begin rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; decoded_n = 1'b1; end
             end else if (bus_op == `BUSOP_INTA) begin
                 tmp8_n = data_in;                                  // interrupt vector byte
+                if (im == 0) begin
+                    // Device supplies the opcode; PC still points at its operands.
+                    ir_n = data_in; irq_seq_n = 0; decoded_n = 1;
+                end
                 reg_r_n = {reg_r[7], (reg_r[6:0] + 7'd1)};
             end else begin
                 tmp8_n = data_in;
@@ -1200,7 +1204,7 @@ module z80_core #(
                             halted_n = 1'b0; iff1_n = 1'b0; iff2_n = 1'b0;
                             irq_seq_n = 2'd2;
                             bus_op_n = `BUSOP_INTA; m_addr_n = rf_n[`RFP_PC]; m_wdata_n = 8'h0;
-                            m_len_n = 4'd7; t_n = 4'd1; phi_n = 1'b0; m_cycle_n = 3'd1;
+                            m_len_n = (im == 0) ? 4'd6 : 4'd7; t_n = 4'd1; phi_n = 1'b0; m_cycle_n = 3'd1;
                             decoded_n = 1'b1;
                         end else if (halted_n) begin
                             irq_seq_n = 2'd3;

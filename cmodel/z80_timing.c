@@ -98,8 +98,11 @@ void z80_timing(uint8_t   bus_op,     /* z80_busop_t                          */
     }
     case BUSOP_INTA: {
         /* interrupt acknowledge: M1+IORQ */
-        *m1_n   = (t_state <= 2) ? 0 : 1;
-        *iorq_n = (t_state >= 3) ? 0 : 1;
+        *m1_n = (t_state <= 4) ? 0 : 1;
+        *iorq_n = ((t_state == 3 && phi) || t_state == 4) ? 0 : 1;
+        if (t_state == 5 || t_state == 6) *addr = (uint16_t)((reg_i << 8) | reg_r);
+        *rfsh_n = (t_state == 5 || t_state == 6) ? 0 : 1;
+        *mreq_n = ((t_state == 5 && phi) || (t_state == 6 && !phi)) ? 0 : 1;
         break;
     }
     default: /* BUSOP_INTERNAL / NONE: no bus activity, hold address */
