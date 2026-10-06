@@ -214,10 +214,18 @@ module top #(
     // bit 1 holds WAIT from the sampler tick that first saw that edge.
     reg [2:0] z80_wait_sync = 3'b111;
     reg       z80_clk_ready = 1'b0;
+    reg [2:0] z80_reset_sync = 3'b000;
+    wire external_reset_n = board_reset_n && z80_reset_n;
+    // Asynchronous assertion, synchronized release. Discard CLK edges already
+    // in the pipeline when RESET rises; wait for a fresh rising CLK.
+    always @(posedge clk_sampler or negedge external_reset_n) begin
+        if (!external_reset_n) z80_reset_sync <= 3'b000;
+        else z80_reset_sync <= {z80_reset_sync[1:0], 1'b1};
+    end
     always @(posedge clk_sampler) begin
         z80_clk_sync <= {z80_clk_sync[1:0], z80_clk};
         z80_wait_sync <= {z80_wait_sync[1:0], z80_wait_n};
-        if (!board_reset_n || !z80_reset_n)
+        if (!external_reset_n || !z80_reset_sync[2])
             z80_clk_ready <= 1'b0;
         else if ((z80_clk_sync[2] ^ z80_clk_sync[1]) && z80_clk_sync[1])
             z80_clk_ready <= 1'b1;
@@ -226,7 +234,7 @@ module top #(
     wire core_host_clk = EXTERNAL_BUS ? clk_sampler : clk_cpu;
     wire core_ce = EXTERNAL_BUS ? z80_clk_edge : 1'b1;
     wire cpu_reset_n = board_reset_n &&
-                       (!EXTERNAL_BUS || (z80_reset_n && z80_clk_ready));
+                       (!EXTERNAL_BUS || (z80_reset_n && z80_reset_sync[2] && z80_clk_ready));
 
     // ---- Z80 core ----
     wire [15:0] addr;

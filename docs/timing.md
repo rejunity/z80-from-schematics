@@ -140,6 +140,23 @@ the same cases against the C model.
 NMI: similar to M1 but no data fetch used for vector; pushes PC and jumps to `0066h`;
 copies `IFF1→IFF2`, clears `IFF1`.
 
+### External-clock reset release (Tang Primer)
+
+RESET assertion holds the core and clears a sampler-domain release pipeline.
+Deassertion passes through three sampler registers before a fresh synchronized
+rising CLK can release the core. CLK edges already in flight when RESET rises
+cannot start T1; the following falling CLK starts the first opcode read at 0000.
+This avoids an early first fetch caused by accepting a pre-release CLK edge.
+`tb_reset_top.v` sweeps 200 RESET-release offsets across a 1 MHz clock and checks
+that the first `JP 0100h` survives WAIT stretching. This establishes the RTL
+ordering; hardware retesting is still needed for the intermittent zero opcode
+reported in `event_tests_20261007/reset_low_release_high`. That capture also
+shows WAIT low only at 37.120–37.147 us, already high at the T2 falling CLK
+(37.947 us); data remains 00 until after RD ends (38.560 us), with C3 first
+visible at 39.040 us. A CPU correctly sampling WAIT must consume 00 in that
+case. The peripheral must keep WAIT low across the sample until data is ready;
+the reset ordering fix alone does not prove this driver-side race is gone.
+
 ## HALT
 
 `HALT` is the only Z80 instruction whose M1 cycle is allowed to be
