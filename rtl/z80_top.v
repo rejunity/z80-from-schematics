@@ -71,16 +71,18 @@ module z80_top (
     // they map to a negedge DFF with async *set* (GF180 dffnsnq); data
     // resets to 0 (dffnrnq).
     reg [7:0] data_in_neg;
-    reg       int_n_neg, nmi_n_neg;
+    reg       int_n_neg, nmi_n_neg, wait_n_neg;
     always @(negedge clk or negedge reset_n) begin
         if (!reset_n) begin
             data_in_neg <= 8'h00;
             int_n_neg   <= 1'b1;
             nmi_n_neg   <= 1'b1;
+            wait_n_neg  <= 1'b1;
         end else begin
             data_in_neg <= data_in;
             int_n_neg   <= int_n;
             nmi_n_neg   <= nmi_n;
+            wait_n_neg  <= wait_n;
         end
     end
 
@@ -104,8 +106,8 @@ module z80_top (
         .clk(clk), .reset_n(reset_n),
         // rising-edge inputs (live) + falling-edge-sampled copies
         .data_in(data_in),   .data_in_neg(data_in_neg),
-        .wait_n(wait_n),     .busreq_n(busreq_n),
-        .int_n_neg(int_n_neg),
+        .busreq_n(busreq_n),
+        .int_n_neg(int_n_neg), .wait_n_neg(wait_n_neg),
         .nmi_n(nmi_n),       .nmi_n_neg(nmi_n_neg),
         // pin images: clock-high half of the next T-state / clock-low half
         // of the current T-state

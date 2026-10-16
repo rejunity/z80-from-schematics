@@ -30,14 +30,14 @@ module z80_core (
     input  wire        clk,
     input  wire        reset_n,
     // inputs consumed on the rising edge (live pins)
-    input  wire [7:0]  data_in,        // M1 opcode / INTA vector, end of T2.N
-    input  wire        wait_n,         // WAIT, end of T2.N / Tw.N
+    input  wire [7:0]  data_in,        // M1 opcode / INTA vector, end of T2.N / Tw2.N
     input  wire        busreq_n,       // BUSREQ, instruction boundary + grant
     input  wire        nmi_n,          // NMI edge detect, clock-low half
     // inputs sampled on the falling edge by z80_top
     input  wire [7:0]  data_in_neg,    // MRD data at T3, IORD data at T4
     input  wire        int_n_neg,      // INT level at T_last.P
     input  wire        nmi_n_neg,      // NMI edge detect, clock-high half
+    input  wire        wait_n_neg,     // WAIT at the falling edge of T2 / Tw
     // pin images -- *_pos: clock-high half of the NEXT T-state (from
     // next-state logic); *_neg: clock-low half of the CURRENT T-state
     output wire [15:0] addr_pos,
@@ -189,7 +189,7 @@ module z80_core (
     assign mreq_n_pos     = idle_pos | tp_mreq;
     assign iorq_n_pos     = idle_pos | tp_iorq;
     assign rd_n_pos       = idle_pos | tp_rd;
-    assign wr_n_pos       = idle_pos | tp_wr;
+    // wr_n_pos is assigned below: it needs `stall` (WR hold across Tw).
     assign rfsh_n_pos     = idle_pos | tp_rfsh;
     assign addr_neg       = tn_addr;
     assign data_out_neg   = tn_dout;
@@ -224,21 +224,31 @@ module z80_core (
     //    deassert). z80_top's negedge sampler took the byte half a cycle
     //    ago; it lands in tmp8 at this rising edge and the micro-sequencer
     //    consumes it in the same evaluation (`rbyte`).
-    //  - latch_pos: M1 opcode / INTA vector at the end of T2.N -- a RISING
-    //    edge capture of the live data bus (the rising edge of T3).
+    //  - latch_pos: M1 opcode at the end of T2.N / INTA vector at the end
+    //    of the second automatic Tw.N -- a RISING edge capture of the live
+    //    data bus (the rising edge of T3).
     wire latch_neg = ((bus_op == `BUSOP_MRD)  && (t_state == 4'd3)) ||
                      ((bus_op == `BUSOP_IORD) && (t_state == 4'd4));
     wire latch_pos = ((bus_op == `BUSOP_M1)   && (t_state == 4'd2)) ||
-                     ((bus_op == `BUSOP_INTA) && (t_state == 4'd2));
-    // WAIT *sample edge* per Zilog UM0080: end of T2.N for memory cycles,
-    // end of the automatic Tw.N for I/O -- the live pin at this rising
-    // edge. Asserted => hold this T-state as a Tw and re-sample next edge.
+                     ((bus_op == `BUSOP_INTA) && (t_state == 4'd4));
+    // WAIT *sample edge* per Zilog UM0080: the FALLING edge of T2 for
+    // memory cycles, of the automatic Tw for I/O, of the second automatic
+    // Tw for INTA. z80_top's negedge sampler took the pin there; the saved
+    // decision holds this T-state as a Tw on this rising edge, whatever
+    // WAIT does during the clock-low half (tb_wait_edge.v).
     wire wait_sample_phase =
                   ( (((bus_op == `BUSOP_M1) || (bus_op == `BUSOP_MRD) ||
                       (bus_op == `BUSOP_MWR)) && (t_state == 4'd2)) ||
-                    (((bus_op == `BUSOP_IORD) || (bus_op == `BUSOP_IOWR)) && (t_state == 4'd3)) );
-    wire wait_sampled = wait_sample_phase && (wait_n == 1'b0);
+                    (((bus_op == `BUSOP_IORD) || (bus_op == `BUSOP_IOWR)) && (t_state == 4'd3)) ||
+                    ((bus_op == `BUSOP_INTA) && (t_state == 4'd4)) );
+    wire wait_sampled = wait_sample_phase && (wait_n_neg == 1'b0);
     wire stall = wait_sampled;  // hold current T-state as a Tw
+    // Inserted Tw repeats T2 of a memory write; its clock-high half is NOT
+    // the initial T2.P before WR first falls (which is what the stateless
+    // decoder describes). Keep WR asserted so the write is one continuous
+    // pulse from T2.N to T3.N (tb_wait_write.v; cmodel hold_write_strobe).
+    wire hold_wr = stall && (bus_op == `BUSOP_MWR);
+    assign wr_n_pos = idle_pos | (hold_wr ? 1'b0 : tp_wr);
     wire [7:0] rbyte = latch_pos ? data_in : latch_neg ? data_in_neg : tmp8;
 
     // ---- 8-bit register read ----
@@ -263,7 +273,7 @@ module z80_core (
             `BUSOP_MWR:  baselen = 4'd3;
             `BUSOP_IORD: baselen = 4'd4;
             `BUSOP_IOWR: baselen = 4'd4;
-            `BUSOP_INTA: baselen = 4'd5;
+            `BUSOP_INTA: baselen = 4'd6;
             default:     baselen = 4'd0;
         endcase
     endfunction
@@ -561,6 +571,11 @@ module z80_core (
                 else begin rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; decoded_n = 1'b1; end
             end else begin                                         // INTA
                 tmp8_n = data_in;                                  // interrupt vector byte
+                if (im == 2'd0) begin
+                    // IM0: the device supplies the opcode; PC still points
+                    // at its operands, so decode it without a fetch/PC++.
+                    ir_n = data_in; irq_seq_n = 2'd0; decoded_n = 1'b1;
+                end
                 reg_r_n = {reg_r[7], (reg_r[6:0] + 7'd1)};
             end
         end
@@ -1255,7 +1270,8 @@ module z80_core (
                             halted_n = 1'b0; iff1_n = 1'b0; iff2_n = 1'b0;
                             irq_seq_n = 2'd2;
                             bus_op_n = `BUSOP_INTA; m_addr_n = rf_n[`RFP_PC]; m_wdata_n = 8'h0;
-                            m_len_n = 4'd7; t_n = 4'd1; m_cycle_n = 3'd1;
+                            // T1 T2 Tw Tw T3 T4 (+1 internal state for IM1/IM2's PC push)
+                            m_len_n = (im == 2'd0) ? 4'd6 : 4'd7; t_n = 4'd1; m_cycle_n = 3'd1;
                             decoded_n = 1'b1;
                         end else if (halted_n) begin
                             irq_seq_n = 2'd3;

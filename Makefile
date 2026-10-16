@@ -368,23 +368,10 @@ rtl:
 
 .PHONY: bus_controls
 bus_controls: dirs
-	@set -e; for cen in 0 1; do \
-	  $(IVERILOG) -g2012 -I$(RTL) -s tb_bus_controls \
-	    -Ptb_bus_controls.USE_CEN=$$cen -o $(BUILD)/tb_bus_controls.vvp \
-	    $(RTL_SRCS) $(TESTS)/iverilog/tb_bus_controls.v; \
-	  $(VVP) $(BUILD)/tb_bus_controls.vvp; \
-	  $(IVERILOG) -g2012 -I$(RTL) -s tb_wait_edge \
-	    -Ptb_wait_edge.USE_CEN=$$cen -o $(BUILD)/tb_wait_edge.vvp \
-	    $(RTL_SRCS) $(TESTS)/iverilog/tb_wait_edge.v; \
-	  $(VVP) $(BUILD)/tb_wait_edge.vvp; \
-	  $(IVERILOG) -g2012 -I$(RTL) -s tb_wait_write \
-	    -Ptb_wait_write.USE_CEN=$$cen -o $(BUILD)/tb_wait_write.vvp \
-	    $(RTL_SRCS) $(TESTS)/iverilog/tb_wait_write.v; \
-	  $(VVP) $(BUILD)/tb_wait_write.vvp; \
-	  $(IVERILOG) -g2012 -I$(RTL) -s tb_int_ack \
-	    -Ptb_int_ack.USE_CEN=$$cen -o $(BUILD)/tb_int_ack.vvp \
-	    $(RTL_SRCS) $(TESTS)/iverilog/tb_int_ack.v; \
-	  $(VVP) $(BUILD)/tb_int_ack.vvp; \
+	@set -e; for tb in tb_bus_controls tb_wait_edge tb_wait_write tb_int_ack; do \
+	  $(IVERILOG) -g2012 -I$(RTL) -s $$tb -o $(BUILD)/$$tb.vvp \
+	    $(RTL_SRCS) $(TESTS)/iverilog/$$tb.v; \
+	  $(VVP) $(BUILD)/$$tb.vvp; \
 	done
 
 iverilog: dirs

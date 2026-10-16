@@ -84,17 +84,18 @@ Active-low signals carry the `_n` suffix (asserted = 0).
 The data bus is modeled as separate `pin_data_in`/`pin_data_out` + `pin_data_drive`
 instead of a tri-state, matching "no internal tri-states; use explicit muxes."
 
-In RTL, `z80_core` registers M1, MREQ, IORQ, RD, WR, RFSH, HALT and data-output
-enable from the **next** timing state, on the same enabled edge as the sequencer.
-This preserves phase timing without exposing intermediate `t_state`/`phi`/`bus_op`
-decodes to external hardware. For example, T4.N → T1.P must not briefly decode
-T1.N and assert RD/MREQ as M1 falls. M1 retains a reset-only output mask to
-preserve its initial T1.P assertion on reset release. Address and data still use
-the current-state decode; BUSACK comes from the registered bus-grant flag.
-`make bus_controls` checks phase parity, injects decoder skew between edges,
-and verifies falling-edge WAIT capture and continuous write strobes through Tw.
-The stateless timing decoder describes initial T2.P; the core's WR register
-retains the asserted strobe when a stalled memory write revisits that phase.
+In RTL every pin, including address and data, is a register output of
+`rtl/z80_top.v`: the core produces two images per rising edge (`*_pos` for the
+clock-high half of the T-state being entered, computed from next-state, and
+`*_neg` for the clock-low half of the current T-state) and the wrapper's
+two-flop XOR former turns them into the dual-edge pin waveforms. No
+`t_state`/`bus_op` decode is visible between edges, so a T4.N → T1.P
+transition cannot briefly assert RD/MREQ as M1 falls. `make bus_controls`
+checks every half-cycle against the timing contract, injects decoder skew
+between edges, and pins falling-edge WAIT capture, continuous write strobes
+through Tw and the INTA contract. The stateless timing decoder describes the
+initial T2.P of a write; the core holds WR low in the `*_pos` image when a
+stalled memory write re-enters that half (`hold_wr`). See `docs/clocking.md`.
 
 ## 3. Internal datapath
 

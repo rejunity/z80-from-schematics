@@ -192,7 +192,7 @@ Notes for each row:
        M-cycle's strobes.
      - **M1 opcode latch under WAIT**: the RTL now, like the C model,
        defers the opcode latch / PC++ / R++ until the rising edge that
-       ends the last Tw (the 2× RTL double-latched).
+       ends the last Tw (the original 2× RTL double-latched).
      Watching: fold the reset / BUSREQ settle into the RTL once the
      pin-scenario gates become hard.
 

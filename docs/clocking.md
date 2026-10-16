@@ -27,7 +27,7 @@ Look at what each of the two ticks actually did:
 | tick | formerly | state it changes | inputs it reads |
 |------|----------|------------------|-----------------|
 | entering `phi=1` (the falling edge) | "B half" | `tmp8` (MRD data at T3, IORD data at T4), `nmi_sampled`/`int_sampled` (T_last.P sample), NMI edge detect, `phi` | `data_in`, `int_n`, `nmi_n` **as present during the clock-high half** |
-| entering `phi=0` (the rising edge) | "A half" | everything else: T-state advance, micro-sequencer, register file, M1 opcode latch, WAIT decision, BUSREQ decision | `data_in`, `wait_n`, `busreq_n`, `nmi_n` **as present during the clock-low half** |
+| entering `phi=0` (the rising edge) | "A half" | everything else: T-state advance, micro-sequencer, register file, M1 opcode latch, WAIT decision, BUSREQ decision | `data_in`, `busreq_n`, `nmi_n` **as present during the clock-low half**; the WAIT sample taken at the falling edge |
 
 The B half is tiny and feeds the A half. So one rising-edge evaluation can
 do `A(B(state, inputs_high_half), inputs_low_half)` — provided the
@@ -43,9 +43,9 @@ once per T-state and reads, in order:
    sample from `int_n_neg` / the NMI edge state; the MRD/IORD read-data
    latch from `data_in_neg`;
 2. **clock-high-half work** (this rising edge): NMI edge detect against the
-   live `nmi_n`; the M1/INTA latch from the live `data_in`; the WAIT sample
-   from the live `wait_n`; BUSREQ; the T-state advance and the whole
-   micro-sequencer.
+   live `nmi_n`; the M1/INTA latch from the live `data_in`; the WAIT
+   decision from `wait_n_neg` (the falling-edge sample of T2 / Tw, UM0080);
+   BUSREQ; the T-state advance and the whole micro-sequencer.
 
 `phi` is gone. `t_state`, `m_cycle`, `bus_op` and friends advance once per
 rising edge. The register file, ALU, PLA, flags — untouched.
@@ -94,7 +94,7 @@ the edge. That is why `*_pos` is a next-state function.
 |-------|-----------------------------------------------------|-------------|
 | `data_in` | M1 opcode / INTA vector at the rising edge ending T2 | live, in the core |
 | `data_in` | MRD data at the falling edge of T3, IORD data at the falling edge of T4 | `data_in_neg` (wrapper negedge flop) |
-| `wait_n` | rising edge ending T2.N (memory) / Tw.N (I/O) | live |
+| `wait_n` | falling edge of T2 (memory), of the automatic Tw (I/O), of the second automatic Tw (INTA) | `wait_n_neg` |
 | `int_n` | level during T_last.P (UM0080: rising edge of the last T-state) | `int_n_neg` |
 | `nmi_n` | falling-edge detect, both halves | live **and** `nmi_n_neg` |
 | `busreq_n` | instruction boundary; every rising edge while granted | live |
@@ -122,7 +122,8 @@ with async **set**, not reset.
   picks the native cell when the liberty offers one; if a flow has put the
   negedge cells on a don't-use list it will instead insert an inverter on
   the clock pin — **check the mapped netlist**. Expected count here:
-  `PW + 10 = 43` negedge flops (33 former `b` bits + 10 input samplers).
+  `PW + 11 = 44` negedge flops (33 former `b` bits + 11 input samplers:
+  `data_in[7:0]`, `int_n`, `nmi_n`, `wait_n`).
 - The negedge→posedge paths (`*_neg` sampler → core, former `a`↔`b`) are
   ordinary half-cycle paths in one clock domain. Time them; do not mark
   them false or asynchronous.
@@ -131,11 +132,11 @@ with async **set**, not reset.
 
   ```
   create_clock -name clk -period 100.0 -waveform {0.0 50.0} [get_ports clk]
-  set_input_delay -clock clk -clock_fall -max <d> [get_ports {data_in[*] int_n nmi_n}]
-  set_input_delay -clock clk -clock_fall -min <d> [get_ports {data_in[*] int_n nmi_n}]
+  set_input_delay -clock clk -clock_fall -max <d> [get_ports {data_in[*] int_n nmi_n wait_n}]
+  set_input_delay -clock clk -clock_fall -min <d> [get_ports {data_in[*] int_n nmi_n wait_n}]
   ```
 
-- Scan: GF180's documented scan flops are rising-edge only. The 43 negedge
+- Scan: GF180's documented scan flops are rising-edge only. The 44 negedge
   flops can be left out of automatic scan (inputs are controllable from
   pins, outputs observable on pins) or given an explicit test mux into a
   small falling-edge chain.
@@ -164,6 +165,35 @@ Still informational-only differences versus the C model (as before, see
 `docs/known-differences.md`): the reset-assert filter / release settle and
 the 2-phase BUSREQ release settle the C model carries from the perfectz80
 analysis are not in the RTL.
+
+
+Four bus-contract behaviours that were first fixed in the 2× core (by
+hardesk, for the externally clocked Tang Primer bus) are carried over and
+pinned by `make bus_controls` (`tests/iverilog/tb_bus_controls.v`,
+`tb_wait_edge.v`, `tb_wait_write.v`, `tb_int_ack.v`, all driving
+`z80_top`):
+
+- **WAIT is sampled on the falling edge** of T2 / the automatic Tw / INTA's
+  second Tw, via the `wait_n_neg` sampler. A pulse that covers that edge
+  inserts a Tw even if released before the rising edge; one that starts
+  after it does not.
+- **WR is one continuous pulse across inserted Tw** in a memory write
+  (`hold_wr` forces the `*_pos` image low while a stalled T2 is re-entered;
+  the decoder alone would re-pulse WR high during each Tw.P).
+- **INTA**: M1 stays low through both automatic wait states, IORQ overlaps
+  M1 from Tw1.N to the end of Tw2, WAIT is sampled at Tw2's falling edge,
+  the vector is consumed on the rising edge that ends the last Tw, and the
+  refresh tail occupies T3/T4. IM0 decodes the bus-supplied opcode (RST,
+  CALL, JP, NOP) without a fetch or PC increment.
+- **Nothing between edges reaches a pin**: every pin is `a ^ b` of two
+  flops, so forcing `t_state` / `bus_op` / `ir` inside the core between
+  edges changes nothing externally (the decoder-skew injection test).
+
+The 2× core's optional clock enable (`USE_CEN` / `cen`) was not carried
+over: `z80_top` must be fed the real Z80 clock, because the falling edge
+*is* the WAIT / data / interrupt sample point. A platform that derives the
+Z80 clock from a faster one should gate or divide the clock outside
+`z80_top`, not step the core with an enable.
 
 ## 7. Simulating it
 
