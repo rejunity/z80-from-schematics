@@ -72,7 +72,7 @@ interactive controls (Enter, Backspace, Ctrl-C / Ctrl-Space = BREAK, Ctrl-\\ = e
     make halt2int        # HALT-to-INT acceptance T-state timing probe (Brewer 2014 / Woodmass HALT2INT)
     make perfectz80          # gate-level signal-trace diff vs perfectz80 Visual-Z80 netlist (C model)
     make perfectz80_rtl      # same, but trace source is the iverilog RTL testbench
-    make synth               # LibreLane (yosys) synthesis → build/synth/z80_core.nl.v
+    make synth               # LibreLane (yosys) synthesis → build/synth/z80_top.nl.v
     make iverilog_netlist    # build gate-level iverilog testbench with sky130 cell models
     make perfectz80_netlist  # diff the synthesised sky130 netlist vs perfectz80
     make basic               # NASCOM BASIC 4.7 on the C model
@@ -142,6 +142,10 @@ Design contract (read these in order to understand the implementation):
 
   - [docs/architecture.md](docs/architecture.md) — clocking, phases, pins, datapath,
     module mapping between C and RTL.
+  - [docs/clocking.md](docs/clocking.md) — why the RTL runs on the Z80 clock
+    itself with every register on the rising edge, how the thin `z80_top`
+    wrapper re-creates the both-edges pin behaviour with a few falling-edge
+    flops, and what to check in the synthesized netlist (GF180 / sky130).
   - [docs/timing.md](docs/timing.md) — M-cycle / T-state / phase model; per-bus-cycle
     timing diagrams matching the C model and the RTL.
   - [docs/pla.md](docs/pla.md) — PLA decode table and the control-word fields.

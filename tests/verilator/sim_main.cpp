@@ -1,36 +1,39 @@
 // ===========================================================================
-// sim_main.cpp - Verilator testbench for z80_core. Wires the core to a 64K
+// sim_main.cpp - Verilator testbench for z80_top. Wires the chip to a 64K
 // memory and emits the shared bus-cycle trace (one line per phase) to stdout,
 // matching scripts/tracegen.c and tests/iverilog/tb_z80.v exactly.
 //
 //   sim_z80 <prog.hex> <num_phases>
 //
-// The per-phase loop mirrors cmodel/z80_sim.c::z80_sys_phase: clock edge first
-// (latch + new outputs), then service writes and present read data.
+// `clk` is the Z80 clock: one period = one T-state, and a trace "phase" is
+// one clock EDGE (even phase = rising edge / clock-high half, odd phase =
+// falling edge / clock-low half). The per-phase loop mirrors
+// cmodel/z80_sim.c::z80_sys_phase: clock edge first (latch + new outputs),
+// then service writes and present read data.
 // ===========================================================================
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include "Vz80_core.h"
+#include "Vz80_top.h"
 #include "verilated.h"
 
 static unsigned char mem[65536];
 
-static bool read_active(Vz80_core *t) {
+static bool read_active(Vz80_top *t) {
     return (!t->mreq_n && !t->rd_n) || (!t->iorq_n && !t->rd_n);
 }
-static bool write_active(Vz80_core *t) {
+static bool write_active(Vz80_top *t) {
     return (!t->mreq_n && !t->wr_n) || (!t->iorq_n && !t->wr_n);
 }
 
-static void present_read(Vz80_core *t) {
+static void present_read(Vz80_top *t) {
     if (read_active(t)) t->data_in = mem[t->addr & 0xFFFF];
     else                t->data_in = 0;
 }
 
-static void dump(Vz80_core *t) {
+static void dump(Vz80_top *t, unsigned phi) {
     printf("%u %u %u %04x %02x %02x %u %u %u %u %u %u %u %u\n",
-           (unsigned)t->dbg_t, (unsigned)t->dbg_phi, (unsigned)t->dbg_m,
+           (unsigned)t->dbg_t, phi, (unsigned)t->dbg_m,
            (unsigned)t->addr, (unsigned)t->data_out, (unsigned)t->data_in,
            (unsigned)t->mreq_n, (unsigned)t->iorq_n, (unsigned)t->rd_n,
            (unsigned)t->wr_n, (unsigned)t->m1_n, (unsigned)t->rfsh_n,
@@ -106,24 +109,27 @@ int main(int argc, char **argv) {
     memset(mem, 0, sizeof(mem));
     load_hex(argv[1]);
 
-    Vz80_core *top = new Vz80_core;
+    Vz80_top *top = new Vz80_top;
     top->wait_n = 1; top->int_n = 1; top->nmi_n = 1; top->busreq_n = 1;
     top->data_in = 0;
 
-    // assert async reset
+    // assert async reset across a couple of edges, release it with the
+    // clock low so the next edge the DUT sees is a rising edge
     top->reset_n = 0; top->clk = 0; top->eval();
     top->clk = 1; top->eval();
     top->clk = 0; top->eval();
-    top->reset_n = 1;
+    top->reset_n = 1; top->eval();
 
-    // line 1 = reset state (T1.P)
+    // line 0 = the rising edge that enters T1.P of the M1 fetch at PC=0
+    top->clk = 1; top->eval();
     if (ev.nmi_lo    == 0) top->nmi_n    = 0;
     if (ev.int_lo    == 0) top->int_n    = 0;
     if (ev.wait_lo   == 0) top->wait_n   = 0;
     if (ev.busreq_lo == 0) top->busreq_n = 0;
     if (ev.reset_lo  == 0) top->reset_n  = 0;
+    if (write_active(top)) mem[top->addr & 0xFFFF] = top->data_out;
     present_read(top); top->eval();
-    dump(top);
+    dump(top, 0);
 
     for (int i = 1; i < phases; i++) {
         // Legacy nmi_phase single-pulse + new per-pin lo/hi events.
@@ -139,11 +145,11 @@ int main(int argc, char **argv) {
         if (i == ev.reset_lo)  top->reset_n  = 0;
         // Legacy single-pulse nmi: keep nmi_n high outside that one phase.
         if (nmi_phase >= 0 && i != nmi_phase && ev.nmi_lo < 0 && ev.nmi_hi < 0) top->nmi_n = 1;
-        top->clk = 1; top->eval();      // posedge: latch + next state
-        top->clk = 0; top->eval();      // settle new outputs
+        top->clk = (i & 1) ? 0 : 1;     // odd phase: falling edge, even: rising
+        top->eval();
         if (write_active(top)) mem[top->addr & 0xFFFF] = top->data_out;
         present_read(top); top->eval(); // present read data for this phase
-        dump(top);
+        dump(top, (unsigned)(i & 1));
     }
 
     top->final();

@@ -1,10 +1,17 @@
 # Timing model
 
 All timing is expressed in **phases**. Each Z80 T-state = two phases:
-`phi=0` (PHI_P, rising-edge region) then `phi=1` (PHI_N, falling-edge region).
-"Set at T_n.P" means the action takes effect on the `posedge clk` entering phi=0 of
-T_n; "set at T_n.N" means entering phi=1 of T_n. WAIT is sampled at the **.N** of T2
-(and of any inserted Tw). Source: Zilog UM0080 timing diagrams (precedence rule 1).
+`phi=0` (PHI_P, the clock-high half, entered on the Z80 clock's rising edge)
+then `phi=1` (PHI_N, the clock-low half, entered on its falling edge).
+"Set at T_n.P" means the pin takes that value from the rising edge of T_n;
+"set at T_n.N" means from the falling edge of T_n. "Sampled at T_n.N" means the
+value present during the clock-low half is what the chip acts on (the sample
+edge is the rising edge that ends it); "sampled/latched at T_n.P" means the
+value present during the clock-high half, captured on the falling edge. WAIT
+is sampled at the **.N** of T2 (and of any inserted Tw). Source: Zilog UM0080
+timing diagrams (precedence rule 1). In the RTL the whole T-state is evaluated
+on one rising edge and the wrapper re-times pins/inputs to the two edges —
+see `docs/clocking.md`.
 
 Legend: `↓` = assert (drive low for active-low pins), `↑` = deassert.
 

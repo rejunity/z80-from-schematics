@@ -171,6 +171,31 @@ Notes for each row:
      window is defined. Promote bus diffs to gating with `BUS_STRICT=1`
      env var.
 
+ 15. **RTL clocking (`cmos-clock`) — RTL vs C-model reset / BUSREQ
+     settle**. The RTL now runs on the Z80 clock with every core register
+     on the rising edge; the thin `rtl/z80_top.v` wrapper re-times pins
+     and three inputs to the falling edge (`docs/clocking.md`). The
+     retiming is trace-identical to the C model on `make compare`, FUSE,
+     Rak and BASIC. Deliberate residual RTL↔C differences, all confined
+     to the informational pin-scenario programs:
+     - **Reset**: the C model carries silicon's ~5-half-cycle reset-assert
+       filter and ~4-half-cycle release settle (`prog17_reset`). The RTL
+       resets asynchronously the moment `reset_n` falls and starts T1 of
+       the first M1 on the first rising edge after release.
+     - **BUSREQ release**: the C model settles 2 half-cycles after
+       `busreq_n` rises (`prog15_busreq_m1`); the RTL samples `busreq_n`
+       on the rising edge and restarts M1 on that edge. (The previous 2×
+       RTL could restart on a falling edge and run phase-swapped
+       thereafter; that is fixed.)
+     - **Pins during a bus grant**: both now idle their strobes while
+       BUSACK is low. The previous 2× RTL kept driving the frozen
+       M-cycle's strobes.
+     - **M1 opcode latch under WAIT**: the RTL now, like the C model,
+       defers the opcode latch / PC++ / R++ until the rising edge that
+       ends the last Tw (the 2× RTL double-latched).
+     Watching: fold the reset / BUSREQ settle into the RTL once the
+     pin-scenario gates become hard.
+
 Add rows as new differences are discovered. Each "watching" row should gain a
 test that pins the chosen behaviour or escalates it.
 

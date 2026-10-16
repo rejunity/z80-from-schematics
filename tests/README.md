@@ -238,7 +238,7 @@ inferred where DFFs were intended, async-reset domain crossings folded
 into combinational paths, lint-suppressed glitches that gates expose.
 
 ```
-make synth                # LibreLane synthesis → build/synth/z80_core.nl.v
+make synth                # LibreLane synthesis → build/synth/z80_top.nl.v
 make iverilog_netlist     # gate-level iverilog tb compiled w/ sky130 cell models
 make perfectz80_netlist   # diff vs perfectz80 over all 12 trace programs
 ```
