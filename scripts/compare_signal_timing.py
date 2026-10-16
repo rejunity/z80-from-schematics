@@ -186,6 +186,23 @@ def parse_events_to_plusargs(events_path):
             args.append(f"+{pin}_hi={hi[pin]}")
     return args
 
+def hex_for_readmemh(prog):
+    """$readmemh (iverilog) accepts only // and /* */ comments, but the
+    trace programs use '#' / ';' comment lines (which tracegen.c,
+    perfectz80_runner.c and sim_main.cpp all skip). Hand the iverilog
+    testbenches a comment-stripped copy under build/ so the pin-scenario
+    programs load instead of silently running an empty memory."""
+    out_dir = os.path.join(ROOT, "build", "hex_readmemh")
+    os.makedirs(out_dir, exist_ok=True)
+    out = os.path.join(out_dir, os.path.basename(prog))
+    with open(prog) as f, open(out, "w") as g:
+        for line in f:
+            tok = line.strip()
+            if not tok or tok[0] in "#;/":
+                continue
+            g.write(line)
+    return out
+
 def compare(prog, phases, source="c"):
     events = prog[:-4] + ".events" if prog.endswith(".hex") else prog + ".events"
     events = events if os.path.exists(events) else ""
@@ -199,7 +216,7 @@ def compare(prog, phases, source="c"):
         # perfectz80_runner still consume the raw sidecar; the iverilog
         # path takes the same events through this plusarg encoding so
         # all three drive the same pin transitions at the same phases.
-        tg_argv = [VVP, TB_VVP, f"+prog={prog}", f"+phases={phases}"] + event_plusargs
+        tg_argv = [VVP, TB_VVP, f"+prog={hex_for_readmemh(prog)}", f"+phases={phases}"] + event_plusargs
         emit_label = "iverilog RTL"
     elif source == "verilator":
         # sim_main.cpp accepts the same +<pin>_lo / +<pin>_hi argv form
@@ -209,7 +226,7 @@ def compare(prog, phases, source="c"):
     elif source == "netlist":
         # LibreLane-synthesized sky130 gate-level netlist driven by the
         # iverilog testbench tb_z80_netlist.v — same plusargs as tb_z80.v.
-        tg_argv = [VVP, TB_NETLIST_VVP, f"+prog={prog}", f"+phases={phases}"] + event_plusargs
+        tg_argv = [VVP, TB_NETLIST_VVP, f"+prog={hex_for_readmemh(prog)}", f"+phases={phases}"] + event_plusargs
         emit_label = "gate-level netlist"
     else:
         raise SystemExit(f"unknown source: {source}")
