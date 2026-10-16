@@ -324,6 +324,10 @@ jobs:
     # + 4 canned BASIC subtests on the synthesised netlist (~3 min). The
     # synth output is cached on hash(rtl/*.v + librelane/config.json +
     # run_synth.sh) so most pushes skip the ~3 min synthesis step.
+    # The 60 min is a safety net, not a budget: each BASIC subtest also
+    # carries its own --max-seconds wall-clock budget (see
+    # tests/basic/run_basic_tests.sh) so a broken/slow simulator build
+    # fails in minutes with a rate printed instead of hanging here.
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
@@ -360,13 +364,23 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential python3
 
-      - name: Install Verilator from nixpkgs (≥ 5.030, UDP-table capable)
+      - name: Install Verilator 5.048 from nixpkgs nixos-26.05 (UDP-table capable, known-good)
         # LibreLane's own `nix profile install github:librelane/librelane`
         # does NOT put Verilator on PATH — librelane is a Python CLI that
         # references its bundled tools by absolute /nix/store paths. We
-        # need a top-level Verilator on PATH explicitly. nixpkgs ships a
-        # current Verilator (5.030+) which handles UDP tables.
-        run: nix profile install nixpkgs#verilator
+        # need a top-level Verilator on PATH explicitly.
+        #
+        # PINNED to the nixos-26.05 release branch (Verilator 5.048) rather
+        # than nixpkgs-unstable. Unstable moved to 5.052 in autumn 2026 and
+        # from 5.050 on the sky130 FUNCTIONAL cell models (UDP dff
+        # primitives) are mis-simulated: the gate-level Z80 executes but
+        # with a wrong refresh/R count and ~17 instead of ~38 phases per
+        # instruction, so NASCOM BASIC never reaches its prompt and this job
+        # spun until the 60-minute timeout (nightly 2026-10-11..16). 5.040
+        # and 5.048 reproduce the C-model trace exactly. Needs >= 5.030 for
+        # UDP table parsing (apt's 5.020 lacks it — see the previous step).
+        # Bump deliberately, after re-running `make basic_netlist_tests`.
+        run: nix profile install github:NixOS/nixpkgs/nixos-26.05#verilator
 
       - name: Verify Verilator version (must be UDP-table capable)
         run: |

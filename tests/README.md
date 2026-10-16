@@ -277,10 +277,16 @@ Verilator gotcha: this needs **Verilator ≥ 5.030** for Verilog-1995
 UDP-table parsing (sky130 FUNCTIONAL cells use UDPs like
 `sky130_fd_sc_hd__udp_dff$P` as their DFF primitives). Ubuntu 24.04's
 `apt install verilator` is 5.020 which lacks UDP support → black-boxed
-DFFs → broken sim. CI installs Verilator via `nix profile install
-nixpkgs#verilator`. Locally, a `nix profile install` of LibreLane gets
-you a compatible Verilator too, but you may need to ensure it's on
-PATH ahead of any system-installed Verilator.
+DFFs → broken sim. And it needs **Verilator ≤ 5.048**: from 5.050 on,
+the same UDP-based cells are mis-simulated (wrong R/refresh count,
+~17 instead of ~38 phases per instruction on the NASCOM boot) so BASIC
+never reaches its prompt and the job used to spin until its timeout.
+CI therefore pins `nix profile install
+github:NixOS/nixpkgs/nixos-26.05#verilator` (5.048; 5.040 is also
+known-good). Locally, make sure that Verilator is on PATH ahead of any
+system-installed one. Each BASIC subtest also runs under a
+`--max-seconds` budget (`BASIC_MAX_SECONDS`, default 600) so a bad
+simulator build fails in minutes with its instruction rate printed.
 
 See [../docs/librelane-flow.md](../docs/librelane-flow.md) for the full
 plan, including the CI job, caching strategy, and risks/gotchas.

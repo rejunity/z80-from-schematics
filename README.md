@@ -104,7 +104,7 @@ fossi-foundation substituter configured (see [docs/librelane-flow.md](docs/libre
           extra-experimental-features = nix-command flakes
         "
     nix profile install github:librelane/librelane
-    nix profile install nixpkgs#verilator   # required for gate-level BASIC (Verilator ≥ 5.030)
+    nix profile install github:NixOS/nixpkgs/nixos-26.05#verilator   # gate-level BASIC: Verilator 5.048 (≥ 5.030 for UDP tables; 5.050+ mis-simulates the sky130 cell models)
 
 
 ## Status

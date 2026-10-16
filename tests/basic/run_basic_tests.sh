@@ -118,8 +118,14 @@ run_one() {
       # NASCOM cold-start to first prompt is ~50M instr; each PRINT subtest
       # adds ~1M. Sentinel-driven early exit normally kicks in well before
       # the 100M cap.
+      # --max-seconds: wall-clock budget per subtest (override with
+      # BASIC_MAX_SECONDS). Source-RTL Verilator finishes each subtest in
+      # ~30 s and gate-level in ~1 min on a healthy runner; the budget only
+      # exists so a pathologically slow simulator build fails in minutes
+      # with a rate printed, instead of hanging until the job timeout.
       prep_input "$in_file" \
         | stdbuf -oL "$BIN" $rom_args ${sentinel:+--exit-on "$sentinel"} \
+            --max-seconds "${BASIC_MAX_SECONDS:-600}" \
             "$rom" 100000000 2>&1 \
         | stdbuf -oL tee "$tmplog" || true
       ;;
