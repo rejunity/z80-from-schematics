@@ -57,6 +57,8 @@ module z80_timing (
                 begin mreq_n = 1'b0; rd_n = 1'b0; end
         end
         `BUSOP_MWR: begin
+            // This decodes the initial T2.P. The core's WR register keeps
+            // the strobe low when WAIT repeats T2 as Tw.P.
             if (!((t == 3'd1) && (phi == 1'b0)) && !((t == 3'd3) && (phi == 1'b1)) && (t <= 3'd3))
                 begin mreq_n = 1'b0; data_drive = 1'b1; end
             if (((t == 3'd2) && (phi == 1'b1)) || ((t == 3'd3) && (phi == 1'b0))) wr_n = 1'b0;
@@ -71,8 +73,12 @@ module z80_timing (
             if (((t == 3'd2) && (phi == 1'b1)) || (t == 3'd3) || ((t == 3'd4) && (phi == 1'b0))) wr_n = 1'b0;
         end
         `BUSOP_INTA: begin
-            m1_n   = (t <= 3'd2) ? 1'b0 : 1'b1;
-            iorq_n = (t >= 3'd3) ? 1'b0 : 1'b1;
+            // T1, T2, two automatic Tw, then refresh T3/T4 (counts 5/6).
+            m1_n = (t <= 3'd4) ? 1'b0 : 1'b1;
+            iorq_n = ((t == 3'd3 && phi) || t == 3'd4) ? 1'b0 : 1'b1;
+            if (t == 3'd5 || t == 3'd6) addr = {reg_i, reg_r};
+            rfsh_n = (t == 3'd5 || t == 3'd6) ? 1'b0 : 1'b1;
+            mreq_n = ((t == 3'd5 && phi) || (t == 3'd6 && !phi)) ? 1'b0 : 1'b1;
         end
         default: ; // INTERNAL / NONE: hold address, no strobes
         endcase

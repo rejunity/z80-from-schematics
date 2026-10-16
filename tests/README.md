@@ -24,6 +24,7 @@ stack.
 | Patrik Rak z80test (doc / memptr / full)          | `tests/z80test/`               | `make z80test`                           | ~2 min          | Documented + undocumented behaviour, MEMPTR / WZ, SCF / CCF Q-leak. **160 / 160 / 160 PASS** since the 2026-06-18 Banks / Q-leak / ULA-port-parity work. |
 | BASIC ROM canned-script regression                | `tests/basic/`                 | `make basic_c_tests`, `make basic_rtl_tests` | ~0.5 s / ~2 s | NASCOM 4.7c + 1 KiB Tiny BASIC running "real software" via stdin scripts |
 | C ↔ iverilog ↔ Verilator phase parity             | `tests/traces/`                | `make compare`                           | ~3 s            | Per-half-cycle bus-cycle trace identity across all three harnesses |
+| Registered bus controls                          | `tests/iverilog/tb_bus_controls.v` | `make bus_controls`                   | ~1 s            | Phase timing with/without CEN, WAIT, DMA, interrupts, HALT and reset; injected decoder skew must not reach control pins |
 | Gate-level vs perfectz80 (C model path)           | `tests/traces/`                | `make perfectz80`                        | ~10 s           | Per-half-cycle 7-pin parity + bus addr/data informational findings |
 | Gate-level vs perfectz80 (iverilog RTL path)      | `tests/traces/`                | `make perfectz80_rtl`                    | ~15 s           | Same diff but driving the iverilog RTL testbench (silicon-faithful leg) |
 | Gate-level vs perfectz80 (LibreLane synth path)   | `librelane/` + `tests/iverilog/tb_z80_netlist.v` | `make perfectz80_netlist` | ~5 min cold / ~1 min warm | yosys-synthesised sky130 gate-level netlist diffed against the Visual-Z80 gate-level netlist over all 12 trace programs (8 hand + 4 random) — the "ultimate test" |
@@ -277,10 +278,16 @@ Verilator gotcha: this needs **Verilator ≥ 5.030** for Verilog-1995
 UDP-table parsing (sky130 FUNCTIONAL cells use UDPs like
 `sky130_fd_sc_hd__udp_dff$P` as their DFF primitives). Ubuntu 24.04's
 `apt install verilator` is 5.020 which lacks UDP support → black-boxed
-DFFs → broken sim. CI installs Verilator via `nix profile install
-nixpkgs#verilator`. Locally, a `nix profile install` of LibreLane gets
-you a compatible Verilator too, but you may need to ensure it's on
-PATH ahead of any system-installed Verilator.
+DFFs → broken sim. And it needs **Verilator ≤ 5.048**: from 5.050 on,
+the same UDP-based cells are mis-simulated (wrong R/refresh count,
+~17 instead of ~38 phases per instruction on the NASCOM boot) so BASIC
+never reaches its prompt and the job used to spin until its timeout.
+CI therefore pins `nix profile install
+github:NixOS/nixpkgs/nixos-26.05#verilator` (5.048; 5.040 is also
+known-good). Locally, make sure that Verilator is on PATH ahead of any
+system-installed one. Each BASIC subtest also runs under a
+`--max-seconds` budget (`BASIC_MAX_SECONDS`, default 600) so a bad
+simulator build fails in minutes with its instruction rate printed.
 
 See [../docs/librelane-flow.md](../docs/librelane-flow.md) for the full
 plan, including the CI job, caching strategy, and risks/gotchas.

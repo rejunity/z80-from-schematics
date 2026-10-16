@@ -14,7 +14,7 @@ module tb_z80;
     reg         clk = 1'b0;
     reg         reset_n = 1'b0;
     reg         wait_n = 1'b1, int_n = 1'b1, nmi_n = 1'b1, busreq_n = 1'b1;
-    reg  [7:0]  data_in;
+    wire [7:0]  data_in;
 
     wire [15:0] addr;
     wire [7:0]  data_out;
@@ -34,12 +34,10 @@ module tb_z80;
         .dbg_t(dbg_t), .dbg_phi(dbg_phi), .dbg_m(dbg_m)
     );
 
-    // combinational memory/I-O read (matches cmodel/z80_sim.c)
-    always @* begin
-        if (!mreq_n && !rd_n)       data_in = mem[addr];
-        else if (!iorq_n && !rd_n)  data_in = mem[addr];
-        else                        data_in = 8'h00;
-    end
+    // Combinational memory/I-O read (matches cmodel/z80_sim.c). Use an
+    // indexed continuous read: always @* expands all 64K words into its
+    // sensitivity list, making Icarus elaboration/startup very expensive.
+    assign data_in = ((!mreq_n || !iorq_n) && !rd_n) ? mem[addr] : 8'h00;
 
     // memory write
     always @(posedge clk) begin
