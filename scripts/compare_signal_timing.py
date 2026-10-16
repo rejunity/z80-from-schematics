@@ -197,10 +197,17 @@ def hex_for_readmemh(prog):
     out = os.path.join(out_dir, os.path.basename(prog))
     with open(prog) as f, open(out, "w") as g:
         for line in f:
-            tok = line.strip()
-            if not tok or tok[0] in "#;/":
-                continue
-            g.write(line)
+            # whole-line AND trailing comments ("ED 56   # IM 1"): cut at
+            # the first comment introducer, exactly like tracegen.c's
+            # token loader (which stops reading the line at a #, ; or /)
+            cut = len(line)
+            for intro in ("#", ";", "//"):
+                i = line.find(intro)
+                if i >= 0:
+                    cut = min(cut, i)
+            body = line[:cut].strip()
+            if body:
+                g.write(body + "\n")
     return out
 
 def compare(prog, phases, source="c"):
