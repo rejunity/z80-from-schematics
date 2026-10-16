@@ -7,13 +7,21 @@
 // /INT is asserted while stdin queue is non-empty (NASCOM's interrupt-
 // driven RX path).
 //
-//   sim_basic [--autostart] [--exit-on <substr>] <rom.hex> [max_instr]
+//   sim_basic [--autostart] [--exit-on <substr>] [--max-seconds <s>] <rom.hex> [max_instr]
 //
 // --exit-on <substr>: when <substr> appears in the BASIC stdout, run a
 // brief grace window (~50K more instructions) so any trailing "Ok\n" or
 // newline finishes flushing, then exit cleanly. Used by the canned-script
 // CI tests so the harness doesn't waste 5+ minutes spinning past the
 // test's own "DONE-XYZ" sentinel before the max_instr cap fires.
+//
+// --max-seconds <s>: wall-clock budget. The gate-level build of this
+// harness is at the mercy of whatever Verilator the CI runner installs;
+// a slow (or non-functional) simulation used to spin silently until the
+// 60-minute job timeout killed it with nothing in the log. With a budget
+// the run stops itself, prints how far it got and at what rate, and the
+// test fails on the missing sentinel. A progress line goes to stderr
+// every 30 s for the same reason.
 //
 // Exit code: 0 always — the test driver greps stdout for expected substrings.
 #include <cstdio>
@@ -56,14 +64,16 @@ int main(int argc, char** argv) {
     const char* rom_path  = nullptr;
     const char* exit_on   = nullptr;
     long long   max_instr = 30000000LL;
+    double      max_seconds = 0.0;     // 0 = no wall-clock budget
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--autostart")) autostart = true;
         else if (!strcmp(argv[i], "--exit-on") && i + 1 < argc) exit_on = argv[++i];
+        else if (!strcmp(argv[i], "--max-seconds") && i + 1 < argc) max_seconds = atof(argv[++i]);
         else if (!rom_path)                  rom_path = argv[i];
         else                                 max_instr = atoll(argv[i]);
     }
     if (!rom_path) {
-        fprintf(stderr,"usage: %s [--autostart] [--exit-on <substr>] <rom.hex> [max_instr]\n",argv[0]);
+        fprintf(stderr,"usage: %s [--autostart] [--exit-on <substr>] [--max-seconds <s>] <rom.hex> [max_instr]\n",argv[0]);
         return 2;
     }
 
@@ -126,8 +136,25 @@ int main(int argc, char** argv) {
     static const long long EXIT_GRACE_INSTR = 50000;
 
     auto t0 = std::chrono::steady_clock::now();
+    auto t_report = t0;
+    const char* stop_reason = "max_instr reached";
 
     while (instr < max_instr) {
+        // Wall-clock budget + progress heartbeat. Checked once per
+        // T-state-ish (every 64 K phases) so the clock read is free.
+        if ((phases & 0xFFFF) == 0) {
+            auto now = std::chrono::steady_clock::now();
+            double el = std::chrono::duration<double>(now - t0).count();
+            if (std::chrono::duration<double>(now - t_report).count() >= 30.0) {
+                t_report = now;
+                fprintf(stderr, "[sim_basic] progress: %lld phases, ~%lld instr, %.1fs (%.2f Mphases/s, %.0f instr/s)\n",
+                        phases, instr, el, phases / el / 1e6, instr / el);
+            }
+            if (max_seconds > 0.0 && el >= max_seconds) {
+                stop_reason = "wall-clock budget (--max-seconds) exhausted";
+                break;
+            }
+        }
         // /INT mirrors RDRF: drop while stdin queue non-empty so NASCOM's
         // ACIA-IRQ-driven RX path fires.
         t->int_n = q_in.empty() ? 1 : 0;
@@ -189,15 +216,17 @@ int main(int argc, char** argv) {
         phases++;
         if (prev_m1_n && !t->m1_n) {
             instr++;
-            if (sentinel_seen && --grace_remaining <= 0) break;
+            if (sentinel_seen && --grace_remaining <= 0) { stop_reason = "sentinel seen"; break; }
         }
         prev_m1_n = t->m1_n;
     }
 
     auto t1 = std::chrono::steady_clock::now();
     double secs = std::chrono::duration<double>(t1 - t0).count();
-    fprintf(stderr, "\n[sim_basic] %lld phases (~%lld instructions) in %.2fs (%.2f Mphases/s)\n",
-            phases, instr, secs, phases / secs / 1e6);
+    fprintf(stderr, "\n[sim_basic] %lld phases (~%lld instructions) in %.2fs (%.2f Mphases/s, %.0f instr/s) -- stopped: %s\n",
+            phases, instr, secs, phases / secs / 1e6, instr / secs, stop_reason);
+    if (exit_on && !sentinel_seen)
+        fprintf(stderr, "[sim_basic] sentinel '%s' NOT seen\n", exit_on);
 
     delete t;
     return 0;

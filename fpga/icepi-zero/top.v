@@ -70,6 +70,7 @@ module top #(
 
     z80_core cpu (
         .clk        (clk_cpu),
+        .cen        (1'b1),      // USE_CEN=0: core steps on every clock
         .reset_n    (reset_n),
         .addr       (addr),
         .data_in    (data_in),
