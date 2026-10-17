@@ -1,0 +1,4 @@
+# WAIT low across T2.N and Tw1.N of LDIR iteration 1 write (M3): two Tw,
+# during which the RTL must do BC-1 exactly once (on the edge leaving T2).
+104 wait 0
+108 wait 1

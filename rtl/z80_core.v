@@ -1,12 +1,42 @@
 // ===========================================================================
-// z80_core.v - the Z80 engine: sequencer + micro-sequencer + register file.
+// z80_core.v - the Z80 engine, organised the way the die is.
 //
-// 1:1 port of the C model (cmodel/z80_core.c). ONE clock, ONE edge: every
-// register in this module updates on `posedge clk`, once per Z80 T-state --
-// the clock IS the Z80 clock, there is no 2x oversampling. DFF only, no
-// latches, no negedge logic, no `initial` in synthesizable code; async-assert
-// reset. All state is computed combinationally as *_n and registered on
-// posedge clk.
+//   decode PLA       z80_pla: (prefix state, opcode) -> instruction class
+//                    (exec) and its fields (registers, ALU op, cc, ...)
+//   sequencer        (this module) T-state / M-cycle counters, bus-cycle
+//                    type and length, WAIT, BUSREQ, NMI/INT sampling and
+//                    the instruction boundary (accept NMI / INT / HALT or
+//                    fetch the next M1)
+//   execute          z80_execute, the random control logic: (exec, M, T)
+//                    -> control word ctl_* -- which bus cycle starts next
+//                    and at which address, what the incrementer does,
+//                    which registers load what. Narrow selects, no data.
+//   register file    z80_regfile: BC DE HL AF, BC' DE' HL' AF', IX IY SP
+//                    PC WZ, renamed by the EX / EXX exchange flip-flops;
+//                    a pair write port, a byte port, the flag port, the
+//                    PC / SP / WZ loads
+//   address side     z80_addr: abus (16 bit) -> IDU (+1 / -1 / -2) ->
+//                    address latch (m_addr) and register write-back; the
+//                    effective-address adder (PC+e, IX+d) next to it
+//   ALU              z80_alu (8 bit, flags) and, here, the 16-bit add /
+//                    subtract for ADD HL,rp / ADC HL,rp / SBC HL,rp
+//   data latches     tmp8 (read data), m_wdata (write data), tmph (the DDCB
+//                    opcode). Operand words assemble in WZ (Z then W), as
+//                    on the die; MEMPTR is simply what WZ is left holding.
+//   pin timing       z80_timing x2: the pin images of the two halves of a
+//                    T-state (z80_top forms the dual-edge pins from them)
+//
+// Every unit exists once and is shared through select signals from the
+// execute block, so an instruction class costs control decode, not a copy
+// of its datapath. Behaviour is identical to the C model
+// (cmodel/z80_core.c), including the undocumented flags, MEMPTR (WZ) and
+// Q; `make compare` checks every phase of every trace program against it.
+//
+// ONE clock, ONE edge: every register in this module updates on
+// `posedge clk`, once per Z80 T-state -- the clock IS the Z80 clock, there
+// is no 2x oversampling. DFF only, no latches, no negedge logic, no
+// `initial` in synthesizable code; async-assert reset. All state is
+// computed combinationally as *_n and registered on posedge clk.
 //
 // The original chip does work on both clock edges, and the C model keeps
 // that as two half-steps per T-state (phi=0 "P" = clock-high half, phi=1
@@ -14,7 +44,7 @@
 // edge evaluation: first the clock-low-half work (MRD/IORD read-data latch,
 // INT/NMI sample point) consuming the `*_neg` inputs that z80_top sampled on
 // the falling edge, then the clock-high-half work (M1 opcode latch, WAIT
-// sample, T-state advance, micro-sequencer) consuming the live inputs.
+// sample, T-state advance, execute) consuming the live inputs.
 //
 // Pins leave this module as two images per T-state -- `*_pos`, the value
 // for the clock-high half of the T-state being ENTERED (a function of the
@@ -66,40 +96,32 @@ module z80_core (
     output wire [3:0]  dbg_t,
     output wire [2:0]  dbg_m
 );
-    // Separate loop indices for the combinational and the clocked block:
-    // one shared `integer` is assigned from both, which Yosys turns into a
-    // flop with a conflicting combinational driver (LibreLane's
-    // Checker.YosysSynthChecks rejects it).
-    integer i, ri;
 
-    // ---- registered state ----
-    reg [15:0] rf [0:12];
+    // =======================================================================
+    // registered state
+    // =======================================================================
     reg [7:0]  reg_i, reg_r, ir;
-    reg [7:0]  reg_q;       // F left by previous F-modifying instruction, else 0
-    reg        f_modified;  // set this cycle if any instruction wrote F
+    reg [7:0]  reg_q;          // Q: F left by the previous F-modifying instruction, else 0
+    reg        f_modified;     // set this instruction if anything wrote F
     reg [3:0]  t_state;
     reg [2:0]  m_cycle;
     reg [2:0]  bus_op;
     reg [3:0]  m_len;
-    reg [15:0] m_addr;
-    reg [7:0]  m_wdata;
+    reg [15:0] m_addr;         // address latch
+    reg [7:0]  m_wdata;        // write-data latch
     reg [2:0]  prefix;
     reg        iff1, iff2;
     reg [1:0]  im;
     reg        halted;
-    reg [7:0]  tmp8, tmpl, tmph;
-    reg [15:0] tmp16;
-    reg [31:0] cycle, instr_count;
-    reg        decoded;
+    reg [7:0]  tmp8, tmph;
     reg        nmi_pending, prev_nmi_n, ei_delay, suppress_decode, bus_granted;
     reg        nmi_sampled, int_sampled;  // latched at T_last.P per UM0080
     reg [1:0]  irq_seq;        // 0 none, 1 NMI, 2 INT, 3 HALT-nop
     reg        in_reset_hold;  // set by async reset, cleared (sync) by the
-                               // first rising edge after release; the comb
-                               // block holds all state while it is set
+                               // first rising edge after release; nothing
+                               // moves while it is set
 
-    // ---- next-state ----
-    reg [15:0] rf_n [0:12];
+    // ---- next state ----
     reg [7:0]  reg_i_n, reg_r_n, ir_n;
     reg [3:0]  t_n, m_len_n;
     reg [2:0]  m_cycle_n, bus_op_n;
@@ -109,20 +131,18 @@ module z80_core (
     reg        iff1_n, iff2_n;
     reg [1:0]  im_n;
     reg        halted_n;
-    reg [7:0]  tmp8_n, tmpl_n, tmph_n;
-    reg [15:0] tmp16_n;
+    reg [7:0]  tmp8_n, tmph_n;
     reg [7:0]  reg_q_n;
     reg        f_modified_n;
-    reg [31:0] cycle_n, instr_count_n;
-    reg        decoded_n;
     reg        nmi_pending_n, prev_nmi_n_n, ei_delay_n, suppress_decode_n, bus_granted_n;
     reg        nmi_sampled_n, int_sampled_n;
     reg        nmi_pending_mid;   // nmi_pending after the clock-high-half edge detect
     reg [1:0]  irq_seq_n;
     reg        allow_int;
-    reg        fin;
 
-    // ---- decode (combinational) ----
+    // =======================================================================
+    // decode PLA
+    // =======================================================================
     wire [6:0] exec_w;
     wire [4:0] flag_mode_w;
     wire [2:0] alu_op_w, rf_src_w, rf_dst_w, cc_w, rot_op_w, bit_index_w;
@@ -130,9 +150,9 @@ module z80_core (
     wire [3:0] rp_sel_w, aux_w;
     wire [7:0] rst_addr_w;
     wire       use_disp_w;
-    // uses_cc / valid are produced by z80_pla but the sequencer doesn't
-    // consume them yet. Wire them up so iverilog and Verilator don't warn
-    // about missing pins; -Wno-UNUSEDSIGNAL handles the dead-end side.
+    // uses_cc / valid are produced by z80_pla but not consumed here. Wire
+    // them up so iverilog and Verilator don't warn about missing pins;
+    // -Wno-UNUSEDSIGNAL handles the dead-end side.
     wire       uses_cc_w, valid_w;
 
     z80_pla u_pla (
@@ -152,7 +172,9 @@ module z80_core (
                           (irq_seq == 2'd2) ? `EXEC_INT :
                           (irq_seq == 2'd3) ? `EXEC_NOP : exec_w;
 
-    // ---- pin images ----
+    // =======================================================================
+    // pin images
+    // =======================================================================
     // *_pos is the clock-high half of the T-state being ENTERED at this
     // rising edge: a function of the next-state signals, so z80_top can
     // register it on the very edge the state commits. *_neg is the
@@ -221,12 +243,14 @@ module z80_core (
     assign busack_n_neg = bus_granted   ? 1'b0 : 1'b1;
     assign dbg_t = t_state; assign dbg_m = m_cycle;
 
-    // ---- timing-point predicates ----
+    // =======================================================================
+    // timing-point predicates
+    // =======================================================================
     // Read-data latch points (mirror cmodel is_latch_phase):
     //  - latch_neg: MRD at T3 / IORD at T4 -- the chip captures the data bus
     //    on the FALLING edge of that T-state (just before MREQ/IORQ
     //    deassert). z80_top's negedge sampler took the byte half a cycle
-    //    ago; it lands in tmp8 at this rising edge and the micro-sequencer
+    //    ago; it lands in tmp8 at this rising edge and the execute step
     //    consumes it in the same evaluation (`rbyte`).
     //  - latch_pos: M1 opcode at the end of T2.N / INTA vector at the end
     //    of the second automatic Tw.N -- a RISING edge capture of the live
@@ -253,22 +277,89 @@ module z80_core (
     // pulse from T2.N to T3.N (tb_wait_write.v; cmodel hold_write_strobe).
     wire hold_wr = stall && (bus_op == `BUSOP_MWR);
     assign wr_n_pos = idle_pos | (hold_wr ? 1'b0 : tp_wr);
+    // the byte read this T-state: live opcode / vector, the falling-edge
+    // MRD / IORD sample, or the data latch
     wire [7:0] rbyte = latch_pos ? data_in : latch_neg ? data_in_neg : tmp8;
 
-    // ---- 8-bit register read ----
-    function [7:0] getr8; input [2:0] sel;
-        case (sel)
-            3'd0: getr8 = rf[`RFP_BC][15:8];
-            3'd1: getr8 = rf[`RFP_BC][7:0];
-            3'd2: getr8 = rf[`RFP_DE][15:8];
-            3'd3: getr8 = rf[`RFP_DE][7:0];
-            3'd4: getr8 = rf[`RFP_HL][15:8];
-            3'd5: getr8 = rf[`RFP_HL][7:0];
-            3'd6: getr8 = 8'h00;
-            default: getr8 = rf[`RFP_AF][15:8];
-        endcase
-    endfunction
+    // the sequencer's step points. Registers load on every edge that
+    // advances (wr_edge). The execute step proper -- bus cycles,
+    // sequencing, most register loads -- runs on the last T-state of an
+    // M-cycle (ex_edge); the incrementer jobs the die does while the
+    // address latch holds (PC+1 of the opcode fetch, block-move pointer
+    // and counter steps) run on earlier T-states.
+    wire m_end   = (t_state + 4'd1) > m_len;            // last T-state of the M-cycle
+    wire wr_edge = !in_reset_hold && !bus_granted && !stall;
+    wire ex_edge = wr_edge && m_end;
 
+    // =======================================================================
+    // register file: read side
+    // =======================================================================
+    wire [15:0] r_bc, r_de, r_hl, r_af, r_bc2, r_de2, r_hl2, r_af2;
+    wire [15:0] r_ix, r_iy, r_sp, r_pc, r_wz;
+    wire [7:0]  A_cur = r_af[15:8];
+    wire [7:0]  F_cur = r_af[7:0];
+    // logical register view (RFP_* order) for testbenches
+    wire [15:0] rfl [0:12] /* verilator public_flat_rd */;
+    assign rfl[`RFP_BC]  = r_bc;  assign rfl[`RFP_DE]  = r_de;
+    assign rfl[`RFP_HL]  = r_hl;  assign rfl[`RFP_AF]  = r_af;
+    assign rfl[`RFP_BC2] = r_bc2; assign rfl[`RFP_DE2] = r_de2;
+    assign rfl[`RFP_HL2] = r_hl2; assign rfl[`RFP_AF2] = r_af2;
+    assign rfl[`RFP_IX]  = r_ix;  assign rfl[`RFP_IY]  = r_iy;
+    assign rfl[`RFP_SP]  = r_sp;  assign rfl[`RFP_PC]  = r_pc;
+    assign rfl[`RFP_WZ]  = r_wz;
+
+    // HL / IX / IY pair of the current instruction
+    wire [15:0] rf_hlp = (idx_w == 2'd1) ? r_ix : (idx_w == 2'd2) ? r_iy : r_hl;
+    // rp[p] / rp2[p] pair named by the PLA (BC DE HL/IX/IY SP AF)
+    reg  [15:0] rf_rp;
+    always @* begin
+        case (rp_sel_w)
+            `RFP_BC: rf_rp = r_bc;
+            `RFP_DE: rf_rp = r_de;
+            `RFP_HL: rf_rp = r_hl;
+            `RFP_AF: rf_rp = r_af;
+            `RFP_IX: rf_rp = r_ix;
+            `RFP_IY: rf_rp = r_iy;
+            `RFP_SP: rf_rp = r_sp;
+            default: rf_rp = 16'h0000;     // the PLA names no other pair
+        endcase
+    end
+    // r[z] byte without the IX/IY substitution (CB page, OUT (C),r)
+    reg  [7:0] r8_src;
+    always @* begin
+        case (rf_src_w)
+            3'd0: r8_src = r_bc[15:8];
+            3'd1: r8_src = r_bc[7:0];
+            3'd2: r8_src = r_de[15:8];
+            3'd3: r8_src = r_de[7:0];
+            3'd4: r8_src = r_hl[15:8];
+            3'd5: r8_src = r_hl[7:0];
+            3'd6: r8_src = 8'h00;
+            default: r8_src = A_cur;
+        endcase
+    end
+    // r[z] / r[y] byte with IXH/IXL/IYH/IYL substituted for H/L under
+    // DD/FD (not when the instruction has an (IX+d) memory operand)
+    wire [7:0] getri_src_val =
+        (idx_w != 2'd0 && !use_disp_w && rf_src_w == 3'd4) ? rf_hlp[15:8] :
+        (idx_w != 2'd0 && !use_disp_w && rf_src_w == 3'd5) ? rf_hlp[7:0]  :
+        (rf_src_w == 3'd0) ? r_bc[15:8] :
+        (rf_src_w == 3'd1) ? r_bc[7:0]  :
+        (rf_src_w == 3'd2) ? r_de[15:8] :
+        (rf_src_w == 3'd3) ? r_de[7:0]  :
+        (rf_src_w == 3'd4) ? r_hl[15:8] :
+        (rf_src_w == 3'd5) ? r_hl[7:0]  :
+        (rf_src_w == 3'd7) ? A_cur : 8'h00;
+    wire [7:0] getri_dst_val =
+        (idx_w != 2'd0 && !use_disp_w && rf_dst_w == 3'd4) ? rf_hlp[15:8] :
+        (idx_w != 2'd0 && !use_disp_w && rf_dst_w == 3'd5) ? rf_hlp[7:0]  :
+        (rf_dst_w == 3'd0) ? r_bc[15:8] :
+        (rf_dst_w == 3'd1) ? r_bc[7:0]  :
+        (rf_dst_w == 3'd2) ? r_de[15:8] :
+        (rf_dst_w == 3'd3) ? r_de[7:0]  :
+        (rf_dst_w == 3'd4) ? r_hl[15:8] :
+        (rf_dst_w == 3'd5) ? r_hl[7:0]  :
+        (rf_dst_w == 3'd7) ? A_cur : 8'h00;
 
     function [3:0] baselen; input [2:0] bop;
         case (bop)
@@ -294,48 +385,20 @@ module z80_core (
             default: cc_true = f[7]; // M
         endcase
     endfunction
+    wire cc_taken = cc_true(F_cur, cc_w);
 
-    // ---- ALU operand selection + instance ----
-    reg  [7:0] alu_a, alu_b, alu_xy;
-    reg  [4:0] alu_md;
-    reg  [2:0] alu_rot, alu_bit;
-    wire [7:0] A_cur = rf[`RFP_AF][15:8];
-    wire [7:0] F_cur = rf[`RFP_AF][7:0];
-    // Continuous wires replacing the old getri() function. iverilog 12
-    // doesn't propagate rf[hlp] (variable-index array) dependencies through
-    // function calls in always @*, so the operand mux missed mid-cycle PLA
-    // transitions from idx_w 0 -> 2 under DD/FD prefix. Expressing the
-    // index-aware byte read as a continuous wire ensures correct sensitivity.
-    wire [7:0] getri_src_val =
-        (idx_w != 2'd0 && !use_disp_w && rf_src_w == 3'd4) ? rf[hlp][15:8] :
-        (idx_w != 2'd0 && !use_disp_w && rf_src_w == 3'd5) ? rf[hlp][7:0]  :
-        (rf_src_w == 3'd0) ? rf[`RFP_BC][15:8] :
-        (rf_src_w == 3'd1) ? rf[`RFP_BC][7:0]  :
-        (rf_src_w == 3'd2) ? rf[`RFP_DE][15:8] :
-        (rf_src_w == 3'd3) ? rf[`RFP_DE][7:0]  :
-        (rf_src_w == 3'd4) ? rf[`RFP_HL][15:8] :
-        (rf_src_w == 3'd5) ? rf[`RFP_HL][7:0]  :
-        (rf_src_w == 3'd7) ? rf[`RFP_AF][15:8] : 8'h00;
-    wire [7:0] getri_dst_val =
-        (idx_w != 2'd0 && !use_disp_w && rf_dst_w == 3'd4) ? rf[hlp][15:8] :
-        (idx_w != 2'd0 && !use_disp_w && rf_dst_w == 3'd5) ? rf[hlp][7:0]  :
-        (rf_dst_w == 3'd0) ? rf[`RFP_BC][15:8] :
-        (rf_dst_w == 3'd1) ? rf[`RFP_BC][7:0]  :
-        (rf_dst_w == 3'd2) ? rf[`RFP_DE][15:8] :
-        (rf_dst_w == 3'd3) ? rf[`RFP_DE][7:0]  :
-        (rf_dst_w == 3'd4) ? rf[`RFP_HL][15:8] :
-        (rf_dst_w == 3'd5) ? rf[`RFP_HL][7:0]  :
-        (rf_dst_w == 3'd7) ? rf[`RFP_AF][15:8] : 8'h00;
-
-    // Pre-derive the small inputs used by FLAG_BLOCK_IO so the mux below
-    // can stay simple. These are all functions of rf[] / tmp8 / tmpl /
-    // aux_w[0] (the dec/inc bit), readable here without dependence on rf_n.
-    wire [8:0] bk_ini = {1'b0, tmpl} + {1'b0, (rf[`RFP_BC][7:0] + (aux_w[0] ? 8'hFF : 8'h1))};
-    wire [8:0] bk_out = {1'b0, tmpl} + {1'b0, (rf[`RFP_HL][7:0] + (aux_w[0] ? 8'hFF : 8'h1))};
+    // =======================================================================
+    // ALU: operand latches + z80_alu
+    // =======================================================================
+    // Block-IO flag inputs: data + (C +/- 1) for INxR, data + new L for OTxR.
+    // The data byte is still in the read-data latch tmp8 (the IN / MRD
+    // M-cycle latched it; the following MWR / IOWR does not).
+    wire [8:0] bk_ini = {1'b0, tmp8} + {1'b0, (r_bc[7:0] + (aux_w[0] ? 8'hFF : 8'h1))};
+    wire [8:0] bk_out = {1'b0, tmp8} + {1'b0, r_hl[7:0]};   // L already stepped (M3 T1)
 
     // Banks-2018 INIR/INDR/OTIR/OTDR repeat-M-cycle flag fold-in.
     // Mirrors redcode INXR_OTXR_COMMON exactly (see scripts/refs/
-    // redcode_z80/Z80.c line 1233). Inputs: data byte (tmpl after the
+    // redcode_z80/Z80.c line 1233). Inputs: data byte (tmp8 after the
     // IN/MRD M-cycle), newB (B post-decrement), bk = {hcf, t[7:0]}
     // 9-bit sum (bk_ini for INxR, bk_out for OTxR), pch = high byte of
     // post-rewind PC (= (PC-2)[15:8]) used for YF/XF fold-in.
@@ -384,6 +447,9 @@ module z80_core (
         end
     endfunction
 
+    reg  [7:0] alu_a, alu_b, alu_xy;
+    reg  [4:0] alu_md;
+    reg  [2:0] alu_rot, alu_bit;
     always @* begin
         alu_a = A_cur;
         alu_b = 8'h00;
@@ -396,13 +462,11 @@ module z80_core (
             `EXEC_ALU_N, `EXEC_ALU_M:alu_b = rbyte;
             `EXEC_INC_R, `EXEC_DEC_R:alu_b = getri_dst_val;
             `EXEC_INC_M, `EXEC_DEC_M:alu_b = rbyte;
-            `EXEC_CB_R: begin alu_b = getr8(rf_src_w); alu_xy = getr8(rf_src_w); end
-            `EXEC_CB_M: begin alu_b = rbyte;           alu_xy = rf[`RFP_WZ][15:8]; end
-            `EXEC_DDCB: begin alu_b = rbyte;           alu_xy = rf[`RFP_WZ][15:8];
+            `EXEC_CB_R: begin alu_b = r8_src;          alu_xy = r8_src; end
+            `EXEC_CB_M: begin alu_b = rbyte;           alu_xy = r_wz[15:8]; end
+            `EXEC_DDCB: begin alu_b = rbyte;           alu_xy = r_wz[15:8];
                             alu_md = (tmph[7:6] == `CB_BIT) ? `FLAG_BIT : `FLAG_ROT;
                             alu_rot = tmph[5:3]; alu_bit = tmph[5:3]; end
-            // New A2 modes — flag formulas live in z80_alu.v, consumed
-            // by the EXEC handlers below as alu_res/alu_fout.
             `EXEC_NEG: begin alu_md = `FLAG_NEG; alu_a = A_cur; end
             `EXEC_LD_A_IR: begin alu_md = `FLAG_LD_A_I;
                               alu_b = aux_w[0] ? reg_r : reg_i;
@@ -413,29 +477,28 @@ module z80_core (
                 alu_a = A_cur; alu_b = rbyte;
             end
             `EXEC_BLOCK: begin
-                // (cat=aux_w[2:1], dec=aux_w[0]). Fire flag mux only at the
-                // M-cycle where the formula commits. tmp8 holds the latched
-                // byte for LD (latched at m=2's end); rbyte = data_in at the
-                // current latch phase for CP at m=2.
+                // (cat=aux_w[2:1], dec=aux_w[0]). The flag mode is live only
+                // in the M-cycle whose end commits the flags. tmp8 holds the
+                // byte LDI moved; rbyte is the byte CPI is reading.
                 case (aux_w[2:1])
                     2'd0: if (m_cycle == 3'd3) begin
                         alu_md = `FLAG_BLOCK_LD; alu_a = A_cur; alu_b = tmp8;
-                        alu_bit = {2'b0, ((rf[`RFP_BC] - 16'd1) != 16'd0)};
+                        alu_bit = {2'b0, (r_bc != 16'd0)};    // BC-1 done at M3 T2
                     end
                     2'd1: if (m_cycle == 3'd2) begin
                         alu_md = `FLAG_BLOCK_CP; alu_a = A_cur; alu_b = rbyte;
-                        alu_bit = {2'b0, ((rf[`RFP_BC] - 16'd1) != 16'd0)};
+                        alu_bit = {2'b0, (r_bc != 16'd0)};    // BC-1 done at M2 T2
                     end
                     2'd2: if (m_cycle == 3'd4) begin
                         alu_md = `FLAG_BLOCK_IO;
-                        alu_a = tmpl;                      // data
-                        alu_b = rf[`RFP_BC][15:8] - 8'd1;   // newB
+                        alu_a = tmp8;                      // data
+                        alu_b = r_bc[15:8] - 8'd1;         // newB
                         alu_xy = {4'b0, bk_ini[8], bk_ini[2:0]};
                     end
                     default: if (m_cycle == 3'd4) begin   // 2'd3 = OUT
                         alu_md = `FLAG_BLOCK_IO;
-                        alu_a = tmpl;                      // data
-                        alu_b = rf[`RFP_BC][15:8];          // already-decremented B
+                        alu_a = tmp8;                      // data
+                        alu_b = r_bc[15:8];                // already-decremented B
                         alu_xy = {4'b0, bk_out[8], bk_out[2:0]};
                     end
                 endcase
@@ -451,79 +514,279 @@ module z80_core (
         .res(alu_res), .fout(alu_fout)
     );
 
-    // ---- 8-bit register write into rf_n ----
-    task setr8; input [2:0] sel; input [7:0] val;
-        case (sel)
-            3'd0: rf_n[`RFP_BC][15:8] = val;
-            3'd1: rf_n[`RFP_BC][7:0]  = val;
-            3'd2: rf_n[`RFP_DE][15:8] = val;
-            3'd3: rf_n[`RFP_DE][7:0]  = val;
-            3'd4: rf_n[`RFP_HL][15:8] = val;
-            3'd5: rf_n[`RFP_HL][7:0]  = val;
-            3'd6: ;                       // (HL): memory, not a register
-            default: rf_n[`RFP_AF][15:8] = val;
-        endcase
-    endtask
+    // =======================================================================
+    // execute: control word
+    // =======================================================================
+`include "z80_ctl.vh"
 
-    // index-aware 8-bit write (H/L -> IXH/IXL under DD/FD, no memory operand)
-    task setri; input [2:0] sel; input [7:0] val;
-        if (idx_w != 2'd0 && !use_disp_w && sel == 3'd4)
-            rf_n[hlp][15:8] = val;
-        else if (idx_w != 2'd0 && !use_disp_w && sel == 3'd5)
-            rf_n[hlp][7:0] = val;
-        else setr8(sel, val);
-    endtask
+    wire        ctl_mstart, ctl_m1, ctl_fin;
+    wire [2:0]  ctl_bop;
+    wire [3:0]  ctl_mx;
+    wire [2:0]  ctl_al, ctl_ab, ctl_ri;
+    wire [1:0]  ctl_inc;
+    wire        ctl_ea_pc;
+    wire [1:0]  ctl_ea_d;
+    wire [2:0]  ctl_db;
+    wire [1:0]  ctl_bi;
+    wire        ctl_bhi;
+    wire [2:0]  ctl_pc, ctl_wz;
+    wire [1:0]  ctl_sp, ctl_vec;
+    wire        ctl_pw;
+    wire [2:0]  ctl_pwi;
+    wire [1:0]  ctl_pws;
+    wire        ctl_bw;
+    wire [3:0]  ctl_bwd;
+    wire [2:0]  ctl_bws;
+    wire        ctl_fw;
+    wire [2:0]  ctl_fs;
+    wire        ctl_ex_dehl, ctl_ex_af, ctl_exx;
+    wire        ctl_tmph;
+    wire [1:0]  ctl_iff;
+    wire        ctl_im, ctl_halt, ctl_ld_i, ctl_ld_r, ctl_prefix;
+    wire        ctl_cbx, ctl_cbr;
+    wire [2:0]  pfx_next;
+    wire [7:0]  b_dec = r_bc[15:8] - 8'd1;      // B-1 (DJNZ, INI, OUTI)
 
-    task startm; input [2:0] bop; input [15:0] a; input [7:0] wd; input [3:0] extra;
-        begin
-            bus_op_n  = bop;
-            m_addr_n  = a;
-            m_wdata_n = wd;
-            m_len_n   = baselen(bop) + extra;
-            t_n       = 4'd1;
-            m_cycle_n = m_cycle + 3'd1;
-        end
-    endtask
+    z80_execute u_exec (
+        .m_end(m_end), .latch_pos(latch_pos), .bus_op(bus_op),
+        .suppress_decode(suppress_decode), .m_cycle(m_cycle), .t_state(t_state),
+        .irq_seq(irq_seq), .eff_exec(eff_exec), .exec_w(exec_w),
+        .alu_op_w(alu_op_w), .cb_kind_w(cb_kind_w), .idx_w(idx_w),
+        .use_disp_w(use_disp_w), .aux_w(aux_w), .prefix(prefix), .ir(ir),
+        .ddcb_kind(tmph[7:6]), .im(im),
+        .cc_taken(cc_taken), .zf(F_cur[6]), .bc_nz(r_bc != 16'd0),
+        .b_nz(r_bc[15:8] != 8'd0), .b_dec_nz(b_dec != 8'd0),
+        .ctl_mstart(ctl_mstart), .ctl_m1(ctl_m1), .ctl_fin(ctl_fin),
+        .ctl_bop(ctl_bop), .ctl_mx(ctl_mx), .ctl_al(ctl_al),
+        .ctl_ab(ctl_ab), .ctl_ri(ctl_ri), .ctl_inc(ctl_inc),
+        .ctl_ea_pc(ctl_ea_pc), .ctl_ea_d(ctl_ea_d),
+        .ctl_db(ctl_db), .ctl_bi(ctl_bi), .ctl_bhi(ctl_bhi),
+        .ctl_pc(ctl_pc), .ctl_wz(ctl_wz), .ctl_sp(ctl_sp), .ctl_vec(ctl_vec),
+        .ctl_pw(ctl_pw), .ctl_pwi(ctl_pwi), .ctl_pws(ctl_pws),
+        .ctl_bw(ctl_bw), .ctl_bwd(ctl_bwd), .ctl_bws(ctl_bws),
+        .ctl_fw(ctl_fw), .ctl_fs(ctl_fs),
+        .ctl_ex_dehl(ctl_ex_dehl), .ctl_ex_af(ctl_ex_af), .ctl_exx(ctl_exx),
+        .ctl_tmph(ctl_tmph), .ctl_iff(ctl_iff), .ctl_im(ctl_im),
+        .ctl_halt(ctl_halt), .ctl_ld_i(ctl_ld_i), .ctl_ld_r(ctl_ld_r),
+        .ctl_prefix(ctl_prefix), .ctl_cbx(ctl_cbx), .ctl_cbr(ctl_cbr),
+        .pfx_next(pfx_next)
+    );
 
-    // 16-bit ADD HL,rp (inline; IDU/ALU detail handled in C model too)
-    reg [16:0] add16;
-    reg [12:0] add12;
-    reg [7:0]  f16;
-    reg [7:0]  cbres;
-    reg [16:0] r17;
-    reg [12:0] r13;
-    reg [7:0]  edf, edv;
-    reg [2:0]  mm;
-    reg [15:0] memaddr;
-    reg [15:0] bbc;            // block: BC after decrement
-    reg [8:0]  bk;             // block-IO: data + (C±1) or +L
-    reg [7:0]  bdata, bn2, bnewB;
-    reg [4:0]  bhc;            // block-CP: low-nibble borrow
+    // =======================================================================
+    // address side
+    // =======================================================================
+    wire [15:0] abus, idu, ea, al_in, a16;
+    z80_addr u_addr (
+        .pc(r_pc), .sp(r_sp), .wz(r_wz), .hl(r_hl), .de(r_de), .bc(r_bc),
+        .hlp(rf_hlp), .rp(rf_rp), .rbyte(rbyte), .a(A_cur), .i_reg(reg_i),
+        .tmp8(tmp8), .b_dec(b_dec), .a16(a16),
+        .ctl_ab(ctl_ab), .ctl_ri(ctl_ri), .ctl_inc(ctl_inc),
+        .ctl_ea_pc(ctl_ea_pc), .ctl_ea_d(ctl_ea_d), .ctl_al(ctl_al),
+        .abus(abus), .idu(idu), .ea(ea), .al_in(al_in)
+    );
 
-    // ---- combinational next-state ----
+    // 16-bit ALU: ADD HL,rp / ADC HL,rp / SBC HL,rp (HL is IX/IY under DD/FD)
+    wire        a16_sub = (exec_w == `EXEC_SBC16);
+    wire        a16_cy  = (exec_w == `EXEC_ADC16) ? F_cur[0] : (a16_sub ? ~F_cur[0] : 1'b0);
+    wire [15:0] a16_y   = a16_sub ? ~rf_rp : rf_rp;
+    wire [16:0] a16_s   = {1'b0, rf_hlp} + {1'b0, a16_y} + {16'd0, a16_cy};
+    assign      a16     = a16_s[15:0];
+    wire        a16_c   = a16_s[16] ^ a16_sub;                         // carry / borrow
+    wire        a16_h   = a16[12] ^ rf_hlp[12] ^ a16_y[12] ^ a16_sub;  // out of bit 11
+    wire        a16_v   = ~(rf_hlp[15] ^ a16_y[15]) & (rf_hlp[15] ^ a16[15]);
+    wire [7:0]  a16_f   = (exec_w == `EXEC_ADD_HL_RP)
+        ? ((F_cur & (`Z80_SF | `Z80_ZF | `Z80_PF)) | (a16[15:8] & (`Z80_YF | `Z80_XF))
+           | (a16_h ? `Z80_HF : 8'h00) | (a16_c ? `Z80_CF : 8'h00))
+        : ((a16[15] ? `Z80_SF : 8'h00) | ((a16 == 16'h0000) ? `Z80_ZF : 8'h00)
+           | (a16[15:8] & (`Z80_YF | `Z80_XF)) | (a16_h ? `Z80_HF : 8'h00)
+           | (a16_v ? `Z80_PF : 8'h00) | (a16_sub ? `Z80_NF : 8'h00)
+           | (a16_c ? `Z80_CF : 8'h00));
+
+    // bit-operation unit: CB rotates come from the ALU, RES / SET here
+    wire [1:0]  cb_kind = ctl_cbx ? tmph[7:6] : cb_kind_w;
+    wire [2:0]  cb_bit  = ctl_cbx ? tmph[5:3] : bit_index_w;
+    wire [7:0]  cb_in   = ctl_cbr ? r8_src : rbyte;
+    wire [7:0]  cb_mask = 8'h01 << cb_bit;
+    reg  [7:0]  cbres;
     always @* begin
-        for (i = 0; i < 13; i = i + 1) rf_n[i] = rf[i];
+        case (cb_kind)
+            `CB_ROT: cbres = alu_res;
+            `CB_RES: cbres = cb_in & ~cb_mask;
+            `CB_SET: cbres = cb_in | cb_mask;
+            default: cbres = cb_in;
+        endcase
+    end
+    // RRD / RLD: the byte written back to (HL)
+    wire [7:0]  rrd_mem = (exec_w == `EXEC_RRD) ? {A_cur[3:0], rbyte[7:4]} : {rbyte[3:0], A_cur[3:0]};
+
+    // write-data latch input
+    reg  [15:0] db_pair;
+    always @* begin
+        case (ctl_bi)
+            BI_PC:   db_pair = r_pc;
+            BI_RP:   db_pair = rf_rp;
+            BI_HLP:  db_pair = rf_hlp;
+            default: db_pair = r_af;
+        endcase
+    end
+    reg  [7:0]  wdata;
+    always @* begin
+        case (ctl_db)
+            DB_ZERO: wdata = 8'h00;
+            DB_REG:  wdata = ctl_bhi ? db_pair[15:8] : db_pair[7:0];
+            DB_RI:   wdata = getri_src_val;
+            DB_R8:   wdata = r8_src;
+            DB_RB:   wdata = rbyte;
+            DB_ALU:  wdata = alu_res;
+            DB_CB:   wdata = cbres;
+            default: wdata = rrd_mem;
+        endcase
+    end
+    // interrupt / restart vectors
+    reg  [15:0] vec;
+    always @* begin
+        case (ctl_vec)
+            VEC_NMI: vec = 16'h0066;
+            VEC_IM:  vec = (im == 2'd1) ? 16'h0038 : {8'h00, (tmp8 & 8'h38)};
+            default: vec = {8'h00, rst_addr_w};
+        endcase
+    end
+
+    // =======================================================================
+    // register file: write side
+    // =======================================================================
+    // pair write port
+    reg  [3:0]  pw_idx;
+    reg  [15:0] pw_data;
+    always @* begin
+        case (ctl_pwi)
+            RI_HLP:  pw_idx = hlp;
+            RI_HL:   pw_idx = `RFP_HL;
+            RI_BC:   pw_idx = `RFP_BC;
+            RI_DE:   pw_idx = `RFP_DE;
+            default: pw_idx = rp_sel_w;
+        endcase
+        case (ctl_pws)
+            PW_IDU:  pw_data = idu;
+            PW_A16:  pw_data = a16;
+            default: pw_data = r_wz;
+        endcase
+    end
+    // byte write port: r[y]-style register code (IXH/IXL substitution for
+    // BW_RI), A, B, the DDCB copy target, or a byte of HL/IX/IY
+    reg  [2:0]  bw_code;
+    reg         bw_ix, bw_en, bw_hi;
+    reg  [3:0]  bw_pair;
+    reg  [7:0]  bw_data;
+    always @* begin
+        bw_ix = 1'b0;
+        case (ctl_bwd)
+            BW_RI:   begin bw_code = rf_dst_w; bw_ix = 1'b1; end
+            BW_A:    bw_code = 3'd7;
+            BW_B:    bw_code = 3'd0;
+            BW_DDCB: bw_code = tmph[2:0];
+            default: bw_code = rf_dst_w;
+        endcase
+        bw_en = 1'b1; bw_hi = ~bw_code[0];
+        case (bw_code)
+            3'd0, 3'd1: bw_pair = `RFP_BC;
+            3'd2, 3'd3: bw_pair = `RFP_DE;
+            3'd4, 3'd5: bw_pair = (bw_ix && idx_w != 2'd0 && !use_disp_w) ? hlp : `RFP_HL;
+            3'd6:       begin bw_pair = `RFP_HL; bw_en = 1'b0; end     // (HL): not a register
+            default:    begin bw_pair = `RFP_AF; bw_hi = 1'b1; end
+        endcase
+        if (ctl_bwd == BW_HLPL) begin bw_pair = hlp; bw_hi = 1'b0; bw_en = 1'b1; end
+        if (ctl_bwd == BW_HLPH) begin bw_pair = hlp; bw_hi = 1'b1; bw_en = 1'b1; end
+        if (ctl_bwd == BW_RPL)  begin bw_pair = rp_sel_w; bw_hi = 1'b0; bw_en = 1'b1; end
+        if (ctl_bwd == BW_RPH)  begin bw_pair = rp_sel_w; bw_hi = 1'b1; bw_en = 1'b1; end
+        case (ctl_bws)
+            BS_RI:   bw_data = getri_src_val;
+            BS_ALU:  bw_data = alu_res;
+            BS_RB:   bw_data = rbyte;
+            BS_CB:   bw_data = cbres;
+            default: bw_data = b_dec;
+        endcase
+    end
+    // flag port
+    reg  [7:0]  f_data;
+    always @* begin
+        case (ctl_fs)
+            FS_ALU:  f_data = alu_fout;
+            FS_A16:  f_data = a16_f;
+            // Banks 2018 LDIR/LDDR repeat: YF / XF from PC.13 / PC.11
+            FS_BLD:  f_data = (alu_fout & ~(`Z80_YF | `Z80_XF)) | (r_pc[15:8] & (`Z80_YF | `Z80_XF));
+            // ... CPIR/CPDR repeat: same fold onto the F CPI left
+            FS_BCP:  f_data = (F_cur & ~(`Z80_YF | `Z80_XF)) | (r_pc[15:8] & (`Z80_YF | `Z80_XF));
+            // ... INIR/INDR/OTIR/OTDR repeat: full recompute (idu = PC-2)
+            default: f_data = banks_io_rep_f(tmp8,
+                                  (aux_w[2:1] == 2'd2) ? b_dec : r_bc[15:8],
+                                  (aux_w[2:1] == 2'd2) ? bk_ini : bk_out,
+                                  idu[15:8]);
+        endcase
+    end
+
+    // PC / SP / WZ loads
+    reg         pc_we, sp_we, wz_we;
+    reg  [15:0] pc_d, sp_d, wz_d;
+    always @* begin
+        pc_we = 1'b1; sp_we = 1'b1; wz_we = 1'b1;
+        case (ctl_pc)
+            PC_IDU:  pc_d = idu;
+            PC_EA:   pc_d = ea;
+            PC_NN:   pc_d = {rbyte, r_wz[7:0]};
+            PC_ABUS: pc_d = abus;
+            PC_VEC:  pc_d = vec;
+            default: begin pc_we = 1'b0; pc_d = idu; end
+        endcase
+        case (ctl_sp)
+            SP_IDU:  sp_d = idu;
+            SP_ABUS: sp_d = abus;
+            default: begin sp_we = 1'b0; sp_d = idu; end
+        endcase
+        case (ctl_wz)
+            WZ_IDU:  wz_d = idu;
+            WZ_ALO:  wz_d = {A_cur, idu[7:0]};
+            WZ_EA:   wz_d = ea;
+            WZ_Z:    wz_d = {r_wz[15:8], rbyte};
+            WZ_W:    wz_d = {rbyte, r_wz[7:0]};
+            WZ_IV:   wz_d = {reg_i, tmp8};
+            WZ_VEC:  wz_d = vec;
+            default: begin wz_we = 1'b0; wz_d = idu; end
+        endcase
+    end
+
+    wire [15:0] pc_next;        // PC after this edge (next M1 address)
+    wire [7:0]  f_next;         // F after this edge (Q commit)
+    z80_regfile u_regs (
+        .clk(clk), .reset_n(reset_n), .we(wr_edge), .ex_en(ex_edge),
+        .ex_dehl(ctl_ex_dehl), .ex_af(ctl_ex_af), .exx(ctl_exx),
+        .pw_we(ctl_pw), .pw_sel(pw_idx), .pw_d(pw_data),
+        .bw_we(ctl_bw && bw_en), .bw_sel(bw_pair), .bw_hi(bw_hi), .bw_d(bw_data),
+        .f_we(ctl_fw), .f_d(f_data),
+        .pc_we(pc_we), .pc_d(pc_d), .sp_we(sp_we), .sp_d(sp_d),
+        .wz_we(wz_we), .wz_d(wz_d),
+        .bc(r_bc), .de(r_de), .hl(r_hl), .af(r_af),
+        .bc2(r_bc2), .de2(r_de2), .hl2(r_hl2), .af2(r_af2),
+        .ix(r_ix), .iy(r_iy), .sp(r_sp), .pc(r_pc), .wz(r_wz),
+        .pc_next(pc_next), .f_next(f_next)
+    );
+
+    // =======================================================================
+    // sequencer
+    // =======================================================================
+    always @* begin
         reg_i_n = reg_i; reg_r_n = reg_r; ir_n = ir;
         t_n = t_state; m_cycle_n = m_cycle;
         bus_op_n = bus_op; m_len_n = m_len; m_addr_n = m_addr; m_wdata_n = m_wdata;
         prefix_n = prefix; iff1_n = iff1; iff2_n = iff2; im_n = im; halted_n = halted;
-        tmp8_n = tmp8; tmpl_n = tmpl; tmph_n = tmph; tmp16_n = tmp16;
-        reg_q_n = reg_q; f_modified_n = f_modified;
-        // Detect F-write THIS M-cycle. Mirrors cmodel/z80_core.c's
-        // z80_setF() which sets c->f_modified = true on every F write.
-        // alu_md != FLAG_NONE means the ALU is computing flags and the
-        // resulting alu_fout will be written to rf_n[RFP_AF][7:0] by
-        // one of the EXEC handlers below. Set f_modified_n=1 so the
-        // Q-update at instruction-done picks the new F (silicon-
-        // faithful per Sean Young §4.1) instead of zeroing it -- the
-        // earlier `rf_n != rf` comparator zero'd Q whenever an F-write
-        // happened to leave F bit-identical (e.g. SCF chained with no
-        // prior CF set), which is the wrong semantic and broke z80full
-        // 007 SCF+CCF + 102/103 INIR/INDR -> NOP'.
-        if (alu_md != `FLAG_NONE) f_modified_n = 1'b1;
-        cycle_n = cycle + 32'd1; instr_count_n = instr_count; decoded_n = decoded;
-        fin = 1'b0;
-        add16 = 17'd0; f16 = 8'd0;
+        tmp8_n = tmp8; tmph_n = tmph;
+        reg_q_n = reg_q;
+        // Detect an F write this instruction (mirrors c->f_modified in
+        // cmodel/z80_core.c): the ALU is in a flag mode, so one of the
+        // execute paths commits alu_fout. Q at instruction-done is F if
+        // it was written -- even with an unchanged value -- else 0
+        // (Sean Young 4.1; z80full 007 SCF+CCF, 102/103 INIR/INDR->NOP').
+        f_modified_n = f_modified | (alu_md != `FLAG_NONE);
         ei_delay_n = ei_delay; suppress_decode_n = suppress_decode;
         bus_granted_n = bus_granted; irq_seq_n = irq_seq;
         nmi_sampled_n = nmi_sampled; int_sampled_n = int_sampled;
@@ -565,22 +828,18 @@ module z80_core (
 
         // M1 opcode / INTA vector latch at the end of T2.N. Not while WAIT
         // is holding T2 as a Tw -- the opcode is captured on the rising
-        // edge that ends the LAST Tw (mirrors cmodel `!stalled`).
+        // edge that ends the LAST Tw (mirrors cmodel `!stalled`). PC+1 of
+        // the fetch is an IDU job of the same edge (execute, mid-M-cycle).
         if (latch_pos && !stall) begin
+            tmp8_n  = data_in;
+            reg_r_n = {reg_r[7], (reg_r[6:0] + 7'd1)};
             if (bus_op == `BUSOP_M1) begin
-                ir_n   = data_in;
-                tmp8_n = data_in;
-                reg_r_n = {reg_r[7], (reg_r[6:0] + 7'd1)};
-                if (suppress_decode) suppress_decode_n = 1'b0;     // ack/halt: no PC++/decode
-                else begin rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; decoded_n = 1'b1; end
-            end else begin                                         // INTA
-                tmp8_n = data_in;                                  // interrupt vector byte
-                if (im == 2'd0) begin
-                    // IM0: the device supplies the opcode; PC still points
-                    // at its operands, so decode it without a fetch/PC++.
-                    ir_n = data_in; irq_seq_n = 2'd0; decoded_n = 1'b1;
-                end
-                reg_r_n = {reg_r[7], (reg_r[6:0] + 7'd1)};
+                ir_n = data_in;
+                if (suppress_decode) suppress_decode_n = 1'b0;     // ack / halt: no PC++ / decode
+            end else if (im == 2'd0) begin                         // INTA
+                // IM0: the device supplies the opcode; PC still points at
+                // its operands, so decode it without a fetch / PC++.
+                ir_n = data_in; irq_seq_n = 2'd0;
             end
         end
 
@@ -590,8 +849,8 @@ module z80_core (
         if (bus_granted) begin
             if (busreq_n) begin                  // released: resume with a fresh M1
                 bus_granted_n = 1'b0;
-                bus_op_n = `BUSOP_M1; m_addr_n = rf[`RFP_PC]; m_len_n = 4'd4;
-                t_n = 4'd1; m_cycle_n = 3'd1; decoded_n = 1'b0;
+                bus_op_n = `BUSOP_M1; m_addr_n = r_pc; m_len_n = 4'd4;
+                t_n = 4'd1; m_cycle_n = 3'd1;
             end
             // else: hold all state (idle)
         end
@@ -599,710 +858,98 @@ module z80_core (
         else if (stall) begin
         end
         // advance one T-state
+        else if (!m_end) begin
+            t_n = t_state + 4'd1;
+        end
+        // last T-state of the M-cycle: the execute step
         else begin
-            if ((t_state + 4'd1) > m_len) begin
-                // (IX+d)/(IY+d) displacement preamble: fetch d, then 5T addr calc
-                // (skipped during interrupt/HALT sequences)
-                mm = m_cycle; memaddr = rf[hlp];
-                if (irq_seq == 2'd0 && idx_w != 2'd0 && use_disp_w && m_cycle == 3'd1) begin
-                    startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
-                    rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1;
-                end else if (irq_seq == 2'd0 && idx_w != 2'd0 && use_disp_w && m_cycle == 3'd2 && eff_exec != `EXEC_LD_M_N) begin
-                    rf_n[`RFP_WZ] = rf[hlp] + {{8{rbyte[7]}}, rbyte};
-                    startm(`BUSOP_INTERNAL, rf[hlp] + {{8{rbyte[7]}}, rbyte}, 8'h0, 4'd5);
+            if (ctl_prefix) prefix_n = pfx_next;
+            if (ctl_tmph) tmph_n = rbyte;
+            case (ctl_iff)
+                IFF_DI:   begin iff1_n = 1'b0; iff2_n = 1'b0; end
+                IFF_EI:   begin iff1_n = 1'b1; iff2_n = 1'b1; ei_delay_n = 1'b1; end
+                IFF_RETN: iff1_n = iff2;
+                default:  ;
+            endcase
+            if (ctl_im)    im_n = aux_w[1:0];
+            if (ctl_halt)  halted_n = 1'b1;
+            if (ctl_ld_i)  reg_i_n = A_cur;
+            if (ctl_ld_r)  reg_r_n = A_cur;
+            if (ctl_ex_af) f_modified_n = 1'b1;   // Q sees the swapped-in F
+
+            if (ctl_mstart) begin
+                bus_op_n  = ctl_bop;
+                m_addr_n  = al_in;
+                m_wdata_n = wdata;
+                m_len_n   = baselen(ctl_bop) + ctl_mx;
+                t_n       = 4'd1;
+                m_cycle_n = m_cycle + 3'd1;
+            end
+            if (ctl_m1) begin
+                bus_op_n = `BUSOP_M1; m_addr_n = r_pc; m_wdata_n = 8'h0;
+                m_len_n = 4'd4; t_n = 4'd1; m_cycle_n = 3'd1;
+            end
+
+            if (ctl_fin) begin
+                prefix_n = `PFX_NONE;
+                // Commit Q: F if THIS instruction wrote F, else 0 (Sean Young
+                // 4.1 + ZEXALL <daa,cpl,scf,ccf>).
+                reg_q_n = f_modified_n ? f_next : 8'h00;
+                f_modified_n = 1'b0;
+                // begin_next: decide bus grant / NMI / INT / HALT / next opcode
+                if (!busreq_n) begin
+                    bus_granted_n = 1'b1;            // DMA owns the bus next cycle
                 end else begin
-                // For LD (IX+d),n on m_cycle==2: compute WZ here (no internal cycle),
-                // then fall through to EXEC_LD_M_N with mm==1 (N read with +2T padding).
-                if (irq_seq == 2'd0 && idx_w != 2'd0 && use_disp_w && eff_exec == `EXEC_LD_M_N && m_cycle == 3'd2) begin
-                    rf_n[`RFP_WZ] = rf[hlp] + {{8{rbyte[7]}}, rbyte};
-                end
-                if (irq_seq == 2'd0 && idx_w != 2'd0 && use_disp_w) begin
-                    if (eff_exec == `EXEC_LD_M_N) begin
-                        mm = m_cycle - 3'd1;   /* no internal cycle */
-                        memaddr = (m_cycle == 3'd2) ? (rf[hlp] + {{8{rbyte[7]}}, rbyte}) : rf[`RFP_WZ];
+                    allow_int = ~ei_delay_n;         // ei_delay_n reflects EI this cycle
+                    ei_delay_n = 1'b0;
+                    // Accept based on the SAMPLED interrupt state (latched at
+                    // T_last.P), not the live signals. The sampled latches
+                    // freeze the silicon's accept decision one phase before
+                    // the boundary; that matches Zilog UM0080 NMI/INT timing.
+                    if (nmi_sampled_n) begin
+                        nmi_sampled_n = 1'b0;
+                        nmi_pending_n = 1'b0;
+                        // Silicon-faithful HALT exit (Brewer 2014 /
+                        // Woodmass HALT2INT): PC is ALREADY past the HALT
+                        // byte. Just clear halted_n; no PC bump.
+                        halted_n = 1'b0;
+                        iff2_n = iff1_n; iff1_n = 1'b0;
+                        irq_seq_n = 2'd1;
+                        bus_op_n = `BUSOP_M1; m_addr_n = pc_next; m_wdata_n = 8'h0;
+                        m_len_n = 4'd5; t_n = 4'd1; m_cycle_n = 3'd1;
+                        suppress_decode_n = 1'b1;
+                    end else if (allow_int && int_sampled_n && iff1_n) begin
+                        int_sampled_n = 1'b0;
+                        // Same: silicon-faithful HALT exit, no PC bump.
+                        halted_n = 1'b0; iff1_n = 1'b0; iff2_n = 1'b0;
+                        irq_seq_n = 2'd2;
+                        bus_op_n = `BUSOP_INTA; m_addr_n = pc_next; m_wdata_n = 8'h0;
+                        // T1 T2 Tw Tw T3 T4 (+1 internal state for IM1/IM2's PC push)
+                        m_len_n = (im == 2'd0) ? 4'd6 : 4'd7; t_n = 4'd1; m_cycle_n = 3'd1;
+                    end else if (halted_n) begin
+                        irq_seq_n = 2'd3;
+                        bus_op_n = `BUSOP_M1; m_addr_n = pc_next; m_wdata_n = 8'h0;
+                        m_len_n = 4'd4; t_n = 4'd1; m_cycle_n = 3'd1;
+                        suppress_decode_n = 1'b1;
                     end else begin
-                        mm = m_cycle - 3'd2;
-                        memaddr = rf[`RFP_WZ];
+                        irq_seq_n = 2'd0;
+                        bus_op_n = `BUSOP_M1; m_addr_n = pc_next; m_wdata_n = 8'h0;
+                        m_len_n = 4'd4; t_n = 4'd1; m_cycle_n = 3'd1;
                     end
                 end
-                // ===== micro-sequencer (mirror z80_control.c) =====
-                case (eff_exec)
-                `EXEC_NOP, `EXEC_ILLEGAL: fin = 1'b1;
-                `EXEC_PREFIX: begin
-                    case (ir)
-                        8'hDD: prefix_n = `PFX_DD;
-                        8'hFD: prefix_n = `PFX_FD;
-                        8'hED: prefix_n = `PFX_ED;
-                        8'hCB: prefix_n = (prefix == `PFX_DD) ? `PFX_DDCB :
-                                          (prefix == `PFX_FD) ? `PFX_FDCB : `PFX_CB;
-                        default: ;
-                    endcase
-                    if (prefix_n == `PFX_DDCB || prefix_n == `PFX_FDCB) begin
-                        startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0); /* read displacement d */
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1;
-                    end else begin
-                        bus_op_n = `BUSOP_M1; m_addr_n = rf[`RFP_PC]; m_wdata_n = 8'h0;
-                        m_len_n = 4'd4; t_n = 4'd1; m_cycle_n = 3'd1; decoded_n = 1'b0;
-                    end
-                end
-                `EXEC_DDCB: begin
-                    if (m_cycle == 3'd2) begin tmpl_n = rbyte;           /* d */
-                        startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0); rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd3) begin tmph_n = rbyte;      /* op */
-                        rf_n[`RFP_WZ] = rf[hlp] + {{8{tmpl[7]}}, tmpl};
-                        startm(`BUSOP_INTERNAL, rf[hlp] + {{8{tmpl[7]}}, tmpl}, 8'h0, 4'd2); end
-                    else if (m_cycle == 3'd4) startm(`BUSOP_MRD, rf[`RFP_WZ], 8'h0, 4'd1); /* read (IX+d) 4T */
-                    else if (m_cycle == 3'd5) begin
-                        if (tmph[7:6] == `CB_BIT) begin rf_n[`RFP_AF][7:0] = alu_fout; fin = 1'b1; end
-                        else begin
-                            case (tmph[7:6])
-                                `CB_ROT: begin cbres = alu_res; rf_n[`RFP_AF][7:0] = alu_fout; end
-                                `CB_RES: cbres = rbyte & ~(8'h01 << tmph[5:3]);
-                                default: cbres = rbyte |  (8'h01 << tmph[5:3]);
-                            endcase
-                            if (tmph[2:0] != 3'd6) setr8(tmph[2:0], cbres);  /* undoc copy */
-                            startm(`BUSOP_MWR, rf[`RFP_WZ], cbres, 4'd0);
-                        end
-                    end
-                    else fin = 1'b1;
-                end
-                `EXEC_DI: begin iff1_n = 1'b0; iff2_n = 1'b0; fin = 1'b1; end
-                `EXEC_EI: begin iff1_n = 1'b1; iff2_n = 1'b1; ei_delay_n = 1'b1; fin = 1'b1; end
-                `EXEC_HALT: begin
-                    // Silicon-faithful per Brewer 2014 + Woodmass HALT2INT:
-                    // PC stays past the HALT byte (M1 fetch already
-                    // incremented it; do NOT decrement). HALT NOP M-cycles
-                    // re-fetch at PC (= post-HALT-byte); NMI/INT exit
-                    // doesn't bump PC further (it was already correct).
-                    // Mirrors cmodel/z80_core.c EXEC_HALT after the
-                    // 2026-06-18 PC-convention flip; FUSE test 76 enters
-                    // known-fuse-wrong as a result.
-                    halted_n = 1'b1;
-                    fin = 1'b1;
-                end
-
-                `EXEC_LD_R_R: begin setri(rf_dst_w, getri_src_val); fin = 1'b1; end
-                `EXEC_ALU_R:  begin if (alu_op_w != `ALU_CP) setr8(3'd7, alu_res);
-                                  rf_n[`RFP_AF][7:0] = alu_fout; fin = 1'b1; end
-                `EXEC_INC_R, `EXEC_DEC_R: begin setri(rf_dst_w, alu_res);
-                                  rf_n[`RFP_AF][7:0] = alu_fout; fin = 1'b1; end
-                `EXEC_ROT_A, `EXEC_DAA, `EXEC_CPL: begin setr8(3'd7, alu_res);
-                                  rf_n[`RFP_AF][7:0] = alu_fout; fin = 1'b1; end
-                `EXEC_SCF, `EXEC_CCF: begin rf_n[`RFP_AF][7:0] = alu_fout; fin = 1'b1; end
-
-                `EXEC_EX_DE_HL: begin rf_n[`RFP_DE] = rf[`RFP_HL]; rf_n[`RFP_HL] = rf[`RFP_DE]; fin = 1'b1; end
-                `EXEC_EX_AF:    begin rf_n[`RFP_AF] = rf[`RFP_AF2]; rf_n[`RFP_AF2] = rf[`RFP_AF];
-                                      f_modified_n = 1'b1; fin = 1'b1; end
-                `EXEC_EXX: begin
-                    rf_n[`RFP_BC] = rf[`RFP_BC2]; rf_n[`RFP_BC2] = rf[`RFP_BC];
-                    rf_n[`RFP_DE] = rf[`RFP_DE2]; rf_n[`RFP_DE2] = rf[`RFP_DE];
-                    rf_n[`RFP_HL] = rf[`RFP_HL2]; rf_n[`RFP_HL2] = rf[`RFP_HL];
-                    fin = 1'b1;
-                end
-                `EXEC_JP_HL: begin rf_n[`RFP_PC] = rf[hlp]; fin = 1'b1; end
-
-                `EXEC_INC_RP: begin
-                    if (m_cycle == 3'd1) begin rf_n[rp_sel_w] = rf[rp_sel_w] + 16'd1;
-                        startm(`BUSOP_INTERNAL, rf[rp_sel_w] + 16'd1, 8'h0, 4'd2); end
-                    else fin = 1'b1;
-                end
-                `EXEC_DEC_RP: begin
-                    if (m_cycle == 3'd1) begin rf_n[rp_sel_w] = rf[rp_sel_w] - 16'd1;
-                        startm(`BUSOP_INTERNAL, rf[rp_sel_w] - 16'd1, 8'h0, 4'd2); end
-                    else fin = 1'b1;
-                end
-                `EXEC_LD_SP_HL: begin
-                    if (m_cycle == 3'd1) begin rf_n[`RFP_SP] = rf[hlp];
-                        startm(`BUSOP_INTERNAL, rf[hlp], 8'h0, 4'd2); end
-                    else fin = 1'b1;
-                end
-                `EXEC_ADD_HL_RP: begin
-                    if (m_cycle == 3'd1) begin
-                        add16 = {1'b0, rf[hlp]} + {1'b0, rf[rp_sel_w]};
-                        add12 = {1'b0, rf[hlp][11:0]} + {1'b0, rf[rp_sel_w][11:0]};
-                        f16 = (F_cur & (`Z80_SF | `Z80_ZF | `Z80_PF));
-                        if (add12[12]) f16 = f16 | `Z80_HF;
-                        if (add16[16]) f16 = f16 | `Z80_CF;
-                        f16 = f16 | (add16[15:8] & (`Z80_YF | `Z80_XF));
-                        rf_n[`RFP_WZ] = rf[hlp] + 16'd1;
-                        rf_n[hlp] = add16[15:0];
-                        rf_n[`RFP_AF][7:0] = f16;
-                        startm(`BUSOP_INTERNAL, add16[15:0], 8'h0, 4'd7);
-                    end else fin = 1'b1;
-                end
-
-                `EXEC_LD_R_N: begin
-                    if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else begin setri(rf_dst_w, rbyte); fin = 1'b1; end
-                end
-                `EXEC_ALU_N: begin
-                    if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else begin if (alu_op_w != `ALU_CP) setr8(3'd7, alu_res);
-                        rf_n[`RFP_AF][7:0] = alu_fout; fin = 1'b1; end
-                end
-                `EXEC_LD_R_M: begin
-                    if (mm == 3'd1) startm(`BUSOP_MRD, memaddr, 8'h0, 4'd0);
-                    else begin setri(rf_dst_w, rbyte); fin = 1'b1; end
-                end
-                `EXEC_ALU_M: begin
-                    if (mm == 3'd1) startm(`BUSOP_MRD, memaddr, 8'h0, 4'd0);
-                    else begin if (alu_op_w != `ALU_CP) setr8(3'd7, alu_res);
-                        rf_n[`RFP_AF][7:0] = alu_fout; fin = 1'b1; end
-                end
-                `EXEC_ST_M_R: begin
-                    if (mm == 3'd1) startm(`BUSOP_MWR, memaddr, getri_src_val, 4'd0);
-                    else fin = 1'b1;
-                end
-                `EXEC_LD_M_N: begin
-                    if (mm == 3'd1) begin
-                        /* LD (IX+d),n folds 2T IX+d compute into N read (5T total) */
-                        startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0,
-                               (idx_w != 2'd0 && use_disp_w) ? 4'd2 : 4'd0);
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1;
-                    end
-                    else if (mm == 3'd2) startm(`BUSOP_MWR, memaddr, rbyte, 4'd0);
-                    else fin = 1'b1;
-                end
-                `EXEC_INC_M, `EXEC_DEC_M: begin
-                    if (mm == 3'd1) startm(`BUSOP_MRD, memaddr, 8'h0, 4'd1);
-                    else if (mm == 3'd2) begin rf_n[`RFP_AF][7:0] = alu_fout;
-                        startm(`BUSOP_MWR, memaddr, alu_res, 4'd0); end
-                    else fin = 1'b1;
-                end
-
-                `EXEC_LD_RP_NN: begin
-                    if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd2) begin tmpl_n = rbyte;
-                        startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0); rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else begin rf_n[rp_sel_w] = {rbyte, tmpl}; fin = 1'b1; end
-                end
-                `EXEC_JP, `EXEC_JP_CC: begin
-                    if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd2) begin tmpl_n = rbyte;
-                        startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0); rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else begin
-                        rf_n[`RFP_WZ] = {rbyte, tmpl};
-                        if ((exec_w == `EXEC_JP) || cc_true(F_cur, cc_w)) rf_n[`RFP_PC] = {rbyte, tmpl};
-                        fin = 1'b1;
-                    end
-                end
-
-                `EXEC_JR: begin
-                    if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd2) begin
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + {{8{rbyte[7]}}, rbyte};
-                        rf_n[`RFP_WZ] = rf[`RFP_PC] + {{8{rbyte[7]}}, rbyte};
-                        startm(`BUSOP_INTERNAL, rf[`RFP_PC] + {{8{rbyte[7]}}, rbyte}, 8'h0, 4'd5);
-                    end else fin = 1'b1;
-                end
-                `EXEC_JR_CC: begin
-                    if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd2) begin
-                        if (cc_true(F_cur, cc_w)) begin
-                            rf_n[`RFP_PC] = rf[`RFP_PC] + {{8{rbyte[7]}}, rbyte};
-                            rf_n[`RFP_WZ] = rf[`RFP_PC] + {{8{rbyte[7]}}, rbyte};
-                            startm(`BUSOP_INTERNAL, rf[`RFP_PC] + {{8{rbyte[7]}}, rbyte}, 8'h0, 4'd5);
-                        end else fin = 1'b1;
-                    end else fin = 1'b1;
-                end
-                `EXEC_DJNZ: begin
-                    if (m_cycle == 3'd1) startm(`BUSOP_INTERNAL, rf[`RFP_PC], 8'h0, 4'd1);
-                    else if (m_cycle == 3'd2) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd3) begin
-                        rf_n[`RFP_BC][15:8] = rf[`RFP_BC][15:8] - 8'd1;
-                        if ((rf[`RFP_BC][15:8] - 8'd1) != 8'd0) begin
-                            rf_n[`RFP_PC] = rf[`RFP_PC] + {{8{rbyte[7]}}, rbyte};
-                            rf_n[`RFP_WZ] = rf[`RFP_PC] + {{8{rbyte[7]}}, rbyte};
-                            startm(`BUSOP_INTERNAL, rf[`RFP_PC] + {{8{rbyte[7]}}, rbyte}, 8'h0, 4'd5);
-                        end else fin = 1'b1;
-                    end else fin = 1'b1;
-                end
-
-                `EXEC_CALL, `EXEC_CALL_CC: begin
-                    if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd2) begin tmpl_n = rbyte;
-                        startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0); rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd3) begin
-                        tmp16_n = {rbyte, tmpl}; rf_n[`RFP_WZ] = {rbyte, tmpl};
-                        if ((exec_w == `EXEC_CALL) || cc_true(F_cur, cc_w))
-                            startm(`BUSOP_INTERNAL, rf[`RFP_PC], 8'h0, 4'd1);
-                        else fin = 1'b1;
-                    end
-                    else if (m_cycle == 3'd4) begin rf_n[`RFP_SP] = rf[`RFP_SP] - 16'd1;
-                        startm(`BUSOP_MWR, rf[`RFP_SP] - 16'd1, rf[`RFP_PC][15:8], 4'd0); end
-                    else if (m_cycle == 3'd5) begin rf_n[`RFP_SP] = rf[`RFP_SP] - 16'd1;
-                        startm(`BUSOP_MWR, rf[`RFP_SP] - 16'd1, rf[`RFP_PC][7:0], 4'd0); end
-                    else begin rf_n[`RFP_PC] = tmp16; fin = 1'b1; end
-                end
-                `EXEC_RET: begin
-                    if (m_cycle == 3'd1) startm(`BUSOP_MRD, rf[`RFP_SP], 8'h0, 4'd0);
-                    else if (m_cycle == 3'd2) begin tmpl_n = rbyte; rf_n[`RFP_SP] = rf[`RFP_SP] + 16'd1;
-                        startm(`BUSOP_MRD, rf[`RFP_SP] + 16'd1, 8'h0, 4'd0); end
-                    else begin rf_n[`RFP_SP] = rf[`RFP_SP] + 16'd1;
-                        rf_n[`RFP_PC] = {rbyte, tmpl}; rf_n[`RFP_WZ] = {rbyte, tmpl}; fin = 1'b1; end
-                end
-                `EXEC_RET_CC: begin
-                    if (m_cycle == 3'd1) startm(`BUSOP_INTERNAL, rf[`RFP_PC], 8'h0, 4'd1);
-                    else if (m_cycle == 3'd2) begin
-                        if (cc_true(F_cur, cc_w)) startm(`BUSOP_MRD, rf[`RFP_SP], 8'h0, 4'd0);
-                        else fin = 1'b1;
-                    end
-                    else if (m_cycle == 3'd3) begin tmpl_n = rbyte; rf_n[`RFP_SP] = rf[`RFP_SP] + 16'd1;
-                        startm(`BUSOP_MRD, rf[`RFP_SP] + 16'd1, 8'h0, 4'd0); end
-                    else begin rf_n[`RFP_SP] = rf[`RFP_SP] + 16'd1;
-                        rf_n[`RFP_PC] = {rbyte, tmpl}; rf_n[`RFP_WZ] = {rbyte, tmpl}; fin = 1'b1; end
-                end
-                `EXEC_RST: begin
-                    if (m_cycle == 3'd1) startm(`BUSOP_INTERNAL, rf[`RFP_PC], 8'h0, 4'd1);
-                    else if (m_cycle == 3'd2) begin rf_n[`RFP_SP] = rf[`RFP_SP] - 16'd1;
-                        startm(`BUSOP_MWR, rf[`RFP_SP] - 16'd1, rf[`RFP_PC][15:8], 4'd0); end
-                    else if (m_cycle == 3'd3) begin rf_n[`RFP_SP] = rf[`RFP_SP] - 16'd1;
-                        startm(`BUSOP_MWR, rf[`RFP_SP] - 16'd1, rf[`RFP_PC][7:0], 4'd0); end
-                    else begin rf_n[`RFP_PC] = {8'h00, rst_addr_w};
-                        rf_n[`RFP_WZ] = {8'h00, rst_addr_w}; fin = 1'b1; end
-                end
-                `EXEC_PUSH: begin
-                    if (m_cycle == 3'd1) startm(`BUSOP_INTERNAL, rf[`RFP_PC], 8'h0, 4'd1);
-                    else if (m_cycle == 3'd2) begin rf_n[`RFP_SP] = rf[`RFP_SP] - 16'd1;
-                        startm(`BUSOP_MWR, rf[`RFP_SP] - 16'd1, rf[rp_sel_w][15:8], 4'd0); end
-                    else if (m_cycle == 3'd3) begin rf_n[`RFP_SP] = rf[`RFP_SP] - 16'd1;
-                        startm(`BUSOP_MWR, rf[`RFP_SP] - 16'd1, rf[rp_sel_w][7:0], 4'd0); end
-                    else fin = 1'b1;
-                end
-                `EXEC_POP: begin
-                    if (m_cycle == 3'd1) startm(`BUSOP_MRD, rf[`RFP_SP], 8'h0, 4'd0);
-                    else if (m_cycle == 3'd2) begin tmpl_n = rbyte; rf_n[`RFP_SP] = rf[`RFP_SP] + 16'd1;
-                        startm(`BUSOP_MRD, rf[`RFP_SP] + 16'd1, 8'h0, 4'd0); end
-                    else begin rf_n[`RFP_SP] = rf[`RFP_SP] + 16'd1;
-                        rf_n[rp_sel_w] = {rbyte, tmpl}; fin = 1'b1; end
-                end
-
-                `EXEC_LD_A_RP: begin
-                    if (m_cycle == 3'd1) begin rf_n[`RFP_WZ] = rf[rp_sel_w] + 16'd1;
-                        startm(`BUSOP_MRD, rf[rp_sel_w], 8'h0, 4'd0); end
-                    else begin setr8(3'd7, rbyte); fin = 1'b1; end
-                end
-                `EXEC_LD_RP_A: begin
-                    if (m_cycle == 3'd1) begin
-                        rf_n[`RFP_WZ] = {A_cur, (rf[rp_sel_w][7:0] + 8'd1)};
-                        startm(`BUSOP_MWR, rf[rp_sel_w], A_cur, 4'd0); end
-                    else fin = 1'b1;
-                end
-                `EXEC_LD_A_NN: begin
-                    if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd2) begin tmpl_n = rbyte;
-                        startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0); rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd3) begin tmp16_n = {rbyte, tmpl};
-                        rf_n[`RFP_WZ] = {rbyte, tmpl} + 16'd1; startm(`BUSOP_MRD, {rbyte, tmpl}, 8'h0, 4'd0); end
-                    else begin setr8(3'd7, rbyte); fin = 1'b1; end
-                end
-                `EXEC_LD_NN_A: begin
-                    if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd2) begin tmpl_n = rbyte;
-                        startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0); rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd3) begin
-                        rf_n[`RFP_WZ] = {A_cur, (tmpl + 8'd1)};
-                        startm(`BUSOP_MWR, {rbyte, tmpl}, A_cur, 4'd0); end
-                    else fin = 1'b1;
-                end
-                `EXEC_LD_HL_NN: begin
-                    if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd2) begin tmpl_n = rbyte;
-                        startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0); rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd3) begin tmp16_n = {rbyte, tmpl};
-                        rf_n[`RFP_WZ] = {rbyte, tmpl} + 16'd1; startm(`BUSOP_MRD, {rbyte, tmpl}, 8'h0, 4'd0); end
-                    else if (m_cycle == 3'd4) begin rf_n[hlp][7:0] = rbyte;
-                        startm(`BUSOP_MRD, tmp16 + 16'd1, 8'h0, 4'd0); end
-                    else begin rf_n[hlp][15:8] = rbyte; fin = 1'b1; end
-                end
-                `EXEC_LD_NN_HL: begin
-                    if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd2) begin tmpl_n = rbyte;
-                        startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0); rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd3) begin tmp16_n = {rbyte, tmpl};
-                        rf_n[`RFP_WZ] = {rbyte, tmpl} + 16'd1;
-                        startm(`BUSOP_MWR, {rbyte, tmpl}, rf[hlp][7:0], 4'd0); end
-                    else if (m_cycle == 3'd4) startm(`BUSOP_MWR, tmp16 + 16'd1, rf[hlp][15:8], 4'd0);
-                    else fin = 1'b1;
-                end
-
-                `EXEC_IN_A_N: begin
-                    if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd2) begin rf_n[`RFP_WZ] = {A_cur, rbyte} + 16'd1;
-                        startm(`BUSOP_IORD, {A_cur, rbyte}, 8'h0, 4'd0); end
-                    else begin setr8(3'd7, rbyte); fin = 1'b1; end
-                end
-                `EXEC_OUT_N_A: begin
-                    if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd2) begin rf_n[`RFP_WZ] = {A_cur, (rbyte + 8'd1)};
-                        startm(`BUSOP_IOWR, {A_cur, rbyte}, A_cur, 4'd0); end
-                    else fin = 1'b1;
-                end
-                `EXEC_EX_SP_HL: begin
-                    if (m_cycle == 3'd1) startm(`BUSOP_MRD, rf[`RFP_SP], 8'h0, 4'd0);
-                    else if (m_cycle == 3'd2) begin tmpl_n = rbyte;
-                        startm(`BUSOP_MRD, rf[`RFP_SP] + 16'd1, 8'h0, 4'd1); end
-                    else if (m_cycle == 3'd3) begin tmph_n = rbyte;
-                        startm(`BUSOP_MWR, rf[`RFP_SP] + 16'd1, rf[hlp][15:8], 4'd0); end
-                    else if (m_cycle == 3'd4) startm(`BUSOP_MWR, rf[`RFP_SP], rf[hlp][7:0], 4'd2);
-                    else begin rf_n[hlp] = {tmph, tmpl}; rf_n[`RFP_WZ] = {tmph, tmpl}; fin = 1'b1; end
-                end
-
-                `EXEC_CB_R: begin
-                    case (cb_kind_w)
-                        `CB_ROT: begin setr8(rf_dst_w, alu_res); rf_n[`RFP_AF][7:0] = alu_fout; end
-                        `CB_BIT: rf_n[`RFP_AF][7:0] = alu_fout;
-                        `CB_RES: setr8(rf_dst_w, getr8(rf_src_w) & ~(8'h01 << bit_index_w));
-                        `CB_SET: setr8(rf_dst_w, getr8(rf_src_w) |  (8'h01 << bit_index_w));
-                    endcase
-                    fin = 1'b1;
-                end
-                `EXEC_CB_M: begin
-                    if (m_cycle == 3'd1) startm(`BUSOP_MRD, rf[`RFP_HL], 8'h0, 4'd1);
-                    else if (cb_kind_w == `CB_BIT) begin rf_n[`RFP_AF][7:0] = alu_fout; fin = 1'b1; end
-                    else if (m_cycle == 3'd2) begin
-                        case (cb_kind_w)
-                            `CB_ROT: begin cbres = alu_res; rf_n[`RFP_AF][7:0] = alu_fout; end
-                            `CB_RES: cbres = rbyte & ~(8'h01 << bit_index_w);
-                            `CB_SET: cbres = rbyte |  (8'h01 << bit_index_w);
-                            default: cbres = rbyte;
-                        endcase
-                        startm(`BUSOP_MWR, rf[`RFP_HL], cbres, 4'd0);
-                    end else fin = 1'b1;
-                end
-
-                /* ---------- ED page (non-block) ---------- */
-                `EXEC_ADC16, `EXEC_SBC16: begin
-                    if (m_cycle == 3'd1) startm(`BUSOP_INTERNAL, rf[`RFP_HL], 8'h0, 4'd7);
-                    else begin
-                        rf_n[`RFP_WZ] = rf[`RFP_HL] + 16'd1;
-                        if (exec_w == `EXEC_ADC16) begin
-                            r17 = {1'b0, rf[`RFP_HL]} + {1'b0, rf[rp_sel_w]} + {16'b0, F_cur[0]};
-                            r13 = {1'b0, rf[`RFP_HL][11:0]} + {1'b0, rf[rp_sel_w][11:0]} + {12'b0, F_cur[0]};
-                            edf = 8'h0;
-                            if (r13[12]) edf = edf | `Z80_HF;
-                            if ((~(rf[`RFP_HL] ^ rf[rp_sel_w]) & (rf[`RFP_HL] ^ r17[15:0]) & 16'h8000) != 16'h0) edf = edf | `Z80_PF;
-                            if (r17[16]) edf = edf | `Z80_CF;
-                        end else begin
-                            r17 = {1'b0, rf[`RFP_HL]} - {1'b0, rf[rp_sel_w]} - {16'b0, F_cur[0]};
-                            r13 = {1'b0, rf[`RFP_HL][11:0]} - {1'b0, rf[rp_sel_w][11:0]} - {12'b0, F_cur[0]};
-                            edf = `Z80_NF;
-                            if (r13[12]) edf = edf | `Z80_HF;
-                            if (((rf[`RFP_HL] ^ rf[rp_sel_w]) & (rf[`RFP_HL] ^ r17[15:0]) & 16'h8000) != 16'h0) edf = edf | `Z80_PF;
-                            if (r17[16]) edf = edf | `Z80_CF;
-                        end
-                        if (r17[15]) edf = edf | `Z80_SF;
-                        if (r17[15:0] == 16'h0) edf = edf | `Z80_ZF;
-                        edf = edf | (r17[15:8] & (`Z80_YF | `Z80_XF));
-                        rf_n[`RFP_HL] = r17[15:0];
-                        rf_n[`RFP_AF][7:0] = edf;
-                        fin = 1'b1;
-                    end
-                end
-                `EXEC_NEG: begin
-                    rf_n[`RFP_AF][15:8] = alu_res;
-                    rf_n[`RFP_AF][7:0]  = alu_fout;
-                    fin = 1'b1;
-                end
-                `EXEC_IM: begin im_n = aux_w[1:0]; fin = 1'b1; end
-                `EXEC_RETN: begin
-                    if (m_cycle == 3'd1) startm(`BUSOP_MRD, rf[`RFP_SP], 8'h0, 4'd0);
-                    else if (m_cycle == 3'd2) begin tmpl_n = rbyte; rf_n[`RFP_SP] = rf[`RFP_SP] + 16'd1;
-                        startm(`BUSOP_MRD, rf[`RFP_SP] + 16'd1, 8'h0, 4'd0); end
-                    else begin rf_n[`RFP_SP] = rf[`RFP_SP] + 16'd1;
-                        rf_n[`RFP_PC] = {rbyte, tmpl}; rf_n[`RFP_WZ] = {rbyte, tmpl};
-                        iff1_n = iff2; fin = 1'b1; end
-                end
-                `EXEC_LD_I_A: begin
-                    if (m_cycle == 3'd1) startm(`BUSOP_INTERNAL, rf[`RFP_PC], 8'h0, 4'd1);
-                    else begin reg_i_n = A_cur; fin = 1'b1; end
-                end
-                `EXEC_LD_R_A: begin
-                    if (m_cycle == 3'd1) startm(`BUSOP_INTERNAL, rf[`RFP_PC], 8'h0, 4'd1);
-                    else begin reg_r_n = A_cur; fin = 1'b1; end
-                end
-                `EXEC_LD_A_IR: begin
-                    if (m_cycle == 3'd1) startm(`BUSOP_INTERNAL, rf[`RFP_PC], 8'h0, 4'd1);
-                    else begin
-                        rf_n[`RFP_AF][15:8] = alu_res;
-                        rf_n[`RFP_AF][7:0]  = alu_fout;
-                        fin = 1'b1;
-                    end
-                end
-                `EXEC_LD_NNA_RP: begin
-                    if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd2) begin tmpl_n = rbyte;
-                        startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0); rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd3) begin tmp16_n = {rbyte, tmpl};
-                        rf_n[`RFP_WZ] = {rbyte, tmpl} + 16'd1;
-                        startm(`BUSOP_MWR, {rbyte, tmpl}, rf[rp_sel_w][7:0], 4'd0); end
-                    else if (m_cycle == 3'd4) startm(`BUSOP_MWR, tmp16 + 16'd1, rf[rp_sel_w][15:8], 4'd0);
-                    else fin = 1'b1;
-                end
-                `EXEC_LD_RP_NNA: begin
-                    if (m_cycle == 3'd1) begin startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0);
-                        rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd2) begin tmpl_n = rbyte;
-                        startm(`BUSOP_MRD, rf[`RFP_PC], 8'h0, 4'd0); rf_n[`RFP_PC] = rf[`RFP_PC] + 16'd1; end
-                    else if (m_cycle == 3'd3) begin tmp16_n = {rbyte, tmpl};
-                        rf_n[`RFP_WZ] = {rbyte, tmpl} + 16'd1;
-                        startm(`BUSOP_MRD, {rbyte, tmpl}, 8'h0, 4'd0); end
-                    else if (m_cycle == 3'd4) begin tmpl_n = rbyte;
-                        startm(`BUSOP_MRD, tmp16 + 16'd1, 8'h0, 4'd0); end
-                    else begin rf_n[rp_sel_w] = {rbyte, tmpl}; fin = 1'b1; end
-                end
-                `EXEC_IN_C: begin
-                    if (m_cycle == 3'd1) begin rf_n[`RFP_WZ] = rf[`RFP_BC] + 16'd1;
-                        startm(`BUSOP_IORD, rf[`RFP_BC], 8'h0, 4'd0); end
-                    else begin
-                        if (rf_dst_w != 3'd6) setr8(rf_dst_w, rbyte);
-                        rf_n[`RFP_AF][7:0] = alu_fout; fin = 1'b1;
-                    end
-                end
-                `EXEC_OUT_C: begin
-                    if (m_cycle == 3'd1) begin rf_n[`RFP_WZ] = rf[`RFP_BC] + 16'd1;
-                        startm(`BUSOP_IOWR, rf[`RFP_BC], (rf_src_w == 3'd6) ? 8'h0 : getr8(rf_src_w), 4'd0); end
-                    else fin = 1'b1;
-                end
-                `EXEC_RRD, `EXEC_RLD: begin
-                    if (m_cycle == 3'd1) startm(`BUSOP_MRD, rf[`RFP_HL], 8'h0, 4'd0);
-                    else if (m_cycle == 3'd2) begin
-                        // new_A and flags from z80_alu (FLAG_RRD / FLAG_RLD).
-                        // new_mem is pure nibble routing — kept here as bus
-                        // fabric until E1 lands the explicit db1/db2 segments.
-                        rf_n[`RFP_AF][15:8] = alu_res;
-                        rf_n[`RFP_AF][7:0]  = alu_fout;
-                        if (exec_w == `EXEC_RRD)
-                            cbres = {A_cur[3:0], rbyte[7:4]};   // new (HL)
-                        else
-                            cbres = {rbyte[3:0], A_cur[3:0]};   // new (HL)
-                        rf_n[`RFP_WZ] = rf[`RFP_HL] + 16'd1;
-                        tmpl_n = cbres;
-                        startm(`BUSOP_INTERNAL, rf[`RFP_HL], 8'h0, 4'd4);
-                    end
-                    else if (m_cycle == 3'd3) startm(`BUSOP_MWR, rf[`RFP_HL], tmpl, 4'd0);
-                    else fin = 1'b1;
-                end
-
-                /* ---------- ED block instructions ----------
-                   aux: [0]=dec  [2:1]=cat(0 LD,1 CP,2 IN,3 OUT)  [3]=repeat */
-                `EXEC_BLOCK: begin
-                    // Pointer/BC updates are IDU work (A1 will move them);
-                    // flags come from z80_alu (FLAG_BLOCK_LD/CP/IO modes).
-                    if (aux_w[2:1] == 2'd0) begin                 // LDI/LDD/LDIR/LDDR
-                        if (m_cycle == 3'd1) startm(`BUSOP_MRD, rf[`RFP_HL], 8'h0, 4'd0);
-                        else if (m_cycle == 3'd2)
-                            startm(`BUSOP_MWR, rf[`RFP_DE], rbyte, 4'd2); /* 5T write */
-                        else if (m_cycle == 3'd3) begin
-                            bbc = rf[`RFP_BC] - 16'd1; rf_n[`RFP_BC] = bbc;
-                            rf_n[`RFP_HL] = rf[`RFP_HL] + (aux_w[0] ? 16'hFFFF : 16'h1);
-                            rf_n[`RFP_DE] = rf[`RFP_DE] + (aux_w[0] ? 16'hFFFF : 16'h1);
-                            rf_n[`RFP_AF][7:0] = alu_fout;
-                            if (aux_w[3] && bbc != 16'd0) begin
-                                rf_n[`RFP_PC] = rf[`RFP_PC] - 16'd2;
-                                rf_n[`RFP_WZ] = rf[`RFP_PC] - 16'd1;
-                                /* Banks-2018 LDIR/LDDR repeat YF/XF fold-in:
-                                 * overwrite YF=PC.13, XF=PC.11 (high byte of
-                                 * post-rewind PC = rf[PC]-2). See
-                                 * cmodel/z80_core.c LDI/LDIR repeat block. */
-                                rf_n[`RFP_AF][7:0] = (alu_fout & ~(`Z80_YF | `Z80_XF))
-                                    | ((rf[`RFP_PC][15:8] - 8'd0) & (`Z80_YF | `Z80_XF));
-                                startm(`BUSOP_INTERNAL, rf[`RFP_PC] - 16'd2, 8'h0, 4'd5);
-                            end else fin = 1'b1;
-                        end else fin = 1'b1;
-                    end else if (aux_w[2:1] == 2'd1) begin        // CPI/CPD/CPIR/CPDR
-                        if (m_cycle == 3'd1) startm(`BUSOP_MRD, rf[`RFP_HL], 8'h0, 4'd0);
-                        else if (m_cycle == 3'd2) begin
-                            bbc = rf[`RFP_BC] - 16'd1; rf_n[`RFP_BC] = bbc;
-                            rf_n[`RFP_WZ] = rf[`RFP_WZ] + (aux_w[0] ? 16'hFFFF : 16'h1);
-                            rf_n[`RFP_HL] = rf[`RFP_HL] + (aux_w[0] ? 16'hFFFF : 16'h1);
-                            rf_n[`RFP_AF][7:0] = alu_fout;
-                            startm(`BUSOP_INTERNAL, rf[`RFP_HL] + (aux_w[0] ? 16'hFFFF : 16'h1), 8'h0, 4'd5);
-                        end else if (m_cycle == 3'd3) begin
-                            if (aux_w[3] && rf[`RFP_BC] != 16'd0 && !(F_cur & `Z80_ZF)) begin
-                                rf_n[`RFP_PC] = rf[`RFP_PC] - 16'd2;
-                                rf_n[`RFP_WZ] = rf[`RFP_PC] - 16'd1;
-                                /* Banks-2018 CPIR/CPDR repeat YF/XF fold-in:
-                                 * overwrite YF=PC.13, XF=PC.11. F_cur is the
-                                 * current F from CPI's BLOCK_CP result. */
-                                rf_n[`RFP_AF][7:0] = (F_cur & ~(`Z80_YF | `Z80_XF))
-                                    | ((rf[`RFP_PC][15:8] - 8'd0) & (`Z80_YF | `Z80_XF));
-                                startm(`BUSOP_INTERNAL, rf[`RFP_PC] - 16'd2, 8'h0, 4'd5);
-                            end else fin = 1'b1;
-                        end else fin = 1'b1;
-                    end else if (aux_w[2:1] == 2'd2) begin        // INI/IND/INIR/INDR
-                        if (m_cycle == 3'd1) startm(`BUSOP_INTERNAL, rf[`RFP_PC], 8'h0, 4'd1);
-                        else if (m_cycle == 3'd2) begin
-                            rf_n[`RFP_WZ] = rf[`RFP_BC] + (aux_w[0] ? 16'hFFFF : 16'h1);
-                            startm(`BUSOP_IORD, rf[`RFP_BC], 8'h0, 4'd0);
-                        end else if (m_cycle == 3'd3) begin
-                            tmpl_n = rbyte; startm(`BUSOP_MWR, rf[`RFP_HL], rbyte, 4'd0);
-                        end else if (m_cycle == 3'd4) begin
-                            bnewB = getr8(3'd0) - 8'd1; rf_n[`RFP_BC][15:8] = bnewB;
-                            rf_n[`RFP_HL] = rf[`RFP_HL] + (aux_w[0] ? 16'hFFFF : 16'h1);
-                            rf_n[`RFP_AF][7:0] = alu_fout;
-                            if (aux_w[3] && bnewB != 8'h0) begin
-                                rf_n[`RFP_PC] = rf[`RFP_PC] - 16'd2;
-                                rf_n[`RFP_WZ] = rf[`RFP_PC] - 16'd1;
-                                /* INIR/INDR Banks-2018 fold-in: full F
-                                 * recompute via banks_io_rep_f using
-                                 * bk_ini (= data + (C +/- 1), 9-bit).
-                                 * pch source is the high byte of the
-                                 * post-rewind PC. */
-                                rf_n[`RFP_AF][7:0] = banks_io_rep_f(
-                                    tmpl, bnewB, bk_ini,
-                                    (rf[`RFP_PC] - 16'd2) >> 8);
-                                startm(`BUSOP_INTERNAL, rf[`RFP_PC] - 16'd2, 8'h0, 4'd5);
-                            end else fin = 1'b1;
-                        end else fin = 1'b1;
-                    end else begin                                // OUTI/OUTD/OTIR/OTDR
-                        if (m_cycle == 3'd1) startm(`BUSOP_INTERNAL, rf[`RFP_PC], 8'h0, 4'd1);
-                        else if (m_cycle == 3'd2) startm(`BUSOP_MRD, rf[`RFP_HL], 8'h0, 4'd0);
-                        else if (m_cycle == 3'd3) begin
-                            tmpl_n = rbyte;
-                            rf_n[`RFP_BC][15:8] = getr8(3'd0) - 8'd1;
-                            rf_n[`RFP_WZ] = rf_n[`RFP_BC] + (aux_w[0] ? 16'hFFFF : 16'h1);
-                            startm(`BUSOP_IOWR, rf_n[`RFP_BC], rbyte, 4'd0);
-                        end else if (m_cycle == 3'd4) begin
-                            rf_n[`RFP_HL] = rf[`RFP_HL] + (aux_w[0] ? 16'hFFFF : 16'h1);
-                            bnewB = getr8(3'd0);
-                            rf_n[`RFP_AF][7:0] = alu_fout;
-                            if (aux_w[3] && bnewB != 8'h0) begin
-                                rf_n[`RFP_PC] = rf[`RFP_PC] - 16'd2;
-                                rf_n[`RFP_WZ] = rf[`RFP_PC] - 16'd1;
-                                /* OTIR/OTDR Banks-2018 fold-in: same
-                                 * formula as INIR/INDR but addend = L
-                                 * (post-increment HL low byte), embedded
-                                 * in bk_out. */
-                                rf_n[`RFP_AF][7:0] = banks_io_rep_f(
-                                    tmpl, bnewB, bk_out,
-                                    (rf[`RFP_PC] - 16'd2) >> 8);
-                                startm(`BUSOP_INTERNAL, rf[`RFP_PC] - 16'd2, 8'h0, 4'd5);
-                            end else fin = 1'b1;
-                        end else fin = 1'b1;
-                    end
-                end
-
-                /* ---------- interrupt acceptance sequences ---------- */
-                `EXEC_NMI: begin
-                    if (m_cycle == 3'd1) begin rf_n[`RFP_SP] = rf[`RFP_SP] - 16'd1;
-                        startm(`BUSOP_MWR, rf[`RFP_SP] - 16'd1, rf[`RFP_PC][15:8], 4'd0); end
-                    else if (m_cycle == 3'd2) begin rf_n[`RFP_SP] = rf[`RFP_SP] - 16'd1;
-                        startm(`BUSOP_MWR, rf[`RFP_SP] - 16'd1, rf[`RFP_PC][7:0], 4'd0); end
-                    else begin rf_n[`RFP_PC] = 16'h0066; rf_n[`RFP_WZ] = 16'h0066; fin = 1'b1; end
-                end
-                `EXEC_INT: begin
-                    if (m_cycle == 3'd1) begin rf_n[`RFP_SP] = rf[`RFP_SP] - 16'd1;
-                        startm(`BUSOP_MWR, rf[`RFP_SP] - 16'd1, rf[`RFP_PC][15:8], 4'd0); end
-                    else if (m_cycle == 3'd2) begin rf_n[`RFP_SP] = rf[`RFP_SP] - 16'd1;
-                        startm(`BUSOP_MWR, rf[`RFP_SP] - 16'd1, rf[`RFP_PC][7:0], 4'd0); end
-                    else if (m_cycle == 3'd3) begin
-                        if (im == 2'd2) begin
-                            tmp16_n = {reg_i, tmp8};
-                            startm(`BUSOP_MRD, {reg_i, tmp8}, 8'h0, 4'd0);
-                        end else begin
-                            rf_n[`RFP_PC] = (im == 2'd1) ? 16'h0038 : {8'h00, (tmp8 & 8'h38)};
-                            rf_n[`RFP_WZ] = (im == 2'd1) ? 16'h0038 : {8'h00, (tmp8 & 8'h38)};
-                            fin = 1'b1;
-                        end
-                    end
-                    else if (m_cycle == 3'd4) begin tmpl_n = rbyte;
-                        startm(`BUSOP_MRD, tmp16 + 16'd1, 8'h0, 4'd0); end
-                    else begin rf_n[`RFP_PC] = {rbyte, tmpl}; rf_n[`RFP_WZ] = {rbyte, tmpl}; fin = 1'b1; end
-                end
-
-                default: fin = 1'b1;
-                endcase
-
-                if (fin) begin
-                    instr_count_n = instr_count + 32'd1;
-                    prefix_n = `PFX_NONE;
-                    // Commit Q: F if THIS instruction wrote F, else 0.
-                    // Per Sean Young §4.1 + ZEXALL <daa,cpl,scf,ccf>
-                    // CRC: Q resets to 0 after any non-F-modifying instr.
-                    // Earlier this branch compared rf_n[AF] != rf[AF],
-                    // which mis-detects "F written to same value" (e.g.
-                    // SCF chained when CF was already 1) as no-write and
-                    // zero'd Q. Now uses f_modified_n which was set to 1
-                    // upstream whenever this instruction's M-cycle invoked
-                    // the ALU with a flag mode -- mirrors c->f_modified
-                    // in cmodel/z80_core.c. Fixes z80full 007 SCF+CCF
-                    // and 102/103 INIR/INDR -> NOP' RTL regressions.
-                    reg_q_n = f_modified_n ? rf_n[`RFP_AF][7:0] : 8'h00;
-                    f_modified_n = 1'b0;
-                    // begin_next: decide bus grant / NMI / INT / HALT / next opcode
-                    if (!busreq_n) begin
-                        bus_granted_n = 1'b1;            // DMA owns the bus next cycle
-                    end else begin
-                        allow_int = ~ei_delay_n;         // ei_delay_n reflects EI this cycle
-                        ei_delay_n = 1'b0;
-                        // Accept based on the SAMPLED interrupt state (latched at
-                        // T_last.P), not the live signals. The sampled latches
-                        // freeze the silicon's accept decision one phase before
-                        // the boundary; that matches Zilog UM0080 NMI/INT timing.
-                        if (nmi_sampled_n) begin
-                            nmi_sampled_n = 1'b0;
-                            nmi_pending_n = 1'b0;
-                            // Silicon-faithful HALT exit (Brewer 2014 /
-                            // Woodmass HALT2INT): PC is ALREADY past the
-                            // HALT byte (left there by EXEC_HALT). Just
-                            // clear halted_n; no PC bump.
-                            halted_n = 1'b0;
-                            iff2_n = iff1_n; iff1_n = 1'b0;
-                            irq_seq_n = 2'd1;
-                            bus_op_n = `BUSOP_M1; m_addr_n = rf_n[`RFP_PC]; m_wdata_n = 8'h0;
-                            m_len_n = 4'd5; t_n = 4'd1; m_cycle_n = 3'd1;
-                            decoded_n = 1'b1; suppress_decode_n = 1'b1;
-                        end else if (allow_int && int_sampled_n && iff1_n) begin
-                            int_sampled_n = 1'b0;
-                            // Same: silicon-faithful HALT exit, no PC bump.
-                            halted_n = 1'b0; iff1_n = 1'b0; iff2_n = 1'b0;
-                            irq_seq_n = 2'd2;
-                            bus_op_n = `BUSOP_INTA; m_addr_n = rf_n[`RFP_PC]; m_wdata_n = 8'h0;
-                            // T1 T2 Tw Tw T3 T4 (+1 internal state for IM1/IM2's PC push)
-                            m_len_n = (im == 2'd0) ? 4'd6 : 4'd7; t_n = 4'd1; m_cycle_n = 3'd1;
-                            decoded_n = 1'b1;
-                        end else if (halted_n) begin
-                            irq_seq_n = 2'd3;
-                            bus_op_n = `BUSOP_M1; m_addr_n = rf_n[`RFP_PC]; m_wdata_n = 8'h0;
-                            m_len_n = 4'd4; t_n = 4'd1; m_cycle_n = 3'd1;
-                            decoded_n = 1'b1; suppress_decode_n = 1'b1;
-                        end else begin
-                            irq_seq_n = 2'd0;
-                            bus_op_n = `BUSOP_M1; m_addr_n = rf_n[`RFP_PC]; m_wdata_n = 8'h0;
-                            m_len_n = 4'd4; t_n = 4'd1; m_cycle_n = 3'd1; decoded_n = 1'b0;
-                        end
-                    end
-                end
-                end  // displacement-preamble else
-            end else begin
-                t_n = t_state + 4'd1;
             end
         end
         end  // !in_reset_hold
     end
 
-    // ---- registers ----
+    // =======================================================================
+    // registers
+    // =======================================================================
     // Async-assert reset drives every FF to a constant (required for
     // async-reset DFF cell inference, and for gate-level sim where FFs have
     // no initializers). Release is synchronous: the first rising edge after
     // reset_n goes high clears `in_reset_hold` WITHOUT advancing state (the
-    // combinational block holds everything while it is set), so that edge
+    // combinational logic holds everything while it is set), so that edge
     // enters T1 of the first M1 at PC=0 and z80_top's former loads the T1.P
     // pin image on it. The C model additionally models silicon's reset-
     // assert filter (~5 half-cycles of continued execution) and release
@@ -1311,16 +958,11 @@ module z80_core (
     // divergence only, see docs/known-differences.md.
     always @(posedge clk or negedge reset_n) begin
         if (!reset_n) begin
-            // 0x5555 matches perfectz80's gate-level Visual-Z80 netlist
-            // boot pattern; see cmodel/z80_core.c z80_reset() comment.
-            for (ri = 0; ri < 13; ri = ri + 1) rf[ri] <= 16'h5555;
-            rf[`RFP_PC] <= 16'h0000;
             reg_i <= 8'h00; reg_r <= 8'h00; ir <= 8'h00;
             t_state <= 4'd1; m_cycle <= 3'd1;
             bus_op <= `BUSOP_M1; m_len <= 4'd4; m_addr <= 16'h0000; m_wdata <= 8'h00;
             prefix <= `PFX_NONE; iff1 <= 1'b0; iff2 <= 1'b0; im <= 2'd0; halted <= 1'b0;
-            tmp8 <= 8'h00; tmpl <= 8'h00; tmph <= 8'h00; tmp16 <= 16'h0000;
-            cycle <= 32'd0; instr_count <= 32'd0; decoded <= 1'b0;
+            tmp8 <= 8'h00; tmph <= 8'h00;
             nmi_pending <= 1'b0; prev_nmi_n <= 1'b1; ei_delay <= 1'b0;
             nmi_sampled <= 1'b0; int_sampled <= 1'b0;
             suppress_decode <= 1'b0; bus_granted <= 1'b0; irq_seq <= 2'd0;
@@ -1328,13 +970,11 @@ module z80_core (
             in_reset_hold <= 1'b1;
         end else begin
             in_reset_hold <= 1'b0;
-            for (ri = 0; ri < 13; ri = ri + 1) rf[ri] <= rf_n[ri];
             reg_i <= reg_i_n; reg_r <= reg_r_n; ir <= ir_n;
             t_state <= t_n; m_cycle <= m_cycle_n;
             bus_op <= bus_op_n; m_len <= m_len_n; m_addr <= m_addr_n; m_wdata <= m_wdata_n;
             prefix <= prefix_n; iff1 <= iff1_n; iff2 <= iff2_n; im <= im_n; halted <= halted_n;
-            tmp8 <= tmp8_n; tmpl <= tmpl_n; tmph <= tmph_n; tmp16 <= tmp16_n;
-            cycle <= cycle_n; instr_count <= instr_count_n; decoded <= decoded_n;
+            tmp8 <= tmp8_n; tmph <= tmph_n;
             nmi_pending <= nmi_pending_n; prev_nmi_n <= prev_nmi_n_n; ei_delay <= ei_delay_n;
             nmi_sampled <= nmi_sampled_n; int_sampled <= int_sampled_n;
             suppress_decode <= suppress_decode_n; bus_granted <= bus_granted_n; irq_seq <= irq_seq_n;
