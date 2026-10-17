@@ -10,7 +10,7 @@ core, independent of any particular shuttle wrapper.
 |---|---|
 | PDK | `gf180mcuD`, `54435919` (the pin of LibreLane 3.0.14, used by TinyTapeout's ttgf26d shuttle). wafer.space's project template pins `f6eeac7d` of the same gf180mcuD variant and the same 7-track 5 V cell library (`gf180mcu_fd_sc_mcu7t5v0`, with `gf180mcu_fd_io` pads). |
 | Cells | `gf180mcu_fd_sc_mcu7t5v0` |
-| Clock target | 80 ns (12.5 MHz) -- the 5 V cells at the slow corner (ss, 125 °C, 4.5 V) do ~14 MHz; typical ~22 MHz |
+| Clock target | 50 ns (20 MHz), met at the typical corners LibreLane signs off (+5.1 ns); the 5 V cells at the slow corner (ss, 125 °C, 4.5 V) reach ~14 MHz |
 | Config | `config.yaml` (Classic flow, relative die sizing) |
 
 ## Run it
@@ -20,10 +20,14 @@ fossi-foundation binary cache), then from the repository root:
 
     nix profile install github:librelane/librelane/3.0.14
     make -C asic/gf180mcu                  # RTL -> GDS (~30 min); the PDK is fetched by ciel
-    make -C asic/gf180mcu summary          # area, per-corner timing, sign-off; non-zero exit on a failure
+    make -C asic/gf180mcu summary          # area, per-corner timing, sign-off; non-zero exit on a failure (*)
     make -C asic/gf180mcu sign_of_life     # the routed netlist runs asic/tb_sign_of_life.v
     make -C asic/gf180mcu sign_of_life_rtl # same program on rtl/
     make -C asic/gf180mcu synth            # synthesis and its checks only (minutes)
+
+(*) Sign-off as LibreLane counts it: DRC / LVS / antenna / XOR clean,
+no setup violations at the corners in TIMING_VIOLATION_CORNERS (typical),
+no hold violations at any corner; every corner is printed.
 
 Results land in `asic/gf180mcu/runs/<tag>/` (`final/` holds GDS, netlists,
 metrics). CI: `.github/workflows/asic-gf180mcu.yml` runs all of the above on
@@ -52,7 +56,7 @@ flip-flops, one IDU, WZ operand latch), measured with a 20 MHz target:
 | Std cells | 8,391 |
 | Cell area | 155,892 µm² |
 | Die | 535 × 553 µm = 0.30 mm² (57 % utilised) |
-| Setup @ 20 MHz | -18.5 ns at ss 125 °C 4.5 V (worst path 70 ns, full cycle: ~14 MHz); +5.1 ns typical (~22 MHz) -- hence the 80 ns target |
+| Setup slack @ 20 MHz | +5.1 ns typical (signed off, ~22 MHz); -18.5 ns at ss 125 °C 4.5 V (worst path 70 ns, a full cycle: ~14 MHz) |
 | Hold slack | +0.25 ns |
 | Route / Magic DRC, LVS, antenna, GDS XOR | all 0 (KLayout DRC is not part of LibreLane's GF180 Classic flow) |
 | Signs of life, routed netlist | PASS (HALT after 554 clocks) |
@@ -65,3 +69,4 @@ TinyTapeout gf180 tiles are 347 × 161 µm (up to 4x4); at 60 % density the core
 ## Notes
 
 - The worst path at the slow corner is a full Z80 clock cycle (rising to rising edge) through the execute block's next-state logic, not one of the half-cycle paths into the falling-edge pin former.
+- A looser target does not buy slow-corner margin: at 80 ns the typical corner has 14 ns spare, the resizer stops early, and the slow corner ends at ~89 ns (-9 ns). Closing 20 MHz at 125 °C / 4.5 V would take logic restructuring or the faster 9-track library.

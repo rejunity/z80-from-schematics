@@ -17,13 +17,14 @@ VERILOG_FILES:
 VERILOG_INCLUDE_DIRS:
   - dir::../../rtl
 
-# One Z80-rate clock. 80 ns = 12.5 MHz: the 5 V cells meet ~14 MHz at
-# the slow corner (ss, 125 C, 4.5 V) and ~22 MHz typical; 20 MHz (the
-# fastest CMOS Z80 grade) misses the slow corner by ~18 ns. The negedge
-# input samplers and the falling-edge half of the pin former make some
-# paths half-cycle.
+# One Z80-rate clock. 50 ns = 20 MHz, the fastest CMOS Z80 grade
+# (Z84C0020). Met at the typical corners LibreLane signs off; the 5 V
+# cells at the slow corner (ss, 125 C, 4.5 V) reach ~14 MHz (reported,
+# not gated -- a looser target only makes the resizer stop earlier). The
+# negedge input samplers and the falling-edge half of the pin former make
+# some paths half-cycle.
 CLOCK_PORT: clk
-CLOCK_PERIOD: 80
+CLOCK_PERIOD: 50
 
 # Let the die follow the cell area; utilisation is reported so it can be
 # compared with TinyTapeout tile and wafer.space slot sizes.
