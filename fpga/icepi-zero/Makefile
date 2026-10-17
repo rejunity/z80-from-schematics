@@ -70,14 +70,18 @@ $(BUILD)/icepi-zero.lpf: icepi-zero.lpf
 
 # ---- synth / pnr / pack ----
 # Console shows pass headers two levels deep (-v 2) plus warnings; the full
-# log goes to build/yosys.log (-l). Known-benign warnings are demoted (-w):
+# log goes to build/yosys.log (-l).
+YOSYS_QUIET := -v 2 -Q -T
+# Known-benign warnings dropped from the console only (the -l log keeps them):
 # the core's trace counters and memories, tri-state notes, BRAM map ranges.
-YOSYS_QUIET := -v 2 -Q -T \
-  -w 'Replacing memory|limited support for tri-state|Drivers conflicting|out of bounds on signal'
+YOSYS_FILTER := grep --line-buffered -vE 'port Q\[|Drivers conflicting|Replacing memory|limited support for tri-state|out of bounds on signal|Latch inferred for signal .\\z80_core'
 
 $(BUILD)/top.json: $(BUILD)/src $(BUILD)/rom.mem $(VENV)/.ok
+	@rm -f $@
 	cd $(BUILD) && $(YOSYS) $(YOSYS_QUIET) -l yosys.log -p \
-	  'read_verilog -Isrc src/z80_top.v src/z80_core.v src/z80_pla.v src/z80_alu.v src/z80_timing.v src/top.v src/uart.v; hierarchy -top top; proc; async2sync; synth_ecp5 -top top -json top.json'
+	  'read_verilog -Isrc src/z80_top.v src/z80_core.v src/z80_pla.v src/z80_alu.v src/z80_timing.v src/top.v src/uart.v; hierarchy -top top; proc; async2sync; synth_ecp5 -top top -json top.json' \
+	  2>&1 | $(YOSYS_FILTER)
+	@test -f $@ || { echo "yosys failed, see $(BUILD)/yosys.log"; exit 1; }
 
 # nextpnr: full log in build/nextpnr.log, console shows the stage lines,
 # placer/router progress and the timing summary.
