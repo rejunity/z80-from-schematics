@@ -149,8 +149,9 @@ int main(int argc, char** argv) {
             uint16_t pc = R->z80_top__DOT__u_core__DOT__rf[11];
             if (pc == 0) break;     // outer RET to 0
             if (pc == 0x0010 && prev_pc_at_m1 != 0x0010) {
-                // print A. AF is rf[3]; A is the high byte.
-                unsigned char ch = (R->z80_top__DOT__u_core__DOT__rf[3] >> 8) & 0xFF;
+                // print A: logical AF is rfl[3] (rf[] holds physical pairs
+                // behind the EX/EXX exchange flip-flops); A is the high byte.
+                unsigned char ch = (R->z80_top__DOT__u_core__DOT__rfl[3] >> 8) & 0xFF;
                 std::putchar((int)ch);
                 if (cap_used < cap_sz - 1) captured[cap_used++] = (char)ch;
                 std::fflush(stdout);

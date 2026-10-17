@@ -103,7 +103,15 @@ module z80_core (
     // =======================================================================
     // registered state
     // =======================================================================
-    reg [15:0] rf [0:12];      // register file, RFP_* pair indices
+    reg [15:0] rf [0:12];      // register file, physical pairs (see below)
+    // Exchange flip-flops. EX DE,HL / EXX / EX AF,AF' move no data: like
+    // the die they flip which physical pair answers to which name. rf[0..3]
+    // and rf[4..7] are the two banks; with all flip-flops clear (reset)
+    // physical = logical (RFP_* indices), so a testbench may preload rf[]
+    // straight after reset. Read registers back through rfl[].
+    reg        xbank;          // EXX: BC DE HL are rf[4..6] (else rf[0..2])
+    reg        xaf;            // EX AF,AF': AF is rf[7] (else rf[3])
+    reg  [1:0] xdh;            // EX DE,HL, per physical bank: DE and HL swapped
     reg [7:0]  reg_i, reg_r, ir;
     reg [7:0]  reg_q;          // Q: F left by the previous F-modifying instruction, else 0
     reg        f_modified;     // set this instruction if anything wrote F
@@ -128,6 +136,8 @@ module z80_core (
 
     // ---- next state ----
     reg [15:0] rf_n [0:12];
+    wire       xbank_n, xaf_n;
+    wire [1:0] xdh_n;
     reg [7:0]  reg_i_n, reg_r_n, ir_n;
     reg [3:0]  t_n, m_len_n;
     reg [2:0]  m_cycle_n, bus_op_n;
@@ -297,12 +307,48 @@ module z80_core (
     // =======================================================================
     // register file: read side
     // =======================================================================
-    wire [15:0] r_bc  = rf[`RFP_BC],  r_de  = rf[`RFP_DE],  r_hl  = rf[`RFP_HL],  r_af  = rf[`RFP_AF];
-    wire [15:0] r_bc2 = rf[`RFP_BC2], r_de2 = rf[`RFP_DE2], r_hl2 = rf[`RFP_HL2], r_af2 = rf[`RFP_AF2];
+    // logical pair -> physical pair through the exchange flip-flops
+    function [3:0] phys;
+        input [3:0] l; input xb; input xa; input [1:0] xd;
+        reg b, s;
+        begin
+            b = ((l == `RFP_BC2) || (l == `RFP_DE2) || (l == `RFP_HL2)) ? ~xb : xb;
+            s = b ? xd[1] : xd[0];
+            case (l)
+                `RFP_BC, `RFP_BC2: phys = {1'b0, b, 2'd0};
+                `RFP_DE, `RFP_DE2: phys = {1'b0, b, s ? 2'd2 : 2'd1};
+                `RFP_HL, `RFP_HL2: phys = {1'b0, b, s ? 2'd1 : 2'd2};
+                `RFP_AF:           phys = {1'b0, xa, 2'd3};
+                `RFP_AF2:          phys = {1'b0, ~xa, 2'd3};
+                default:           phys = l;
+            endcase
+        end
+    endfunction
+    wire [15:0] p_bc0 = rf[0], p_de0 = rf[1], p_hl0 = rf[2], p_af0 = rf[3];
+    wire [15:0] p_bc1 = rf[4], p_de1 = rf[5], p_hl1 = rf[6], p_af1 = rf[7];
+    wire        x_sw  = xbank ? xdh[1] : xdh[0];   // DE/HL swapped in the live bank
+    wire        x_sw2 = xbank ? xdh[0] : xdh[1];   // ... in the other bank
+    wire [15:0] r_bc  = xbank ? p_bc1 : p_bc0;
+    wire [15:0] r_de  = xbank ? (x_sw ? p_hl1 : p_de1) : (x_sw ? p_hl0 : p_de0);
+    wire [15:0] r_hl  = xbank ? (x_sw ? p_de1 : p_hl1) : (x_sw ? p_de0 : p_hl0);
+    wire [15:0] r_af  = xaf ? p_af1 : p_af0;
+    wire [15:0] r_bc2 = xbank ? p_bc0 : p_bc1;
+    wire [15:0] r_de2 = xbank ? (x_sw2 ? p_hl0 : p_de0) : (x_sw2 ? p_hl1 : p_de1);
+    wire [15:0] r_hl2 = xbank ? (x_sw2 ? p_de0 : p_hl0) : (x_sw2 ? p_de1 : p_hl1);
+    wire [15:0] r_af2 = xaf ? p_af0 : p_af1;
     wire [15:0] r_ix  = rf[`RFP_IX],  r_iy  = rf[`RFP_IY],  r_sp  = rf[`RFP_SP];
     wire [15:0] r_pc  = rf[`RFP_PC],  r_wz  = rf[`RFP_WZ];
     wire [7:0]  A_cur = r_af[15:8];
     wire [7:0]  F_cur = r_af[7:0];
+    // logical register view (RFP_* order) for testbenches
+    wire [15:0] rfl [0:12] /* verilator public_flat_rd */;
+    assign rfl[`RFP_BC]  = r_bc;  assign rfl[`RFP_DE]  = r_de;
+    assign rfl[`RFP_HL]  = r_hl;  assign rfl[`RFP_AF]  = r_af;
+    assign rfl[`RFP_BC2] = r_bc2; assign rfl[`RFP_DE2] = r_de2;
+    assign rfl[`RFP_HL2] = r_hl2; assign rfl[`RFP_AF2] = r_af2;
+    assign rfl[`RFP_IX]  = r_ix;  assign rfl[`RFP_IY]  = r_iy;
+    assign rfl[`RFP_SP]  = r_sp;  assign rfl[`RFP_PC]  = r_pc;
+    assign rfl[`RFP_WZ]  = r_wz;
 
     // HL / IX / IY pair of the current instruction
     wire [15:0] rf_hlp = (idx_w == 2'd1) ? r_ix : (idx_w == 2'd2) ? r_iy : r_hl;
@@ -1358,27 +1404,31 @@ module z80_core (
         endcase
     end
 
+    // physical targets of the logical write ports
+    wire [3:0] pw_phys = phys(pw_idx,   xbank, xaf, xdh);
+    wire [3:0] bw_phys = phys(bw_pair,  xbank, xaf, xdh);
+    wire [3:0] af_phys = phys(`RFP_AF,  xbank, xaf, xdh);
+    wire [3:0] hl_phys = phys(`RFP_HL,  xbank, xaf, xdh);
+    wire [3:0] de_phys = phys(`RFP_DE,  xbank, xaf, xdh);
+    // exchanges flip the renaming, effective from the next T-state
+    assign xbank_n = xbank ^ (ex_edge & ctl_exx);
+    assign xaf_n   = xaf   ^ (ex_edge & ctl_ex_af);
+    assign xdh_n   = xdh   ^ ((ex_edge & ctl_ex_dehl) ? (xbank ? 2'b10 : 2'b01) : 2'b00);
+
     always @* begin
         for (i = 0; i < 13; i = i + 1) rf_n[i] = rf[i];
         if (pc_m1_inc) rf_n[`RFP_PC] = pc_inc;
         if (ex_edge) begin
-            if (ctl_ex_dehl) begin rf_n[`RFP_DE] = r_hl; rf_n[`RFP_HL] = r_de; end
-            if (ctl_ex_af)   begin rf_n[`RFP_AF] = r_af2; rf_n[`RFP_AF2] = r_af; end
-            if (ctl_exx) begin
-                rf_n[`RFP_BC] = r_bc2; rf_n[`RFP_BC2] = r_bc;
-                rf_n[`RFP_DE] = r_de2; rf_n[`RFP_DE2] = r_de;
-                rf_n[`RFP_HL] = r_hl2; rf_n[`RFP_HL2] = r_hl;
-            end
             for (i = 0; i < 13; i = i + 1) begin
-                if (ctl_pw && pw_idx == i) rf_n[i] = pw_data;
-                if (ctl_bw && bw_en && bw_pair == i) begin
+                if (ctl_pw && pw_phys == i) rf_n[i] = pw_data;
+                if (ctl_bw && bw_en && bw_phys == i) begin
                     if (bw_hi) rf_n[i][15:8] = bw_data;
                     else       rf_n[i][7:0]  = bw_data;
                 end
+                if (ctl_fw      && af_phys == i) rf_n[i][7:0] = f_data;
+                if (ctl_hl_step && hl_phys == i) rf_n[i] = hl_step;
+                if (ctl_de_step && de_phys == i) rf_n[i] = de_step;
             end
-            if (ctl_fw)      rf_n[`RFP_AF][7:0] = f_data;
-            if (ctl_hl_step) rf_n[`RFP_HL] = hl_step;
-            if (ctl_de_step) rf_n[`RFP_DE] = de_step;
             case (ctl_pc)
                 PC_IDU:  rf_n[`RFP_PC] = idu;
                 PC_EA:   rf_n[`RFP_PC] = ea;
@@ -1404,6 +1454,9 @@ module z80_core (
             endcase
         end
     end
+
+    // logical F after this edge (EX AF,AF' renames AF on the same edge)
+    wire [7:0] f_next = xaf_n ? rf_n[7][7:0] : rf_n[3][7:0];
 
     // =======================================================================
     // sequencer
@@ -1538,7 +1591,7 @@ module z80_core (
                 prefix_n = `PFX_NONE;
                 // Commit Q: F if THIS instruction wrote F, else 0 (Sean Young
                 // 4.1 + ZEXALL <daa,cpl,scf,ccf>).
-                reg_q_n = f_modified_n ? rf_n[`RFP_AF][7:0] : 8'h00;
+                reg_q_n = f_modified_n ? f_next : 8'h00;
                 f_modified_n = 1'b0;
                 // begin_next: decide bus grant / NMI / INT / HALT / next opcode
                 if (!busreq_n) begin
@@ -1615,10 +1668,12 @@ module z80_core (
             nmi_sampled <= 1'b0; int_sampled <= 1'b0;
             suppress_decode <= 1'b0; bus_granted <= 1'b0; irq_seq <= 2'd0;
             reg_q <= 8'h00; f_modified <= 1'b0;
+            xbank <= 1'b0; xaf <= 1'b0; xdh <= 2'b00;
             in_reset_hold <= 1'b1;
         end else begin
             in_reset_hold <= 1'b0;
             for (ri = 0; ri < 13; ri = ri + 1) rf[ri] <= rf_n[ri];
+            xbank <= xbank_n; xaf <= xaf_n; xdh <= xdh_n;
             reg_i <= reg_i_n; reg_r <= reg_r_n; ir <= ir_n;
             t_state <= t_n; m_cycle <= m_cycle_n;
             bus_op <= bus_op_n; m_len <= m_len_n; m_addr <= m_addr_n; m_wdata <= m_wdata_n;

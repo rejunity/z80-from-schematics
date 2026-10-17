@@ -368,7 +368,8 @@ def main():
     else:
         hand = [os.path.join(ROOT, f"tests/traces/{n}.hex") for n in (
                     "prog1","prog2","prog3_cb","prog4_ed",
-                    "prog5_ddfd","prog6_block","prog7_ddcb","prog8_nmi")]
+                    "prog5_ddfd","prog6_block","prog7_ddcb","prog8_nmi",
+                    "prog10_exchange")]
         # Random programs from scripts/gen_random_trace_progs.py. Sorted
         # so the seed order is deterministic in the report.
         import glob
@@ -387,7 +388,12 @@ def main():
           f"bus addr+data {bus_mode})")
     ok = True
     for p in progs:
-        if not compare(p, phases, source=source): ok = False
+        # a program may ask for a longer run in <prog>.phases (one number)
+        ph = phases
+        side = os.path.splitext(p)[0] + ".phases"
+        if os.path.exists(side):
+            ph = max(phases, int(open(side).read().split()[0]))
+        if not compare(p, ph, source=source): ok = False
     return 0 if ok else 1
 
 if __name__ == "__main__":
