@@ -69,15 +69,24 @@ $(BUILD)/icepi-zero.lpf: icepi-zero.lpf
 	cp $< $@
 
 # ---- synth / pnr / pack ----
+# Console shows pass headers two levels deep (-v 2) plus warnings; the full
+# log goes to build/yosys.log (-l). Known-benign warnings are demoted (-w):
+# the core's trace counters and memories, tri-state notes, BRAM map ranges.
+YOSYS_QUIET := -v 2 -Q -T \
+  -w 'Replacing memory|limited support for tri-state|Drivers conflicting|out of bounds on signal'
+
 $(BUILD)/top.json: $(BUILD)/src $(BUILD)/rom.mem $(VENV)/.ok
-	cd $(BUILD) && $(YOSYS) -q -p \
-	  'read_verilog -Isrc src/z80_top.v src/z80_core.v src/z80_pla.v src/z80_alu.v src/z80_timing.v src/top.v src/uart.v; hierarchy -top top; proc; async2sync; synth_ecp5 -top top -json top.json' \
-	  2>&1 | tee yosys.log | tail -40
+	cd $(BUILD) && $(YOSYS) $(YOSYS_QUIET) -l yosys.log -p \
+	  'read_verilog -Isrc src/z80_top.v src/z80_core.v src/z80_pla.v src/z80_alu.v src/z80_timing.v src/top.v src/uart.v; hierarchy -top top; proc; async2sync; synth_ecp5 -top top -json top.json'
+
+# nextpnr: full log in build/nextpnr.log, console shows the stage lines,
+# placer/router progress and the timing summary.
+NEXTPNR_PROGRESS := grep --line-buffered -E '^(Info: (Pack|Running|Placed|Creating|HeAP|SA |Routing|Router|Max frequency|Program finished|Device util|promoting)|Info: +[0-9]+000 \||ERROR|Warning)'
 
 $(BUILD)/top.config: $(BUILD)/top.json $(BUILD)/icepi-zero.lpf
 	cd $(BUILD) && $(NEXTPNR) --$(FPGA_SIZE) --package $(PACKAGE) \
 	  --lpf icepi-zero.lpf --json top.json --textcfg top.config \
-	  2>&1 | tee nextpnr.log | grep -E "Max frequency|ERROR|error" || true
+	  2>&1 | tee nextpnr.log | $(NEXTPNR_PROGRESS) || true
 	@test -f $(BUILD)/top.config
 
 $(BUILD)/top.bit: $(BUILD)/top.config
