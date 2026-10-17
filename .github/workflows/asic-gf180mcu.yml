@@ -1,0 +1,65 @@
+# RTL-to-GDS of z80_top on gf180mcuD (LibreLane 3.0.14 Classic flow, the bare
+# core -- no pad ring), the sign-off checks, and the signs-of-life program
+# on the routed netlist. Runs on pushes to this branch and on demand.
+# See asic/gf180mcu/README.md.
+name: asic-gf180mcu
+
+on:
+  push:
+    branches: [asic-gf180mcu]
+  workflow_dispatch:
+
+jobs:
+  harden:
+    name: gf180mcuD RTL-to-GDS + signs of life
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: DeterminateSystems/nix-installer-action@main
+        with:
+          # pre-built LibreLane closure; without it nix rebuilds LibreLane's
+          # pinned iverilog from source and one of its self-tests fails
+          extra-conf: |
+            extra-substituters = https://nix-cache.fossi-foundation.org
+            extra-trusted-public-keys = nix-cache.fossi-foundation.org:3+K59iFwXqKsL7BNu6Guy0v+uTlwsxYQxjspXzqLYQs=
+            extra-experimental-features = nix-command flakes
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+
+      # iverilog >= 12 for the gate-level run (the IHP cell models need it)
+      - name: Install LibreLane 3.0.14 and iverilog
+        run: nix profile install github:librelane/librelane/3.0.14 nixpkgs#iverilog
+
+      - name: Cache the gf180mcuD PDK (ciel)
+        uses: actions/cache@v4
+        with:
+          path: ~/.ciel
+          key: ciel-gf180mcu-54435919abffb937387ec956209f9cf5fd2dfbee
+
+      - name: Signs of life (RTL)
+        run: make -C asic/gf180mcu sign_of_life_rtl
+
+      - name: RTL-to-GDS
+        run: make -C asic/gf180mcu harden LIBRELANE_ARGS=--hide-progress-bar
+
+      - name: Sign-off summary (fails on DRC / LVS / antenna / XOR / timing)
+        run: make -C asic/gf180mcu summary
+
+      - name: Signs of life (routed netlist, gf180mcuD cell models)
+        run: make -C asic/gf180mcu sign_of_life
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: asic-gf180mcu
+          path: |
+            asic/gf180mcu/runs/*/final/metrics.*
+            asic/gf180mcu/runs/*/final/gds/
+            asic/gf180mcu/runs/*/final/nl/
+            asic/gf180mcu/runs/*/*-openroad-stapostpnr/summary.rpt
+            asic/gf180mcu/runs/*/flow.log
+            asic/gf180mcu/runs/*/warning.log
+            asic/gf180mcu/runs/*/error.log
+          retention-days: 14
