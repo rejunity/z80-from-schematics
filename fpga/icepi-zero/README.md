@@ -1,15 +1,20 @@
-# RZ80 BASIC SBC on the IcePi Zero
+# RZ80 on the IcePi Zero — BASIC SBC and Z80 chip
 
-A Z80 single-board computer in one FPGA: the rz80 core (`rtl/z80_top.v`),
+Two builds, one `top.v`: **sbc** (below) and **chip**, the Z80 itself on
+the 40-pin header with an external clock (see [Chip build](#chip-build)).
+
+The sbc build is a Z80 single-board computer in one FPGA: the rz80 core (`rtl/z80_top.v`),
 64 KiB of RAM with **NASCOM BASIC 4.7** (RC2014 build) preloaded, and a
 68B50-style ACIA on the board's FTDI USB-UART at **115200 8N1**. Target:
 [IcePi Zero](https://github.com/cheyao/icepi-zero) (Lattice ECP5
 **LFE5U-25F**, CABGA256, 50 MHz MEMS oscillator).
 
     make venv     # once: python venv + pip-installed YoWASP FPGA toolchain
-    make          # bitstream -> build/top.bit
+    make sbc      # bitstream -> build/top_sbc.bit   (make = both builds)
     make prog     # load to FPGA SRAM   (openFPGALoader, volatile)
     make flash    # write to SPI flash  (persists across power cycles)
+
+(`prog` / `flash` take `MODE=sbc` (default) or `MODE=chip`.)
 
 Then connect a terminal to the board's USB serial port:
 
@@ -22,10 +27,6 @@ so you get the ROM's warm-start `C|W` prompt).
 Terminal notes: BASIC wants CR line endings (screen sends CR — good),
 and Ctrl-C is BREAK just like `make basic`.
 
-This board has only the SBC build. A Z80 *chip-replacement* build (the
-live bus on a header, clock from outside) needs 37 header pins; the
-IcePi's 40-pin header has 28 user I/O. The Tang Primer 25K port
-([`../tang-primer-25k`](../tang-primer-25k/README.md)) has both builds.
 
 ## What's in the SBC (`top.v`)
 
@@ -39,23 +40,46 @@ IcePi's 40-pin header has 28 user I/O. The Tang Primer 25K port
 | LEDs | 0 heartbeat · 1 TX activity · 2 RX activity · 3 RX FIFO non-empty · 4 HALT |
 | Header | the Z80 bus mirrored as **outputs** on the 40-pin header (below) |
 
-### Header mirror
+### Header
 
-`gpio[27:0]` (the vendored LPF's names for the 40-pin Pi-style header)
-carry the bus so a logic analyser or an external bus display can watch
-BASIC run. 28 pins is a subset of the Tang port's full 37-pin chip pinout:
+`gpio[27:0]` (the vendored LPF's names for the 40-pin Pi-style header).
+A Z80 DIP has 38 signals; the header has 28 user I/O, so both builds
+carry the first 28 of the priority list shared by all our boards —
+memory strobes first, then as much address bus as fits: CLK, D0–D7,
+/MREQ, /RD, /WR, A0–A15. (The Tang Primer 25K port has all 38;
+/IORQ, /M1, /RFSH, /HALT, /BUSACK, /WAIT, /INT, /NMI, /BUSREQ are the
+ones left out here.)
 
 | gpio | signal | gpio | signal |
 |---|---|---|---|
 | 0–15 | A0–A15 | 24 | /MREQ |
-| 16–23 | D0–D7 | 25 | /IORQ |
+| 16–23 | D0–D7 | 25 | CLK (header pin 22) |
 | | | 26 | /RD |
 | | | 27 | /WR |
 
-D shows the byte on the internal bus: the CPU's write data while it
-drives, otherwise what memory / the ACIA returned. All pins are 3.3 V
-outputs, not 5 V tolerant. Header pin numbers per `gpio` index are in
+In the sbc build every pin is an **output**, so a logic analyser or an
+external bus display can watch BASIC run: CLK is the internal 4 MHz Z80
+clock, D the byte on the internal bus (the CPU's write data while it
+drives, otherwise what memory / the ACIA returned). All pins are 3.3 V,
+not 5 V tolerant. Header pin numbers per `gpio` index are in
 `icepi-zero.lpf`.
+
+## Chip build
+
+    make chip                  # -> build/top_chip.bit
+    make prog MODE=chip        # or: make flash MODE=chip
+
+The Z80 as a chip on the header, same layout as above: **CLK** on
+gpio 25 (header pin 22) is an *input* and clocks the core directly — one
+T-state per CLK period, both edges used as on the real chip (no PLL, no
+clock enable). D0–D7 are bidirectional (driven while the Z80 writes),
+A0–A15, /MREQ, /RD, /WR are outputs. Not on the header: /IORQ (an I/O
+cycle shows as /RD or /WR with /MREQ high), /M1, /RFSH, /HALT, /BUSACK;
+/WAIT, /INT, /NMI, /BUSREQ are tied inactive; **/RESET is button 0**
+(plus power-on reset), released on a CLK rising edge. The CLK input is
+constrained at 8 MHz (`icepi-zero-chip.lpf`). LEDs: 0 heartbeat · 1
+blinks while CLK runs · 2 memory cycle · 3 in reset · 4 HALT. 3.3 V I/O
+— level-shift a 5 V bus.
 
 ## Toolchain — venv, no system packages
 
