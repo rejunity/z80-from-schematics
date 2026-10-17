@@ -1,0 +1,13 @@
+# WAIT on the T2 sample of CPIR's read M-cycle -- the T-state on whose
+# edge the RTL's incrementer does BC-1 (HL stepped at T1, WZ at the next
+# M-cycle's T1). Stops on the match at 0x8002, then pushes BC / HL / AF.
+@0000
+31 00 A0           # LD SP,0xA000
+21 00 80           # LD HL,0x8000
+01 04 00           # LD BC,0x0004
+3E C3              # LD A,0xC3
+ED B1              # CPIR
+C5 E5 F5           # PUSH BC / PUSH HL / PUSH AF
+76                 # HALT
+@8000
+AA BB C3 DD

@@ -298,11 +298,15 @@ module z80_core (
     // MRD / IORD sample, or the data latch
     wire [7:0] rbyte = latch_pos ? data_in : latch_neg ? data_in_neg : tmp8;
 
-    // the sequencer's step points
-    wire m_end     = (t_state + 4'd1) > m_len;          // last T-state of the M-cycle
-    wire ex_edge   = !in_reset_hold && !bus_granted && !stall && m_end;  // execute runs
-    wire pc_m1_inc = !in_reset_hold && latch_pos && !stall &&
-                     (bus_op == `BUSOP_M1) && !suppress_decode;          // opcode fetch PC+1
+    // the sequencer's step points. Registers load on every edge that
+    // advances (wr_edge). The execute step proper -- bus cycles,
+    // sequencing, most register loads -- runs on the last T-state of an
+    // M-cycle (ex_edge); the incrementer jobs the die does while the
+    // address latch holds (PC+1 of the opcode fetch, block-move pointer
+    // and counter steps) run on earlier T-states.
+    wire m_end   = (t_state + 4'd1) > m_len;            // last T-state of the M-cycle
+    wire wr_edge = !in_reset_hold && !bus_granted && !stall;
+    wire ex_edge = wr_edge && m_end;
 
     // =======================================================================
     // register file: read side
@@ -432,9 +436,9 @@ module z80_core (
     // =======================================================================
     // ALU: operand latches + z80_alu
     // =======================================================================
-    // Block-IO flag inputs: data + (C +/- 1) for INxR, data + L for OTxR.
+    // Block-IO flag inputs: data + (C +/- 1) for INxR, data + new L for OTxR.
     wire [8:0] bk_ini = {1'b0, tmpl} + {1'b0, (r_bc[7:0] + (aux_w[0] ? 8'hFF : 8'h1))};
-    wire [8:0] bk_out = {1'b0, tmpl} + {1'b0, (r_hl[7:0] + (aux_w[0] ? 8'hFF : 8'h1))};
+    wire [8:0] bk_out = {1'b0, tmpl} + {1'b0, r_hl[7:0]};   // L already stepped (M3 T1)
 
     // Banks-2018 INIR/INDR/OTIR/OTDR repeat-M-cycle flag fold-in.
     // Mirrors redcode INXR_OTXR_COMMON exactly (see scripts/refs/
@@ -523,11 +527,11 @@ module z80_core (
                 case (aux_w[2:1])
                     2'd0: if (m_cycle == 3'd3) begin
                         alu_md = `FLAG_BLOCK_LD; alu_a = A_cur; alu_b = tmp8;
-                        alu_bit = {2'b0, ((r_bc - 16'd1) != 16'd0)};
+                        alu_bit = {2'b0, (r_bc != 16'd0)};    // BC-1 done at M3 T2
                     end
                     2'd1: if (m_cycle == 3'd2) begin
                         alu_md = `FLAG_BLOCK_CP; alu_a = A_cur; alu_b = rbyte;
-                        alu_bit = {2'b0, ((r_bc - 16'd1) != 16'd0)};
+                        alu_bit = {2'b0, (r_bc != 16'd0)};    // BC-1 done at M2 T2
                     end
                     2'd2: if (m_cycle == 3'd4) begin
                         alu_md = `FLAG_BLOCK_IO;
@@ -561,8 +565,7 @@ module z80_core (
     localparam [2:0] AL_ABUS = 3'd0,   // the address-side bus
                      AL_IDU  = 3'd1,   // abus +1 / -1 / -2
                      AL_EA   = 3'd2,   // effective-address adder
-                     AL_A16  = 3'd3,   // 16-bit ALU sum (ADD HL,rp internal cycle)
-                     AL_HLS  = 3'd4;   // HL +/- 1 (CPI / CPD internal cycle)
+                     AL_A16  = 3'd3;   // 16-bit ALU sum (ADD HL,rp internal cycle)
     // address-side bus source
     localparam [2:0] AB_REG  = 3'd0,   // register pair, see RI_*
                      AB_NN   = 3'd1,   // {rbyte, tmpl}: the operand word nn
@@ -589,7 +592,7 @@ module z80_core (
     localparam [2:0] WZ_HOLD = 3'd0, WZ_IDU = 3'd1, WZ_ALO = 3'd2, WZ_EA = 3'd3,
                      WZ_NN = 3'd4, WZ_TMP = 3'd5, WZ_VEC = 3'd6;
     // pair write port source
-    localparam [2:0] PW_IDU = 3'd0, PW_NN = 3'd1, PW_A16 = 3'd2, PW_TMP = 3'd3, PW_BCD = 3'd4;
+    localparam [2:0] PW_IDU = 3'd0, PW_NN = 3'd1, PW_A16 = 3'd2, PW_TMP = 3'd3;
     // byte write port destination / source
     localparam [2:0] BW_RI = 3'd0, BW_R8 = 3'd1, BW_A = 3'd2, BW_B = 3'd3,
                      BW_DDCB = 3'd4, BW_HLPL = 3'd5, BW_HLPH = 3'd6;
@@ -624,7 +627,6 @@ module z80_core (
     reg [2:0]  ctl_bwd, ctl_bws;       //   destination / source
     reg        ctl_fw;                 // flag port
     reg [2:0]  ctl_fs;                 //   source
-    reg        ctl_hl_step, ctl_de_step;   // block-move pointer steps
     reg        ctl_ex_dehl, ctl_ex_af, ctl_exx;
     reg [1:0]  ctl_tmpl, ctl_tmp16;
     reg        ctl_tmph;
@@ -702,6 +704,13 @@ module z80_core (
     task alu_to_a;
         begin if (alu_op_w != `ALU_CP) wr_byte(BW_A, BS_ALU); wr_flags(FS_ALU); end
     endtask
+    // block-move pointer step on a mid-M-cycle edge: pair <- pair +/- 1
+    task blk_step; input [2:0] rsel;
+        begin
+            ctl_ab = AB_REG; ctl_ri = rsel; ctl_inc = aux_w[0] ? INC_M1 : INC_P1;
+            ctl_pw = 1'b1; ctl_pwi = rsel; ctl_pws = PW_IDU;
+        end
+    endtask
     // repeat of a block instruction: PC <- PC-2, WZ <- PC-1, 5 internal T
     task blk_repeat; input [2:0] fsrc;
         begin
@@ -722,7 +731,6 @@ module z80_core (
         ctl_pw = 1'b0; ctl_pwi = RI_RP; ctl_pws = PW_IDU;
         ctl_bw = 1'b0; ctl_bwd = BW_RI; ctl_bws = BS_RI;
         ctl_fw = 1'b0; ctl_fs = FS_ALU;
-        ctl_hl_step = 1'b0; ctl_de_step = 1'b0;
         ctl_ex_dehl = 1'b0; ctl_ex_af = 1'b0; ctl_exx = 1'b0;
         ctl_tmpl = TL_HOLD; ctl_tmph = 1'b0; ctl_tmp16 = T16_HOLD;
         ctl_iff = IFF_HOLD; ctl_im = 1'b0; ctl_halt = 1'b0;
@@ -730,10 +738,34 @@ module z80_core (
         ctl_cbx = 1'b0; ctl_cbr = 1'b0;
         mm = m_cycle; mem_ri = RI_HLP; mem_ea = 1'b0;
 
+        // ---- mid-M-cycle micro-ops: the IDU's jobs while the address
+        // latch holds (the execute step below owns the last T-state) ----
+        if (!m_end) begin
+            if (latch_pos && bus_op == `BUSOP_M1 && !suppress_decode) begin
+                ctl_ri = RI_PC; ctl_inc = INC_P1; ctl_pc = PC_IDU;   // opcode fetch: PC+1
+            end else if (eff_exec == `EXEC_BLOCK && t_state == 4'd1) begin
+                case (aux_w[2:1])
+                    2'd0:    if (m_cycle == 3'd2) blk_step(RI_HL);        // LDx: HL, M2 T1
+                             else if (m_cycle == 3'd3) blk_step(RI_DE);   //      DE, M3 T1
+                    2'd1:    if (m_cycle == 3'd2) blk_step(RI_HL);        // CPx: HL, M2 T1
+                             else if (m_cycle == 3'd3) begin             //      WZ, M3 T1
+                                 ctl_ri = RI_WZ; ctl_inc = aux_w[0] ? INC_M1 : INC_P1;
+                                 ctl_wz = WZ_IDU;
+                             end
+                    2'd2:    if (m_cycle == 3'd4) blk_step(RI_HL);        // INx: HL, M4 T1
+                    default: if (m_cycle == 3'd3) blk_step(RI_HL);        // OUTx: HL, M3 T1
+                endcase
+            end else if (eff_exec == `EXEC_BLOCK && t_state == 4'd2 &&
+                         ((aux_w[2:1] == 2'd0 && m_cycle == 3'd3) ||       // LDx: BC-1, M3 T2
+                          (aux_w[2:1] == 2'd1 && m_cycle == 3'd2))) begin  // CPx: BC-1, M2 T2
+                ctl_ri = RI_BC; ctl_inc = INC_M1;
+                ctl_pw = 1'b1; ctl_pwi = RI_BC; ctl_pws = PW_IDU;
+            end
+        end
         // (IX+d) / (IY+d) displacement preamble: read d, then 5 internal
         // T-states while WZ = IX+d is formed (not during interrupt/HALT
         // sequences)
-        if (irq_seq == 2'd0 && idx_w != 2'd0 && use_disp_w && m_cycle == 3'd1) begin
+        else if (irq_seq == 2'd0 && idx_w != 2'd0 && use_disp_w && m_cycle == 3'd1) begin
             op_fetch(4'd0);
         end else if (irq_seq == 2'd0 && idx_w != 2'd0 && use_disp_w && m_cycle == 3'd2
                      && eff_exec != `EXEC_LD_M_N) begin
@@ -1126,23 +1158,19 @@ module z80_core (
                     else if (m_cycle == 3'd2) begin
                         ctl_db = DB_RB; at_pair(`BUSOP_MWR, RI_DE, 4'd2);   // 5 T write
                     end else if (m_cycle == 3'd3) begin
-                        ctl_pw = 1'b1; ctl_pwi = RI_BC; ctl_pws = PW_BCD;   // BC-1
-                        ctl_hl_step = 1'b1; ctl_de_step = 1'b1;
+                        // HL, DE and BC stepped at M2 T1 / M3 T1 / M3 T2
                         wr_flags(FS_ALU);
                         // Banks 2018: on repeat YF/XF come from PC.13 / PC.11
-                        if (aux_w[3] && bc_dec != 16'd0) blk_repeat(FS_BLD);
+                        if (aux_w[3] && r_bc != 16'd0) blk_repeat(FS_BLD);
                         else ctl_fin = 1'b1;
                     end else ctl_fin = 1'b1;
                 end
                 2'd1: begin                                   // CPI CPD CPIR CPDR
                     if (m_cycle == 3'd1) at_pair(`BUSOP_MRD, RI_HL, 4'd0);
                     else if (m_cycle == 3'd2) begin
-                        ctl_pw = 1'b1; ctl_pwi = RI_BC; ctl_pws = PW_BCD;   // BC-1
-                        ctl_ab = AB_REG; ctl_ri = RI_WZ;
-                        ctl_inc = aux_w[0] ? INC_M1 : INC_P1; ctl_wz = WZ_IDU;   // WZ +/- 1
-                        ctl_hl_step = 1'b1;
+                        // HL and BC stepped at M2 T1 / T2; WZ steps at M3 T1
                         wr_flags(FS_ALU);
-                        mstart(`BUSOP_INTERNAL, AL_HLS, 4'd5);
+                        at_pair(`BUSOP_INTERNAL, RI_HL, 4'd5);
                     end else if (m_cycle == 3'd3) begin
                         if (aux_w[3] && r_bc != 16'd0 && !F_cur[6]) blk_repeat(FS_BCP);
                         else ctl_fin = 1'b1;
@@ -1157,8 +1185,7 @@ module z80_core (
                         ctl_tmpl = TL_RB; ctl_db = DB_RB;
                         at_pair(`BUSOP_MWR, RI_HL, 4'd0);
                     end else if (m_cycle == 3'd4) begin
-                        wr_byte(BW_B, BS_BD);                 // B-1
-                        ctl_hl_step = 1'b1;
+                        wr_byte(BW_B, BS_BD);                 // B-1 (HL stepped at M4 T1)
                         wr_flags(FS_ALU);
                         if (aux_w[3] && b_dec != 8'd0) blk_repeat(FS_BIO);
                         else ctl_fin = 1'b1;
@@ -1174,8 +1201,7 @@ module z80_core (
                         ctl_db = DB_RB;
                         mstart(`BUSOP_IOWR, AL_ABUS, 4'd0);
                     end else if (m_cycle == 3'd4) begin
-                        ctl_hl_step = 1'b1;
-                        wr_flags(FS_ALU);
+                        wr_flags(FS_ALU);                     // HL stepped at M3 T1
                         if (aux_w[3] && r_bc[15:8] != 8'd0) blk_repeat(FS_BIO);
                         else ctl_fin = 1'b1;
                     end else ctl_fin = 1'b1;
@@ -1247,12 +1273,6 @@ module z80_core (
     wire [15:0] ea_base = ctl_ea_pc ? r_pc : rf_hlp;
     wire [7:0]  ea_d    = (ctl_ea_d == EA_RB) ? rbyte : (ctl_ea_d == EA_TL) ? tmpl : 8'hFF;
     wire [15:0] ea      = ea_base + {{8{ea_d[7]}}, ea_d};
-    // opcode fetch PC+1 (the M1 latch edge never runs the execute step)
-    wire [15:0] pc_inc  = r_pc + 16'd1;
-    // block-move pointer and counter steps
-    wire [15:0] bc_dec  = r_bc - 16'd1;
-    wire [15:0] hl_step = r_hl + (aux_w[0] ? 16'hFFFF : 16'h0001);
-    wire [15:0] de_step = r_de + (aux_w[0] ? 16'hFFFF : 16'h0001);
 
     // 16-bit ALU: ADD HL,rp / ADC HL,rp / SBC HL,rp (HL is IX/IY under DD/FD)
     wire        a16_sub = (exec_w == `EXEC_SBC16);
@@ -1295,8 +1315,7 @@ module z80_core (
             AL_ABUS: al_in = abus;
             AL_IDU:  al_in = idu;
             AL_EA:   al_in = ea;
-            AL_A16:  al_in = a16;
-            default: al_in = hl_step;
+            default: al_in = a16;
         endcase
     end
     // write-data latch input
@@ -1343,14 +1362,14 @@ module z80_core (
             RI_HLP:  pw_idx = hlp;
             RI_HL:   pw_idx = `RFP_HL;
             RI_BC:   pw_idx = `RFP_BC;
+            RI_DE:   pw_idx = `RFP_DE;
             default: pw_idx = rp_sel_w;
         endcase
         case (ctl_pws)
             PW_IDU:  pw_data = idu;
             PW_NN:   pw_data = {rbyte, tmpl};
             PW_A16:  pw_data = a16;
-            PW_TMP:  pw_data = {tmph, tmpl};
-            default: pw_data = bc_dec;
+            default: pw_data = {tmph, tmpl};
         endcase
     end
     // byte write port: r[y]-style register code (IXH/IXL substitution for
@@ -1408,8 +1427,6 @@ module z80_core (
     wire [3:0] pw_phys = phys(pw_idx,   xbank, xaf, xdh);
     wire [3:0] bw_phys = phys(bw_pair,  xbank, xaf, xdh);
     wire [3:0] af_phys = phys(`RFP_AF,  xbank, xaf, xdh);
-    wire [3:0] hl_phys = phys(`RFP_HL,  xbank, xaf, xdh);
-    wire [3:0] de_phys = phys(`RFP_DE,  xbank, xaf, xdh);
     // exchanges flip the renaming, effective from the next T-state
     assign xbank_n = xbank ^ (ex_edge & ctl_exx);
     assign xaf_n   = xaf   ^ (ex_edge & ctl_ex_af);
@@ -1417,17 +1434,14 @@ module z80_core (
 
     always @* begin
         for (i = 0; i < 13; i = i + 1) rf_n[i] = rf[i];
-        if (pc_m1_inc) rf_n[`RFP_PC] = pc_inc;
-        if (ex_edge) begin
+        if (wr_edge) begin
             for (i = 0; i < 13; i = i + 1) begin
                 if (ctl_pw && pw_phys == i) rf_n[i] = pw_data;
                 if (ctl_bw && bw_en && bw_phys == i) begin
                     if (bw_hi) rf_n[i][15:8] = bw_data;
                     else       rf_n[i][7:0]  = bw_data;
                 end
-                if (ctl_fw      && af_phys == i) rf_n[i][7:0] = f_data;
-                if (ctl_hl_step && hl_phys == i) rf_n[i] = hl_step;
-                if (ctl_de_step && de_phys == i) rf_n[i] = de_step;
+                if (ctl_fw && af_phys == i) rf_n[i][7:0] = f_data;
             end
             case (ctl_pc)
                 PC_IDU:  rf_n[`RFP_PC] = idu;
@@ -1516,7 +1530,7 @@ module z80_core (
         // M1 opcode / INTA vector latch at the end of T2.N. Not while WAIT
         // is holding T2 as a Tw -- the opcode is captured on the rising
         // edge that ends the LAST Tw (mirrors cmodel `!stalled`). PC+1 of
-        // the fetch is in the register-file block (pc_m1_inc).
+        // the fetch is an IDU job of the same edge (execute, mid-M-cycle).
         if (latch_pos && !stall) begin
             tmp8_n  = data_in;
             reg_r_n = {reg_r[7], (reg_r[6:0] + 7'd1)};
