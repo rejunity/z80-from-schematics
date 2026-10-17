@@ -66,7 +66,11 @@ module z80_core (
     output wire [3:0]  dbg_t,
     output wire [2:0]  dbg_m
 );
-    integer i;
+    // Separate loop indices for the combinational and the clocked block:
+    // one shared `integer` is assigned from both, which Yosys turns into a
+    // flop with a conflicting combinational driver (LibreLane's
+    // Checker.YosysSynthChecks rejects it).
+    integer i, ri;
 
     // ---- registered state ----
     reg [15:0] rf [0:12];
@@ -1309,7 +1313,7 @@ module z80_core (
         if (!reset_n) begin
             // 0x5555 matches perfectz80's gate-level Visual-Z80 netlist
             // boot pattern; see cmodel/z80_core.c z80_reset() comment.
-            for (i = 0; i < 13; i = i + 1) rf[i] <= 16'h5555;
+            for (ri = 0; ri < 13; ri = ri + 1) rf[ri] <= 16'h5555;
             rf[`RFP_PC] <= 16'h0000;
             reg_i <= 8'h00; reg_r <= 8'h00; ir <= 8'h00;
             t_state <= 4'd1; m_cycle <= 3'd1;
@@ -1324,7 +1328,7 @@ module z80_core (
             in_reset_hold <= 1'b1;
         end else begin
             in_reset_hold <= 1'b0;
-            for (i = 0; i < 13; i = i + 1) rf[i] <= rf_n[i];
+            for (ri = 0; ri < 13; ri = ri + 1) rf[ri] <= rf_n[ri];
             reg_i <= reg_i_n; reg_r <= reg_r_n; ir <= ir_n;
             t_state <= t_n; m_cycle <= m_cycle_n;
             bus_op <= bus_op_n; m_len <= m_len_n; m_addr <= m_addr_n; m_wdata <= m_wdata_n;
