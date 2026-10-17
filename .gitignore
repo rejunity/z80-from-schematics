@@ -42,3 +42,7 @@ __pycache__/
 # from FUSE.app/Contents/Resources/48.rom on macOS.
 spec48.rom
 48.rom
+# LibreLane runs and logs
+/asic/*/runs/
+/asic/*/harden.log
+/asic/*/harden-*.log

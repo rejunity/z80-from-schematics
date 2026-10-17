@@ -1,0 +1,30 @@
+# LibreLane 3 Classic flow: harden z80_top as a stand-alone macro on
+# sky130A / sky130_fd_sc_hd -- the PDK and cell library used by the
+# TinyTapeout SKY130 shuttles (tt-gds-action ttsky26d: LibreLane 3.0.14,
+# which pins open_pdks sky130 8afc8346).
+#
+# This is a tapeout-readiness probe of the core itself (synthesis ->
+# floorplan -> place -> CTS -> route -> STA -> DRC/LVS/antenna), not a
+# shuttle submission: no TinyTapeout tile wrapper and no pads yet.
+meta:
+  version: 3
+  flow: Classic
+
+DESIGN_NAME: z80_top
+VERILOG_FILES:
+  - dir::../../rtl/*.v
+VERILOG_INCLUDE_DIRS:
+  - dir::../../rtl
+
+# One Z80-rate clock. 50 ns = 20 MHz, the fastest CMOS Z80 grade
+# (Z84C0020). The negedge input samplers and the falling-edge half of
+# the pin former make some paths half-cycle (25 ns).
+CLOCK_PORT: clk
+CLOCK_PERIOD: 50
+
+# Let the die follow the cell area; utilisation is reported so it can be
+# compared with TinyTapeout tile and wafer.space slot sizes. 45% hit
+# global-routing congestion on sky130 (93% of tracks, 5095 overflows).
+FP_SIZING: relative
+FP_CORE_UTIL: 30
+PL_TARGET_DENSITY_PCT: 40

@@ -1,0 +1,65 @@
+# RTL-to-GDS of z80_top on sky130A (LibreLane 3.0.14 Classic flow, the bare
+# core -- no pad ring), the sign-off checks, and the signs-of-life program
+# on the routed netlist. Runs on pushes to this branch and on demand.
+# See asic/sky130/README.md.
+name: asic-sky130
+
+on:
+  push:
+    branches: [asic-sky130]
+  workflow_dispatch:
+
+jobs:
+  harden:
+    name: sky130A RTL-to-GDS + signs of life
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: DeterminateSystems/nix-installer-action@main
+        with:
+          # pre-built LibreLane closure; without it nix rebuilds LibreLane's
+          # pinned iverilog from source and one of its self-tests fails
+          extra-conf: |
+            extra-substituters = https://nix-cache.fossi-foundation.org
+            extra-trusted-public-keys = nix-cache.fossi-foundation.org:3+K59iFwXqKsL7BNu6Guy0v+uTlwsxYQxjspXzqLYQs=
+            extra-experimental-features = nix-command flakes
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+
+      # iverilog >= 12 for the gate-level run (the IHP cell models need it)
+      - name: Install LibreLane 3.0.14 and iverilog
+        run: nix profile install github:librelane/librelane/3.0.14 nixpkgs#iverilog
+
+      - name: Cache the sky130A PDK (ciel)
+        uses: actions/cache@v4
+        with:
+          path: ~/.ciel
+          key: ciel-sky130-8afc8346a57fe1ab7934ba5a6056ea8b43078e71
+
+      - name: Signs of life (RTL)
+        run: make -C asic/sky130 sign_of_life_rtl
+
+      - name: RTL-to-GDS
+        run: make -C asic/sky130 harden LIBRELANE_ARGS=--hide-progress-bar
+
+      - name: Sign-off summary (fails on DRC / LVS / antenna / XOR / timing)
+        run: make -C asic/sky130 summary
+
+      - name: Signs of life (routed netlist, sky130A cell models)
+        run: make -C asic/sky130 sign_of_life
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: asic-sky130
+          path: |
+            asic/sky130/runs/*/final/metrics.*
+            asic/sky130/runs/*/final/gds/
+            asic/sky130/runs/*/final/nl/
+            asic/sky130/runs/*/*-openroad-stapostpnr/summary.rpt
+            asic/sky130/runs/*/flow.log
+            asic/sky130/runs/*/warning.log
+            asic/sky130/runs/*/error.log
+          retention-days: 14
