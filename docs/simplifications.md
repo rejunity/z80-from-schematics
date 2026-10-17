@@ -28,7 +28,13 @@ a `z80_idu` module but it never merged.
 **Fix**: add `cmodel/z80_idu.c` + `rtl/z80_idu.v`, route all the inline 16-bit
 add/sub-1 + disp-add through it.
 
-**Status**: pending.
+**Status**: RTL done (optimise-luts): `rtl/z80_addr.v` has one IDU on the
+address-side bus for every 16-bit +/-1 (PC+1, SP+/-1, rp+/-1, block pointer
+steps, MEMPTR +1 rules) and, next to it, one effective-address adder for
+PC+e / IX+d. Block instructions use the IDU on T-states where the address
+latch holds, like the die (table in `docs/architecture.md` section 3). R's
+7-bit refresh increment keeps its own small incrementer (it shares the
+opcode-latch edge with PC+1). C model: still inline arithmetic.
 
 ### A2. Inline 8-bit ALU ops outside `z80_alu`
 
@@ -60,7 +66,9 @@ either as two passes driven by the sequencer or as one 16-bit-shaped mode that
 internally calls the 8-bit nibble code twice. Either way the inline
 `rf[hlp] + rf[rp_sel_w]` in core goes away.
 
-**Status**: pending.
+**Status**: partly: the RTL now has one shared 16-bit adder/subtractor (with the
+half-carry taken from the carry into bit 12) for all three instructions, next
+to the ALU; it is still one pass, not byte-twice through `z80_alu`.
 
 ### A4. Register file as flat 13×16 array
 
@@ -78,7 +86,12 @@ do explicit byte swaps in C / non-blocking swaps in Verilog.
 no data movement). Already prototyped on `wip-like-z80-microarch` but not
 merged.
 
-**Status**: pending.
+**Status**: RTL done (optimise-luts): `rtl/z80_regfile.v` holds the pairs
+behind four exchange flip-flops (EXX bank, AF bank, DE/HL swap per bank);
+EX / EXX flip them, no data moves. WZ is the operand latch as on the die,
+so the old `tmpl` / `tmp16` temporaries are gone. PC / SP / WZ are loads of
+the same file rather than a separate `z80_sysreg`; I and R stay in the core.
+C model: still copies on EX / EXX.
 
 ## B. Timing / phase shortcuts
 
@@ -179,7 +192,10 @@ literal tri-state, synthesizable). This is what the `wip-like-z80-microarch`
 branch started. Plumbing-only on the C side; meaningful on the RTL side for
 gate-level fidelity.
 
-**Status**: pending — large.
+**Status**: partly: the RTL has the 16-bit address-side bus (`abus` in
+`rtl/z80_addr.v`) between the register file, the IDU and the address latch;
+the 8-bit data side is still a set of selects (register byte read, ALU
+result, data latch) rather than modelled db1/db2 segments.
 
 ### E2. WAIT sample point
 

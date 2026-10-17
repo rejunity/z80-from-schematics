@@ -99,38 +99,78 @@ stalled memory write re-enters that half (`hold_wr`). See `docs/clocking.md`.
 
 ## 3. Internal datapath
 
-A single 8-bit internal data bus (`bus_db`) plus a 16-bit address path. No internal
-tri-states; every bus is an explicit mux selected by control lines.
+The RTL is organised like the die (Shirriff's die analysis, Z80 Explorer's
+`exec_matrix`), at T-state resolution. Every block exists once and is shared
+through narrow control signals; there are no internal tri-states (every bus
+is an explicit mux).
 
 ```
-          +----------------------------------------------+
-   ctl -->| PLA decode  ->  control word (ctl_*)         |
-          +----------------------------------------------+
-                 |                  |             |
-                 v                  v             v
-        +----------------+   +-----------+  +--------------+
-        |  register file |<->|  ALU + F  |  | addr gen +/- |
-        |  BC DE HL AF   |   | (nibble)  |  |  inc/dec     |
-        |  BC'DE'HL'AF'  |   +-----------+  +--------------+
-        |  IX IY SP PC   |        ^  |            |
-        |  I R  WZ  IR   |        |  v            v
-        +----------------+      bus_db        pin_addr
-                 ^___________________|____________
-                          internal 8-bit data bus
+            prefix, IR
+                |
+          +-----------+   exec, fields   +---------------+   ctl_* (selects)
+          | z80_pla   |----------------->| z80_execute   |---------------------+
+          | decode    |                  | random control|                     |
+          +-----------+   M, T, conds -->| logic         |                     |
+                                         +---------------+                     |
+   +--------------------------+                                                |
+   | z80_core: sequencer      |  T / M counters, WAIT, BUSREQ, NMI / INT,      |
+   | (+ data latches, pins)   |  instruction boundary; tmp8, m_wdata, tmph     |
+   +--------------------------+                                                |
+                                                                               v
+   +---------------------------+   abus (16)   +-------------------------------+
+   | z80_regfile               |-------------->| z80_addr: IDU (+1/-1/-2),     |
+   | BC DE HL AF  BC'DE'HL'AF' |<--------------| EA adder (PC+e, IX+d),        |--> m_addr
+   | IX IY SP PC WZ            |  write-back   | address-latch input           |   (address latch)
+   | + EX/EXX exchange flops   |               +-------------------------------+
+   +---------------------------+
+          |  byte reads / writes (data side)
+          v
+   +---------------------------+
+   | z80_alu (8 bit + flags),  |  plus the 16-bit add/sub of ADD/ADC/SBC HL
+   | bit-op unit (RES / SET)   |  and the write-data latch (m_wdata)
+   +---------------------------+
 ```
 
-### Register file (`rf_*`)
-16-bit-oriented file (mirrors the die): pairs `BC DE HL AF`, alternates
-`BC' DE' HL' AF'`, plus `IX IY SP PC I R WZ` and the instruction register `IR`.
-8-bit access selects the high/low half of a pair. The WZ ("MEMPTR") pair is an
-internal temporary, not programmer-visible, but observable via `BIT n,(HL)` flags.
-A 16-bit incrementer/decrementer sits on the address-read path (used for PC, SP, the
-refresh `R` increment, and `(rp)±` block moves).
+### Register file (`rtl/z80_regfile.v`)
+16-bit pairs BC DE HL AF, BC' DE' HL' AF', IX IY SP PC WZ. As on the die,
+`EX DE,HL` / `EXX` / `EX AF,AF'` move no data: four exchange flip-flops (EXX
+bank, AF bank, and a DE/HL swap bit per physical bank) rename which physical
+pair answers to which name. Ports: a 16-bit pair write, a byte write (either
+half of a pair), the flag port, and PC / SP / WZ loads; logical read ports.
+WZ ("MEMPTR") is the operand latch, as on the die: the operand word of JP,
+CALL, RET, LD A,(nn), LD HL,(nn), EX (SP),HL, the IM 2 vector fetch... is
+assembled in Z then W, which is why MEMPTR ends up holding it. LD rp,nn and
+POP, which leave MEMPTR alone, write their bytes straight into the pair.
+
+### Address side (`rtl/z80_addr.v`)
+The 16-bit address-side bus `abus` carries a register pair (or an address
+temporary: `{n_hi, Z}`, `{A, n}`, `{I, vector}`, `{B-1, C}`). One 16-bit
+incrementer/decrementer (IDU) on it forms PC+1, SP-1, rp+1, the block-move
+pointer steps and the MEMPTR +1 rules, for the address latch and for
+write-back. Next to it, the effective-address adder forms PC + e (JR, DJNZ,
+the block-repeat PC-1) and IX/IY + d. The address latch (`m_addr`) loads at
+the start of each M-cycle.
+
+The die runs the IDU while the address latch holds; the RTL's execute block
+does the same, issuing a few micro-ops on T-states before the last one:
+
+| Instruction        | IDU job (edge leaving)                    |
+|--------------------|-------------------------------------------|
+| every opcode fetch | PC+1 (M1 T2, the opcode latch edge)        |
+| LDI / LDD          | HL+-1 (M2 T1), DE+-1 (M3 T1), BC-1 (M3 T2) |
+| CPI / CPD          | HL+-1 (M2 T1), BC-1 (M2 T2), WZ+-1 (M3 T1) |
+| INI / IND          | HL+-1 (M4 T1)                              |
+| OUTI / OUTD        | HL+-1 (M3 T1)                              |
+
+All other register loads happen on the last T-state of an M-cycle, together
+with the start of the next bus cycle. R's 7-bit refresh increment stays a
+small incrementer of its own: it shares the opcode-latch edge with PC+1.
 
 ### ALU (`alu_*`)
 Organized as a **4-bit nibble unit applied twice** (low nibble then high nibble) with
 an explicit carry chain between passes — per Shirriff's die analysis (see
-`docs/alu.md`). Operand latches `alu_op_a`, `alu_op_b`, op select `alu_op`, carry-in,
+`docs/alu.md`). (The RTL evaluates both nibble passes in one T-state; the
+16-bit ADD / ADC / SBC HL,rp use one shared 16-bit adder next to the ALU.) Operand latches `alu_op_a`, `alu_op_b`, op select `alu_op`, carry-in,
 result `alu_res`, and the flag-source outputs. Logic ops, add/sub, DAA, and the
 rotate/shift helpers share the unit.
 
@@ -143,18 +183,26 @@ See `docs/flags.md`.
 
 ## 4. Control word & decode
 
-The PLA maps `(prefix_state, opcode)` → a **control word** of *named lines*
-(`docs/pla.md`). It is compact and ROM-like: opcodes are decomposed into the standard
-`x[7:6] y[5:3] z[2:0]` fields (with `p=y>>1`, `q=y&1`) and matched in a table, rather
-than dispatched through an opaque per-opcode `switch`. The control word selects
-register source/dest, ALU op, flag mode, bus source/dest, address source, memory/IO
-control, the **M-cycle sequence template** (`seq_*`), prefix handling, interrupt and
-refresh handling, and undocumented special-cases.
+The PLA maps `(prefix_state, opcode)` → instruction class (`exec`) plus its fields
+(`docs/pla.md`): register source/dest, ALU op, flag mode, condition, index
+register, displacement, block-op variant. It is compact and ROM-like: opcodes are
+decomposed into the standard `x[7:6] y[5:3] z[2:0]` fields (with `p=y>>1`,
+`q=y&1`) and matched in a table, rather than dispatched through an opaque
+per-opcode `switch`.
 
-The **micro-sequencer** lives inside `cmodel/z80_core.c` (mirroring the sequencer
-block of `rtl/z80_core.v`). It consumes the control word + `m_cycle`/`t_state`/`phi`
-and drives the datapath and pins per phase — a structured state machine keyed off the
-control word's `exec` line + step index, *not* a giant behavioral function per opcode.
+The **execute block** (`rtl/z80_execute.v`, the die's random control logic)
+turns the class, the M-cycle, the T-state and a few datapath conditions (cc, Z,
+BC != 0, B != 0, B-1 != 0) into the **control word** `ctl_*`: which bus cycle
+starts next and where its address comes from, what the IDU and the EA adder do,
+which register-file ports write what, the flag source, the exchanges, the
+interrupt-enable updates, instruction done. Only narrow select signals leave
+it; the data stays in the datapath. Per instruction class it reads like a row of
+Z80 Explorer's `exec_matrix` (one row per class, one column per M-cycle). The
+encodings are in `rtl/z80_ctl.vh`.
+
+In the C model the micro-sequencer lives inside `cmodel/z80_core.c`: a
+structured state machine keyed off the same `exec` class + step index, *not* a
+giant behavioural function per opcode.
 
 ## 5. Module mapping (C ↔ Verilog, one C file per Verilog module)
 
@@ -162,7 +210,7 @@ control word's `exec` line + step index, *not* a giant behavioral function per o
 |-------------------------------------------------------------------------------------------------------------------------------|-------------------------|---------------------|
 | Public types, pins, constants, module entry-point decls                                                                       | `cmodel/z80.h`          | `rtl/z80_defs.vh`   |
 | Chip top: falling-edge input samplers + dual-edge pin former (the only negedge logic)                                        | (folded into the per-phase step) | `rtl/z80_top.v`     |
-| Core: phase engine, micro-sequencer, bus-cycle setup, register file, interrupts / refresh / HALT / WAIT / BUSREQ              | `cmodel/z80_core.c`     | `rtl/z80_core.v`    |
+| Core: phase engine, micro-sequencer, bus-cycle setup, register file, interrupts / refresh / HALT / WAIT / BUSREQ              | `cmodel/z80_core.c`     | `rtl/z80_core.v` (sequencer, data latches) + `rtl/z80_execute.v` (control word) + `rtl/z80_regfile.v` (register file, exchange flip-flops) + `rtl/z80_addr.v` (abus, IDU, EA adder, address-latch input) |
 | PLA decode (pure combinational)                                                                                               | `cmodel/z80_pla.c`      | `rtl/z80_pla.v`     |
 | ALU + flag assembly (pure combinational)                                                                                      | `cmodel/z80_alu.c`      | `rtl/z80_alu.v`     |
 | External pin timing (pure combinational)                                                                                      | `cmodel/z80_timing.c`   | `rtl/z80_timing.v`  |
@@ -181,6 +229,10 @@ file that mutates it; its public functions (`z80_init`, `z80_reset`,
 
 The C model is the fast reference; the RTL implements the identical machine and is
 verified against it phase-by-phase (`make compare`; see `docs/verification.md`).
+Inside the core the RTL follows the die more literally than the C model does
+(exchange flip-flops instead of copies, one IDU with its jobs spread over the
+M-cycle, WZ as the operand latch): register contents can differ *between*
+T-states of an instruction, never at the pins or at instruction boundaries.
 
 ### Building
 `make cmodel` builds the static library and relinks the dependent CLI binaries

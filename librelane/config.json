@@ -4,6 +4,9 @@
     "dir::../rtl/z80_alu.v",
     "dir::../rtl/z80_pla.v",
     "dir::../rtl/z80_timing.v",
+    "dir::../rtl/z80_execute.v",
+    "dir::../rtl/z80_regfile.v",
+    "dir::../rtl/z80_addr.v",
     "dir::../rtl/z80_core.v",
     "dir::../rtl/z80_top.v"
   ],

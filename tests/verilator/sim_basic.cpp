@@ -114,10 +114,10 @@ int main(int argc, char** argv) {
     // invocation; NASCOM BASIC's cold-boot path sets its own SP via
     // `LD SP,nn` early, so the netlist path doesn't need the prime.
 #ifndef NETLIST_BUILD
-    R->z80_top__DOT__u_core__DOT__rf[11]   = 0x0000;
-    R->z80_top__DOT__u_core__DOT__rf_n[11] = 0x0000;
-    R->z80_top__DOT__u_core__DOT__rf[10]   = 0xFFFE;
-    R->z80_top__DOT__u_core__DOT__rf_n[10] = 0xFFFE;
+    R->z80_top__DOT__u_core__DOT__u_regs__DOT__rf[11]   = 0x0000;
+    R->z80_top__DOT__u_core__DOT__u_regs__DOT__rf_n[11] = 0x0000;
+    R->z80_top__DOT__u_core__DOT__u_regs__DOT__rf[10]   = 0xFFFE;
+    R->z80_top__DOT__u_core__DOT__u_regs__DOT__rf_n[10] = 0xFFFE;
 #endif
 
     long long phases = 0, instr = 0;
