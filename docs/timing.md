@@ -13,14 +13,12 @@ timing diagrams (precedence rule 1). In the RTL the whole T-state is evaluated
 on one rising edge and the wrapper re-times pins/inputs to the two edges —
 see `docs/clocking.md`.
 
-For the Tang Primer external bus, the 30 MHz sampler detects each external CLK
-edge after synchronization. It pipelines `/WAIT` alongside CLK, so the core
-uses the WAIT value captured at the sampler tick that first observed the
-falling edge. The core latches that value on entry to `phi=1`; the latched
-decision holds T2/Tw at the following rising-edge phase step. Changing `/WAIT`
-after the falling-edge sample does not change that decision. The sampler adds
-latency to the observation of both pins, so this is an edge-aligned digital
-model, not a zero-delay physical latch on the external CLK pin.
+On the Tang Primer chip build (`fpga/tang-primer-25k`, `EXTERNAL_BUS=1`)
+the header CLK is the clock of `z80_top` itself, so `/WAIT` on the header is
+sampled by the wrapper's falling-edge flop with no synchronizer in between:
+a pulse that is low across the falling edge of T2 (or of a Tw) inserts a wait
+state, a pulse that only spans the rising edge does not.
+`tests/iverilog/tb_wait_top.v` checks both through the real top-level.
 
 Legend: `↓` = assert (drive low for active-low pins), `↑` = deassert.
 
@@ -148,20 +146,21 @@ copies `IFF1→IFF2`, clears `IFF1`.
 
 ### External-clock reset release (Tang Primer)
 
-RESET assertion holds the core and clears a sampler-domain release pipeline.
-Deassertion passes through three sampler registers before a fresh synchronized
-rising CLK can release the core. CLK edges already in flight when RESET rises
-cannot start T1; the following falling CLK starts the first opcode read at 0000.
-This avoids an early first fetch caused by accepting a pre-release CLK edge.
-`tb_reset_top.v` sweeps 200 RESET-release offsets across a 1 MHz clock and checks
-that the first `JP 0100h` survives WAIT stretching. This establishes the RTL
-ordering; hardware retesting is still needed for the intermittent zero opcode
-reported in `event_tests_20261007/reset_low_release_high`. That capture also
-shows WAIT low only at 37.120–37.147 us, already high at the T2 falling CLK
-(37.947 us); data remains 00 until after RD ends (38.560 us), with C3 first
-visible at 39.040 us. A CPU correctly sampling WAIT must consume 00 in that
-case. The peripheral must keep WAIT low across the sample until data is ready;
-the reset ordering fix alone does not prove this driver-side race is gone.
+RESET (power-on counter, key[0], header /RESET) asserts asynchronously and
+holds `z80_top` at the idle pin pattern. Its release passes through a two-flop
+synchronizer clocked by the Z80 clock, so the first T1 starts on a rising edge
+that follows the release, never on one that preceded it, whatever the phase
+of the release. `tb_reset_top.v` sweeps 200 RESET-release offsets across a
+1 MHz external clock and checks that the first fetch is an M1 at 0000 and that
+the first `JP 0100h` survives three Tw of WAIT stretching. This establishes
+the RTL ordering; hardware retesting of the single-clock build is still
+needed for the intermittent zero opcode reported in
+`event_tests_20261007/reset_low_release_high`. That capture also shows WAIT
+low only at 37.120–37.147 us, already high at the T2 falling CLK (37.947 us);
+data remains 00 until after RD ends (38.560 us), with C3 first visible at
+39.040 us. A CPU correctly sampling WAIT must consume 00 in that case. The
+peripheral must keep WAIT low across the sample until data is ready; the
+reset ordering alone does not prove this driver-side race is gone.
 
 ## HALT
 

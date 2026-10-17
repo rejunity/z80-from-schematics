@@ -21,17 +21,20 @@
 #include "verilated.h"
 
 #ifndef SIM_BAUD
-#define SIM_BAUD 781250
+#define SIM_BAUD 260417
 #endif
-static const int CORE_HZ   = 12500000;
+static const int CLK_DIV   = 12;       // top.v sim stand-in for PLLA+CLKDIV: 50 MHz / 12
+static const int CORE_HZ   = 50000000 / CLK_DIV;   // 4.17 MHz Z80 clock
 static const int BIT_TICKS =           // in half-input-clk (eval) steps
-    ((CORE_HZ + SIM_BAUD / 2) / SIM_BAUD) * 4 * 2;
+    ((CORE_HZ + SIM_BAUD / 2) / SIM_BAUD) * CLK_DIV * 2;
 
 int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);
     Vtop* t = new Vtop;
     t->key = 0;         // buttons idle low (active high on this board)
     t->uart_rx = 1;
+    t->z80_reset_n = 1; // header /RESET and /NMI are inputs in the sbc build too (pull-ups)
+    t->z80_nmi_n = 1;
 
     std::queue<int> tx_levels;
     auto send_byte = [&](uint8_t b) {

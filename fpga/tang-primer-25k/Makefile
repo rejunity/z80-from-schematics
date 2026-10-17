@@ -1,13 +1,22 @@
 # RZ80 -> Sipeed Tang Primer 25K (Gowin GW5A-LV25MG121NES)
 #
+# Two bitstreams from one top.v (EXTERNAL_BUS parameter):
+#   sbc   BASIC single-board computer, internal 4 MHz clock, UART console,
+#         J3 mirrors the Z80 bus as outputs        -> build/top_sbc.fs
+#   chip  Z80 chip replacement: J3 is the live bus, CLK comes in on J3-22
+#                                                  -> build/top_chip.fs
+#
 #   make venv    create .venv and pip-install the toolchain
-#   make fs      synthesize + place&route + pack -> build/top.fs  (default)
-#   make sim     Verilator smoke test (fast serial)
+#   make         both bitstreams (= make fs);  make sbc / make chip for one
+#   make sim     Verilator smoke test of the sbc build (fast serial)
 #   make sim_real  same at true 115200 pacing (exercises TIE path)
-#   make prog    load bitstream to SRAM (lost on power-cycle)
-#   make flash   write bitstream to SPI flash (persistent)
-#   make timing  show nextpnr's max-frequency summary
+#   make prog MODE=sbc|chip    load bitstream to SRAM (lost on power-cycle)
+#   make flash MODE=sbc|chip   write bitstream to SPI flash (persistent)
+#   make timing  show nextpnr's max-frequency summary for both builds
 #   make clean   remove build/;  make distclean also removes .venv
+#
+# The sbc build runs the top-level `make bus_controls` regressions too
+# (tb_wait_top / tb_reset_top drive the chip build's header).
 #
 # Whole flow is pip-installed into .venv: yowasp-yosys (synth_gowin),
 # yowasp-nextpnr-himbaechel-gowin (place&route, WASM), and apycula
@@ -26,7 +35,7 @@ PYTHON   ?= python3
 
 ROM_HEX  ?= $(ROOT)/tests/basic/nascom_basic_4_7_rc2014.hex
 
-CORE_SRCS := $(ROOT)/rtl/z80_core.v $(ROOT)/rtl/z80_pla.v \
+CORE_SRCS := $(ROOT)/rtl/z80_top.v  $(ROOT)/rtl/z80_core.v $(ROOT)/rtl/z80_pla.v \
              $(ROOT)/rtl/z80_alu.v  $(ROOT)/rtl/z80_timing.v
 CORE_INCS := $(ROOT)/rtl/z80_defs.vh
 SOC_SRCS  := top.v $(ICEPI)/uart.v
@@ -40,7 +49,16 @@ DEVICE   := GW5A-LV25MG121NES
 PACK_DEV := GW5A-25A
 BOARD    := tangprimer25k
 
-.PHONY: all venv fs sim sim_real prog flash timing clean distclean
+MODES := sbc chip
+EXTBUS_sbc  := 0
+EXTBUS_chip := 1
+MODE ?= sbc
+# keep the per-build synth/pnr netlists (make would delete chained intermediates)
+.SECONDARY:
+# stem of the pattern rules below without any directory part
+STEM = $(notdir $*)
+
+.PHONY: all venv fs sbc chip sim sim_real prog flash timing clean distclean
 all: fs
 
 # ---- toolchain venv (created before any tools are installed/used) ----
@@ -71,54 +89,63 @@ $(BUILD)/tang_primer_25k.cst: tang_primer_25k.cst
 # the core's async-assert reset constants conflict with FF init values,
 # and the POR holds reset for thousands of clocks so sync semantics
 # are equivalent.
-$(BUILD)/top.json: $(BUILD)/src $(BUILD)/rom.mem $(VENV)/.ok
+$(BUILD)/top_%.synth.json: $(BUILD)/src $(BUILD)/rom.mem $(VENV)/.ok
 	cd $(BUILD) && $(YOSYS) -q -p \
-	  'read_verilog -Isrc src/z80_core.v src/z80_pla.v src/z80_alu.v src/z80_timing.v src/top.v src/uart.v; hierarchy -top top; proc; async2sync; synth_gowin -top top -family gw5a -nolutram -json top.json' \
-	  2>&1 | tee yosys.log | tail -20
+	  'read_verilog -Isrc src/z80_top.v src/z80_core.v src/z80_pla.v src/z80_alu.v src/z80_timing.v src/top.v src/uart.v; hierarchy -top top -chparam EXTERNAL_BUS $(EXTBUS_$(STEM)); proc; async2sync; synth_gowin -top top -family gw5a -nolutram -json top_$(STEM).synth.json' \
+	  2>&1 | tee yosys_$(STEM).log | tail -20
 
 # sspi_as_gpio is mandatory on GW5A-25 (apycula enforces it), but NOT
 # cpu_as_gpio: apicula's examples pass it, we use no CPU-group pins,
 # and repurposing config-interface pins risks locking out the BL616's
 # JTAG access until the next power cycle.
-$(BUILD)/top_pnr.json: $(BUILD)/top.json $(BUILD)/tang_primer_25k.cst
-	cd $(BUILD) && $(NEXTPNR) --top top --json top.json --write top_pnr.json \
+$(BUILD)/top_%.pnr.json: $(BUILD)/top_%.synth.json $(BUILD)/tang_primer_25k.cst
+	cd $(BUILD) && $(NEXTPNR) --top top --json top_$(STEM).synth.json --write top_$(STEM).pnr.json \
 	  --device $(DEVICE) --vopt cst=tang_primer_25k.cst --vopt sspi_as_gpio \
-	  2>&1 | tee nextpnr.log | grep -E "Max frequency|ERROR|error" || true
-	@test -f $(BUILD)/top_pnr.json
+	  2>&1 | tee nextpnr_$(STEM).log | grep -E "Max frequency|ERROR|error" || true
+	@test -f $(BUILD)/top_$(STEM).pnr.json
 
-$(BUILD)/top.fs: $(BUILD)/top_pnr.json
-	cd $(BUILD) && $(GOWIN_PACK) --sspi_as_gpio -d $(PACK_DEV) -o top.fs top_pnr.json
+$(BUILD)/top_%.fs: $(BUILD)/top_%.pnr.json
+	cd $(BUILD) && $(GOWIN_PACK) --sspi_as_gpio -d $(PACK_DEV) -o top_$(STEM).fs top_$(STEM).pnr.json
 
-fs: $(BUILD)/top.fs
+sbc:  $(BUILD)/top_sbc.fs
+chip: $(BUILD)/top_chip.fs
+fs:   sbc chip
 
-timing: $(BUILD)/top_pnr.json
-	@grep -E "Max frequency" $(BUILD)/nextpnr.log | tail -4
+timing: $(BUILD)/top_sbc.pnr.json $(BUILD)/top_chip.pnr.json
+	@for m in $(MODES); do echo "== $$m"; grep -E "Max frequency" $(BUILD)/nextpnr_$$m.log | tail -4; done
 
 # ---- simulation (native Verilator) ----
 VERILATOR ?= verilator
-SIM_BAUD  ?= 781250          # core clk / 16; sim_real uses true 115200
+# Sim Z80 clock is the /12 stand-in for the PLLA+CLKDIV: 4.1667 MHz, so
+# -GCORE_HZ overrides the UART divisors to match. SIM_BAUD = Z80 clk / 16
+# (make keeps trailing spaces, so no inline comment on that line).
+SIM_CORE_HZ := 4166667
+SIM_BAUD  ?= 260417
+# One object dir per baud: SIM_BAUD is baked into the model (-G/-D), so
+# `make sim_real` after `make sim` must not reuse the fast binary.
+OBJ_DIR   := $(BUILD)/obj_dir_$(SIM_BAUD)
 
-$(BUILD)/obj_dir/Vtop: $(BUILD)/src sim_top.cpp
-	rm -rf $(BUILD)/obj_dir
+$(OBJ_DIR)/Vtop: $(BUILD)/src sim_top.cpp
+	rm -rf $(OBJ_DIR)
 	cd $(BUILD) && $(VERILATOR) --cc --exe --build -j 4 -O2 \
-	  -Wno-fatal -Isrc --Mdir obj_dir --top-module top \
-	  -GCORE_HZ=12500000 -GBAUD=$(SIM_BAUD) -GEXTERNAL_BUS=0 \
+	  -Wno-fatal -Isrc --Mdir obj_dir_$(SIM_BAUD) --top-module top \
+	  -GCORE_HZ=$(SIM_CORE_HZ) -GBAUD=$(SIM_BAUD) -GEXTERNAL_BUS=0 \
 	  -CFLAGS -DSIM_BAUD=$(SIM_BAUD) \
-	  src/top.v src/uart.v src/z80_core.v src/z80_pla.v src/z80_alu.v src/z80_timing.v \
+	  src/top.v src/uart.v src/z80_top.v src/z80_core.v src/z80_pla.v src/z80_alu.v src/z80_timing.v \
 	  ../sim_top.cpp > verilator.log 2>&1 || (tail -20 verilator.log; exit 1)
 
-sim: $(BUILD)/obj_dir/Vtop $(BUILD)/rom.mem
-	cd $(BUILD) && ./obj_dir/Vtop
+sim: $(OBJ_DIR)/Vtop $(BUILD)/rom.mem
+	cd $(BUILD) && ./obj_dir_$(SIM_BAUD)/Vtop
 
 sim_real:
 	$(MAKE) sim SIM_BAUD=115200
 
 # ---- board ----
-prog: $(BUILD)/top.fs
-	$(OPENFPGALOADER) -b $(BOARD) $(BUILD)/top.fs
+prog: $(BUILD)/top_$(MODE).fs
+	$(OPENFPGALOADER) -b $(BOARD) $(BUILD)/top_$(MODE).fs
 
-flash: $(BUILD)/top.fs
-	$(OPENFPGALOADER) -b $(BOARD) -f $(BUILD)/top.fs
+flash: $(BUILD)/top_$(MODE).fs
+	$(OPENFPGALOADER) -b $(BOARD) -f $(BUILD)/top_$(MODE).fs
 
 clean:
 	rm -rf $(BUILD)
