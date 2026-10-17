@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Run LibreLane's Classic flow, stopping after Yosys.Synthesis. Produces
-# a synthesized gate-level netlist (z80_core.nl.v) under
+# a synthesized gate-level netlist (z80_top.nl.v) under
 # librelane/runs/<timestamp>/final/nl/.
 #
 # Side effects (consumed by the Makefile):
-#   build/synth/z80_core.nl.v       — symlink to the latest run's netlist
+#   build/synth/z80_top.nl.v       — symlink to the latest run's netlist
 #   build/synth/pdk_root.path       — single-line file with the resolved
 #                                     PDK_ROOT path, so `make iverilog_netlist`
 #                                     can find the sky130_fd_sc_hd Verilog
@@ -50,12 +50,12 @@ librelane --to Yosys.Synthesis ./config.json
 # Makefile rules downstream.
 mkdir -p "$ROOT/build/synth"
 
-latest=$(ls -dt runs/*/final/nl/z80_core.nl.v 2>/dev/null | head -1 || true)
+latest=$(ls -dt runs/*/final/nl/z80_top.nl.v 2>/dev/null | head -1 || true)
 if [ -z "$latest" ]; then
   echo "synth: no netlist produced — check librelane/runs/*/" >&2
   exit 1
 fi
-ln -sf "$ROOT/librelane/$latest" "$ROOT/build/synth/z80_core.nl.v"
+ln -sf "$ROOT/librelane/$latest" "$ROOT/build/synth/z80_top.nl.v"
 echo "synth: produced $latest"
 
 # Resolve PDK_ROOT — try in order:

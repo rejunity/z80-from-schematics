@@ -1,12 +1,17 @@
-// Control pins must match the timing contract after each phase, and must
-// not follow intermediate decoder states between phase edges. Injected skew
+// Control pins must match the timing contract after each clock edge, and
+// must not follow intermediate decoder states between edges. Injected skew
 // is a structural regression, not a model of a particular routed delay.
+//
+// Single Z80-rate clock: one T-state per period. After a rising edge the
+// pins show the clock-high half (".P") of the new T-state; after a falling
+// edge, the clock-low half (".N"). z80_top's two-flop former makes every
+// pin a register output, so nothing inside z80_core can reach a pin
+// between edges.
 `timescale 1ns/1ps
 `include "z80_defs.vh"
 
 module tb_bus_controls;
-    parameter USE_CEN = 1;
-    reg clk = 0, cen = 1, reset_n = 0;
+    reg clk = 0, reset_n = 1;
     reg wait_n = 1, int_n = 1, nmi_n = 1, busreq_n = 1;
     wire [15:0] addr;
     wire [7:0] data_out;
@@ -15,44 +20,47 @@ module tb_bus_controls;
     wire [7:0] data_in = !mreq_n && !rd_n ? mem[addr] : 8'hff;
     wire [8:0] pins = {data_drive, m1_n, mreq_n, iorq_n, rd_n,
                        wr_n, rfsh_n, halt_n, busack_n};
-    z80_core #(.USE_CEN(USE_CEN)) dut (
-        .clk(clk), .cen(cen), .reset_n(reset_n),
+    z80_top dut (
+        .clk(clk), .reset_n(reset_n),
         .addr(addr), .data_in(data_in), .data_out(data_out), .data_drive(data_drive),
         .m1_n(m1_n), .mreq_n(mreq_n), .iorq_n(iorq_n), .rd_n(rd_n),
         .wr_n(wr_n), .rfsh_n(rfsh_n), .halt_n(halt_n), .busack_n(busack_n),
         .wait_n(wait_n), .int_n(int_n), .nmi_n(nmi_n), .busreq_n(busreq_n),
-        .dbg_t(), .dbg_phi(), .dbg_m()
+        .dbg_t(), .dbg_m()
     );
+    wire phi = ~clk;   // which half of the T-state the pins show (settled)
 
-    // Existing timing contract evaluated on the committed state. This catches
-    // an accidental extra phase of latency, including refresh and WAIT phases.
+    // Timing contract evaluated on the committed state and the current
+    // clock half. This catches an accidental extra half-cycle of latency,
+    // including refresh and WAIT phases.
     wire ref_drive, ref_m1, ref_mreq, ref_iorq, ref_rd, ref_wr, ref_rfsh;
     z80_timing reference_timing (
-        .bus_op(dut.bus_op), .t_state(dut.t_state[2:0]), .phi(dut.phi),
-        .m_len(dut.m_len), .m_addr(dut.m_addr), .m_wdata(dut.m_wdata),
-        .reg_i(dut.reg_i), .reg_r(dut.reg_r), .addr(), .data_out(),
+        .bus_op(dut.u_core.bus_op), .t_state(dut.u_core.t_state[2:0]), .phi(phi),
+        .m_len(dut.u_core.m_len), .m_addr(dut.u_core.m_addr), .m_wdata(dut.u_core.m_wdata),
+        .reg_i(dut.u_core.reg_i), .reg_r(dut.u_core.reg_r), .addr(), .data_out(),
         .data_drive(ref_drive), .m1_n(ref_m1), .mreq_n(ref_mreq),
         .iorq_n(ref_iorq), .rd_n(ref_rd), .wr_n(ref_wr), .rfsh_n(ref_rfsh)
     );
-    wire ref_halt = !(dut.halted || ((dut.exec_w == `EXEC_HALT) &&
-                       (dut.bus_op == `BUSOP_M1) &&
-                       (dut.t_state == 4) && dut.phi));
+    wire ref_halt = !(dut.u_core.halted || ((dut.u_core.exec_w == `EXEC_HALT) &&
+                       (dut.u_core.bus_op == `BUSOP_M1) &&
+                       (dut.u_core.t_state == 4) && phi));
     // A memory-write Tw.P retains WR; the base timing decoder describes
     // only the initial T2.P before WR first falls.
     reg ref_wait_write = 0;
     always @(posedge clk or negedge reset_n)
         if (!reset_n) ref_wait_write <= 0;
-        else if (!USE_CEN || cen)
-            ref_wait_write <= dut.stall && dut.bus_op == `BUSOP_MWR;
-    wire [8:0] expected = {dut.hold_pins ? 7'b0111111 :
+        else ref_wait_write <= dut.u_core.hold_wr;
+    // Reset hold and bus grant (BUSACK) idle every strobe and release the
+    // data bus (docs/known-differences.md row 15).
+    wire idle = dut.u_core.in_reset_hold || dut.u_core.bus_granted;
+    wire [8:0] expected = {idle ? 7'b0111111 :
                           {ref_drive, ref_m1, ref_mreq, ref_iorq, ref_rd,
                            ref_wait_write ? 1'b0 : ref_wr, ref_rfsh},
-                          ref_halt, !dut.bus_granted};
+                          ref_halt, !dut.u_core.bus_granted};
     integer i, steps = 0, waits = 0, grants = 0, halts = 0;
     reg [7:0] bus_seen = 0;
     reg [8:0] before_pins;
     reg [3:0] saved_t;
-    reg saved_phi;
     reg [2:0] saved_op;
     reg [7:0] saved_ir;
 
@@ -64,29 +72,25 @@ module tb_bus_controls;
     task check_pins;
         begin
             if (pins !== expected)
-                $fatal(1, "phase %0d op=%0d T%0d phi=%0d pins=%b expected=%b",
-                       steps, dut.bus_op, dut.t_state, dut.phi, pins, expected);
+                $fatal(1, "half-step %0d op=%0d T%0d phi=%0d pins=%b expected=%b",
+                       steps, dut.u_core.bus_op, dut.u_core.t_state, phi, pins, expected);
         end
     endtask
 
+    // half a T-state: one clock edge, settle, check
     task step;
-        reg [8:0] previous;
         begin
-            #5;
-            previous = pins;
-            clk = 1;
-            #2;
+            #4;
+            clk = ~clk;
+            #1;
             steps = steps + 1;
             check_pins;
-            if (reset_n && USE_CEN && !cen && pins !== previous)
-                $fatal(1, "controls changed with clock enable disabled");
-            if (reset_n && (!USE_CEN || cen)) begin
-                bus_seen[dut.bus_op] = 1;
-                if (dut.stall) waits = waits + 1;
+            if (reset_n) begin
+                bus_seen[dut.u_core.bus_op] = 1;
+                if (dut.u_core.stall) waits = waits + 1;
                 if (!busack_n) grants = grants + 1;
                 if (!halt_n) halts = halts + 1;
             end
-            #3; clk = 0;
         end
     endtask
 
@@ -99,7 +103,7 @@ module tb_bus_controls;
     endtask
 
     always @(posedge clk)
-        if (reset_n && (!USE_CEN || cen) && !mreq_n && !wr_n && data_drive)
+        if (reset_n && !mreq_n && !wr_n && data_drive)
             mem[addr] <= data_out;
 
     initial begin
@@ -113,10 +117,10 @@ module tb_bus_controls;
          272'h3100803e553200403a0040d320db2021004034dd210040dd7e00ed56fb0076c30300;
         mem['h38] = 'hed; mem['h39] = 'h4d;
         mem['h66] = 'hed; mem['h67] = 'h45;
+        #1 reset_n = 0;   // real falling edge on reset_n: async-resets both former halves
         step;
-        reset_n = 1; #1; check_pins; // preserve reset-release T1.P
+        reset_n = 1; #1; check_pins; // still idle until the first rising edge
         for (i = 0; i < 1200; i = i + 1) begin
-            cen = (i % 7) >= 2;
             wait_n = (i % 31) >= 6;
             busreq_n = !(i >= 350 && i < 390);
             nmi_n = !(i >= 500 && i < 505);
@@ -127,46 +131,44 @@ module tb_bus_controls;
             $fatal(1, "missing coverage bus=%b waits=%0d grants=%0d halts=%0d",
                    bus_seen, waits, grants, halts);
 
-        // Runtime reset with CEN low must immediately make transfers idle.
-        cen = 0; reset_n = 0; #1; check_pins;
+        // Runtime reset must immediately (asynchronously) make transfers idle.
+        reset_n = 0; #1; check_pins;
         step;
         mem[0] = 0;
         wait_n = 1; int_n = 1; nmi_n = 1; busreq_n = 1;
         reset_n = 1; #1; check_pins;
-        cen = 1;
-        while (!(dut.bus_op == `BUSOP_M1 && dut.t_state == 4 && dut.phi)) step;
+        while (!(dut.u_core.bus_op == `BUSOP_M1 && dut.u_core.t_state == 4 && phi)) step;
         before_pins = pins;
-        saved_t = dut.t_state; saved_phi = dut.phi; saved_op = dut.bus_op;
-        saved_ir = dut.ir;
+        saved_t = dut.u_core.t_state; saved_op = dut.u_core.bus_op;
+        saved_ir = dut.u_core.ir;
 
-        // T4.N -> T1.P: new T arrives before phi. Old RTL asserts M1/RD/MREQ.
-        force dut.t_state = 1;
-        unchanged;
-        force dut.phi = 0;
+        // T4.N -> T1.P: pretend the T counter settled early. Decoding state
+        // straight onto pins would assert M1/RD/MREQ here.
+        force dut.u_core.t_state = 1;
         unchanged;
         // Other intermediate decodes exercise WR/IORQ and data output enable.
-        force dut.bus_op = `BUSOP_MWR;
-        force dut.t_state = 3;
+        force dut.u_core.bus_op = `BUSOP_MWR;
+        force dut.u_core.t_state = 3;
         unchanged;
-        force dut.bus_op = `BUSOP_IOWR;
+        force dut.u_core.bus_op = `BUSOP_IOWR;
         unchanged;
-        force dut.bus_op = `BUSOP_MRD;
+        force dut.u_core.bus_op = `BUSOP_MRD;
         unchanged;
-        release dut.t_state; release dut.phi; release dut.bus_op;
-        dut.t_state = saved_t; dut.phi = saved_phi; dut.bus_op = saved_op;
+        release dut.u_core.t_state; release dut.u_core.bus_op;
+        dut.u_core.t_state = saved_t; dut.u_core.bus_op = saved_op;
         // HALT must also be isolated from transient instruction decoding.
-        force dut.ir = 8'h76;
+        force dut.u_core.ir = 8'h76;
         unchanged;
-        release dut.ir;
-        dut.ir = saved_ir;
+        release dut.u_core.ir;
+        dut.u_core.ir = saved_ir;
         #1; check_pins;
         step; // real T1.P must assert M1, leaving all transfer strobes idle
         if (m1_n !== 0 || {mreq_n, iorq_n, rd_n, wr_n} !== 4'b1111)
             $fatal(1, "invalid M1 entry");
-        step; // T1.N must start the real fetch without an extra phase delay
+        step; // T1.N must start the real fetch without an extra half-cycle delay
         if ({mreq_n, rd_n} !== 2'b00) $fatal(1, "late opcode read");
-        $display("PASS bus controls USE_CEN=%0d: %0d phases, bus=%b, WAIT/DMA/HALT/reset/skew",
-                 USE_CEN, steps, bus_seen);
+        $display("PASS bus controls: %0d half-steps, bus=%b, WAIT/DMA/HALT/reset/skew",
+                 steps, bus_seen);
         $finish;
     end
 endmodule

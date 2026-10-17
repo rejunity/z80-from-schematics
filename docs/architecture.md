@@ -7,40 +7,47 @@ described below use the prose-friendly `pin_*` / `ctl_*` style, while the actual
 identifiers in code follow each language's idiom (`pins.mreq_n` etc. in C, bare
 `mreq_n` ports + `rf_n` style next-state regs in Verilog).
 
-## 1. Clocking & phases (single clock, DFF-only)
+## 1. Clocking & phases (one clock, one edge, DFF-only)
 
-The original Z80 acts on **both** edges of its clock. We model that with a single
-modern clock running at **2× the Z80 clock**, so each Z80 T-state is exactly two
-modern-clock ticks. All state updates on `posedge clk`. No latches, no dual-edge.
+The original Z80 acts on **both** edges of its clock. The C model represents
+that as two half-steps per T-state; the RTL runs on the Z80 clock itself, with
+every register in the core on `posedge clk` (one tick per T-state), and a thin
+top-level wrapper that re-creates the both-edges pin behaviour with a handful
+of falling-edge flops. No latches, no 2× clock, one clock domain. The full
+story — the retiming argument, the dual-edge output former, which input is
+sampled on which edge, GF180 cell mapping — is in `docs/clocking.md`.
 
 ```
 Z80 T-state:   |   T1        |   T2        | ...
-Z80 CLK:        __----____----____----____--
-phase (phi):    0    1   0    1   0    1
-modern clk tick:^    ^   ^    ^   ^    ^
+Z80 CLK (clk):  __----____----____----____--
+phase (phi):    0    1   0    1   0    1       <- C model half-steps / trace lines
+core posedge:   ^        ^        ^            <- RTL: all internal state
+wrapper negedge:     ^        ^        ^       <- RTL: pin former b-flops, input samplers
 ```
 
-- `phi == 0` ("**PHI_P**"): the first half of a T-state — corresponds to the Z80
-  clock *rising-edge* region. Actions the real chip performs on the rising edge
-  (drive address bus, raise/clear M1 at T1, latch refresh address at T3, **latch
-  MRD/IORD read data** at the last T-state's PHI_P) take effect on the
-  `posedge clk` that *enters* phi=0.
-- `phi == 1` ("**PHI_N**"): the second half — corresponds to the Z80 clock
-  *falling-edge* region. Actions on the real chip's falling edge (assert MREQ/RD,
-  assert WR, sample WAIT, deassert MREQ/RD/IORQ/WR at the last T-state, latch the
-  M1 opcode at T2.N) take effect on the `posedge clk` that *enters* phi=1.
+- `phi == 0` ("**PHI_P**"): the clock-high half of a T-state. Actions the
+  real chip performs on the rising edge (drive address bus, raise/clear M1
+  at T1, present the refresh address at T3) take effect here.
+- `phi == 1` ("**PHI_N**"): the clock-low half. Actions on the real chip's
+  falling edge (assert MREQ/RD, assert WR, deassert MREQ/RD/IORQ/WR at the
+  last T-state, **latch MRD/IORD read data** at T3/T4) take effect here.
 
-On the Tang Primer external bus, CLK and `/WAIT` pass through aligned 30 MHz
-sampler pipelines. When a synchronized falling CLK edge enables the phase step
-into `phi=1`, the core captures the corresponding WAIT sample in a register.
-The next rising-edge step uses that saved bit to insert Tw; it does not reread
-the live WAIT pin.
+In the **C model** each half is one call of `z80_phase_step()`. In the **RTL**
+one `posedge clk` evaluates both halves of a T-state back to back — the
+clock-low-half work first (read-data latch, INT/NMI sample point), reading the
+inputs the wrapper captured on the falling edge, then the clock-high-half work
+(opcode latch, WAIT, sequencer), reading the live inputs. The core emits two
+pin images per T-state (`*_pos` for the coming clock-high half, computed from
+next-state; `*_neg` for the current clock-low half) and `rtl/z80_top.v` turns
+them into the actual pin waveform with a glitch-free two-flop XOR former
+(`a <= pos ^ b` on the rising edge, `b <= neg ^ a` on the falling edge,
+`pin = a ^ b`).
 
-The canonical simulation step is **one phase** (`z80_phase_step()` in C; one `clk`
-edge in RTL). Two phase-steps advance one T-state. Traces are emitted once per phase.
+Traces are still emitted once per **phase** (two lines per T-state), so the C
+model, the RTL and the perfectz80 gate-level reference line up unchanged.
 
 ### Timing/sequencer registers
-- `phi` (1 bit): current phase.
+- `phi` (1 bit): current phase (C model only — the RTL evaluates both phases on one edge).
 - `t_state` (4 bits in RTL, 8 in C — holds 1..N including WAIT extensions and the
    5-T INTERNAL/M1 cycle, 1-based).
 - `m_cycle` (3 bits): machine-cycle index within the current instruction, 1-based.
@@ -55,7 +62,7 @@ Active-low signals carry the `_n` suffix (asserted = 0).
 
 | Pin                  | Dir | Meaning                                                         |
 |----------------------|-----|-----------------------------------------------------------------|
-| `pin_clk`            | in  | 2× modeled clock                                                |
+| `pin_clk`            | in  | the Z80 clock (one period = one T-state)                        |
 | `pin_reset_n`        | in  | async-assert / sync-deassert reset (active low)                 |
 | `pin_addr[15:0]`     | out | address bus                                                     |
 | `pin_data_in[7:0]`   | in  | data bus, sampled side                                          |
@@ -68,7 +75,7 @@ Active-low signals carry the `_n` suffix (asserted = 0).
 | `pin_wr_n`           | out | write strobe                                                    |
 | `pin_rfsh_n`         | out | refresh address valid                                           |
 | `pin_halt_n`         | out | CPU halted                                                      |
-| `pin_wait_n`         | in  | insert wait states (sampled on falling edge)                    |
+| `pin_wait_n`         | in  | insert wait states (sampled at the end of T2.N / Tw.N)          |
 | `pin_int_n`          | in  | maskable interrupt request                                      |
 | `pin_nmi_n`          | in  | non-maskable interrupt (edge)                                   |
 | `pin_busreq_n`       | in  | bus request                                                     |
@@ -77,17 +84,18 @@ Active-low signals carry the `_n` suffix (asserted = 0).
 The data bus is modeled as separate `pin_data_in`/`pin_data_out` + `pin_data_drive`
 instead of a tri-state, matching "no internal tri-states; use explicit muxes."
 
-In RTL, `z80_core` registers M1, MREQ, IORQ, RD, WR, RFSH, HALT and data-output
-enable from the **next** timing state, on the same enabled edge as the sequencer.
-This preserves phase timing without exposing intermediate `t_state`/`phi`/`bus_op`
-decodes to external hardware. For example, T4.N → T1.P must not briefly decode
-T1.N and assert RD/MREQ as M1 falls. M1 retains a reset-only output mask to
-preserve its initial T1.P assertion on reset release. Address and data still use
-the current-state decode; BUSACK comes from the registered bus-grant flag.
-`make bus_controls` checks phase parity, injects decoder skew between edges,
-and verifies falling-edge WAIT capture and continuous write strobes through Tw.
-The stateless timing decoder describes initial T2.P; the core's WR register
-retains the asserted strobe when a stalled memory write revisits that phase.
+In RTL every pin, including address and data, is a register output of
+`rtl/z80_top.v`: the core produces two images per rising edge (`*_pos` for the
+clock-high half of the T-state being entered, computed from next-state, and
+`*_neg` for the clock-low half of the current T-state) and the wrapper's
+two-flop XOR former turns them into the dual-edge pin waveforms. No
+`t_state`/`bus_op` decode is visible between edges, so a T4.N → T1.P
+transition cannot briefly assert RD/MREQ as M1 falls. `make bus_controls`
+checks every half-cycle against the timing contract, injects decoder skew
+between edges, and pins falling-edge WAIT capture, continuous write strobes
+through Tw and the INTA contract. The stateless timing decoder describes the
+initial T2.P of a write; the core holds WR low in the `*_pos` image when a
+stalled memory write re-enters that half (`hold_wr`). See `docs/clocking.md`.
 
 ## 3. Internal datapath
 
@@ -153,7 +161,8 @@ control word's `exec` line + step index, *not* a giant behavioral function per o
 | Concept                                                                                                                       | C file                  | Verilog file        |
 |-------------------------------------------------------------------------------------------------------------------------------|-------------------------|---------------------|
 | Public types, pins, constants, module entry-point decls                                                                       | `cmodel/z80.h`          | `rtl/z80_defs.vh`   |
-| Top-level core: phase engine, micro-sequencer, bus-cycle setup, register file, interrupts / refresh / HALT / WAIT / BUSREQ    | `cmodel/z80_core.c`     | `rtl/z80_core.v`    |
+| Chip top: falling-edge input samplers + dual-edge pin former (the only negedge logic)                                        | (folded into the per-phase step) | `rtl/z80_top.v`     |
+| Core: phase engine, micro-sequencer, bus-cycle setup, register file, interrupts / refresh / HALT / WAIT / BUSREQ              | `cmodel/z80_core.c`     | `rtl/z80_core.v`    |
 | PLA decode (pure combinational)                                                                                               | `cmodel/z80_pla.c`      | `rtl/z80_pla.v`     |
 | ALU + flag assembly (pure combinational)                                                                                      | `cmodel/z80_alu.c`      | `rtl/z80_alu.v`     |
 | External pin timing (pure combinational)                                                                                      | `cmodel/z80_timing.c`   | `rtl/z80_timing.v`  |
@@ -161,7 +170,8 @@ control word's `exec` line + step index, *not* a giant behavioral function per o
 | Trace capture / emit                                                                                                          | `cmodel/z80_trace.c`    | core `$display` hooks |
 | System wrapper (CPU + 64 K RAM/IO for runners)                                                                                | `cmodel/z80_sim.c/h`    | (test-bench only)   |
 
-Both sides have **one .c per .v module**. The three combinational submodules
+Both sides have **one .c per .v module** (plus `rtl/z80_top.v`, which has no
+C counterpart: it only re-times pins to the two clock edges). The three combinational submodules
 (`z80_pla`, `z80_alu`, `z80_timing`) are pure functions in C with one parameter per
 Verilog port — by-value inputs first, by-pointer outputs after — so a C call site
 reads like a Verilog instantiation. The stateful `z80_core` holds the registered

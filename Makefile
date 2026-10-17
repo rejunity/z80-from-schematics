@@ -188,16 +188,16 @@ perfectz80_rtl: iverilog $(BIN)/perfectz80_runner
 #
 # `make synth` runs LibreLane via the librelane/run_synth.sh wrapper,
 # which expects `librelane` on PATH (nix profile install). It writes:
-#   build/synth/z80_core.nl.v   — synthesized netlist (symlink)
+#   build/synth/z80_top.nl.v   — synthesized netlist (symlink)
 #   build/synth/pdk_root.path   — resolved PDK_ROOT for downstream rules
-synth: $(BUILD)/synth/z80_core.nl.v
+synth: $(BUILD)/synth/z80_top.nl.v
 
 # Synthesis produces both the netlist .v and a small pdk_root.path file
 # (read lazily by the iverilog rule's recipe). One rule, two outputs.
 # Only the netlist is declared here; pdk_root.path is a side effect.
 # (Grouped-target syntax `&:` would be cleaner but is GNU Make 4.3+
 # only; macOS ships 3.81.)
-$(BUILD)/synth/z80_core.nl.v: $(RTL_SRCS) librelane/config.json librelane/run_synth.sh
+$(BUILD)/synth/z80_top.nl.v: $(RTL_SRCS) librelane/config.json librelane/run_synth.sh
 	@mkdir -p $(BUILD)/synth
 	librelane/run_synth.sh
 
@@ -211,7 +211,7 @@ $(BUILD)/synth/z80_core.nl.v: $(RTL_SRCS) librelane/config.json librelane/run_sy
 # correctness diff against perfectz80 (which is also unit-delay).
 iverilog_netlist: synth $(BUILD)/tb_z80_netlist.vvp
 
-$(BUILD)/tb_z80_netlist.vvp: $(TESTS)/iverilog/tb_z80_netlist.v $(BUILD)/synth/z80_core.nl.v
+$(BUILD)/tb_z80_netlist.vvp: $(TESTS)/iverilog/tb_z80_netlist.v $(BUILD)/synth/z80_top.nl.v
 	@if [ ! -f $(BUILD)/synth/pdk_root.path ]; then \
 	    echo "iverilog_netlist: $(BUILD)/synth/pdk_root.path missing — run \`make synth\` first"; exit 1; \
 	  fi; \
@@ -223,7 +223,7 @@ $(BUILD)/tb_z80_netlist.vvp: $(TESTS)/iverilog/tb_z80_netlist.v $(BUILD)/synth/z
 	  echo "== building gate-level iverilog sim (sky130 cells) =="; \
 	  $(IVERILOG) -g2012 -DFUNCTIONAL -s tb_z80 -o $@ \
 	    $(TESTS)/iverilog/tb_z80_netlist.v \
-	    $(BUILD)/synth/z80_core.nl.v \
+	    $(BUILD)/synth/z80_top.nl.v \
 	    $$SKY130_V_DIR/primitives.v \
 	    $$SKY130_V_DIR/sky130_fd_sc_hd.v && \
 	  echo "Built $@"
@@ -268,12 +268,12 @@ verilator_basic_netlist: synth dirs
 	$(VERILATOR) --cc --exe --build -j 0 -O3 -Wall \
 	  -Wno-fatal -Wno-WIDTH -Wno-CASEINCOMPLETE -Wno-UNUSEDSIGNAL \
 	  -Wno-MULTITOP -Wno-MODDUP -Wno-PINMISSING -Wno-TIMESCALEMOD \
-	  --Mdir $(BUILD)/obj_dir_basic_netlist --top-module z80_core \
+	  --Mdir $(BUILD)/obj_dir_basic_netlist --top-module z80_top \
 	  +define+FUNCTIONAL +define+UNIT_DELAY \
 	  -CFLAGS -DNETLIST_BUILD \
 	  -I$$SKY130_V \
 	  $$SKY130_V/primitives.v $$SKY130_V/sky130_fd_sc_hd.v \
-	  $(BUILD)/synth/z80_core.nl.v \
+	  $(BUILD)/synth/z80_top.nl.v \
 	  $(abspath $(TESTS)/verilator/sim_basic.cpp) -o sim_basic_netlist && \
 	echo "Built $(BUILD)/obj_dir_basic_netlist/sim_basic_netlist"
 
@@ -368,23 +368,10 @@ rtl:
 
 .PHONY: bus_controls
 bus_controls: dirs
-	@set -e; for cen in 0 1; do \
-	  $(IVERILOG) -g2012 -I$(RTL) -s tb_bus_controls \
-	    -Ptb_bus_controls.USE_CEN=$$cen -o $(BUILD)/tb_bus_controls.vvp \
-	    $(RTL_SRCS) $(TESTS)/iverilog/tb_bus_controls.v; \
-	  $(VVP) $(BUILD)/tb_bus_controls.vvp; \
-	  $(IVERILOG) -g2012 -I$(RTL) -s tb_wait_edge \
-	    -Ptb_wait_edge.USE_CEN=$$cen -o $(BUILD)/tb_wait_edge.vvp \
-	    $(RTL_SRCS) $(TESTS)/iverilog/tb_wait_edge.v; \
-	  $(VVP) $(BUILD)/tb_wait_edge.vvp; \
-	  $(IVERILOG) -g2012 -I$(RTL) -s tb_wait_write \
-	    -Ptb_wait_write.USE_CEN=$$cen -o $(BUILD)/tb_wait_write.vvp \
-	    $(RTL_SRCS) $(TESTS)/iverilog/tb_wait_write.v; \
-	  $(VVP) $(BUILD)/tb_wait_write.vvp; \
-	  $(IVERILOG) -g2012 -I$(RTL) -s tb_int_ack \
-	    -Ptb_int_ack.USE_CEN=$$cen -o $(BUILD)/tb_int_ack.vvp \
-	    $(RTL_SRCS) $(TESTS)/iverilog/tb_int_ack.v; \
-	  $(VVP) $(BUILD)/tb_int_ack.vvp; \
+	@set -e; for tb in tb_bus_controls tb_wait_edge tb_wait_write tb_int_ack; do \
+	  $(IVERILOG) -g2012 -I$(RTL) -s $$tb -o $(BUILD)/$$tb.vvp \
+	    $(RTL_SRCS) $(TESTS)/iverilog/$$tb.v; \
+	  $(VVP) $(BUILD)/$$tb.vvp; \
 	done
 	@$(IVERILOG) -g2012 -I$(RTL) -s tb_wait_top -o $(BUILD)/tb_wait_top.vvp \
 	  $(RTL_SRCS) fpga/tang-primer-25k/top.v fpga/icepi-zero/uart.v \
@@ -415,7 +402,7 @@ verilator: dirs
 	echo "== building verilator sim =="; \
 	$(VERILATOR) --cc --exe --build -j 0 -Wall \
 	  -Wno-fatal -Wno-WIDTH -Wno-CASEINCOMPLETE -Wno-UNUSEDSIGNAL \
-	  --Mdir $(BUILD)/obj_dir --top-module z80_core \
+	  --Mdir $(BUILD)/obj_dir --top-module z80_top \
 	  -I$(RTL) $(RTL_SRCS) $(abspath $(TESTS)/verilator/sim_main.cpp) -o sim_z80 && \
 	echo "Built $(BUILD)/obj_dir/sim_z80"
 
@@ -445,7 +432,7 @@ verilator_zex: dirs
 	echo "== building verilator sim_zex =="; \
 	$(VERILATOR) --cc --exe --build -j 0 -O3 -Wall \
 	  -Wno-fatal -Wno-WIDTH -Wno-CASEINCOMPLETE -Wno-UNUSEDSIGNAL \
-	  --Mdir $(BUILD)/obj_dir_zex --top-module z80_core \
+	  --Mdir $(BUILD)/obj_dir_zex --top-module z80_top \
 	  -I$(RTL) $(RTL_SRCS) $(abspath $(TESTS)/verilator/sim_zex.cpp) -o sim_zex && \
 	echo "Built $(BUILD)/obj_dir_zex/sim_zex"
 
@@ -493,7 +480,7 @@ verilator_z80test: dirs
 	echo "== building verilator sim_z80test =="; \
 	$(VERILATOR) --cc --exe --build -j 0 -O3 -Wall \
 	  -Wno-fatal -Wno-WIDTH -Wno-CASEINCOMPLETE -Wno-UNUSEDSIGNAL \
-	  --Mdir $(BUILD)/obj_dir_z80test --top-module z80_core \
+	  --Mdir $(BUILD)/obj_dir_z80test --top-module z80_top \
 	  -I$(RTL) $(RTL_SRCS) $(abspath $(TESTS)/verilator/sim_z80test.cpp) -o sim_z80test && \
 	echo "Built $(BUILD)/obj_dir_z80test/sim_z80test"
 
@@ -518,7 +505,7 @@ verilator_basic: dirs
 	echo "== building verilator sim_basic =="; \
 	$(VERILATOR) --cc --exe --build -j 0 -O3 -Wall \
 	  -Wno-fatal -Wno-WIDTH -Wno-CASEINCOMPLETE -Wno-UNUSEDSIGNAL \
-	  --Mdir $(BUILD)/obj_dir_basic --top-module z80_core \
+	  --Mdir $(BUILD)/obj_dir_basic --top-module z80_top \
 	  -I$(RTL) $(RTL_SRCS) $(abspath $(TESTS)/verilator/sim_basic.cpp) -o sim_basic && \
 	echo "Built $(BUILD)/obj_dir_basic/sim_basic"
 

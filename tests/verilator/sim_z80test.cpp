@@ -1,4 +1,4 @@
-// sim_z80test.cpp - Verilated z80_core driving Patrik Rak's z80test
+// sim_z80test.cpp - Verilated z80_top driving Patrik Rak's z80test
 // (.tap files at tests/z80test/). Mirrors scripts/z80test_runner.c but
 // runs through the Verilog RTL instead of the C model. The same
 // silicon-faithful conventions apply:
@@ -23,8 +23,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <chrono>
-#include "Vz80_core.h"
-#include "Vz80_core___024root.h"
+#include "Vz80_top.h"
+#include "Vz80_top___024root.h"
 #include "verilated.h"
 
 static unsigned char mem[65536];
@@ -93,7 +93,7 @@ int main(int argc, char** argv) {
     mem[0x0001] = 0x00;
 
     Verilated::commandArgs(argc, argv);
-    Vz80_core* t = new Vz80_core;
+    Vz80_top* t = new Vz80_top;
     auto* R = t->rootp;
     t->busreq_n = 1; t->int_n = 1; t->nmi_n = 1; t->wait_n = 1; t->data_in = 0;
 
@@ -107,22 +107,22 @@ int main(int argc, char** argv) {
     // rtl/z80_defs.vh: BC=0, DE=1, HL=2, AF=3, BC2=4, DE2=5, HL2=6,
     // AF2=7, IX=8, IY=9, SP=10, PC=11, WZ=12. Set the bank Rak's
     // outer harness expects (regs to 0xFFFF, SP to 0xFFEE).
-    R->z80_core__DOT__rf[11]   = load_addr;       // PC
-    R->z80_core__DOT__rf_n[11] = load_addr;
-    R->z80_core__DOT__rf[10]   = 0xFFEE;          // SP
-    R->z80_core__DOT__rf_n[10] = 0xFFEE;
-    R->z80_core__DOT__rf[3]    = 0xFFFF;          // AF
-    R->z80_core__DOT__rf_n[3]  = 0xFFFF;
-    R->z80_core__DOT__rf[0]    = 0xFFFF;          // BC
-    R->z80_core__DOT__rf_n[0]  = 0xFFFF;
-    R->z80_core__DOT__rf[1]    = 0xFFFF;          // DE
-    R->z80_core__DOT__rf_n[1]  = 0xFFFF;
-    R->z80_core__DOT__rf[2]    = 0xFFFF;          // HL
-    R->z80_core__DOT__rf_n[2]  = 0xFFFF;
-    R->z80_core__DOT__rf[8]    = 0xFFFF;          // IX
-    R->z80_core__DOT__rf_n[8]  = 0xFFFF;
-    R->z80_core__DOT__rf[9]    = 0xFFFF;          // IY
-    R->z80_core__DOT__rf_n[9]  = 0xFFFF;
+    R->z80_top__DOT__u_core__DOT__rf[11]   = load_addr;       // PC
+    R->z80_top__DOT__u_core__DOT__rf_n[11] = load_addr;
+    R->z80_top__DOT__u_core__DOT__rf[10]   = 0xFFEE;          // SP
+    R->z80_top__DOT__u_core__DOT__rf_n[10] = 0xFFEE;
+    R->z80_top__DOT__u_core__DOT__rf[3]    = 0xFFFF;          // AF
+    R->z80_top__DOT__u_core__DOT__rf_n[3]  = 0xFFFF;
+    R->z80_top__DOT__u_core__DOT__rf[0]    = 0xFFFF;          // BC
+    R->z80_top__DOT__u_core__DOT__rf_n[0]  = 0xFFFF;
+    R->z80_top__DOT__u_core__DOT__rf[1]    = 0xFFFF;          // DE
+    R->z80_top__DOT__u_core__DOT__rf_n[1]  = 0xFFFF;
+    R->z80_top__DOT__u_core__DOT__rf[2]    = 0xFFFF;          // HL
+    R->z80_top__DOT__u_core__DOT__rf_n[2]  = 0xFFFF;
+    R->z80_top__DOT__u_core__DOT__rf[8]    = 0xFFFF;          // IX
+    R->z80_top__DOT__u_core__DOT__rf_n[8]  = 0xFFFF;
+    R->z80_top__DOT__u_core__DOT__rf[9]    = 0xFFFF;          // IY
+    R->z80_top__DOT__u_core__DOT__rf_n[9]  = 0xFFFF;
 
     long long phases = 0, instr = 0;
     bool prev_m1_n = true;
@@ -146,11 +146,11 @@ int main(int argc, char** argv) {
         phases++;
         if (prev_m1_n && !t->m1_n) {
             instr++;
-            uint16_t pc = R->z80_core__DOT__rf[11];
+            uint16_t pc = R->z80_top__DOT__u_core__DOT__rf[11];
             if (pc == 0) break;     // outer RET to 0
             if (pc == 0x0010 && prev_pc_at_m1 != 0x0010) {
                 // print A. AF is rf[3]; A is the high byte.
-                unsigned char ch = (R->z80_core__DOT__rf[3] >> 8) & 0xFF;
+                unsigned char ch = (R->z80_top__DOT__u_core__DOT__rf[3] >> 8) & 0xFF;
                 std::putchar((int)ch);
                 if (cap_used < cap_sz - 1) captured[cap_used++] = (char)ch;
                 std::fflush(stdout);
