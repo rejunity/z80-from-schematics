@@ -290,7 +290,7 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: synth-netlist
-          path: build/synth/z80_core.nl.v
+          path: build/synth/z80_top.nl.v
           retention-days: 30
       - name: Upload gate-level netlist per-program VCDs
         # build/vcd/<prog>.netlist.vcd from perfectz80_netlist +

@@ -186,8 +186,9 @@ gate-level fidelity.
 Resolved: the C model samples `wait_n` on entry to T2.N for M1/MRD/MWR or
 the automatic Tw.N (T3.N in the model) for IORD/IOWR, or the second
 automatic Tw.N (state 4.N) for INTA, then retains that
-decision through the following phase advance. The RTL now registers the
-WAIT decision on the enabled transition into that same `.N` phase.
+decision through the following phase advance. The RTL samples `wait_n` on
+the falling edge of that T-state (`rtl/z80_top.v`, `wait_n_neg`) and uses the
+saved bit on the following rising edge.
 
 **Status**: resolved; `make bus_controls` checks short pulses on either side
 of the falling-edge sample.

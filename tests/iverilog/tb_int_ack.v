@@ -1,27 +1,27 @@
 // Interrupt devices drive data only during M1+IORQ, never during RD.
+// Single Z80-rate clock: clock-high = ".P", clock-low = ".N".
 `timescale 1ns/1ps
 `include "z80_defs.vh"
 module tb_int_ack;
-    parameter USE_CEN = 1;
-    reg clk=0, cen=1, reset_n=0, wait_n=1, int_n=1;
+    reg clk=0, reset_n=1, wait_n=1, int_n=1;
     reg [7:0] mem [0:65535];
     reg [7:0] vector;
     wire [15:0] addr;
     wire [7:0] dout;
     wire m1, mr, io, rd, wr, refresh, halt;
     wire [7:0] din = !m1 && !io ? vector : (!mr && !rd ? mem[addr] : 8'h00);
-    z80_core #(.USE_CEN(USE_CEN)) dut (
-        .clk(clk), .cen(cen), .reset_n(reset_n), .wait_n(wait_n),
+    z80_top dut (
+        .clk(clk), .reset_n(reset_n), .wait_n(wait_n),
         .int_n(int_n), .nmi_n(1'b1), .busreq_n(1'b1),
         .addr(addr), .data_in(din), .data_out(dout), .data_drive(),
         .m1_n(m1), .mreq_n(mr), .iorq_n(io), .rd_n(rd), .wr_n(wr),
-        .rfsh_n(refresh), .halt_n(halt), .busack_n(), .dbg_t(), .dbg_phi(), .dbg_m()
+        .rfsh_n(refresh), .halt_n(halt), .busack_n(), .dbg_t(), .dbg_m()
     );
-    task step;
+    wire phi = ~clk;
+    task step;   // half a T-state
         begin
-            #5 clk=1; #1;
+            #4 clk=~clk; #1;
             if (!mr && !wr) mem[addr]=dout;
-            #4 clk=0;
         end
     endtask
     integer i, mode, n, waits, overlaps, refreshes;
@@ -47,42 +47,41 @@ module tb_int_ack;
             mem[target]=8'h76;
             vector=opcode; waits=0; overlaps=0; refreshes=0; seen_ack=0; reached=0;
             reset_n=1;
-            for(n=0;n<600 && !reached;n=n+1) begin
-                if(dut.iff1 && (!from_halt || dut.halted)) int_n=0;
-                if(dut.bus_op==`BUSOP_INTA) begin
+            for(n=0;n<1200 && !reached;n=n+1) begin
+                if(dut.u_core.iff1 && (!from_halt || dut.u_core.halted)) int_n=0;
+                if(dut.u_core.bus_op==`BUSOP_INTA) begin
                     if(!seen_ack) begin
-                        seen_ack=1; return_pc=addr; ack_r=dut.reg_r;
+                        seen_ack=1; return_pc=addr; ack_r=dut.u_core.reg_r;
                         if(imode==0 && (opcode==8'hcd || opcode==8'hc3)) begin
                             mem[return_pc]=0; mem[return_pc+1]=8'h02;
                         end
                         if(imode==0 && opcode==0) begin target=return_pc; mem[target]=8'h76; end
                     end
-                    if(dut.t_state<=4 && addr!==return_pc) $fatal(1,"ack address changed");
-                    if(io !== !((dut.t_state==3 && dut.phi) || dut.t_state==4))
+                    if(dut.u_core.t_state<=4 && addr!==return_pc) $fatal(1,"ack address changed");
+                    if(io !== !((dut.u_core.t_state==3 && phi) || dut.u_core.t_state==4))
                         $fatal(1,"wrong IORQ acknowledge phase");
                     if(!rd || !wr) $fatal(1,"INTA asserted RD/WR");
                     if(!io && m1) $fatal(1,"IORQ without M1 during INTA");
-                    if(dut.t_state<=4 && !mr) $fatal(1,"INTA performed memory read");
+                    if(dut.u_core.t_state<=4 && !mr) $fatal(1,"INTA performed memory read");
                     if(!io) overlaps=overlaps+1;
                     if(!refresh) refreshes=refreshes+1;
-                    if(dut.t_state==4 && dut.phi==0 && waits<insert_wait) begin
+                    if(dut.u_core.t_state==4 && phi==0 && waits<insert_wait) begin
                         wait_n=0; waits=waits+1;
                         vector=8'h00; // vector not ready while WAIT is held
                     end else begin wait_n=1; vector=opcode; end
-                    if(dut.t_state==4 && dut.phi==1 && dut.wait_sampled) begin
+                    if(dut.u_core.t_state==4 && phi==1 && dut.u_core.wait_sampled) begin
                         // A short falling-edge sample must survive release.
                         wait_n=1;
-                        if(USE_CEN) begin cen=0; step; cen=1; end
                     end
                 end
-                if(seen_ack && dut.bus_op==`BUSOP_M1 && !rd && addr==target) reached=1;
+                if(seen_ack && dut.u_core.bus_op==`BUSOP_M1 && !rd && addr==target) reached=1;
                 step;
             end
             if(!seen_ack || !reached || overlaps!=3+2*insert_wait || refreshes!=4 || waits!=insert_wait)
                 $fatal(1,"INT case mode=%0d op=%h reached=%b overlap=%0d refresh=%0d waits=%0d",imode,opcode,reached,overlaps,refreshes,waits);
-            if(dut.reg_r !== ack_r+8'd1) $fatal(1,"ack must increment R once");
+            if(dut.u_core.reg_r !== ack_r+8'd1) $fatal(1,"ack must increment R once");
             expected_sp=(imode==0 && (opcode==8'hc3 || opcode==0))?16'h9000:16'h8ffe;
-            if(dut.rf[`RFP_SP]!==expected_sp) $fatal(1,"wrong interrupt stack depth");
+            if(dut.u_core.rf[`RFP_SP]!==expected_sp) $fatal(1,"wrong interrupt stack depth");
             if(expected_sp==16'h8ffe) begin
                 if(imode==0 && opcode==8'hcd) return_pc=return_pc+2;
                 if({mem[16'h8fff],mem[16'h8ffe]}!==return_pc) $fatal(1,"wrong return PC");
@@ -96,7 +95,7 @@ module tb_int_ack;
             run_case(mode, mode==2?8'h34:8'hff,3,1);
         end
         run_case(0,8'hcd,3,0); run_case(0,8'hc3,3,0); run_case(0,0,3,0);
-        $display("PASS interrupt acknowledge, IM0/1/2, WAIT USE_CEN=%0d",USE_CEN);
+        $display("PASS interrupt acknowledge, IM0/1/2, WAIT");
         $finish;
     end
 endmodule

@@ -153,7 +153,7 @@ only rebuilt the library, leaving stale runner binaries on disk).
 - **Speed**: C model 6.56 Minstr/s, Verilator 0.31 Minstr/s, perfectz80 ~10 kphases/s.
 
 ### Verilator
-The Verilator testbench (`tests/verilator/sim_main.cpp`, top `z80_core`) is complete
+The Verilator testbench (`tests/verilator/sim_main.cpp`, top `z80_top`) is complete
 and `make verilator` now builds it cleanly under Apple clang 21 (post-Xcode-update) +
 Verilator 5.042 from Homebrew. The earlier toolchain block (Apple clang 14 / libc++17
 SDK mismatch) is resolved. `make compare` runs both iverilog and Verilator and confirms
@@ -163,8 +163,9 @@ all three (C, iverilog, Verilator) agree on every phase.
 Direct end-to-end run of the 1356-case FUSE suite against the Verilog RTL via
 iverilog. `scripts/gen_fuse_tb.py` parses `tests/fuse/tests.{in,expected}` and emits
 a single ~70k-line `tests/iverilog/tb_fuse.v` with all tests inlined as procedural
-blocks (hierarchical pokes into `dut.rf[]`, `dut.reg_i`, …, `dut.reg_q`, the
-test memory loaded byte-by-byte, then `run_phases(2 × ts_target)` posedges, then a
+blocks (hierarchical pokes into `dut.u_core.rf[]`, `.reg_i`, …, `.reg_q`, the
+test memory loaded byte-by-byte, then `run_tstates(ts_target)` rising edges (one per
+T-state — the clock is the Z80 clock), then a
 `$display` dump). The driver `scripts/compare_fuse_rtl.py` compiles, runs `vvp`, and
 diffs against `tests.expected`.
 

@@ -9,14 +9,14 @@
 //     time by the Makefile via -y / -I flags rather than literal
 //     `include directives, so the same testbench works with whatever
 //     PDK_ROOT resolves to)
-//   - z80_core comes from build/synth/z80_core.nl.v (gates) rather than
-//     rtl/z80_core.v (RTL)
+//   - z80_top comes from build/synth/z80_top.nl.v (gates) rather than
+//     rtl/z80_top.v + rtl/z80_core.v (RTL)
 //
 // Compile (from the Makefile):
 //   iverilog -g2012 -DFUNCTIONAL \
 //     -o build/tb_z80_netlist.vvp \
 //     tests/iverilog/tb_z80_netlist.v \
-//     build/synth/z80_core.nl.v \
+//     build/synth/z80_top.nl.v \
 //     $PDK_ROOT/sky130A/libs.ref/sky130_fd_sc_hd/verilog/primitives.v \
 //     $PDK_ROOT/sky130A/libs.ref/sky130_fd_sc_hd/verilog/sky130_fd_sc_hd.v
 //
@@ -42,22 +42,21 @@ module tb_z80;
     wire [7:0]  data_out;
     wire        data_drive, m1_n, mreq_n, iorq_n, rd_n, wr_n, rfsh_n, halt_n, busack_n;
     wire [3:0]  dbg_t;
-    wire        dbg_phi;
+    reg         dbg_phi;            // 0 = clock-high half, 1 = clock-low half
     wire [2:0]  dbg_m;
 
     reg  [7:0]  mem [0:65535];
 
-    // Synthesized netlist — same module name `z80_core`, same port list as
-    // rtl/z80_core.v (synthesis preserved the port interface; dbg_* are
-    // top-level OUTPUTs, see rtl/z80_core.v:23-25 and docs/librelane-flow.md
-    // "RTL pre-flight").
-    z80_core dut (
+    // Synthesized netlist — same module name `z80_top`, same port list as
+    // rtl/z80_top.v (synthesis preserved the port interface; dbg_* are
+    // top-level OUTPUTs, see docs/librelane-flow.md "RTL pre-flight").
+    z80_top dut (
         .clk(clk), .reset_n(reset_n),
         .addr(addr), .data_in(data_in), .data_out(data_out), .data_drive(data_drive),
         .m1_n(m1_n), .mreq_n(mreq_n), .iorq_n(iorq_n), .rd_n(rd_n), .wr_n(wr_n),
         .rfsh_n(rfsh_n), .halt_n(halt_n), .busack_n(busack_n),
         .wait_n(wait_n), .int_n(int_n), .nmi_n(nmi_n), .busreq_n(busreq_n),
-        .dbg_t(dbg_t), .dbg_phi(dbg_phi), .dbg_m(dbg_m)
+        .dbg_t(dbg_t), .dbg_m(dbg_m)
     );
 
     // Combinational memory/I-O read — matches cmodel/z80_sim.c and tb_z80.v
@@ -69,12 +68,11 @@ module tb_z80;
         else                        data_in = 8'h00;
     end
 
-    // Memory write
-    always @(posedge clk) begin
-        if (!mreq_n && !wr_n) mem[addr] <= data_out;
-    end
+    // Memory write: captured from the settled pins at every phase (see
+    // `service`), never in an edge-triggered block -- sampling dual-edge
+    // flop outputs on the edge would race the cell models.
 
-    always #1 clk = ~clk;
+    always #2 clk = ~clk;           // period 4 = one T-state
 
     integer i, phases, nmiph;
     integer nmi_lo, nmi_hi, int_lo, int_hi, wait_lo, wait_hi;
@@ -85,6 +83,10 @@ module tb_z80;
         $display("%0d %0d %0d %04X %02X %02X %0d %0d %0d %0d %0d %0d %0d %0d",
                  dbg_t, dbg_phi, dbg_m, addr, data_out, data_in,
                  mreq_n, iorq_n, rd_n, wr_n, m1_n, rfsh_n, halt_n, busack_n);
+    endtask
+
+    task service;
+        if (!mreq_n && !wr_n) mem[addr] = data_out;
     endtask
 
     initial begin
@@ -105,22 +107,25 @@ module tb_z80;
         for (i = 0; i < 65536; i = i + 1) mem[i] = 8'h00;
         $readmemh(progf, mem);
 
+        // Same reset / phase choreography as tb_z80.v: release reset in the
+        // clock-low half, the first rising edge enters T1.P = trace line 0.
         reset_n = 1'b0;
-        repeat (4) @(negedge clk);
-        reset_n = 1'b1;
+        repeat (2) @(negedge clk);
+        #1 reset_n = 1'b1;
+        @(posedge clk); #1;
 
         nmi_n    = (0 == nmiph || 0 == nmi_lo) ? 1'b0 : 1'b1;
         int_n    = (0 == int_lo)    ? 1'b0 : 1'b1;
         wait_n   = (0 == wait_lo)   ? 1'b0 : 1'b1;
         busreq_n = (0 == busreq_lo) ? 1'b0 : 1'b1;
         if (0 == reset_lo) reset_n = 1'b0;
-        #0;                                   // iverilog delta-cycle settle so
-                                              // the in_reset_hold combinational
-                                              // mux sees reset_n=1 before dump
-                                              // (mirror of tb_z80.v's fix)
-        dump;                                 // line 1 = reset state (T1.P)
+        dbg_phi = 1'b0;
+        service;
+        dump;                                 // line 0 = T1.P
         for (i = 1; i < phases; i = i + 1) begin
-            @(negedge clk);
+            if (i[0]) @(negedge clk); else @(posedge clk);
+            #1;
+            dbg_phi = i[0];
             if (i == nmi_hi)    nmi_n    = 1'b1;
             if (i == nmiph || i == nmi_lo) nmi_n = 1'b0;
             if (i == int_hi)    int_n    = 1'b1;
@@ -132,6 +137,7 @@ module tb_z80;
             if (i == reset_hi)  reset_n  = 1'b1;
             if (i == reset_lo)  reset_n  = 1'b0;
             if (nmiph >= 0 && i != nmiph && nmi_lo < 0 && nmi_hi < 0) nmi_n = 1'b1;
+            service;
             dump;
         end
         $finish;

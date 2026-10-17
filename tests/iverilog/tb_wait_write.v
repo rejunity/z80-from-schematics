@@ -1,23 +1,24 @@
 // WAIT must stretch one continuous write pulse, including each Tw high half.
+// Single Z80-rate clock: clock-high = ".P", clock-low = ".N".
 `timescale 1ns/1ps
 `include "z80_defs.vh"
 module tb_wait_write;
-    parameter USE_CEN = 1;
-    reg clk = 0, cen = 1, reset_n = 0, wait_n = 1;
+    reg clk = 0, reset_n = 1, wait_n = 1;
     reg [7:0] mem [0:65535];
     wire [15:0] addr;
     wire [7:0] data_out;
     wire data_drive, m1_n, mreq_n, iorq_n, rd_n, wr_n, rfsh_n, halt_n, busack_n;
-    z80_core #(.USE_CEN(USE_CEN)) dut (
-        .clk(clk), .cen(cen), .reset_n(reset_n), .addr(addr),
+    z80_top dut (
+        .clk(clk), .reset_n(reset_n), .addr(addr),
         .data_in(mem[addr]), .data_out(data_out), .data_drive(data_drive),
         .m1_n(m1_n), .mreq_n(mreq_n), .iorq_n(iorq_n), .rd_n(rd_n),
         .wr_n(wr_n), .rfsh_n(rfsh_n), .halt_n(halt_n), .busack_n(busack_n),
         .wait_n(wait_n), .int_n(1'b1), .nmi_n(1'b1), .busreq_n(1'b1),
-        .dbg_t(), .dbg_phi(), .dbg_m()
+        .dbg_t(), .dbg_m()
     );
-    task step;
-        begin #5 clk = 1; #5 clk = 0; end
+    wire phi = ~clk;
+    task step;   // half a T-state
+        begin #4 clk = ~clk; #1; end
     endtask
     task reach;
         input [2:0] op;
@@ -25,7 +26,7 @@ module tb_wait_write;
         integer n;
         begin : search
             for (n = 0; n < 300; n = n + 1) begin
-                if (dut.bus_op == op && dut.t_state == t && !dut.phi)
+                if (dut.u_core.bus_op == op && dut.u_core.t_state == t && !phi)
                     disable search;
                 step;
             end
@@ -40,7 +41,7 @@ module tb_wait_write;
                 wr_n !== 0 || rd_n !== 1 || m1_n !== 1 || rfsh_n !== 1 ||
                 mreq_n !== (op != `BUSOP_MWR) || iorq_n !== (op != `BUSOP_IOWR))
                 $fatal(1, "write changed during Tw: op=%0d T=%0d phi=%b addr=%h data=%h WR=%b",
-                       op, dut.t_state, dut.phi, addr, data_out, wr_n);
+                       op, dut.u_core.t_state, phi, addr, data_out, wr_n);
         end
     endtask
     task held_write;
@@ -60,10 +61,7 @@ module tb_wait_write;
                 check_write(op, address);
                 step; // Tw.N samples WAIT again
                 check_write(op, address);
-                if (dut.t_state !== sample_t) $fatal(1, "write escaped WAIT");
-            end
-            if (USE_CEN) begin
-                cen = 0; step; check_write(op, address); cen = 1;
+                if (dut.u_core.t_state !== sample_t) $fatal(1, "write escaped WAIT");
             end
             wait_n = 1;
             step; check_write(op, address); // previous low sample still inserts Tw
@@ -80,6 +78,7 @@ module tb_wait_write;
         // LD A,55; LD (4000),A; OUT (20),A; HALT
         {mem[0],mem[1],mem[2],mem[3],mem[4],mem[5],mem[6],mem[7]} =
             64'h3e55320040d32076;
+        #1 reset_n = 0;   // real falling edge on reset_n: async-resets both former halves
         step; reset_n = 1;
         held_write(`BUSOP_MWR, 2, 16'h4000);
         held_write(`BUSOP_IOWR, 3, 16'h5520);
@@ -91,23 +90,23 @@ module tb_wait_write;
         step; check_write(`BUSOP_MWR, 16'h4000);
         wait_n = 0;
         step;
-        if (dut.t_state !== 3 || dut.phi !== 0)
+        if (dut.u_core.t_state !== 3 || phi !== 0)
             $fatal(1, "late WAIT incorrectly stretched the current write");
         step;
         if (wr_n !== 1 || mreq_n !== 1)
             $fatal(1, "write did not finish with late WAIT");
         wait_n = 1;
 
-        // A reset during a held write must release the strobes immediately,
-        // including when the phase clock enable is stopped.
+        // A reset during a held write must release the strobes immediately
+        // (asynchronously, between clock edges).
         reset_n = 0; step; reset_n = 1;
         reach(`BUSOP_MWR, 2);
         wait_n = 0; step; step;
         check_write(`BUSOP_MWR, 16'h4000);
-        cen = 0; reset_n = 0; #1;
+        reset_n = 0; #1;
         if ({wr_n, mreq_n, iorq_n} !== 3'b111 || data_drive !== 0)
             $fatal(1, "reset did not release held write");
-        $display("PASS continuous memory/IO write WAIT strobes USE_CEN=%0d", USE_CEN);
+        $display("PASS continuous memory/IO write WAIT strobes");
         $finish;
     end
 endmodule

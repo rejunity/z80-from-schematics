@@ -1,10 +1,11 @@
 {
-  "DESIGN_NAME": "z80_core",
+  "DESIGN_NAME": "z80_top",
   "VERILOG_FILES": [
     "dir::../rtl/z80_alu.v",
     "dir::../rtl/z80_pla.v",
     "dir::../rtl/z80_timing.v",
-    "dir::../rtl/z80_core.v"
+    "dir::../rtl/z80_core.v",
+    "dir::../rtl/z80_top.v"
   ],
   "CLOCK_PORT": "clk",
   "CLOCK_NET": "clk",

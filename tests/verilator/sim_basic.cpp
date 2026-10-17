@@ -1,4 +1,4 @@
-// sim_basic.cpp - Verilated z80_core driving NASCOM BASIC 4.7 / Tiny BASIC
+// sim_basic.cpp - Verilated z80_top driving NASCOM BASIC 4.7 / Tiny BASIC
 // ROMs over an emulated 68B50 ACIA at ports 0x80 (status) / 0x81 (data).
 // Pre-drains stdin into a queue at startup (the canned-script CI path);
 // no termios / signal / Ctrl-* handling — purely batch.
@@ -31,8 +31,8 @@
 #include <chrono>
 #include <queue>
 #include <string>
-#include "Vz80_core.h"
-#include "Vz80_core___024root.h"
+#include "Vz80_top.h"
+#include "Vz80_top___024root.h"
 #include "verilated.h"
 
 static uint8_t mem[65536];
@@ -93,7 +93,7 @@ int main(int argc, char** argv) {
             q_in.size(), autostart ? " (autostart prepended)" : "");
 
     Verilated::commandArgs(argc, argv);
-    Vz80_core* t = new Vz80_core;
+    Vz80_top* t = new Vz80_top;
     auto* R = t->rootp;
     t->busreq_n = 1; t->int_n = 1; t->nmi_n = 1; t->wait_n = 1; t->data_in = 0;
 
@@ -114,10 +114,10 @@ int main(int argc, char** argv) {
     // invocation; NASCOM BASIC's cold-boot path sets its own SP via
     // `LD SP,nn` early, so the netlist path doesn't need the prime.
 #ifndef NETLIST_BUILD
-    R->z80_core__DOT__rf[11]   = 0x0000;
-    R->z80_core__DOT__rf_n[11] = 0x0000;
-    R->z80_core__DOT__rf[10]   = 0xFFFE;
-    R->z80_core__DOT__rf_n[10] = 0xFFFE;
+    R->z80_top__DOT__u_core__DOT__rf[11]   = 0x0000;
+    R->z80_top__DOT__u_core__DOT__rf_n[11] = 0x0000;
+    R->z80_top__DOT__u_core__DOT__rf[10]   = 0xFFFE;
+    R->z80_top__DOT__u_core__DOT__rf_n[10] = 0xFFFE;
 #endif
 
     long long phases = 0, instr = 0;
