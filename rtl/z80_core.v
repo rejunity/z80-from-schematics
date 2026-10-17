@@ -20,8 +20,9 @@
 //                    address adder (PC+e, IX+d) next to it
 //   ALU              z80_alu (8 bit, flags) and the 16-bit add / subtract
 //                    for ADD HL,rp / ADC HL,rp / SBC HL,rp
-//   data latches     tmp8 (read data), m_wdata (write data), tmpl / tmph /
-//                    tmp16 (operand bytes and words)
+//   data latches     tmp8 (read data), m_wdata (write data), tmph (the DDCB
+//                    opcode). Operand words assemble in WZ (Z then W), as
+//                    on the die; MEMPTR is simply what WZ is left holding.
 //   pin timing       z80_timing x2: the pin images of the two halves of a
 //                    T-state (z80_top forms the dual-edge pins from them)
 //
@@ -125,8 +126,7 @@ module z80_core (
     reg        iff1, iff2;
     reg [1:0]  im;
     reg        halted;
-    reg [7:0]  tmp8, tmpl, tmph;
-    reg [15:0] tmp16;
+    reg [7:0]  tmp8, tmph;
     reg        nmi_pending, prev_nmi_n, ei_delay, suppress_decode, bus_granted;
     reg        nmi_sampled, int_sampled;  // latched at T_last.P per UM0080
     reg [1:0]  irq_seq;        // 0 none, 1 NMI, 2 INT, 3 HALT-nop
@@ -147,8 +147,7 @@ module z80_core (
     reg        iff1_n, iff2_n;
     reg [1:0]  im_n;
     reg        halted_n;
-    reg [7:0]  tmp8_n, tmpl_n, tmph_n;
-    reg [15:0] tmp16_n;
+    reg [7:0]  tmp8_n, tmph_n;
     reg [7:0]  reg_q_n;
     reg        f_modified_n;
     reg        nmi_pending_n, prev_nmi_n_n, ei_delay_n, suppress_decode_n, bus_granted_n;
@@ -437,12 +436,14 @@ module z80_core (
     // ALU: operand latches + z80_alu
     // =======================================================================
     // Block-IO flag inputs: data + (C +/- 1) for INxR, data + new L for OTxR.
-    wire [8:0] bk_ini = {1'b0, tmpl} + {1'b0, (r_bc[7:0] + (aux_w[0] ? 8'hFF : 8'h1))};
-    wire [8:0] bk_out = {1'b0, tmpl} + {1'b0, r_hl[7:0]};   // L already stepped (M3 T1)
+    // The data byte is still in the read-data latch tmp8 (the IN / MRD
+    // M-cycle latched it; the following MWR / IOWR does not).
+    wire [8:0] bk_ini = {1'b0, tmp8} + {1'b0, (r_bc[7:0] + (aux_w[0] ? 8'hFF : 8'h1))};
+    wire [8:0] bk_out = {1'b0, tmp8} + {1'b0, r_hl[7:0]};   // L already stepped (M3 T1)
 
     // Banks-2018 INIR/INDR/OTIR/OTDR repeat-M-cycle flag fold-in.
     // Mirrors redcode INXR_OTXR_COMMON exactly (see scripts/refs/
-    // redcode_z80/Z80.c line 1233). Inputs: data byte (tmpl after the
+    // redcode_z80/Z80.c line 1233). Inputs: data byte (tmp8 after the
     // IN/MRD M-cycle), newB (B post-decrement), bk = {hcf, t[7:0]}
     // 9-bit sum (bk_ini for INxR, bk_out for OTxR), pch = high byte of
     // post-rewind PC (= (PC-2)[15:8]) used for YF/XF fold-in.
@@ -535,13 +536,13 @@ module z80_core (
                     end
                     2'd2: if (m_cycle == 3'd4) begin
                         alu_md = `FLAG_BLOCK_IO;
-                        alu_a = tmpl;                      // data
+                        alu_a = tmp8;                      // data
                         alu_b = r_bc[15:8] - 8'd1;         // newB
                         alu_xy = {4'b0, bk_ini[8], bk_ini[2:0]};
                     end
                     default: if (m_cycle == 3'd4) begin   // 2'd3 = OUT
                         alu_md = `FLAG_BLOCK_IO;
-                        alu_a = tmpl;                      // data
+                        alu_a = tmp8;                      // data
                         alu_b = r_bc[15:8];                // already-decremented B
                         alu_xy = {4'b0, bk_out[8], bk_out[2:0]};
                     end
@@ -568,40 +569,37 @@ module z80_core (
                      AL_A16  = 3'd3;   // 16-bit ALU sum (ADD HL,rp internal cycle)
     // address-side bus source
     localparam [2:0] AB_REG  = 3'd0,   // register pair, see RI_*
-                     AB_NN   = 3'd1,   // {rbyte, tmpl}: the operand word nn
+                     AB_NN   = 3'd1,   // {rbyte, Z}: the operand word nn as W arrives
                      AB_AN   = 3'd2,   // {A, n}: IN A,(n) / OUT (n),A port
                      AB_IV   = 3'd3,   // {I, vector}: IM 2 table address
-                     AB_T16  = 3'd4,   // tmp16
-                     AB_NBC  = 3'd5;   // {B-1, C}: OUTI / OUTD port
+                     AB_NBC  = 3'd4;   // {B-1, C}: OUTI / OUTD port
     // register pair on abus / written by the pair port
     localparam [2:0] RI_PC = 3'd0, RI_SP = 3'd1, RI_WZ = 3'd2, RI_HL = 3'd3,
                      RI_DE = 3'd4, RI_BC = 3'd5, RI_HLP = 3'd6, RI_RP = 3'd7;
     // incrementer
     localparam [1:0] INC_P1 = 2'd0, INC_M1 = 2'd1, INC_M2 = 2'd2;
     // effective-address adder displacement (base: PC or HL/IX/IY)
-    localparam [1:0] EA_RB = 2'd0, EA_TL = 2'd1, EA_M1 = 2'd2;
+    localparam [1:0] EA_RB = 2'd0, EA_Z = 2'd1, EA_M1 = 2'd2;
     // write data
     localparam [2:0] DB_ZERO = 3'd0, DB_REG = 3'd1, DB_RI = 3'd2, DB_R8 = 3'd3,
-                     DB_RB = 3'd4, DB_ALU = 3'd5, DB_CB = 3'd6, DB_TL = 3'd7;
+                     DB_RB = 3'd4, DB_ALU = 3'd5, DB_CB = 3'd6, DB_RRD = 3'd7;
     localparam [1:0] BI_PC = 2'd0, BI_RP = 2'd1, BI_HLP = 2'd2, BI_A = 2'd3;
     // PC / SP / WZ loads
     localparam [2:0] PC_HOLD = 3'd0, PC_IDU = 3'd1, PC_EA = 3'd2, PC_NN = 3'd3,
-                     PC_T16 = 3'd4, PC_ABUS = 3'd5, PC_VEC = 3'd6;
+                     PC_ABUS = 3'd4, PC_VEC = 3'd5;
     localparam [1:0] VEC_RST = 2'd0, VEC_NMI = 2'd1, VEC_IM = 2'd2;
     localparam [1:0] SP_HOLD = 2'd0, SP_IDU = 2'd1, SP_ABUS = 2'd2;
     localparam [2:0] WZ_HOLD = 3'd0, WZ_IDU = 3'd1, WZ_ALO = 3'd2, WZ_EA = 3'd3,
-                     WZ_NN = 3'd4, WZ_TMP = 3'd5, WZ_VEC = 3'd6;
+                     WZ_Z = 3'd4, WZ_W = 3'd5, WZ_IV = 3'd6, WZ_VEC = 3'd7;
     // pair write port source
-    localparam [2:0] PW_IDU = 3'd0, PW_NN = 3'd1, PW_A16 = 3'd2, PW_TMP = 3'd3;
+    localparam [1:0] PW_IDU = 2'd0, PW_A16 = 2'd1, PW_WZ = 2'd2;
     // byte write port destination / source
-    localparam [2:0] BW_RI = 3'd0, BW_R8 = 3'd1, BW_A = 3'd2, BW_B = 3'd3,
-                     BW_DDCB = 3'd4, BW_HLPL = 3'd5, BW_HLPH = 3'd6;
+    localparam [3:0] BW_RI = 4'd0, BW_R8 = 4'd1, BW_A = 4'd2, BW_B = 4'd3,
+                     BW_DDCB = 4'd4, BW_HLPL = 4'd5, BW_HLPH = 4'd6,
+                     BW_RPL = 4'd7, BW_RPH = 4'd8;
     localparam [2:0] BS_RI = 3'd0, BS_ALU = 3'd1, BS_RB = 3'd2, BS_CB = 3'd3, BS_BD = 3'd4;
     // flag port source
     localparam [2:0] FS_ALU = 3'd0, FS_A16 = 3'd1, FS_BLD = 3'd2, FS_BCP = 3'd3, FS_BIO = 3'd4;
-    // operand temporaries
-    localparam [1:0] TL_HOLD = 2'd0, TL_RB = 2'd1, TL_RRD = 2'd2;
-    localparam [1:0] T16_HOLD = 2'd0, T16_NN = 2'd1, T16_IV = 2'd2;
     // interrupt enables
     localparam [1:0] IFF_HOLD = 2'd0, IFF_DI = 2'd1, IFF_EI = 2'd2, IFF_RETN = 2'd3;
 
@@ -622,13 +620,14 @@ module z80_core (
     reg [1:0]  ctl_sp;                 // SP load
     reg [1:0]  ctl_vec;                // vector for PC_VEC / WZ_VEC
     reg        ctl_pw;                 // pair write port
-    reg [2:0]  ctl_pwi, ctl_pws;       //   pair / source
+    reg [2:0]  ctl_pwi;                //   pair
+    reg [1:0]  ctl_pws;                //   source
     reg        ctl_bw;                 // byte write port
-    reg [2:0]  ctl_bwd, ctl_bws;       //   destination / source
+    reg [3:0]  ctl_bwd;                //   destination
+    reg [2:0]  ctl_bws;                //   source
     reg        ctl_fw;                 // flag port
     reg [2:0]  ctl_fs;                 //   source
     reg        ctl_ex_dehl, ctl_ex_af, ctl_exx;
-    reg [1:0]  ctl_tmpl, ctl_tmp16;
     reg        ctl_tmph;
     reg [1:0]  ctl_iff;
     reg        ctl_im, ctl_halt, ctl_ld_i, ctl_ld_r, ctl_prefix;
@@ -681,10 +680,10 @@ module z80_core (
             mstart(`BUSOP_MWR, AL_IDU, 4'd0);
         end
     endtask
-    // pop one byte: MRD at SP+1, SP <- SP+1 (the first pop byte reads (SP))
+    // second pop byte: MRD at SP+1, SP <- SP+1 (the first byte read (SP)
+    // and is stored by the caller: into Z, or into the target pair)
     task pop_next;
         begin
-            ctl_tmpl = TL_RB;
             ctl_ab = AB_REG; ctl_ri = RI_SP; ctl_inc = INC_P1; ctl_sp = SP_IDU;
             mstart(`BUSOP_MRD, AL_IDU, 4'd0);
         end
@@ -694,7 +693,7 @@ module z80_core (
         begin ctl_ab = AB_REG; ctl_ri = RI_SP; ctl_inc = INC_P1; ctl_sp = SP_IDU; end
     endtask
     // byte / flag writes
-    task wr_byte; input [2:0] dst; input [2:0] src;
+    task wr_byte; input [3:0] dst; input [2:0] src;
         begin ctl_bw = 1'b1; ctl_bwd = dst; ctl_bws = src; end
     endtask
     task wr_flags; input [2:0] src;
@@ -732,7 +731,7 @@ module z80_core (
         ctl_bw = 1'b0; ctl_bwd = BW_RI; ctl_bws = BS_RI;
         ctl_fw = 1'b0; ctl_fs = FS_ALU;
         ctl_ex_dehl = 1'b0; ctl_ex_af = 1'b0; ctl_exx = 1'b0;
-        ctl_tmpl = TL_HOLD; ctl_tmph = 1'b0; ctl_tmp16 = T16_HOLD;
+        ctl_tmph = 1'b0;
         ctl_iff = IFF_HOLD; ctl_im = 1'b0; ctl_halt = 1'b0;
         ctl_ld_i = 1'b0; ctl_ld_r = 1'b0; ctl_prefix = 1'b0;
         ctl_cbx = 1'b0; ctl_cbr = 1'b0;
@@ -798,11 +797,11 @@ module z80_core (
             end
             `EXEC_DDCB: begin
                 ctl_cbx = 1'b1;
-                if (m_cycle == 3'd2) begin                // d -> tmpl; read op
-                    ctl_tmpl = TL_RB; op_fetch(4'd0);
+                if (m_cycle == 3'd2) begin                // d -> Z; read op
+                    ctl_wz = WZ_Z; op_fetch(4'd0);
                 end else if (m_cycle == 3'd3) begin       // op -> tmph; WZ = IX+d
                     ctl_tmph = 1'b1;
-                    ctl_ea_pc = 1'b0; ctl_ea_d = EA_TL; ctl_wz = WZ_EA;
+                    ctl_ea_pc = 1'b0; ctl_ea_d = EA_Z; ctl_wz = WZ_EA;
                     mstart(`BUSOP_INTERNAL, AL_EA, 4'd2);
                 end else if (m_cycle == 3'd4)
                     at_pair(`BUSOP_MRD, RI_WZ, 4'd1);     // read (IX+d), 4 T
@@ -896,16 +895,16 @@ module z80_core (
                 end else ctl_fin = 1'b1;
             end
 
-            `EXEC_LD_RP_NN: begin
+            `EXEC_LD_RP_NN: begin                     // bytes straight into rp: MEMPTR untouched
                 if (m_cycle == 3'd1) op_fetch(4'd0);
-                else if (m_cycle == 3'd2) begin ctl_tmpl = TL_RB; op_fetch(4'd0); end
-                else begin ctl_pw = 1'b1; ctl_pwi = RI_RP; ctl_pws = PW_NN; ctl_fin = 1'b1; end
+                else if (m_cycle == 3'd2) begin wr_byte(BW_RPL, BS_RB); op_fetch(4'd0); end
+                else begin wr_byte(BW_RPH, BS_RB); ctl_fin = 1'b1; end
             end
             `EXEC_JP, `EXEC_JP_CC: begin
                 if (m_cycle == 3'd1) op_fetch(4'd0);
-                else if (m_cycle == 3'd2) begin ctl_tmpl = TL_RB; op_fetch(4'd0); end
+                else if (m_cycle == 3'd2) begin ctl_wz = WZ_Z; op_fetch(4'd0); end
                 else begin
-                    ctl_wz = WZ_NN;                       // MEMPTR = nn, taken or not
+                    ctl_wz = WZ_W;                        // MEMPTR = nn, taken or not
                     if (exec_w == `EXEC_JP || cc_taken) ctl_pc = PC_NN;
                     ctl_fin = 1'b1;
                 end
@@ -933,21 +932,21 @@ module z80_core (
 
             `EXEC_CALL, `EXEC_CALL_CC: begin
                 if (m_cycle == 3'd1) op_fetch(4'd0);
-                else if (m_cycle == 3'd2) begin ctl_tmpl = TL_RB; op_fetch(4'd0); end
+                else if (m_cycle == 3'd2) begin ctl_wz = WZ_Z; op_fetch(4'd0); end
                 else if (m_cycle == 3'd3) begin
-                    ctl_tmp16 = T16_NN; ctl_wz = WZ_NN;
+                    ctl_wz = WZ_W;                        // WZ = nn (MEMPTR, taken or not)
                     if (exec_w == `EXEC_CALL || cc_taken) at_pair(`BUSOP_INTERNAL, RI_PC, 4'd1);
                     else ctl_fin = 1'b1;
                 end
                 else if (m_cycle == 3'd4) push_byte(BI_PC, 1'b1);
                 else if (m_cycle == 3'd5) push_byte(BI_PC, 1'b0);
-                else begin ctl_pc = PC_T16; ctl_fin = 1'b1; end
+                else begin ctl_ri = RI_WZ; ctl_pc = PC_ABUS; ctl_fin = 1'b1; end   // PC <- WZ
             end
             `EXEC_RET, `EXEC_RETN: begin
                 if (m_cycle == 3'd1) at_pair(`BUSOP_MRD, RI_SP, 4'd0);
-                else if (m_cycle == 3'd2) pop_next;
+                else if (m_cycle == 3'd2) begin ctl_wz = WZ_Z; pop_next; end
                 else begin
-                    pop_done; ctl_pc = PC_NN; ctl_wz = WZ_NN;
+                    pop_done; ctl_pc = PC_NN; ctl_wz = WZ_W;
                     if (eff_exec == `EXEC_RETN) ctl_iff = IFF_RETN;
                     ctl_fin = 1'b1;
                 end
@@ -958,8 +957,8 @@ module z80_core (
                     if (cc_taken) at_pair(`BUSOP_MRD, RI_SP, 4'd0);
                     else ctl_fin = 1'b1;
                 end
-                else if (m_cycle == 3'd3) pop_next;
-                else begin pop_done; ctl_pc = PC_NN; ctl_wz = WZ_NN; ctl_fin = 1'b1; end
+                else if (m_cycle == 3'd3) begin ctl_wz = WZ_Z; pop_next; end
+                else begin pop_done; ctl_pc = PC_NN; ctl_wz = WZ_W; ctl_fin = 1'b1; end
             end
             `EXEC_RST: begin
                 if (m_cycle == 3'd1) at_pair(`BUSOP_INTERNAL, RI_PC, 4'd1);
@@ -975,9 +974,9 @@ module z80_core (
             end
             `EXEC_POP: begin
                 if (m_cycle == 3'd1) at_pair(`BUSOP_MRD, RI_SP, 4'd0);
-                else if (m_cycle == 3'd2) pop_next;
+                else if (m_cycle == 3'd2) begin wr_byte(BW_RPL, BS_RB); pop_next; end   // MEMPTR untouched
                 else begin
-                    pop_done; ctl_pw = 1'b1; ctl_pwi = RI_RP; ctl_pws = PW_NN; ctl_fin = 1'b1;
+                    pop_done; wr_byte(BW_RPH, BS_RB); ctl_fin = 1'b1;
                 end
             end
 
@@ -996,16 +995,15 @@ module z80_core (
             end
             `EXEC_LD_A_NN: begin
                 if (m_cycle == 3'd1) op_fetch(4'd0);
-                else if (m_cycle == 3'd2) begin ctl_tmpl = TL_RB; op_fetch(4'd0); end
+                else if (m_cycle == 3'd2) begin ctl_wz = WZ_Z; op_fetch(4'd0); end
                 else if (m_cycle == 3'd3) begin
-                    ctl_tmp16 = T16_NN;
                     ctl_ab = AB_NN; ctl_inc = INC_P1; ctl_wz = WZ_IDU;   // WZ = nn+1
                     mstart(`BUSOP_MRD, AL_ABUS, 4'd0);
                 end else begin wr_byte(BW_A, BS_RB); ctl_fin = 1'b1; end
             end
             `EXEC_LD_NN_A: begin
                 if (m_cycle == 3'd1) op_fetch(4'd0);
-                else if (m_cycle == 3'd2) begin ctl_tmpl = TL_RB; op_fetch(4'd0); end
+                else if (m_cycle == 3'd2) begin ctl_wz = WZ_Z; op_fetch(4'd0); end
                 else if (m_cycle == 3'd3) begin
                     ctl_ab = AB_NN; ctl_inc = INC_P1; ctl_wz = WZ_ALO;   // WZ = {A, n.lo+1}
                     ctl_db = DB_REG; ctl_bi = BI_A; ctl_bhi = 1'b1;
@@ -1014,36 +1012,30 @@ module z80_core (
             end
             `EXEC_LD_HL_NN, `EXEC_LD_RP_NNA: begin
                 if (m_cycle == 3'd1) op_fetch(4'd0);
-                else if (m_cycle == 3'd2) begin ctl_tmpl = TL_RB; op_fetch(4'd0); end
+                else if (m_cycle == 3'd2) begin ctl_wz = WZ_Z; op_fetch(4'd0); end
                 else if (m_cycle == 3'd3) begin
-                    ctl_tmp16 = T16_NN;
                     ctl_ab = AB_NN; ctl_inc = INC_P1; ctl_wz = WZ_IDU;   // WZ = nn+1
                     mstart(`BUSOP_MRD, AL_ABUS, 4'd0);
-                end else if (m_cycle == 3'd4) begin
-                    if (eff_exec == `EXEC_LD_HL_NN) wr_byte(BW_HLPL, BS_RB);
-                    else ctl_tmpl = TL_RB;
-                    ctl_ab = AB_T16; ctl_inc = INC_P1;
-                    mstart(`BUSOP_MRD, AL_IDU, 4'd0);
+                end else if (m_cycle == 3'd4) begin                       // read (nn+1) at WZ
+                    wr_byte((eff_exec == `EXEC_LD_HL_NN) ? BW_HLPL : BW_RPL, BS_RB);
+                    at_pair(`BUSOP_MRD, RI_WZ, 4'd0);
                 end else begin
-                    if (eff_exec == `EXEC_LD_HL_NN) wr_byte(BW_HLPH, BS_RB);
-                    else begin ctl_pw = 1'b1; ctl_pwi = RI_RP; ctl_pws = PW_NN; end
+                    wr_byte((eff_exec == `EXEC_LD_HL_NN) ? BW_HLPH : BW_RPH, BS_RB);
                     ctl_fin = 1'b1;
                 end
             end
             `EXEC_LD_NN_HL, `EXEC_LD_NNA_RP: begin
                 if (m_cycle == 3'd1) op_fetch(4'd0);
-                else if (m_cycle == 3'd2) begin ctl_tmpl = TL_RB; op_fetch(4'd0); end
+                else if (m_cycle == 3'd2) begin ctl_wz = WZ_Z; op_fetch(4'd0); end
                 else if (m_cycle == 3'd3) begin
-                    ctl_tmp16 = T16_NN;
                     ctl_ab = AB_NN; ctl_inc = INC_P1; ctl_wz = WZ_IDU;   // WZ = nn+1
                     ctl_db = DB_REG; ctl_bhi = 1'b0;
                     ctl_bi = (eff_exec == `EXEC_LD_NN_HL) ? BI_HLP : BI_RP;
                     mstart(`BUSOP_MWR, AL_ABUS, 4'd0);
-                end else if (m_cycle == 3'd4) begin
-                    ctl_ab = AB_T16; ctl_inc = INC_P1;
+                end else if (m_cycle == 3'd4) begin                       // write (nn+1) at WZ
                     ctl_db = DB_REG; ctl_bhi = 1'b1;
                     ctl_bi = (eff_exec == `EXEC_LD_NN_HL) ? BI_HLP : BI_RP;
-                    mstart(`BUSOP_MWR, AL_IDU, 4'd0);
+                    at_pair(`BUSOP_MWR, RI_WZ, 4'd0);
                 end else ctl_fin = 1'b1;
             end
 
@@ -1065,11 +1057,11 @@ module z80_core (
             `EXEC_EX_SP_HL: begin
                 if (m_cycle == 3'd1) at_pair(`BUSOP_MRD, RI_SP, 4'd0);
                 else if (m_cycle == 3'd2) begin
-                    ctl_tmpl = TL_RB;
+                    ctl_wz = WZ_Z;                                        // (SP) -> Z
                     ctl_ab = AB_REG; ctl_ri = RI_SP; ctl_inc = INC_P1;
                     mstart(`BUSOP_MRD, AL_IDU, 4'd1);
                 end else if (m_cycle == 3'd3) begin
-                    ctl_tmph = 1'b1;
+                    ctl_wz = WZ_W;                                        // (SP+1) -> W
                     ctl_ab = AB_REG; ctl_ri = RI_SP; ctl_inc = INC_P1;
                     ctl_db = DB_REG; ctl_bi = BI_HLP; ctl_bhi = 1'b1;
                     mstart(`BUSOP_MWR, AL_IDU, 4'd0);
@@ -1077,7 +1069,7 @@ module z80_core (
                     ctl_db = DB_REG; ctl_bi = BI_HLP; ctl_bhi = 1'b0;
                     at_pair(`BUSOP_MWR, RI_SP, 4'd2);
                 end else begin
-                    ctl_pw = 1'b1; ctl_pwi = RI_HLP; ctl_pws = PW_TMP; ctl_wz = WZ_TMP;
+                    ctl_pw = 1'b1; ctl_pwi = RI_HLP; ctl_pws = PW_WZ;    // HL <- WZ (= MEMPTR)
                     ctl_fin = 1'b1;
                 end
             end
@@ -1138,14 +1130,14 @@ module z80_core (
             `EXEC_RRD, `EXEC_RLD: begin
                 if (m_cycle == 3'd1) at_pair(`BUSOP_MRD, RI_HL, 4'd0);
                 else if (m_cycle == 3'd2) begin
-                    // A and flags from z80_alu (FLAG_RRD / FLAG_RLD); the new
-                    // (HL) byte is nibble routing, parked in tmpl
-                    wr_byte(BW_A, BS_ALU); wr_flags(FS_ALU);
-                    ctl_tmpl = TL_RRD;
                     ctl_ab = AB_REG; ctl_ri = RI_HL; ctl_inc = INC_P1; ctl_wz = WZ_IDU;  // WZ = HL+1
                     mstart(`BUSOP_INTERNAL, AL_ABUS, 4'd4);
                 end else if (m_cycle == 3'd3) begin
-                    ctl_db = DB_TL; at_pair(`BUSOP_MWR, RI_HL, 4'd0);
+                    // the (HL) byte is still in tmp8 and A is untouched: the
+                    // ALU forms A and the flags (FLAG_RRD / FLAG_RLD), the new
+                    // (HL) byte is nibble routing
+                    wr_byte(BW_A, BS_ALU); wr_flags(FS_ALU);
+                    ctl_db = DB_RRD; at_pair(`BUSOP_MWR, RI_HL, 4'd0);
                 end else ctl_fin = 1'b1;
             end
 
@@ -1182,7 +1174,7 @@ module z80_core (
                         ctl_inc = aux_w[0] ? INC_M1 : INC_P1; ctl_wz = WZ_IDU;  // WZ = BC +/- 1
                         at_pair(`BUSOP_IORD, RI_BC, 4'd0);
                     end else if (m_cycle == 3'd3) begin
-                        ctl_tmpl = TL_RB; ctl_db = DB_RB;
+                        ctl_db = DB_RB;                       // data stays in tmp8 for the flags
                         at_pair(`BUSOP_MWR, RI_HL, 4'd0);
                     end else if (m_cycle == 3'd4) begin
                         wr_byte(BW_B, BS_BD);                 // B-1 (HL stepped at M4 T1)
@@ -1195,7 +1187,6 @@ module z80_core (
                     if (m_cycle == 3'd1) at_pair(`BUSOP_INTERNAL, RI_PC, 4'd1);
                     else if (m_cycle == 3'd2) at_pair(`BUSOP_MRD, RI_HL, 4'd0);
                     else if (m_cycle == 3'd3) begin
-                        ctl_tmpl = TL_RB;
                         wr_byte(BW_B, BS_BD);                 // B-1, then out to {B-1, C}
                         ctl_ab = AB_NBC; ctl_inc = aux_w[0] ? INC_M1 : INC_P1; ctl_wz = WZ_IDU;
                         ctl_db = DB_RB;
@@ -1220,17 +1211,18 @@ module z80_core (
                 else if (m_cycle == 3'd2) push_byte(BI_PC, 1'b0);
                 else if (m_cycle == 3'd3) begin
                     if (im == 2'd2) begin
-                        ctl_tmp16 = T16_IV; ctl_ab = AB_IV;
+                        ctl_wz = WZ_IV; ctl_ab = AB_IV;           // WZ = {I, vector}
                         mstart(`BUSOP_MRD, AL_ABUS, 4'd0);
                     end else begin
                         ctl_vec = VEC_IM; ctl_pc = PC_VEC; ctl_wz = WZ_VEC; ctl_fin = 1'b1;
                     end
                 end
                 else if (m_cycle == 3'd4) begin
-                    ctl_tmpl = TL_RB; ctl_ab = AB_T16; ctl_inc = INC_P1;
+                    ctl_wz = WZ_Z;                                         // low byte -> Z
+                    ctl_ab = AB_REG; ctl_ri = RI_WZ; ctl_inc = INC_P1;
                     mstart(`BUSOP_MRD, AL_IDU, 4'd0);
                 end
-                else begin ctl_pc = PC_NN; ctl_wz = WZ_NN; ctl_fin = 1'b1; end
+                else begin ctl_pc = PC_NN; ctl_wz = WZ_W; ctl_fin = 1'b1; end
             end
 
             default: ctl_fin = 1'b1;
@@ -1259,10 +1251,9 @@ module z80_core (
     always @* begin
         case (ctl_ab)
             AB_REG:  abus = rf_ab;
-            AB_NN:   abus = {rbyte, tmpl};
+            AB_NN:   abus = {rbyte, r_wz[7:0]};
             AB_AN:   abus = {A_cur, rbyte};
             AB_IV:   abus = {reg_i, tmp8};
-            AB_T16:  abus = tmp16;
             default: abus = {b_dec, r_bc[7:0]};
         endcase
     end
@@ -1271,7 +1262,7 @@ module z80_core (
                               (ctl_inc == INC_M1) ? 16'hFFFF : 16'hFFFE);
     // effective address: PC + e (JR, DJNZ, block repeat PC-1), IX + d
     wire [15:0] ea_base = ctl_ea_pc ? r_pc : rf_hlp;
-    wire [7:0]  ea_d    = (ctl_ea_d == EA_RB) ? rbyte : (ctl_ea_d == EA_TL) ? tmpl : 8'hFF;
+    wire [7:0]  ea_d    = (ctl_ea_d == EA_RB) ? rbyte : (ctl_ea_d == EA_Z) ? r_wz[7:0] : 8'hFF;
     wire [15:0] ea      = ea_base + {{8{ea_d[7]}}, ea_d};
 
     // 16-bit ALU: ADD HL,rp / ADC HL,rp / SBC HL,rp (HL is IX/IY under DD/FD)
@@ -1338,7 +1329,7 @@ module z80_core (
             DB_RB:   wdata = rbyte;
             DB_ALU:  wdata = alu_res;
             DB_CB:   wdata = cbres;
-            default: wdata = tmpl;
+            default: wdata = rrd_mem;
         endcase
     end
     // interrupt / restart vectors
@@ -1367,9 +1358,8 @@ module z80_core (
         endcase
         case (ctl_pws)
             PW_IDU:  pw_data = idu;
-            PW_NN:   pw_data = {rbyte, tmpl};
             PW_A16:  pw_data = a16;
-            default: pw_data = {tmph, tmpl};
+            default: pw_data = r_wz;
         endcase
     end
     // byte write port: r[y]-style register code (IXH/IXL substitution for
@@ -1397,6 +1387,8 @@ module z80_core (
         endcase
         if (ctl_bwd == BW_HLPL) begin bw_pair = hlp; bw_hi = 1'b0; bw_en = 1'b1; end
         if (ctl_bwd == BW_HLPH) begin bw_pair = hlp; bw_hi = 1'b1; bw_en = 1'b1; end
+        if (ctl_bwd == BW_RPL)  begin bw_pair = rp_sel_w; bw_hi = 1'b0; bw_en = 1'b1; end
+        if (ctl_bwd == BW_RPH)  begin bw_pair = rp_sel_w; bw_hi = 1'b1; bw_en = 1'b1; end
         case (ctl_bws)
             BS_RI:   bw_data = getri_src_val;
             BS_ALU:  bw_data = alu_res;
@@ -1416,7 +1408,7 @@ module z80_core (
             // ... CPIR/CPDR repeat: same fold onto the F CPI left
             FS_BCP:  f_data = (F_cur & ~(`Z80_YF | `Z80_XF)) | (r_pc[15:8] & (`Z80_YF | `Z80_XF));
             // ... INIR/INDR/OTIR/OTDR repeat: full recompute (idu = PC-2)
-            default: f_data = banks_io_rep_f(tmpl,
+            default: f_data = banks_io_rep_f(tmp8,
                                   (aux_w[2:1] == 2'd2) ? b_dec : r_bc[15:8],
                                   (aux_w[2:1] == 2'd2) ? bk_ini : bk_out,
                                   idu[15:8]);
@@ -1446,8 +1438,7 @@ module z80_core (
             case (ctl_pc)
                 PC_IDU:  rf_n[`RFP_PC] = idu;
                 PC_EA:   rf_n[`RFP_PC] = ea;
-                PC_NN:   rf_n[`RFP_PC] = {rbyte, tmpl};
-                PC_T16:  rf_n[`RFP_PC] = tmp16;
+                PC_NN:   rf_n[`RFP_PC] = {rbyte, r_wz[7:0]};
                 PC_ABUS: rf_n[`RFP_PC] = abus;
                 PC_VEC:  rf_n[`RFP_PC] = vec;
                 default: ;
@@ -1461,8 +1452,9 @@ module z80_core (
                 WZ_IDU:  rf_n[`RFP_WZ] = idu;
                 WZ_ALO:  rf_n[`RFP_WZ] = {A_cur, idu[7:0]};
                 WZ_EA:   rf_n[`RFP_WZ] = ea;
-                WZ_NN:   rf_n[`RFP_WZ] = {rbyte, tmpl};
-                WZ_TMP:  rf_n[`RFP_WZ] = {tmph, tmpl};
+                WZ_Z:    rf_n[`RFP_WZ] = {r_wz[15:8], rbyte};
+                WZ_W:    rf_n[`RFP_WZ] = {rbyte, r_wz[7:0]};
+                WZ_IV:   rf_n[`RFP_WZ] = {reg_i, tmp8};
                 WZ_VEC:  rf_n[`RFP_WZ] = vec;
                 default: ;
             endcase
@@ -1480,7 +1472,7 @@ module z80_core (
         t_n = t_state; m_cycle_n = m_cycle;
         bus_op_n = bus_op; m_len_n = m_len; m_addr_n = m_addr; m_wdata_n = m_wdata;
         prefix_n = prefix; iff1_n = iff1; iff2_n = iff2; im_n = im; halted_n = halted;
-        tmp8_n = tmp8; tmpl_n = tmpl; tmph_n = tmph; tmp16_n = tmp16;
+        tmp8_n = tmp8; tmph_n = tmph;
         reg_q_n = reg_q;
         // Detect an F write this instruction (mirrors c->f_modified in
         // cmodel/z80_core.c): the ALU is in a flag mode, so one of the
@@ -1565,17 +1557,7 @@ module z80_core (
         // last T-state of the M-cycle: the execute step
         else begin
             if (ctl_prefix) prefix_n = pfx_next;
-            case (ctl_tmpl)
-                TL_RB:   tmpl_n = rbyte;
-                TL_RRD:  tmpl_n = rrd_mem;
-                default: ;
-            endcase
             if (ctl_tmph) tmph_n = rbyte;
-            case (ctl_tmp16)
-                T16_NN:  tmp16_n = {rbyte, tmpl};
-                T16_IV:  tmp16_n = {reg_i, tmp8};
-                default: ;
-            endcase
             case (ctl_iff)
                 IFF_DI:   begin iff1_n = 1'b0; iff2_n = 1'b0; end
                 IFF_EI:   begin iff1_n = 1'b1; iff2_n = 1'b1; ei_delay_n = 1'b1; end
@@ -1677,7 +1659,7 @@ module z80_core (
             t_state <= 4'd1; m_cycle <= 3'd1;
             bus_op <= `BUSOP_M1; m_len <= 4'd4; m_addr <= 16'h0000; m_wdata <= 8'h00;
             prefix <= `PFX_NONE; iff1 <= 1'b0; iff2 <= 1'b0; im <= 2'd0; halted <= 1'b0;
-            tmp8 <= 8'h00; tmpl <= 8'h00; tmph <= 8'h00; tmp16 <= 16'h0000;
+            tmp8 <= 8'h00; tmph <= 8'h00;
             nmi_pending <= 1'b0; prev_nmi_n <= 1'b1; ei_delay <= 1'b0;
             nmi_sampled <= 1'b0; int_sampled <= 1'b0;
             suppress_decode <= 1'b0; bus_granted <= 1'b0; irq_seq <= 2'd0;
@@ -1692,7 +1674,7 @@ module z80_core (
             t_state <= t_n; m_cycle <= m_cycle_n;
             bus_op <= bus_op_n; m_len <= m_len_n; m_addr <= m_addr_n; m_wdata <= m_wdata_n;
             prefix <= prefix_n; iff1 <= iff1_n; iff2 <= iff2_n; im <= im_n; halted <= halted_n;
-            tmp8 <= tmp8_n; tmpl <= tmpl_n; tmph <= tmph_n; tmp16 <= tmp16_n;
+            tmp8 <= tmp8_n; tmph <= tmph_n;
             nmi_pending <= nmi_pending_n; prev_nmi_n <= prev_nmi_n_n; ei_delay <= ei_delay_n;
             nmi_sampled <= nmi_sampled_n; int_sampled <= int_sampled_n;
             suppress_decode <= suppress_decode_n; bus_granted <= bus_granted_n; irq_seq <= irq_seq_n;
