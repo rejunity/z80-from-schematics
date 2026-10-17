@@ -10,7 +10,7 @@
 //   4. type "PRINT 123+456" + CR
 //   5. expect "579"  -> PASS
 //
-// The UART runs at BAUD = CORE_HZ/16 (16 core clocks per bit) so the
+// The UART runs at BAUD = CORE_HZ/16 (16 Z80 clocks per bit) so the
 // serial side doesn't dominate simulation time. Run vvp from a directory
 // containing rom.mem (top.v's ROM_FILE default), e.g. build/.
 
@@ -18,11 +18,11 @@
 
 module tb_top;
     localparam integer CLK_IN_HZ = 50_000_000;
-    localparam integer DIV_BITS  = 2;
-    localparam integer CORE_HZ   = CLK_IN_HZ >> DIV_BITS;
+    localparam integer CLK_DIV   = 12;                       // PLL stand-in divider
+    localparam integer CORE_HZ   = CLK_IN_HZ / CLK_DIV;      // 4.17 MHz Z80 clock
     localparam integer SIM_BAUD  = CORE_HZ / 16;
-    // one UART bit = 16 core clks; core clk = 80 ns
-    localparam integer BIT_NS    = 16 * 80;
+    // one UART bit = 16 Z80 clks; Z80 clk = 20 ns * CLK_DIV = 240 ns
+    localparam integer BIT_NS    = 16 * 20 * CLK_DIV;
 
     reg clk = 0;
     always #10 clk = ~clk;              // 50 MHz
@@ -30,13 +30,15 @@ module tb_top;
     reg  usb_rx = 1'b1;
     wire usb_tx;
     wire [4:0] led;
+    wire [27:0] gpio;
 
-    top #(.CLK_IN_HZ(CLK_IN_HZ), .CLK_DIV_BITS(DIV_BITS), .BAUD(SIM_BAUD)) dut (
+    top #(.CORE_HZ(CORE_HZ), .SIM_CLK_DIV(CLK_DIV), .BAUD(SIM_BAUD)) dut (
         .clk    (clk),
         .usb_rx (usb_rx),
         .usb_tx (usb_tx),
         .button (2'b11),                // not pressed
-        .led    (led)
+        .led    (led),
+        .gpio   (gpio)
     );
 
     // ---- host-side TX (drive dut's RX pin) ----
@@ -83,7 +85,7 @@ module tb_top;
                 tail = {tail[247:0], rx_byte};
 
                 case (stage)
-                    0: if (tail[95:0] == "Memory top?") begin
+                    0: if (tail[87:0] == "Memory top?") begin   // 11 chars
                         stage = 1;
                         fork begin
                             #(20 * BIT_NS);

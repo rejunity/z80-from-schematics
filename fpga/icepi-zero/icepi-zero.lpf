@@ -1,7 +1,7 @@
 # IcePi Zero v1.3 pin constraints, vendored verbatim from
 # https://github.com/cheyao/icepi-zero (gateware/v1.3/icepi-zero-v1_3.lpf,
 # zlib-style licence, Copyright (C) 2024-2025 Cheyao) with one addition:
-# a FREQUENCY constraint for the divided Z80 core clock (see end of file).
+# a note on the Z80 clock (see end of file).
 SYSCONFIG CONFIG_IOVOLTAGE=3.3 COMPRESS_CONFIG=ON MCCLK_FREQ=62 MASTER_SPI_PORT=ENABLE SLAVE_SPI_PORT=DISABLE SLAVE_PARALLEL_PORT=DISABLE;
 
 # https://www.latticesemi.com/en/Support/AnswerDatabase/1/9/6/1964
@@ -293,6 +293,5 @@ LOCATE COMP "tp[1]" SITE "C8";
 IOBUF  PORT "tp[1]" IO_TYPE=LVCMOS33 PULLMODE=DOWN;
 
 
-# RZ80 SoC: divided Z80 core clock (50 MHz / 4). Constrain the divided-
-# clock net so nextpnr times the core clock domain.
-FREQUENCY NET "clk_cpu" 12.5 MHZ;
+# RZ80 SBC: the Z80 clock comes from the EHXPLLL (4 MHz, CLKOS); nextpnr
+# picks the frequency up from the PLL parameters. Nothing to add here.
