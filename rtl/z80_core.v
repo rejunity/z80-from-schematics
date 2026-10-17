@@ -523,7 +523,12 @@ module z80_core (
         if (alu_md != `FLAG_NONE) f_modified_n = 1'b1;
         cycle_n = cycle + 32'd1; instr_count_n = instr_count; decoded_n = decoded;
         fin = 1'b0;
-        add16 = 17'd0; f16 = 8'd0;
+        // Every scratch variable gets a value on every path: otherwise
+        // proc_dlatch infers latches (synth_ice40/_ecp5/_gowin stop on them;
+        // the old `async2sync` FPGA recipe and LibreLane's opt passes hid it).
+        add16 = 17'd0; f16 = 8'd0; add12 = 13'd0; r17 = 17'd0; r13 = 13'd0;
+        edf = 8'd0; cbres = 8'd0; mm = 3'd0; memaddr = 16'd0; bbc = 16'd0;
+        bnewB = 8'd0;
         ei_delay_n = ei_delay; suppress_decode_n = suppress_decode;
         bus_granted_n = bus_granted; irq_seq_n = irq_seq;
         nmi_sampled_n = nmi_sampled; int_sampled_n = int_sampled;
