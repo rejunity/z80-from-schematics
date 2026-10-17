@@ -90,15 +90,18 @@ $(BUILD)/tang_primer_25k.cst: tang_primer_25k.cst
 # and the POR holds reset for thousands of clocks so sync semantics
 # are equivalent.
 # Console shows pass headers two levels deep (-v 2) plus warnings; the full
-# log goes to build/yosys_<build>.log (-l). Known-benign warnings are
-# demoted (-w): the core's trace counters and memories, tri-state notes,
-# BRAM map ranges.
-YOSYS_QUIET := -v 2 -Q -T \
-  -w 'Replacing memory|limited support for tri-state|Drivers conflicting|out of bounds on signal'
+# log goes to build/yosys_<build>.log (-l).
+YOSYS_QUIET := -v 2 -Q -T
+# Known-benign warnings dropped from the console only (the -l log keeps them):
+# the core's trace counters and memories, tri-state notes, BRAM map ranges.
+YOSYS_FILTER := grep --line-buffered -vE 'port Q\[|Drivers conflicting|Replacing memory|limited support for tri-state|out of bounds on signal|Latch inferred for signal .\\z80_core'
 
 $(BUILD)/top_%.synth.json: $(BUILD)/src $(BUILD)/rom.mem $(VENV)/.ok
+	@rm -f $@
 	cd $(BUILD) && $(YOSYS) $(YOSYS_QUIET) -l yosys_$(STEM).log -p \
-	  'read_verilog -Isrc src/z80_top.v src/z80_core.v src/z80_pla.v src/z80_alu.v src/z80_timing.v src/top.v src/uart.v; hierarchy -top top -chparam EXTERNAL_BUS $(EXTBUS_$(STEM)); proc; async2sync; synth_gowin -top top -family gw5a -nolutram -json top_$(STEM).synth.json'
+	  'read_verilog -Isrc src/z80_top.v src/z80_core.v src/z80_pla.v src/z80_alu.v src/z80_timing.v src/top.v src/uart.v; hierarchy -top top -chparam EXTERNAL_BUS $(EXTBUS_$(STEM)); proc; async2sync; synth_gowin -top top -family gw5a -nolutram -json top_$(STEM).synth.json' \
+	  2>&1 | $(YOSYS_FILTER)
+	@test -f $@ || { echo "yosys failed, see $(BUILD)/yosys_$(STEM).log"; exit 1; }
 
 # sspi_as_gpio is mandatory on GW5A-25 (apycula enforces it), but NOT
 # cpu_as_gpio: apicula's examples pass it, we use no CPU-group pins,
