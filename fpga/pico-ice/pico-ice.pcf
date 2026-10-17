@@ -1,0 +1,68 @@
+# pico-ice.pcf - RZ80 on the pico-ice (iCE40UP5K-SG48 + RP2040), both builds.
+#
+# Pin numbers are iCE40 SG48 package pins, as printed on the board's pinout
+# (ICE<n>) and in tinyVision's catalogue
+# https://github.com/tinyvision-ai-inc/pico-ice-sdk/blob/main/rtl/pico_ice.pcf
+# and cross-checked against the Rev3 schematic netlist
+# (pico-ice/Board/Rev3/pico-ice.xml). "Pmod 1..3" are the board's own Pmod
+# numbers (pico_ice.pcf calls them PMOD0..2); a Pmod's top row is pins
+# 1-4 (IO1..IO4), its bottom row pins 7-10.
+#
+# Z80 header pinout: the longest prefix of the shared priority list that
+# fits the 25 free header pins (README: "Pinout"): CLK, D0-D7, /MREQ, /RD,
+# /WR, A0-A12. The same signals sit on the same pins in both builds; in the
+# sbc build every one of them is an output (CLK carries the internal 4 MHz).
+# The Makefile appends the per-build Z80 clock constraint
+# (set_frequency clk_z80 ...).
+
+# ---- on-board (default pico-ice firmware) ----
+set_io clk          35   # 12 MHz from RP2040 GPIO24 (clock GPOUT2), via 27R
+set_io uart_rx      27   # <- RP2040 GPIO0 = UART0 TX  (USB-CDC #1 bridge)
+set_io uart_tx      25   # -> RP2040 GPIO1 = UART0 RX
+set_io btn_n        10   # SW2 to GND, 10k pull-up + 100n: Z80 /RESET (also header hole ICE10)
+set_io led_g        39   # RGB0, RGB LED green (sinks via 1k; RP2040 GPIO12 left high-Z)
+set_io led_b        40   # RGB1, blue  (RP2040 GPIO15)
+set_io led_r        41   # RGB2, red   (RP2040 GPIO13)
+set_frequency clk   12
+
+# ---- Pmod 1 (iCE40 only): A0-A3, the strobes, CLK ----
+# The strobes live on an iCE40-only Pmod on purpose: Pmod 3's pins are also
+# RP2040 GPIOs with pull-downs, which would pull /MREQ, /RD, /WR low while
+# the FPGA is unconfigured (power-up, every CRAM load).
+set_io z80_a[0]      4   # Pmod 1 pin 1
+set_io z80_a[1]      2   # Pmod 1 pin 2
+set_io z80_a[2]     47   # Pmod 1 pin 3
+set_io z80_a[3]     45   # Pmod 1 pin 4
+set_io z80_mreq_n    3   # Pmod 1 pin 7
+set_io z80_rd_n     48   # Pmod 1 pin 8
+set_io z80_wr_n     46   # Pmod 1 pin 9
+set_io z80_clk      44   # Pmod 1 pin 10 - global buffer input G6
+
+# ---- Pmod 2 (iCE40 only): D0-D7 ----
+set_io z80_d[0]     43   # Pmod 2 pin 1
+set_io z80_d[1]     38   # Pmod 2 pin 2
+set_io z80_d[2]     34   # Pmod 2 pin 3
+set_io z80_d[3]     31   # Pmod 2 pin 4
+set_io z80_d[4]     42   # Pmod 2 pin 7
+set_io z80_d[5]     36   # Pmod 2 pin 8
+set_io z80_d[6]     32   # Pmod 2 pin 9
+set_io z80_d[7]     28   # Pmod 2 pin 10
+
+# ---- Pmod 3 (shared with RP2040 GPIO0-7): UART, A4-A9 ----
+# pin 1 = ICE27 uart_rx, pin 2 = ICE25 uart_tx (above). Only outputs here:
+# the RP2040's pins stay inputs (stock firmware) with their pull-downs.
+set_io z80_a[4]     21   # Pmod 3 pin 3   (RP2040 GPIO2)
+set_io z80_a[5]     19   # Pmod 3 pin 4   (RP2040 GPIO3)
+set_io z80_a[6]     26   # Pmod 3 pin 7   (RP2040 GPIO4)
+set_io z80_a[7]     23   # Pmod 3 pin 8   (RP2040 GPIO5)
+set_io z80_a[8]     20   # Pmod 3 pin 9   (RP2040 GPIO6)
+set_io z80_a[9]     18   # Pmod 3 pin 10  (RP2040 GPIO7)
+
+# ---- left long header (iCE40-only holes): A10-A12 ----
+set_io z80_a[10]     6   # ICE6
+set_io z80_a[11]     9   # ICE9
+set_io z80_a[12]    11   # ICE11
+
+# Not used, on purpose (see README): ICE12/ICE13 = config-flash and PSRAM
+# QSPI IO2/IO3 (/WP, /HOLD), ICE37 = PSRAM select (via an inverter),
+# ICE14-17 = the SPI bus the RP2040 drives, ICE35 = the RP2040 clock.

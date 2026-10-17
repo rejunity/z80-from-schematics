@@ -1,0 +1,214 @@
+# RZ80 -> pico-ice (tinyVision.ai: Lattice iCE40UP5K-SG48 + RP2040)
+#
+# Two bitstreams from one top.v (EXTERNAL_BUS parameter):
+#   sbc   BASIC single-board computer, internal 4 MHz clock, UART console
+#         through the RP2040's USB-UART, headers mirror the Z80 bus as
+#         outputs                                  -> build/top_sbc.bin
+#   chip  Z80 chip replacement: the headers are the live bus, CLK comes in
+#         on Pmod 1 pin 10 (ICE44)                 -> build/top_chip.bin
+#
+#   make venv    create .venv and pip-install the toolchain
+#   make         both bitstreams;  make sbc / make chip for one
+#   make sim     Verilator smoke test of the sbc build (fast serial)
+#   make sim_real  same at the hardware's serial pacing (exercises the TIE path)
+#   make sim_iverilog  the boot script through iverilog (slow cross-check)
+#   make sim_chip  iverilog smoke test of the chip build: an external clock,
+#                memory and output port on the header pins run a program
+#   make prog MODE=sbc|chip    load into FPGA CRAM over USB DFU (volatile)
+#   make flash MODE=sbc|chip   write the FPGA's config flash over USB DFU
+#   make uf2 MODE=sbc|chip [UF2_DRIVE=/media/$USER/pico-ice]
+#                build/top_<mode>.uf2 for the `pico-ice` USB drive (and copy it)
+#   make timing  post-route Fmax per clock and I/O delays, both builds
+#   make clean   remove build/;  make distclean also removes .venv
+#
+# Synthesis and P&R are pip-installed into .venv: yowasp-yosys
+# (synth_ice40) and yowasp-nextpnr-ice40, which also ships the IceStorm
+# tools (yowasp-icepack, yowasp-icepll). Programming goes through the
+# pico-ice's stock RP2040 firmware: native dfu-util (`prog`, `flash`), or
+# no tool at all -- copy the UF2 onto the board's USB drive (`uf2`).
+#
+# Sources are staged into build/ and the tools run from there: the YoWASP
+# sandbox can only see the current directory tree, and it also makes
+# top.v's ROM_FILE="rom.mem" resolve for yosys, Verilator and vvp alike.
+
+ROOT     := ../..
+BUILD    := build
+VENV     := .venv
+PYTHON   ?= python3
+
+ROM_HEX  ?= $(ROOT)/tests/basic/nascom_basic_4_7_rc2014.hex
+
+# The core is several files (z80_top + the die's blocks + headers): take them all.
+CORE_SRCS := $(wildcard $(ROOT)/rtl/*.v)
+CORE_INCS := $(wildcard $(ROOT)/rtl/*.vh)
+SOC_SRCS  := top.v uart.v
+SIM_SRCS  := $(addprefix src/,$(notdir $(SOC_SRCS) $(CORE_SRCS)))
+
+YOSYS    := $(abspath $(VENV))/bin/yowasp-yosys
+NEXTPNR  := $(abspath $(VENV))/bin/yowasp-nextpnr-ice40
+ICEPACK  := $(abspath $(VENV))/bin/yowasp-icepack
+DFU_UTIL ?= dfu-util
+IVERILOG ?= iverilog
+VVP      ?= vvp
+
+# pico-ice DFU device (stock firmware): alt 0 = config flash, alt 1 = CRAM
+DFU_DEV  := 1209:b1c0
+
+MODES := sbc chip
+EXTBUS_sbc  := 0
+EXTBUS_chip := 1
+# Z80 clock constraint per build (MHz): sbc runs at 4; the chip build's
+# external CLK is constrained at 8 to leave margin over a 4-6 MHz Z80 bus.
+ZCLK_MHZ_sbc  := 4
+ZCLK_MHZ_chip := 8
+MODE ?= sbc
+# keep the per-build synth/pnr netlists (make would delete chained intermediates)
+.SECONDARY:
+# stem of the pattern rules below without any directory part
+STEM = $(notdir $*)
+
+.PHONY: all venv bin sbc chip sim sim_real sim_iverilog sim_chip prog flash uf2 timing clean distclean
+all: bin
+
+# ---- toolchain venv (created before any tools are installed/used) ----
+$(VENV)/.ok:
+	$(PYTHON) -m venv $(VENV)
+	$(VENV)/bin/pip install --upgrade pip
+	$(VENV)/bin/pip install yowasp-yosys yowasp-nextpnr-ice40
+	touch $@
+
+venv: $(VENV)/.ok
+
+# ---- staging ----
+# ROM: 8 KiB block RAM at 0x0000-0x1FFF, so an 8192-line image.
+$(BUILD)/rom.mem: $(ROM_HEX) hex2mem.py
+	@mkdir -p $(BUILD)
+	$(PYTHON) hex2mem.py $< $@ 8192
+
+$(BUILD)/src: $(CORE_SRCS) $(CORE_INCS) $(SOC_SRCS)
+	@mkdir -p $(BUILD)/src
+	cp $(CORE_SRCS) $(CORE_INCS) $(SOC_SRCS) $(BUILD)/src/
+	@touch $@
+
+# pin constraints + this build's Z80 clock constraint
+$(BUILD)/pico-ice_%.pcf: pico-ice.pcf Makefile
+	@mkdir -p $(BUILD)
+	{ cat $<; echo "set_frequency clk_z80 $(ZCLK_MHZ_$(STEM))"; } > $@
+
+# ---- synth / pnr / pack ----
+# No `proc; async2sync` before synth_ice40: the core's async-reset flops
+# map straight onto SB_DFFR/SB_DFFS (and z80_top's falling-edge flops onto
+# SB_DFFN*). async2sync turns every flop into sync-reset plus a Q-side mux,
+# which hides the hold paths from clock-enable inference and costs
+# thousands of LUTs -- the UP5K's 5,280 would not hold the core.
+# Console shows pass headers two levels deep (-v 2) plus warnings; the full
+# log goes to build/yosys_<build>.log (-l).
+YOSYS_QUIET := -v 2 -Q -T
+# Known-benign warnings dropped from the console only (the -l log keeps them):
+# the core's trace counters and memories, tri-state notes, BRAM map ranges.
+YOSYS_FILTER := grep --line-buffered -vE 'port Q\[|Drivers conflicting|Replacing memory|limited support for tri-state|out of bounds on signal|Latch inferred for signal .\\z80_core'
+
+$(BUILD)/top_%.json: $(BUILD)/src $(BUILD)/rom.mem $(VENV)/.ok
+	@rm -f $@
+	cd $(BUILD) && $(YOSYS) $(YOSYS_QUIET) -l yosys_$(STEM).log -p \
+	  'read_verilog -Isrc src/*.v; hierarchy -top top -chparam EXTERNAL_BUS $(EXTBUS_$(STEM)); synth_ice40 -top top -abc9 -dsp -json top_$(STEM).json' \
+	  2>&1 | $(YOSYS_FILTER)
+	@test -f $@ || { echo "yosys failed, see $(BUILD)/yosys_$(STEM).log"; exit 1; }
+
+# nextpnr: full log in build/nextpnr_<build>.log, console shows the clock
+# constraints (set and PLL-derived), the main utilisation rows, placer and
+# router progress (one router row per 5000 arcs) and the timing summary --
+# about 30 lines. nextpnr fails the build if a clock misses its constraint.
+NEXTPNR_PROGRESS := grep --line-buffered -E '^(Info: (constraining clock|HeAP Placer Time|SA placement time|Routing [0-9]|Routing complete|Router1 time|Max frequency|Program finished)|Info: +Derived frequency|Info:[[:space:]]+(ICESTORM_(LC|RAM|SPRAM|PLL)|SB_IO|SB_GB):|Info: +[0-9]*[05]000 \||ERROR|Warning)'
+
+$(BUILD)/top_%.asc: $(BUILD)/top_%.json $(BUILD)/pico-ice_%.pcf
+	cd $(BUILD) && $(NEXTPNR) --up5k --package sg48 --pcf pico-ice_$(STEM).pcf \
+	  --json top_$(STEM).json --asc top_$(STEM).asc --report report_$(STEM).json \
+	  2>&1 | tee nextpnr_$(STEM).log | $(NEXTPNR_PROGRESS) || true
+	@test -f $(BUILD)/top_$(STEM).asc
+
+$(BUILD)/top_%.bin: $(BUILD)/top_%.asc
+	cd $(BUILD) && $(ICEPACK) top_$(STEM).asc top_$(STEM).bin
+
+$(BUILD)/top_%.uf2: $(BUILD)/top_%.bin bin2uf2.py
+	$(PYTHON) bin2uf2.py $< $@
+
+sbc:  $(BUILD)/top_sbc.bin
+chip: $(BUILD)/top_chip.bin
+bin:  sbc chip
+
+# Post-route figures: Fmax per clock, then the unconstrained I/O and
+# cross-domain delays (in the chip build these are the header timings:
+# pad -> posedge/negedge clk_z80 = data setup, clk_z80 -> pad = clock to out).
+timing: $(BUILD)/top_sbc.asc $(BUILD)/top_chip.asc
+	@for m in $(MODES); do echo "== $$m"; sed -n '/Routing complete/,$$p' $(BUILD)/nextpnr_$$m.log | grep -E 'Max (frequency|delay)'; done
+
+# ---- simulation ----
+# `make sim` (Verilator, fast -- seconds) is the default; the iverilog
+# path is kept as the slow cross-check (`make sim_iverilog`).
+VERILATOR ?= verilator
+# In simulation the PLL is a black box and its output is replaced by the
+# 12 MHz input (x1), so the same /6 divider gives a 2 MHz Z80 clock;
+# -GCORE_HZ overrides the UART divisors to match. Default: fast serial
+# (16 Z80 clks/bit) so framing doesn't dominate sim time. `make sim_real`
+# uses the hardware's pacing instead -- 35 Z80 clocks per bit, i.e. 115200
+# baud at 4 MHz, which is 57143 baud at the sim's 2 MHz -- and that pacing
+# is what exercises the ROM's interrupt-driven TX (TIE) path. (make keeps
+# trailing spaces, so no inline comments on these lines.)
+SIM_CORE_HZ := 2000000
+SIM_BAUD  ?= 125000
+SIM_BAUD_REAL := 57143
+# One object dir per baud: SIM_BAUD is baked into the model (-G/-D), so
+# `make sim_real` after `make sim` must not reuse the fast binary.
+OBJ_DIR   := $(BUILD)/obj_dir_$(SIM_BAUD)
+
+$(OBJ_DIR)/Vtop: $(BUILD)/src sim_top.cpp
+	rm -rf $(OBJ_DIR)
+	cd $(BUILD) && $(VERILATOR) --cc --exe --build -j 4 -O2 \
+	  -Wno-fatal -Isrc --Mdir obj_dir_$(SIM_BAUD) --top-module top \
+	  -GCORE_HZ=$(SIM_CORE_HZ) -GBAUD=$(SIM_BAUD) -GEXTERNAL_BUS=0 \
+	  -CFLAGS -DSIM_BAUD=$(SIM_BAUD) \
+	  $(SIM_SRCS) ../sim_top.cpp > verilator.log 2>&1 || (tail -20 verilator.log; exit 1)
+
+sim: $(OBJ_DIR)/Vtop $(BUILD)/rom.mem
+	cd $(BUILD) && ./obj_dir_$(SIM_BAUD)/Vtop
+
+sim_real:
+	$(MAKE) sim SIM_BAUD=$(SIM_BAUD_REAL)
+
+$(BUILD)/tb_top.vvp: $(BUILD)/src $(BUILD)/rom.mem tb_top.v
+	cd $(BUILD) && $(IVERILOG) -g2012 -Isrc -o tb_top.vvp $(SIM_SRCS) ../tb_top.v
+
+sim_iverilog: $(BUILD)/tb_top.vvp
+	cd $(BUILD) && $(VVP) tb_top.vvp
+
+# chip build (EXTERNAL_BUS=1, behavioural pads): the testbench is the
+# external Z80 system on the header pins (see tb_chip.v).
+$(BUILD)/tb_chip.vvp: $(BUILD)/src tb_chip.v
+	cd $(BUILD) && $(IVERILOG) -g2012 -Isrc -o tb_chip.vvp $(SIM_SRCS) ../tb_chip.v
+
+sim_chip: $(BUILD)/tb_chip.vvp
+	cd $(BUILD) && $(VVP) tb_chip.vvp
+
+# ---- board (stock pico-ice firmware on the RP2040) ----
+# prog:  bitstream into the iCE40's configuration RAM -- lost on power-cycle.
+# flash: bitstream into the iCE40's SPI flash, then the RP2040 reboots and
+#        the FPGA configures from it (persistent).
+# uf2:   the same flash write without dfu-util: copy the .uf2 onto the
+#        `pico-ice` USB drive.
+prog: $(BUILD)/top_$(MODE).bin
+	$(DFU_UTIL) -d $(DFU_DEV) --alt 1 --download $<
+
+flash: $(BUILD)/top_$(MODE).bin
+	$(DFU_UTIL) -d $(DFU_DEV) --alt 0 --download $< --reset
+
+# UF2_DRIVE=<mount point of the pico-ice drive> copies it there directly.
+uf2: $(BUILD)/top_$(MODE).uf2
+	@if [ -n "$(UF2_DRIVE)" ]; then cp $< "$(UF2_DRIVE)"/ && sync && echo "copied $< to $(UF2_DRIVE)"; \
+	else echo "copy $< onto the pico-ice USB drive, or: make uf2 MODE=$(MODE) UF2_DRIVE=/media/\$$USER/pico-ice"; fi
+
+clean:
+	rm -rf $(BUILD)
+
+distclean: clean
+	rm -rf $(VENV)
