@@ -108,10 +108,11 @@ $(BUILD)/top_%.synth.json: $(BUILD)/src $(BUILD)/rom.mem $(VENV)/.ok
 # and repurposing config-interface pins risks locking out the BL616's
 # JTAG access until the next power cycle.
 # nextpnr: full log in build/nextpnr_<build>.log, console shows the stage
-# lines, placer/router progress and the timing summary. The chip build's
+# lines, placer/router progress (one router row per 5000 arcs) and the
+# timing summary. The chip build's
 # per-sink "Failed to route ... using dedicated routing" warnings (the J1
 # clock, see README) are summarised instead of listed.
-NEXTPNR_PROGRESS := grep --line-buffered -E '^(Info: (Pack|Running|Placed|Creating|HeAP|SA |Routing|Router|Max frequency|Program finished|Device util)|Info: +[0-9]+000 \||ERROR|Warning)' \
+NEXTPNR_PROGRESS := grep --line-buffered -E '^(Info: (Pack|Running|Placed|Creating|HeAP|SA |Routing|Router|Max frequency|Program finished|Device util)|Info: +[0-9]*[05]000 \||ERROR|Warning)' \
   | grep --line-buffered -v 'Failed to route net'
 
 $(BUILD)/top_%.pnr.json: $(BUILD)/top_%.synth.json $(BUILD)/tang_primer_25k.cst
