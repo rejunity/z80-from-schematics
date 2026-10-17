@@ -63,11 +63,11 @@ def emit_test(t):
         (f"`RFP_SP", t["sp"]),  (f"`RFP_PC", t["pc"]),
         (f"`RFP_WZ", t["wz"]),
     ]
-    # rf[] is physical, but straight after do_reset() the exchange
+    # u_regs.rf[] is physical, but straight after do_reset() the exchange
     # flip-flops are clear and physical = logical.
     for sel, val in pokes:
-        body.append(f'        `core.rf[{sel}]   = 16\'h{val:04x};')
-        body.append(f'        `core.rf_n[{sel}] = 16\'h{val:04x};')
+        body.append(f'        `core.u_regs.rf[{sel}]   = 16\'h{val:04x};')
+        body.append(f'        `core.u_regs.rf_n[{sel}] = 16\'h{val:04x};')
     body.append(f'        `core.reg_i      = 8\'h{t["i"]:02x};  `core.reg_i_n   = 8\'h{t["i"]:02x};')
     body.append(f'        `core.reg_r      = 8\'h{t["r"]:02x};  `core.reg_r_n   = 8\'h{t["r"]:02x};')
     body.append(f'        `core.iff1       = 1\'b{t["iff1"]};   `core.iff1_n    = 1\'b{t["iff1"]};')

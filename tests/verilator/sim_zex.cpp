@@ -45,10 +45,10 @@ int main(int argc, char** argv) {
     t->reset_n = 1;
 
     // poke PC=0x100, SP=0xFFFE (RFP_PC=11, RFP_SP=10)
-    R->z80_top__DOT__u_core__DOT__rf[11]   = 0x0100;
-    R->z80_top__DOT__u_core__DOT__rf_n[11] = 0x0100;
-    R->z80_top__DOT__u_core__DOT__rf[10]   = 0xFFFE;
-    R->z80_top__DOT__u_core__DOT__rf_n[10] = 0xFFFE;
+    R->z80_top__DOT__u_core__DOT__u_regs__DOT__rf[11]   = 0x0100;
+    R->z80_top__DOT__u_core__DOT__u_regs__DOT__rf_n[11] = 0x0100;
+    R->z80_top__DOT__u_core__DOT__u_regs__DOT__rf[10]   = 0xFFFE;
+    R->z80_top__DOT__u_core__DOT__u_regs__DOT__rf_n[10] = 0xFFFE;
 
     long long phases = 0, instr = 0;
     bool prev_m1_n = true;
@@ -69,7 +69,7 @@ int main(int argc, char** argv) {
         // model latched into the M1 address bus for this fetch.
         if (prev_m1_n && !t->m1_n) {
             instr++;
-            uint16_t pc = R->z80_top__DOT__u_core__DOT__rf[11];
+            uint16_t pc = R->z80_top__DOT__u_core__DOT__rfl[11];
             if (pc == 0) break;                       // exit trap (RET to 0x0000)
             // Service BDOS once per execution of the RET at 0x0005, not once
             // per phase that happens to sample PC==5 (which would print the

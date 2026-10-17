@@ -81,7 +81,7 @@ module tb_int_ack;
                 $fatal(1,"INT case mode=%0d op=%h reached=%b overlap=%0d refresh=%0d waits=%0d",imode,opcode,reached,overlaps,refreshes,waits);
             if(dut.u_core.reg_r !== ack_r+8'd1) $fatal(1,"ack must increment R once");
             expected_sp=(imode==0 && (opcode==8'hc3 || opcode==0))?16'h9000:16'h8ffe;
-            if(dut.u_core.rf[`RFP_SP]!==expected_sp) $fatal(1,"wrong interrupt stack depth");
+            if(dut.u_core.rfl[`RFP_SP]!==expected_sp) $fatal(1,"wrong interrupt stack depth");
             if(expected_sp==16'h8ffe) begin
                 if(imode==0 && opcode==8'hcd) return_pc=return_pc+2;
                 if({mem[16'h8fff],mem[16'h8ffe]}!==return_pc) $fatal(1,"wrong return PC");

@@ -44,7 +44,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
-.PHONY: all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test verilator_z80test z80test_rtl halt2int halt2int_probe
+.PHONY: equiv all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test verilator_z80test z80test_rtl halt2int halt2int_probe
 
 all: cmodel ctest
 
@@ -177,6 +177,15 @@ perfectz80: tracegen $(BIN)/perfectz80_runner
 # INT / WAIT / BUSREQ / RESET events still go through the C-only path.
 perfectz80_rtl: iverilog $(BIN)/perfectz80_runner
 	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --rtl=iverilog 200
+
+# === Formal equivalence of z80_core against a git revision ===============
+# For pure restructurings (same registers, moved or renamed): proves the
+# work tree's z80_core identical to REF's for every state and input --
+# next-state, reset values and every pin image (scripts/equiv_rtl.py).
+# Needs a native yosys on PATH (or YOSYS=...). `make equiv REF=main`.
+REF ?= main
+equiv:
+	@$(PYTHON) $(SCRIPTS)/equiv_rtl.py $(REF)
 
 # === LibreLane gate-level flow — "ultimate test" =============================
 # Synthesise rtl/*.v through LibreLane (Yosys.Synthesis step only — no

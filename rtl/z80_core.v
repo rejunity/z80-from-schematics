@@ -3,23 +3,23 @@
 //
 //   decode PLA       z80_pla: (prefix state, opcode) -> instruction class
 //                    (exec) and its fields (registers, ALU op, cc, ...)
-//   sequencer        T-state / M-cycle counters, bus-cycle type and length,
-//                    WAIT, BUSREQ, NMI/INT sampling and the instruction
-//                    boundary (accept NMI / INT / HALT or fetch the next M1)
-//   execute          the random control logic: (exec, M-cycle) -> control
-//                    word ctl_* -- which bus cycle starts next and at which
-//                    address, what the incrementer does, which registers
-//                    load what. Narrow select signals only; no data here.
-//   register file    BC DE HL AF, BC' DE' HL' AF', IX IY SP PC WZ. Reads:
-//                    one indexed pair onto the address-side bus, the rp[p]
-//                    and HL/IX/IY pairs, byte reads onto the data side.
-//                    Writes: a 16-bit pair port, a byte port, the flag
-//                    port, and the PC / SP / WZ loads.
-//   address side     abus (16 bit) -> IDU (+1 / -1 / -2) -> address latch
-//                    (m_addr) and register write-back; the effective-
-//                    address adder (PC+e, IX+d) next to it
-//   ALU              z80_alu (8 bit, flags) and the 16-bit add / subtract
-//                    for ADD HL,rp / ADC HL,rp / SBC HL,rp
+//   sequencer        (this module) T-state / M-cycle counters, bus-cycle
+//                    type and length, WAIT, BUSREQ, NMI/INT sampling and
+//                    the instruction boundary (accept NMI / INT / HALT or
+//                    fetch the next M1)
+//   execute          z80_execute, the random control logic: (exec, M, T)
+//                    -> control word ctl_* -- which bus cycle starts next
+//                    and at which address, what the incrementer does,
+//                    which registers load what. Narrow selects, no data.
+//   register file    z80_regfile: BC DE HL AF, BC' DE' HL' AF', IX IY SP
+//                    PC WZ, renamed by the EX / EXX exchange flip-flops;
+//                    a pair write port, a byte port, the flag port, the
+//                    PC / SP / WZ loads
+//   address side     z80_addr: abus (16 bit) -> IDU (+1 / -1 / -2) ->
+//                    address latch (m_addr) and register write-back; the
+//                    effective-address adder (PC+e, IX+d) next to it
+//   ALU              z80_alu (8 bit, flags) and, here, the 16-bit add /
+//                    subtract for ADD HL,rp / ADC HL,rp / SBC HL,rp
 //   data latches     tmp8 (read data), m_wdata (write data), tmph (the DDCB
 //                    opcode). Operand words assemble in WZ (Z then W), as
 //                    on the die; MEMPTR is simply what WZ is left holding.
@@ -96,23 +96,10 @@ module z80_core (
     output wire [3:0]  dbg_t,
     output wire [2:0]  dbg_m
 );
-    // Separate loop indices for the register-file next-state block and the
-    // clocked block: one `integer` assigned from two processes is a flop
-    // with a conflicting combinational driver to Yosys.
-    integer i, ri;
 
     // =======================================================================
     // registered state
     // =======================================================================
-    reg [15:0] rf [0:12];      // register file, physical pairs (see below)
-    // Exchange flip-flops. EX DE,HL / EXX / EX AF,AF' move no data: like
-    // the die they flip which physical pair answers to which name. rf[0..3]
-    // and rf[4..7] are the two banks; with all flip-flops clear (reset)
-    // physical = logical (RFP_* indices), so a testbench may preload rf[]
-    // straight after reset. Read registers back through rfl[].
-    reg        xbank;          // EXX: BC DE HL are rf[4..6] (else rf[0..2])
-    reg        xaf;            // EX AF,AF': AF is rf[7] (else rf[3])
-    reg  [1:0] xdh;            // EX DE,HL, per physical bank: DE and HL swapped
     reg [7:0]  reg_i, reg_r, ir;
     reg [7:0]  reg_q;          // Q: F left by the previous F-modifying instruction, else 0
     reg        f_modified;     // set this instruction if anything wrote F
@@ -135,9 +122,6 @@ module z80_core (
                                // moves while it is set
 
     // ---- next state ----
-    reg [15:0] rf_n [0:12];
-    wire       xbank_n, xaf_n;
-    wire [1:0] xdh_n;
     reg [7:0]  reg_i_n, reg_r_n, ir_n;
     reg [3:0]  t_n, m_len_n;
     reg [2:0]  m_cycle_n, bus_op_n;
@@ -310,37 +294,8 @@ module z80_core (
     // =======================================================================
     // register file: read side
     // =======================================================================
-    // logical pair -> physical pair through the exchange flip-flops
-    function [3:0] phys;
-        input [3:0] l; input xb; input xa; input [1:0] xd;
-        reg b, s;
-        begin
-            b = ((l == `RFP_BC2) || (l == `RFP_DE2) || (l == `RFP_HL2)) ? ~xb : xb;
-            s = b ? xd[1] : xd[0];
-            case (l)
-                `RFP_BC, `RFP_BC2: phys = {1'b0, b, 2'd0};
-                `RFP_DE, `RFP_DE2: phys = {1'b0, b, s ? 2'd2 : 2'd1};
-                `RFP_HL, `RFP_HL2: phys = {1'b0, b, s ? 2'd1 : 2'd2};
-                `RFP_AF:           phys = {1'b0, xa, 2'd3};
-                `RFP_AF2:          phys = {1'b0, ~xa, 2'd3};
-                default:           phys = l;
-            endcase
-        end
-    endfunction
-    wire [15:0] p_bc0 = rf[0], p_de0 = rf[1], p_hl0 = rf[2], p_af0 = rf[3];
-    wire [15:0] p_bc1 = rf[4], p_de1 = rf[5], p_hl1 = rf[6], p_af1 = rf[7];
-    wire        x_sw  = xbank ? xdh[1] : xdh[0];   // DE/HL swapped in the live bank
-    wire        x_sw2 = xbank ? xdh[0] : xdh[1];   // ... in the other bank
-    wire [15:0] r_bc  = xbank ? p_bc1 : p_bc0;
-    wire [15:0] r_de  = xbank ? (x_sw ? p_hl1 : p_de1) : (x_sw ? p_hl0 : p_de0);
-    wire [15:0] r_hl  = xbank ? (x_sw ? p_de1 : p_hl1) : (x_sw ? p_de0 : p_hl0);
-    wire [15:0] r_af  = xaf ? p_af1 : p_af0;
-    wire [15:0] r_bc2 = xbank ? p_bc0 : p_bc1;
-    wire [15:0] r_de2 = xbank ? (x_sw2 ? p_hl0 : p_de0) : (x_sw2 ? p_hl1 : p_de1);
-    wire [15:0] r_hl2 = xbank ? (x_sw2 ? p_de0 : p_hl0) : (x_sw2 ? p_de1 : p_hl1);
-    wire [15:0] r_af2 = xaf ? p_af0 : p_af1;
-    wire [15:0] r_ix  = rf[`RFP_IX],  r_iy  = rf[`RFP_IY],  r_sp  = rf[`RFP_SP];
-    wire [15:0] r_pc  = rf[`RFP_PC],  r_wz  = rf[`RFP_WZ];
+    wire [15:0] r_bc, r_de, r_hl, r_af, r_bc2, r_de2, r_hl2, r_af2;
+    wire [15:0] r_ix, r_iy, r_sp, r_pc, r_wz;
     wire [7:0]  A_cur = r_af[15:8];
     wire [7:0]  F_cur = r_af[7:0];
     // logical register view (RFP_* order) for testbenches
@@ -562,715 +517,80 @@ module z80_core (
     // =======================================================================
     // execute: control word
     // =======================================================================
-    // address latch input
-    localparam [2:0] AL_ABUS = 3'd0,   // the address-side bus
-                     AL_IDU  = 3'd1,   // abus +1 / -1 / -2
-                     AL_EA   = 3'd2,   // effective-address adder
-                     AL_A16  = 3'd3;   // 16-bit ALU sum (ADD HL,rp internal cycle)
-    // address-side bus source
-    localparam [2:0] AB_REG  = 3'd0,   // register pair, see RI_*
-                     AB_NN   = 3'd1,   // {rbyte, Z}: the operand word nn as W arrives
-                     AB_AN   = 3'd2,   // {A, n}: IN A,(n) / OUT (n),A port
-                     AB_IV   = 3'd3,   // {I, vector}: IM 2 table address
-                     AB_NBC  = 3'd4;   // {B-1, C}: OUTI / OUTD port
-    // register pair on abus / written by the pair port
-    localparam [2:0] RI_PC = 3'd0, RI_SP = 3'd1, RI_WZ = 3'd2, RI_HL = 3'd3,
-                     RI_DE = 3'd4, RI_BC = 3'd5, RI_HLP = 3'd6, RI_RP = 3'd7;
-    // incrementer
-    localparam [1:0] INC_P1 = 2'd0, INC_M1 = 2'd1, INC_M2 = 2'd2;
-    // effective-address adder displacement (base: PC or HL/IX/IY)
-    localparam [1:0] EA_RB = 2'd0, EA_Z = 2'd1, EA_M1 = 2'd2;
-    // write data
-    localparam [2:0] DB_ZERO = 3'd0, DB_REG = 3'd1, DB_RI = 3'd2, DB_R8 = 3'd3,
-                     DB_RB = 3'd4, DB_ALU = 3'd5, DB_CB = 3'd6, DB_RRD = 3'd7;
-    localparam [1:0] BI_PC = 2'd0, BI_RP = 2'd1, BI_HLP = 2'd2, BI_A = 2'd3;
-    // PC / SP / WZ loads
-    localparam [2:0] PC_HOLD = 3'd0, PC_IDU = 3'd1, PC_EA = 3'd2, PC_NN = 3'd3,
-                     PC_ABUS = 3'd4, PC_VEC = 3'd5;
-    localparam [1:0] VEC_RST = 2'd0, VEC_NMI = 2'd1, VEC_IM = 2'd2;
-    localparam [1:0] SP_HOLD = 2'd0, SP_IDU = 2'd1, SP_ABUS = 2'd2;
-    localparam [2:0] WZ_HOLD = 3'd0, WZ_IDU = 3'd1, WZ_ALO = 3'd2, WZ_EA = 3'd3,
-                     WZ_Z = 3'd4, WZ_W = 3'd5, WZ_IV = 3'd6, WZ_VEC = 3'd7;
-    // pair write port source
-    localparam [1:0] PW_IDU = 2'd0, PW_A16 = 2'd1, PW_WZ = 2'd2;
-    // byte write port destination / source
-    localparam [3:0] BW_RI = 4'd0, BW_R8 = 4'd1, BW_A = 4'd2, BW_B = 4'd3,
-                     BW_DDCB = 4'd4, BW_HLPL = 4'd5, BW_HLPH = 4'd6,
-                     BW_RPL = 4'd7, BW_RPH = 4'd8;
-    localparam [2:0] BS_RI = 3'd0, BS_ALU = 3'd1, BS_RB = 3'd2, BS_CB = 3'd3, BS_BD = 3'd4;
-    // flag port source
-    localparam [2:0] FS_ALU = 3'd0, FS_A16 = 3'd1, FS_BLD = 3'd2, FS_BCP = 3'd3, FS_BIO = 3'd4;
-    // interrupt enables
-    localparam [1:0] IFF_HOLD = 2'd0, IFF_DI = 2'd1, IFF_EI = 2'd2, IFF_RETN = 2'd3;
+`include "z80_ctl.vh"
 
-    reg        ctl_mstart;             // start the next M-cycle
-    reg        ctl_m1;                 // fetch the next opcode of a prefixed instruction
-    reg        ctl_fin;                // instruction done -> boundary
-    reg [2:0]  ctl_bop;                //   bus cycle type of the next M-cycle
-    reg [3:0]  ctl_mx;                 //   extra T-states on top of its base length
-    reg [2:0]  ctl_al;                 //   address latch input
-    reg [2:0]  ctl_ab, ctl_ri;         // address-side bus source / pair
-    reg [1:0]  ctl_inc;                // incrementer operation
-    reg        ctl_ea_pc;              // EA base: PC (else HL/IX/IY)
-    reg [1:0]  ctl_ea_d;               // EA displacement
-    reg [2:0]  ctl_db;                 // write data
-    reg [1:0]  ctl_bi;                 //   byte read pair for DB_REG
-    reg        ctl_bhi;                //   ... high byte
-    reg [2:0]  ctl_pc, ctl_wz;         // PC / WZ loads
-    reg [1:0]  ctl_sp;                 // SP load
-    reg [1:0]  ctl_vec;                // vector for PC_VEC / WZ_VEC
-    reg        ctl_pw;                 // pair write port
-    reg [2:0]  ctl_pwi;                //   pair
-    reg [1:0]  ctl_pws;                //   source
-    reg        ctl_bw;                 // byte write port
-    reg [3:0]  ctl_bwd;                //   destination
-    reg [2:0]  ctl_bws;                //   source
-    reg        ctl_fw;                 // flag port
-    reg [2:0]  ctl_fs;                 //   source
-    reg        ctl_ex_dehl, ctl_ex_af, ctl_exx;
-    reg        ctl_tmph;
-    reg [1:0]  ctl_iff;
-    reg        ctl_im, ctl_halt, ctl_ld_i, ctl_ld_r, ctl_prefix;
-    reg        ctl_cbx, ctl_cbr;       // bit-op unit: DDCB opcode fields / register operand
-    reg [2:0]  mm;                     // M-cycle of the operation after the (IX+d) preamble
-    reg [2:0]  mem_ri;                 // memory operand pointer: HL/IX/IY or WZ
-    reg        mem_ea;                 //   ... or IX+d straight from the EA adder
-
-    // next prefix state of a prefix opcode
-    reg [2:0]  pfx_next;
-    always @* begin
-        case (ir)
-            8'hDD:   pfx_next = `PFX_DD;
-            8'hFD:   pfx_next = `PFX_FD;
-            8'hED:   pfx_next = `PFX_ED;
-            8'hCB:   pfx_next = (prefix == `PFX_DD) ? `PFX_DDCB :
-                                (prefix == `PFX_FD) ? `PFX_FDCB : `PFX_CB;
-            default: pfx_next = prefix;
-        endcase
-    end
-
-    // ---- micro-operation groups ----
-    // start the next M-cycle: bus cycle, address latch input, extra T-states
-    task mstart; input [2:0] bop; input [2:0] al; input [3:0] extra;
-        begin ctl_mstart = 1'b1; ctl_bop = bop; ctl_al = al; ctl_mx = extra; end
-    endtask
-    // read the next operand byte: MRD (PC), PC <- PC+1
-    task op_fetch; input [3:0] extra;
-        begin
-            ctl_ab = AB_REG; ctl_ri = RI_PC; ctl_inc = INC_P1; ctl_pc = PC_IDU;
-            mstart(`BUSOP_MRD, AL_ABUS, extra);
-        end
-    endtask
-    // a bus cycle at a register pair
-    task at_pair; input [2:0] bop; input [2:0] rsel; input [3:0] extra;
-        begin ctl_ab = AB_REG; ctl_ri = rsel; mstart(bop, AL_ABUS, extra); end
-    endtask
-    // a bus cycle at the memory operand: (HL), (IX+d) or (WZ)
-    task at_mem; input [2:0] bop; input [3:0] extra;
-        begin
-            if (mem_ea) begin ctl_ea_pc = 1'b0; ctl_ea_d = EA_RB; mstart(bop, AL_EA, extra); end
-            else at_pair(bop, mem_ri, extra);
-        end
-    endtask
-    // push one byte: SP <- SP-1, MWR (SP)
-    task push_byte; input [1:0] bsel; input hi;
-        begin
-            ctl_ab = AB_REG; ctl_ri = RI_SP; ctl_inc = INC_M1; ctl_sp = SP_IDU;
-            ctl_db = DB_REG; ctl_bi = bsel; ctl_bhi = hi;
-            mstart(`BUSOP_MWR, AL_IDU, 4'd0);
-        end
-    endtask
-    // second pop byte: MRD at SP+1, SP <- SP+1 (the first byte read (SP)
-    // and is stored by the caller: into Z, or into the target pair)
-    task pop_next;
-        begin
-            ctl_ab = AB_REG; ctl_ri = RI_SP; ctl_inc = INC_P1; ctl_sp = SP_IDU;
-            mstart(`BUSOP_MRD, AL_IDU, 4'd0);
-        end
-    endtask
-    // the popped word is complete: SP <- SP+1
-    task pop_done;
-        begin ctl_ab = AB_REG; ctl_ri = RI_SP; ctl_inc = INC_P1; ctl_sp = SP_IDU; end
-    endtask
-    // byte / flag writes
-    task wr_byte; input [3:0] dst; input [2:0] src;
-        begin ctl_bw = 1'b1; ctl_bwd = dst; ctl_bws = src; end
-    endtask
-    task wr_flags; input [2:0] src;
-        begin ctl_fw = 1'b1; ctl_fs = src; end
-    endtask
-    // A <- ALU result unless the op is CP, F <- ALU flags
-    task alu_to_a;
-        begin if (alu_op_w != `ALU_CP) wr_byte(BW_A, BS_ALU); wr_flags(FS_ALU); end
-    endtask
-    // block-move pointer step on a mid-M-cycle edge: pair <- pair +/- 1
-    task blk_step; input [2:0] rsel;
-        begin
-            ctl_ab = AB_REG; ctl_ri = rsel; ctl_inc = aux_w[0] ? INC_M1 : INC_P1;
-            ctl_pw = 1'b1; ctl_pwi = rsel; ctl_pws = PW_IDU;
-        end
-    endtask
-    // repeat of a block instruction: PC <- PC-2, WZ <- PC-1, 5 internal T
-    task blk_repeat; input [2:0] fsrc;
-        begin
-            ctl_ab = AB_REG; ctl_ri = RI_PC; ctl_inc = INC_M2; ctl_pc = PC_IDU;
-            ctl_ea_pc = 1'b1; ctl_ea_d = EA_M1; ctl_wz = WZ_EA;
-            wr_flags(fsrc);
-            mstart(`BUSOP_INTERNAL, AL_IDU, 4'd5);
-        end
-    endtask
-
-    always @* begin
-        ctl_mstart = 1'b0; ctl_m1 = 1'b0; ctl_fin = 1'b0;
-        ctl_bop = `BUSOP_NONE; ctl_mx = 4'd0; ctl_al = AL_ABUS;
-        ctl_ab = AB_REG; ctl_ri = RI_PC; ctl_inc = INC_P1;
-        ctl_ea_pc = 1'b0; ctl_ea_d = EA_RB;
-        ctl_db = DB_ZERO; ctl_bi = BI_PC; ctl_bhi = 1'b0;
-        ctl_pc = PC_HOLD; ctl_sp = SP_HOLD; ctl_wz = WZ_HOLD; ctl_vec = VEC_RST;
-        ctl_pw = 1'b0; ctl_pwi = RI_RP; ctl_pws = PW_IDU;
-        ctl_bw = 1'b0; ctl_bwd = BW_RI; ctl_bws = BS_RI;
-        ctl_fw = 1'b0; ctl_fs = FS_ALU;
-        ctl_ex_dehl = 1'b0; ctl_ex_af = 1'b0; ctl_exx = 1'b0;
-        ctl_tmph = 1'b0;
-        ctl_iff = IFF_HOLD; ctl_im = 1'b0; ctl_halt = 1'b0;
-        ctl_ld_i = 1'b0; ctl_ld_r = 1'b0; ctl_prefix = 1'b0;
-        ctl_cbx = 1'b0; ctl_cbr = 1'b0;
-        mm = m_cycle; mem_ri = RI_HLP; mem_ea = 1'b0;
-
-        // ---- mid-M-cycle micro-ops: the IDU's jobs while the address
-        // latch holds (the execute step below owns the last T-state) ----
-        if (!m_end) begin
-            if (latch_pos && bus_op == `BUSOP_M1 && !suppress_decode) begin
-                ctl_ri = RI_PC; ctl_inc = INC_P1; ctl_pc = PC_IDU;   // opcode fetch: PC+1
-            end else if (eff_exec == `EXEC_BLOCK && t_state == 4'd1) begin
-                case (aux_w[2:1])
-                    2'd0:    if (m_cycle == 3'd2) blk_step(RI_HL);        // LDx: HL, M2 T1
-                             else if (m_cycle == 3'd3) blk_step(RI_DE);   //      DE, M3 T1
-                    2'd1:    if (m_cycle == 3'd2) blk_step(RI_HL);        // CPx: HL, M2 T1
-                             else if (m_cycle == 3'd3) begin             //      WZ, M3 T1
-                                 ctl_ri = RI_WZ; ctl_inc = aux_w[0] ? INC_M1 : INC_P1;
-                                 ctl_wz = WZ_IDU;
-                             end
-                    2'd2:    if (m_cycle == 3'd4) blk_step(RI_HL);        // INx: HL, M4 T1
-                    default: if (m_cycle == 3'd3) blk_step(RI_HL);        // OUTx: HL, M3 T1
-                endcase
-            end else if (eff_exec == `EXEC_BLOCK && t_state == 4'd2 &&
-                         ((aux_w[2:1] == 2'd0 && m_cycle == 3'd3) ||       // LDx: BC-1, M3 T2
-                          (aux_w[2:1] == 2'd1 && m_cycle == 3'd2))) begin  // CPx: BC-1, M2 T2
-                ctl_ri = RI_BC; ctl_inc = INC_M1;
-                ctl_pw = 1'b1; ctl_pwi = RI_BC; ctl_pws = PW_IDU;
-            end
-        end
-        // (IX+d) / (IY+d) displacement preamble: read d, then 5 internal
-        // T-states while WZ = IX+d is formed (not during interrupt/HALT
-        // sequences)
-        else if (irq_seq == 2'd0 && idx_w != 2'd0 && use_disp_w && m_cycle == 3'd1) begin
-            op_fetch(4'd0);
-        end else if (irq_seq == 2'd0 && idx_w != 2'd0 && use_disp_w && m_cycle == 3'd2
-                     && eff_exec != `EXEC_LD_M_N) begin
-            ctl_ea_pc = 1'b0; ctl_ea_d = EA_RB; ctl_wz = WZ_EA;
-            mstart(`BUSOP_INTERNAL, AL_EA, 4'd5);
-        end else begin
-            // LD (IX+d),n: WZ = IX+d while n is read (no internal cycle; the
-            // n read is 2 T longer), then the operation runs one M-cycle in
-            if (irq_seq == 2'd0 && idx_w != 2'd0 && use_disp_w &&
-                eff_exec == `EXEC_LD_M_N && m_cycle == 3'd2) begin
-                ctl_ea_pc = 1'b0; ctl_ea_d = EA_RB; ctl_wz = WZ_EA;
-            end
-            if (irq_seq == 2'd0 && idx_w != 2'd0 && use_disp_w) begin
-                mem_ri = RI_WZ;
-                if (eff_exec == `EXEC_LD_M_N) begin
-                    mm = m_cycle - 3'd1;
-                    mem_ea = (m_cycle == 3'd2);
-                end else
-                    mm = m_cycle - 3'd2;
-            end
-
-            case (eff_exec)
-            `EXEC_NOP, `EXEC_ILLEGAL: ctl_fin = 1'b1;
-            `EXEC_PREFIX: begin
-                ctl_prefix = 1'b1;
-                if (pfx_next == `PFX_DDCB || pfx_next == `PFX_FDCB)
-                    op_fetch(4'd0);                       // DD CB d op: read d
-                else
-                    ctl_m1 = 1'b1;                        // fetch the prefixed opcode
-            end
-            `EXEC_DDCB: begin
-                ctl_cbx = 1'b1;
-                if (m_cycle == 3'd2) begin                // d -> Z; read op
-                    ctl_wz = WZ_Z; op_fetch(4'd0);
-                end else if (m_cycle == 3'd3) begin       // op -> tmph; WZ = IX+d
-                    ctl_tmph = 1'b1;
-                    ctl_ea_pc = 1'b0; ctl_ea_d = EA_Z; ctl_wz = WZ_EA;
-                    mstart(`BUSOP_INTERNAL, AL_EA, 4'd2);
-                end else if (m_cycle == 3'd4)
-                    at_pair(`BUSOP_MRD, RI_WZ, 4'd1);     // read (IX+d), 4 T
-                else if (m_cycle == 3'd5) begin
-                    if (tmph[7:6] == `CB_BIT) begin
-                        wr_flags(FS_ALU); ctl_fin = 1'b1;
-                    end else begin
-                        if (tmph[7:6] == `CB_ROT) wr_flags(FS_ALU);
-                        wr_byte(BW_DDCB, BS_CB);          // undocumented copy to r[z]
-                        ctl_db = DB_CB;
-                        at_pair(`BUSOP_MWR, RI_WZ, 4'd0);
-                    end
-                end else ctl_fin = 1'b1;
-            end
-            `EXEC_DI:   begin ctl_iff = IFF_DI; ctl_fin = 1'b1; end
-            `EXEC_EI:   begin ctl_iff = IFF_EI; ctl_fin = 1'b1; end
-            // Silicon-faithful per Brewer 2014 + Woodmass HALT2INT: PC stays
-            // past the HALT byte (the M1 fetch already incremented it); HALT
-            // NOP M-cycles re-fetch there and NMI/INT exit doesn't bump it.
-            `EXEC_HALT: begin ctl_halt = 1'b1; ctl_fin = 1'b1; end
-
-            `EXEC_LD_R_R: begin wr_byte(BW_RI, BS_RI); ctl_fin = 1'b1; end
-            `EXEC_ALU_R:  begin alu_to_a; ctl_fin = 1'b1; end
-            `EXEC_INC_R, `EXEC_DEC_R: begin
-                wr_byte(BW_RI, BS_ALU); wr_flags(FS_ALU); ctl_fin = 1'b1;
-            end
-            `EXEC_ROT_A, `EXEC_DAA, `EXEC_CPL: begin
-                wr_byte(BW_A, BS_ALU); wr_flags(FS_ALU); ctl_fin = 1'b1;
-            end
-            `EXEC_SCF, `EXEC_CCF: begin wr_flags(FS_ALU); ctl_fin = 1'b1; end
-
-            `EXEC_EX_DE_HL: begin ctl_ex_dehl = 1'b1; ctl_fin = 1'b1; end
-            `EXEC_EX_AF:    begin ctl_ex_af = 1'b1; ctl_fin = 1'b1; end
-            `EXEC_EXX:      begin ctl_exx = 1'b1; ctl_fin = 1'b1; end
-            `EXEC_JP_HL: begin
-                ctl_ab = AB_REG; ctl_ri = RI_HLP; ctl_pc = PC_ABUS; ctl_fin = 1'b1;
-            end
-
-            `EXEC_INC_RP, `EXEC_DEC_RP: begin
-                if (m_cycle == 3'd1) begin
-                    ctl_ab = AB_REG; ctl_ri = RI_RP;
-                    ctl_inc = (eff_exec == `EXEC_INC_RP) ? INC_P1 : INC_M1;
-                    ctl_pw = 1'b1; ctl_pwi = RI_RP; ctl_pws = PW_IDU;
-                    mstart(`BUSOP_INTERNAL, AL_IDU, 4'd2);
-                end else ctl_fin = 1'b1;
-            end
-            `EXEC_LD_SP_HL: begin
-                if (m_cycle == 3'd1) begin
-                    ctl_sp = SP_ABUS; at_pair(`BUSOP_INTERNAL, RI_HLP, 4'd2);
-                end else ctl_fin = 1'b1;
-            end
-            `EXEC_ADD_HL_RP: begin
-                if (m_cycle == 3'd1) begin
-                    ctl_ab = AB_REG; ctl_ri = RI_HLP; ctl_inc = INC_P1; ctl_wz = WZ_IDU;  // WZ = HL+1
-                    ctl_pw = 1'b1; ctl_pwi = RI_HLP; ctl_pws = PW_A16;
-                    wr_flags(FS_A16);
-                    mstart(`BUSOP_INTERNAL, AL_A16, 4'd7);
-                end else ctl_fin = 1'b1;
-            end
-
-            `EXEC_LD_R_N: begin
-                if (m_cycle == 3'd1) op_fetch(4'd0);
-                else begin wr_byte(BW_RI, BS_RB); ctl_fin = 1'b1; end
-            end
-            `EXEC_ALU_N: begin
-                if (m_cycle == 3'd1) op_fetch(4'd0);
-                else begin alu_to_a; ctl_fin = 1'b1; end
-            end
-            `EXEC_LD_R_M: begin
-                if (mm == 3'd1) at_mem(`BUSOP_MRD, 4'd0);
-                else begin wr_byte(BW_RI, BS_RB); ctl_fin = 1'b1; end
-            end
-            `EXEC_ALU_M: begin
-                if (mm == 3'd1) at_mem(`BUSOP_MRD, 4'd0);
-                else begin alu_to_a; ctl_fin = 1'b1; end
-            end
-            `EXEC_ST_M_R: begin
-                if (mm == 3'd1) begin ctl_db = DB_RI; at_mem(`BUSOP_MWR, 4'd0); end
-                else ctl_fin = 1'b1;
-            end
-            `EXEC_LD_M_N: begin
-                // LD (IX+d),n folds the 2 T of the IX+d add into the n read
-                if (mm == 3'd1) op_fetch((idx_w != 2'd0 && use_disp_w) ? 4'd2 : 4'd0);
-                else if (mm == 3'd2) begin ctl_db = DB_RB; at_mem(`BUSOP_MWR, 4'd0); end
-                else ctl_fin = 1'b1;
-            end
-            `EXEC_INC_M, `EXEC_DEC_M: begin
-                if (mm == 3'd1) at_mem(`BUSOP_MRD, 4'd1);
-                else if (mm == 3'd2) begin
-                    wr_flags(FS_ALU); ctl_db = DB_ALU; at_mem(`BUSOP_MWR, 4'd0);
-                end else ctl_fin = 1'b1;
-            end
-
-            `EXEC_LD_RP_NN: begin                     // bytes straight into rp: MEMPTR untouched
-                if (m_cycle == 3'd1) op_fetch(4'd0);
-                else if (m_cycle == 3'd2) begin wr_byte(BW_RPL, BS_RB); op_fetch(4'd0); end
-                else begin wr_byte(BW_RPH, BS_RB); ctl_fin = 1'b1; end
-            end
-            `EXEC_JP, `EXEC_JP_CC: begin
-                if (m_cycle == 3'd1) op_fetch(4'd0);
-                else if (m_cycle == 3'd2) begin ctl_wz = WZ_Z; op_fetch(4'd0); end
-                else begin
-                    ctl_wz = WZ_W;                        // MEMPTR = nn, taken or not
-                    if (exec_w == `EXEC_JP || cc_taken) ctl_pc = PC_NN;
-                    ctl_fin = 1'b1;
-                end
-            end
-            `EXEC_JR, `EXEC_JR_CC: begin
-                if (m_cycle == 3'd1) op_fetch(4'd0);
-                else if (m_cycle == 3'd2) begin
-                    if (eff_exec == `EXEC_JR || cc_taken) begin
-                        ctl_ea_pc = 1'b1; ctl_ea_d = EA_RB; ctl_pc = PC_EA; ctl_wz = WZ_EA;
-                        mstart(`BUSOP_INTERNAL, AL_EA, 4'd5);
-                    end else ctl_fin = 1'b1;
-                end else ctl_fin = 1'b1;
-            end
-            `EXEC_DJNZ: begin
-                if (m_cycle == 3'd1) at_pair(`BUSOP_INTERNAL, RI_PC, 4'd1);
-                else if (m_cycle == 3'd2) op_fetch(4'd0);
-                else if (m_cycle == 3'd3) begin
-                    wr_byte(BW_B, BS_BD);                 // B <- B-1
-                    if (b_dec != 8'd0) begin
-                        ctl_ea_pc = 1'b1; ctl_ea_d = EA_RB; ctl_pc = PC_EA; ctl_wz = WZ_EA;
-                        mstart(`BUSOP_INTERNAL, AL_EA, 4'd5);
-                    end else ctl_fin = 1'b1;
-                end else ctl_fin = 1'b1;
-            end
-
-            `EXEC_CALL, `EXEC_CALL_CC: begin
-                if (m_cycle == 3'd1) op_fetch(4'd0);
-                else if (m_cycle == 3'd2) begin ctl_wz = WZ_Z; op_fetch(4'd0); end
-                else if (m_cycle == 3'd3) begin
-                    ctl_wz = WZ_W;                        // WZ = nn (MEMPTR, taken or not)
-                    if (exec_w == `EXEC_CALL || cc_taken) at_pair(`BUSOP_INTERNAL, RI_PC, 4'd1);
-                    else ctl_fin = 1'b1;
-                end
-                else if (m_cycle == 3'd4) push_byte(BI_PC, 1'b1);
-                else if (m_cycle == 3'd5) push_byte(BI_PC, 1'b0);
-                else begin ctl_ri = RI_WZ; ctl_pc = PC_ABUS; ctl_fin = 1'b1; end   // PC <- WZ
-            end
-            `EXEC_RET, `EXEC_RETN: begin
-                if (m_cycle == 3'd1) at_pair(`BUSOP_MRD, RI_SP, 4'd0);
-                else if (m_cycle == 3'd2) begin ctl_wz = WZ_Z; pop_next; end
-                else begin
-                    pop_done; ctl_pc = PC_NN; ctl_wz = WZ_W;
-                    if (eff_exec == `EXEC_RETN) ctl_iff = IFF_RETN;
-                    ctl_fin = 1'b1;
-                end
-            end
-            `EXEC_RET_CC: begin
-                if (m_cycle == 3'd1) at_pair(`BUSOP_INTERNAL, RI_PC, 4'd1);
-                else if (m_cycle == 3'd2) begin
-                    if (cc_taken) at_pair(`BUSOP_MRD, RI_SP, 4'd0);
-                    else ctl_fin = 1'b1;
-                end
-                else if (m_cycle == 3'd3) begin ctl_wz = WZ_Z; pop_next; end
-                else begin pop_done; ctl_pc = PC_NN; ctl_wz = WZ_W; ctl_fin = 1'b1; end
-            end
-            `EXEC_RST: begin
-                if (m_cycle == 3'd1) at_pair(`BUSOP_INTERNAL, RI_PC, 4'd1);
-                else if (m_cycle == 3'd2) push_byte(BI_PC, 1'b1);
-                else if (m_cycle == 3'd3) push_byte(BI_PC, 1'b0);
-                else begin ctl_vec = VEC_RST; ctl_pc = PC_VEC; ctl_wz = WZ_VEC; ctl_fin = 1'b1; end
-            end
-            `EXEC_PUSH: begin
-                if (m_cycle == 3'd1) at_pair(`BUSOP_INTERNAL, RI_PC, 4'd1);
-                else if (m_cycle == 3'd2) push_byte(BI_RP, 1'b1);
-                else if (m_cycle == 3'd3) push_byte(BI_RP, 1'b0);
-                else ctl_fin = 1'b1;
-            end
-            `EXEC_POP: begin
-                if (m_cycle == 3'd1) at_pair(`BUSOP_MRD, RI_SP, 4'd0);
-                else if (m_cycle == 3'd2) begin wr_byte(BW_RPL, BS_RB); pop_next; end   // MEMPTR untouched
-                else begin
-                    pop_done; wr_byte(BW_RPH, BS_RB); ctl_fin = 1'b1;
-                end
-            end
-
-            `EXEC_LD_A_RP: begin
-                if (m_cycle == 3'd1) begin
-                    ctl_inc = INC_P1; ctl_wz = WZ_IDU;          // WZ = rp+1
-                    at_pair(`BUSOP_MRD, RI_RP, 4'd0);
-                end else begin wr_byte(BW_A, BS_RB); ctl_fin = 1'b1; end
-            end
-            `EXEC_LD_RP_A: begin
-                if (m_cycle == 3'd1) begin
-                    ctl_inc = INC_P1; ctl_wz = WZ_ALO;          // WZ = {A, rp.lo+1}
-                    ctl_db = DB_REG; ctl_bi = BI_A; ctl_bhi = 1'b1;
-                    at_pair(`BUSOP_MWR, RI_RP, 4'd0);
-                end else ctl_fin = 1'b1;
-            end
-            `EXEC_LD_A_NN: begin
-                if (m_cycle == 3'd1) op_fetch(4'd0);
-                else if (m_cycle == 3'd2) begin ctl_wz = WZ_Z; op_fetch(4'd0); end
-                else if (m_cycle == 3'd3) begin
-                    ctl_ab = AB_NN; ctl_inc = INC_P1; ctl_wz = WZ_IDU;   // WZ = nn+1
-                    mstart(`BUSOP_MRD, AL_ABUS, 4'd0);
-                end else begin wr_byte(BW_A, BS_RB); ctl_fin = 1'b1; end
-            end
-            `EXEC_LD_NN_A: begin
-                if (m_cycle == 3'd1) op_fetch(4'd0);
-                else if (m_cycle == 3'd2) begin ctl_wz = WZ_Z; op_fetch(4'd0); end
-                else if (m_cycle == 3'd3) begin
-                    ctl_ab = AB_NN; ctl_inc = INC_P1; ctl_wz = WZ_ALO;   // WZ = {A, n.lo+1}
-                    ctl_db = DB_REG; ctl_bi = BI_A; ctl_bhi = 1'b1;
-                    mstart(`BUSOP_MWR, AL_ABUS, 4'd0);
-                end else ctl_fin = 1'b1;
-            end
-            `EXEC_LD_HL_NN, `EXEC_LD_RP_NNA: begin
-                if (m_cycle == 3'd1) op_fetch(4'd0);
-                else if (m_cycle == 3'd2) begin ctl_wz = WZ_Z; op_fetch(4'd0); end
-                else if (m_cycle == 3'd3) begin
-                    ctl_ab = AB_NN; ctl_inc = INC_P1; ctl_wz = WZ_IDU;   // WZ = nn+1
-                    mstart(`BUSOP_MRD, AL_ABUS, 4'd0);
-                end else if (m_cycle == 3'd4) begin                       // read (nn+1) at WZ
-                    wr_byte((eff_exec == `EXEC_LD_HL_NN) ? BW_HLPL : BW_RPL, BS_RB);
-                    at_pair(`BUSOP_MRD, RI_WZ, 4'd0);
-                end else begin
-                    wr_byte((eff_exec == `EXEC_LD_HL_NN) ? BW_HLPH : BW_RPH, BS_RB);
-                    ctl_fin = 1'b1;
-                end
-            end
-            `EXEC_LD_NN_HL, `EXEC_LD_NNA_RP: begin
-                if (m_cycle == 3'd1) op_fetch(4'd0);
-                else if (m_cycle == 3'd2) begin ctl_wz = WZ_Z; op_fetch(4'd0); end
-                else if (m_cycle == 3'd3) begin
-                    ctl_ab = AB_NN; ctl_inc = INC_P1; ctl_wz = WZ_IDU;   // WZ = nn+1
-                    ctl_db = DB_REG; ctl_bhi = 1'b0;
-                    ctl_bi = (eff_exec == `EXEC_LD_NN_HL) ? BI_HLP : BI_RP;
-                    mstart(`BUSOP_MWR, AL_ABUS, 4'd0);
-                end else if (m_cycle == 3'd4) begin                       // write (nn+1) at WZ
-                    ctl_db = DB_REG; ctl_bhi = 1'b1;
-                    ctl_bi = (eff_exec == `EXEC_LD_NN_HL) ? BI_HLP : BI_RP;
-                    at_pair(`BUSOP_MWR, RI_WZ, 4'd0);
-                end else ctl_fin = 1'b1;
-            end
-
-            `EXEC_IN_A_N: begin
-                if (m_cycle == 3'd1) op_fetch(4'd0);
-                else if (m_cycle == 3'd2) begin
-                    ctl_ab = AB_AN; ctl_inc = INC_P1; ctl_wz = WZ_IDU;   // WZ = {A,n}+1
-                    mstart(`BUSOP_IORD, AL_ABUS, 4'd0);
-                end else begin wr_byte(BW_A, BS_RB); ctl_fin = 1'b1; end
-            end
-            `EXEC_OUT_N_A: begin
-                if (m_cycle == 3'd1) op_fetch(4'd0);
-                else if (m_cycle == 3'd2) begin
-                    ctl_ab = AB_AN; ctl_inc = INC_P1; ctl_wz = WZ_ALO;   // WZ = {A, n+1}
-                    ctl_db = DB_REG; ctl_bi = BI_A; ctl_bhi = 1'b1;
-                    mstart(`BUSOP_IOWR, AL_ABUS, 4'd0);
-                end else ctl_fin = 1'b1;
-            end
-            `EXEC_EX_SP_HL: begin
-                if (m_cycle == 3'd1) at_pair(`BUSOP_MRD, RI_SP, 4'd0);
-                else if (m_cycle == 3'd2) begin
-                    ctl_wz = WZ_Z;                                        // (SP) -> Z
-                    ctl_ab = AB_REG; ctl_ri = RI_SP; ctl_inc = INC_P1;
-                    mstart(`BUSOP_MRD, AL_IDU, 4'd1);
-                end else if (m_cycle == 3'd3) begin
-                    ctl_wz = WZ_W;                                        // (SP+1) -> W
-                    ctl_ab = AB_REG; ctl_ri = RI_SP; ctl_inc = INC_P1;
-                    ctl_db = DB_REG; ctl_bi = BI_HLP; ctl_bhi = 1'b1;
-                    mstart(`BUSOP_MWR, AL_IDU, 4'd0);
-                end else if (m_cycle == 3'd4) begin
-                    ctl_db = DB_REG; ctl_bi = BI_HLP; ctl_bhi = 1'b0;
-                    at_pair(`BUSOP_MWR, RI_SP, 4'd2);
-                end else begin
-                    ctl_pw = 1'b1; ctl_pwi = RI_HLP; ctl_pws = PW_WZ;    // HL <- WZ (= MEMPTR)
-                    ctl_fin = 1'b1;
-                end
-            end
-
-            `EXEC_CB_R: begin
-                ctl_cbr = 1'b1;
-                if (cb_kind_w == `CB_ROT || cb_kind_w == `CB_BIT) wr_flags(FS_ALU);
-                if (cb_kind_w != `CB_BIT) wr_byte(BW_R8, BS_CB);
-                ctl_fin = 1'b1;
-            end
-            `EXEC_CB_M: begin
-                if (m_cycle == 3'd1) at_pair(`BUSOP_MRD, RI_HL, 4'd1);
-                else if (cb_kind_w == `CB_BIT) begin wr_flags(FS_ALU); ctl_fin = 1'b1; end
-                else if (m_cycle == 3'd2) begin
-                    if (cb_kind_w == `CB_ROT) wr_flags(FS_ALU);
-                    ctl_db = DB_CB; at_pair(`BUSOP_MWR, RI_HL, 4'd0);
-                end else ctl_fin = 1'b1;
-            end
-
-            // ---------- ED page (non-block) ----------
-            `EXEC_ADC16, `EXEC_SBC16: begin
-                if (m_cycle == 3'd1) at_pair(`BUSOP_INTERNAL, RI_HL, 4'd7);
-                else begin
-                    ctl_ab = AB_REG; ctl_ri = RI_HL; ctl_inc = INC_P1; ctl_wz = WZ_IDU;  // WZ = HL+1
-                    ctl_pw = 1'b1; ctl_pwi = RI_HL; ctl_pws = PW_A16;
-                    wr_flags(FS_A16); ctl_fin = 1'b1;
-                end
-            end
-            `EXEC_NEG: begin wr_byte(BW_A, BS_ALU); wr_flags(FS_ALU); ctl_fin = 1'b1; end
-            `EXEC_IM:  begin ctl_im = 1'b1; ctl_fin = 1'b1; end
-            `EXEC_LD_I_A, `EXEC_LD_R_A: begin
-                if (m_cycle == 3'd1) at_pair(`BUSOP_INTERNAL, RI_PC, 4'd1);
-                else begin
-                    if (eff_exec == `EXEC_LD_I_A) ctl_ld_i = 1'b1; else ctl_ld_r = 1'b1;
-                    ctl_fin = 1'b1;
-                end
-            end
-            `EXEC_LD_A_IR: begin
-                if (m_cycle == 3'd1) at_pair(`BUSOP_INTERNAL, RI_PC, 4'd1);
-                else begin wr_byte(BW_A, BS_ALU); wr_flags(FS_ALU); ctl_fin = 1'b1; end
-            end
-            `EXEC_IN_C: begin
-                if (m_cycle == 3'd1) begin
-                    ctl_inc = INC_P1; ctl_wz = WZ_IDU;          // WZ = BC+1
-                    at_pair(`BUSOP_IORD, RI_BC, 4'd0);
-                end else begin
-                    wr_byte(BW_R8, BS_RB);                     // r[y]; y=6 writes nothing
-                    wr_flags(FS_ALU); ctl_fin = 1'b1;
-                end
-            end
-            `EXEC_OUT_C: begin
-                if (m_cycle == 3'd1) begin
-                    ctl_inc = INC_P1; ctl_wz = WZ_IDU;          // WZ = BC+1
-                    ctl_db = DB_R8;                            // r[y]; y=6 sends 0 (NMOS)
-                    at_pair(`BUSOP_IOWR, RI_BC, 4'd0);
-                end else ctl_fin = 1'b1;
-            end
-            `EXEC_RRD, `EXEC_RLD: begin
-                if (m_cycle == 3'd1) at_pair(`BUSOP_MRD, RI_HL, 4'd0);
-                else if (m_cycle == 3'd2) begin
-                    ctl_ab = AB_REG; ctl_ri = RI_HL; ctl_inc = INC_P1; ctl_wz = WZ_IDU;  // WZ = HL+1
-                    mstart(`BUSOP_INTERNAL, AL_ABUS, 4'd4);
-                end else if (m_cycle == 3'd3) begin
-                    // the (HL) byte is still in tmp8 and A is untouched: the
-                    // ALU forms A and the flags (FLAG_RRD / FLAG_RLD), the new
-                    // (HL) byte is nibble routing
-                    wr_byte(BW_A, BS_ALU); wr_flags(FS_ALU);
-                    ctl_db = DB_RRD; at_pair(`BUSOP_MWR, RI_HL, 4'd0);
-                end else ctl_fin = 1'b1;
-            end
-
-            // ---------- ED block instructions ----------
-            // aux: [0]=dec  [2:1]=cat(0 LD,1 CP,2 IN,3 OUT)  [3]=repeat
-            `EXEC_BLOCK: begin
-                case (aux_w[2:1])
-                2'd0: begin                                   // LDI LDD LDIR LDDR
-                    if (m_cycle == 3'd1) at_pair(`BUSOP_MRD, RI_HL, 4'd0);
-                    else if (m_cycle == 3'd2) begin
-                        ctl_db = DB_RB; at_pair(`BUSOP_MWR, RI_DE, 4'd2);   // 5 T write
-                    end else if (m_cycle == 3'd3) begin
-                        // HL, DE and BC stepped at M2 T1 / M3 T1 / M3 T2
-                        wr_flags(FS_ALU);
-                        // Banks 2018: on repeat YF/XF come from PC.13 / PC.11
-                        if (aux_w[3] && r_bc != 16'd0) blk_repeat(FS_BLD);
-                        else ctl_fin = 1'b1;
-                    end else ctl_fin = 1'b1;
-                end
-                2'd1: begin                                   // CPI CPD CPIR CPDR
-                    if (m_cycle == 3'd1) at_pair(`BUSOP_MRD, RI_HL, 4'd0);
-                    else if (m_cycle == 3'd2) begin
-                        // HL and BC stepped at M2 T1 / T2; WZ steps at M3 T1
-                        wr_flags(FS_ALU);
-                        at_pair(`BUSOP_INTERNAL, RI_HL, 4'd5);
-                    end else if (m_cycle == 3'd3) begin
-                        if (aux_w[3] && r_bc != 16'd0 && !F_cur[6]) blk_repeat(FS_BCP);
-                        else ctl_fin = 1'b1;
-                    end else ctl_fin = 1'b1;
-                end
-                2'd2: begin                                   // INI IND INIR INDR
-                    if (m_cycle == 3'd1) at_pair(`BUSOP_INTERNAL, RI_PC, 4'd1);
-                    else if (m_cycle == 3'd2) begin
-                        ctl_inc = aux_w[0] ? INC_M1 : INC_P1; ctl_wz = WZ_IDU;  // WZ = BC +/- 1
-                        at_pair(`BUSOP_IORD, RI_BC, 4'd0);
-                    end else if (m_cycle == 3'd3) begin
-                        ctl_db = DB_RB;                       // data stays in tmp8 for the flags
-                        at_pair(`BUSOP_MWR, RI_HL, 4'd0);
-                    end else if (m_cycle == 3'd4) begin
-                        wr_byte(BW_B, BS_BD);                 // B-1 (HL stepped at M4 T1)
-                        wr_flags(FS_ALU);
-                        if (aux_w[3] && b_dec != 8'd0) blk_repeat(FS_BIO);
-                        else ctl_fin = 1'b1;
-                    end else ctl_fin = 1'b1;
-                end
-                default: begin                                // OUTI OUTD OTIR OTDR
-                    if (m_cycle == 3'd1) at_pair(`BUSOP_INTERNAL, RI_PC, 4'd1);
-                    else if (m_cycle == 3'd2) at_pair(`BUSOP_MRD, RI_HL, 4'd0);
-                    else if (m_cycle == 3'd3) begin
-                        wr_byte(BW_B, BS_BD);                 // B-1, then out to {B-1, C}
-                        ctl_ab = AB_NBC; ctl_inc = aux_w[0] ? INC_M1 : INC_P1; ctl_wz = WZ_IDU;
-                        ctl_db = DB_RB;
-                        mstart(`BUSOP_IOWR, AL_ABUS, 4'd0);
-                    end else if (m_cycle == 3'd4) begin
-                        wr_flags(FS_ALU);                     // HL stepped at M3 T1
-                        if (aux_w[3] && r_bc[15:8] != 8'd0) blk_repeat(FS_BIO);
-                        else ctl_fin = 1'b1;
-                    end else ctl_fin = 1'b1;
-                end
-                endcase
-            end
-
-            // ---------- interrupt acceptance sequences ----------
-            `EXEC_NMI: begin
-                if (m_cycle == 3'd1) push_byte(BI_PC, 1'b1);
-                else if (m_cycle == 3'd2) push_byte(BI_PC, 1'b0);
-                else begin ctl_vec = VEC_NMI; ctl_pc = PC_VEC; ctl_wz = WZ_VEC; ctl_fin = 1'b1; end
-            end
-            `EXEC_INT: begin
-                if (m_cycle == 3'd1) push_byte(BI_PC, 1'b1);
-                else if (m_cycle == 3'd2) push_byte(BI_PC, 1'b0);
-                else if (m_cycle == 3'd3) begin
-                    if (im == 2'd2) begin
-                        ctl_wz = WZ_IV; ctl_ab = AB_IV;           // WZ = {I, vector}
-                        mstart(`BUSOP_MRD, AL_ABUS, 4'd0);
-                    end else begin
-                        ctl_vec = VEC_IM; ctl_pc = PC_VEC; ctl_wz = WZ_VEC; ctl_fin = 1'b1;
-                    end
-                end
-                else if (m_cycle == 3'd4) begin
-                    ctl_wz = WZ_Z;                                         // low byte -> Z
-                    ctl_ab = AB_REG; ctl_ri = RI_WZ; ctl_inc = INC_P1;
-                    mstart(`BUSOP_MRD, AL_IDU, 4'd0);
-                end
-                else begin ctl_pc = PC_NN; ctl_wz = WZ_W; ctl_fin = 1'b1; end
-            end
-
-            default: ctl_fin = 1'b1;
-            endcase
-        end
-    end
-
-    // =======================================================================
-    // address side: abus, incrementer, effective-address adder
-    // =======================================================================
-    reg  [15:0] rf_ab;
-    always @* begin
-        case (ctl_ri)
-            RI_PC:   rf_ab = r_pc;
-            RI_SP:   rf_ab = r_sp;
-            RI_WZ:   rf_ab = r_wz;
-            RI_HL:   rf_ab = r_hl;
-            RI_DE:   rf_ab = r_de;
-            RI_BC:   rf_ab = r_bc;
-            RI_HLP:  rf_ab = rf_hlp;
-            default: rf_ab = rf_rp;
-        endcase
-    end
+    wire        ctl_mstart, ctl_m1, ctl_fin;
+    wire [2:0]  ctl_bop;
+    wire [3:0]  ctl_mx;
+    wire [2:0]  ctl_al, ctl_ab, ctl_ri;
+    wire [1:0]  ctl_inc;
+    wire        ctl_ea_pc;
+    wire [1:0]  ctl_ea_d;
+    wire [2:0]  ctl_db;
+    wire [1:0]  ctl_bi;
+    wire        ctl_bhi;
+    wire [2:0]  ctl_pc, ctl_wz;
+    wire [1:0]  ctl_sp, ctl_vec;
+    wire        ctl_pw;
+    wire [2:0]  ctl_pwi;
+    wire [1:0]  ctl_pws;
+    wire        ctl_bw;
+    wire [3:0]  ctl_bwd;
+    wire [2:0]  ctl_bws;
+    wire        ctl_fw;
+    wire [2:0]  ctl_fs;
+    wire        ctl_ex_dehl, ctl_ex_af, ctl_exx;
+    wire        ctl_tmph;
+    wire [1:0]  ctl_iff;
+    wire        ctl_im, ctl_halt, ctl_ld_i, ctl_ld_r, ctl_prefix;
+    wire        ctl_cbx, ctl_cbr;
+    wire [2:0]  pfx_next;
     wire [7:0]  b_dec = r_bc[15:8] - 8'd1;      // B-1 (DJNZ, INI, OUTI)
-    reg  [15:0] abus;
-    always @* begin
-        case (ctl_ab)
-            AB_REG:  abus = rf_ab;
-            AB_NN:   abus = {rbyte, r_wz[7:0]};
-            AB_AN:   abus = {A_cur, rbyte};
-            AB_IV:   abus = {reg_i, tmp8};
-            default: abus = {b_dec, r_bc[7:0]};
-        endcase
-    end
-    // IDU: 16-bit incrementer / decrementer on the address side
-    wire [15:0] idu = abus + ((ctl_inc == INC_P1) ? 16'h0001 :
-                              (ctl_inc == INC_M1) ? 16'hFFFF : 16'hFFFE);
-    // effective address: PC + e (JR, DJNZ, block repeat PC-1), IX + d
-    wire [15:0] ea_base = ctl_ea_pc ? r_pc : rf_hlp;
-    wire [7:0]  ea_d    = (ctl_ea_d == EA_RB) ? rbyte : (ctl_ea_d == EA_Z) ? r_wz[7:0] : 8'hFF;
-    wire [15:0] ea      = ea_base + {{8{ea_d[7]}}, ea_d};
+
+    z80_execute u_exec (
+        .m_end(m_end), .latch_pos(latch_pos), .bus_op(bus_op),
+        .suppress_decode(suppress_decode), .m_cycle(m_cycle), .t_state(t_state),
+        .irq_seq(irq_seq), .eff_exec(eff_exec), .exec_w(exec_w),
+        .alu_op_w(alu_op_w), .cb_kind_w(cb_kind_w), .idx_w(idx_w),
+        .use_disp_w(use_disp_w), .aux_w(aux_w), .prefix(prefix), .ir(ir),
+        .ddcb_kind(tmph[7:6]), .im(im),
+        .cc_taken(cc_taken), .zf(F_cur[6]), .bc_nz(r_bc != 16'd0),
+        .b_nz(r_bc[15:8] != 8'd0), .b_dec_nz(b_dec != 8'd0),
+        .ctl_mstart(ctl_mstart), .ctl_m1(ctl_m1), .ctl_fin(ctl_fin),
+        .ctl_bop(ctl_bop), .ctl_mx(ctl_mx), .ctl_al(ctl_al),
+        .ctl_ab(ctl_ab), .ctl_ri(ctl_ri), .ctl_inc(ctl_inc),
+        .ctl_ea_pc(ctl_ea_pc), .ctl_ea_d(ctl_ea_d),
+        .ctl_db(ctl_db), .ctl_bi(ctl_bi), .ctl_bhi(ctl_bhi),
+        .ctl_pc(ctl_pc), .ctl_wz(ctl_wz), .ctl_sp(ctl_sp), .ctl_vec(ctl_vec),
+        .ctl_pw(ctl_pw), .ctl_pwi(ctl_pwi), .ctl_pws(ctl_pws),
+        .ctl_bw(ctl_bw), .ctl_bwd(ctl_bwd), .ctl_bws(ctl_bws),
+        .ctl_fw(ctl_fw), .ctl_fs(ctl_fs),
+        .ctl_ex_dehl(ctl_ex_dehl), .ctl_ex_af(ctl_ex_af), .ctl_exx(ctl_exx),
+        .ctl_tmph(ctl_tmph), .ctl_iff(ctl_iff), .ctl_im(ctl_im),
+        .ctl_halt(ctl_halt), .ctl_ld_i(ctl_ld_i), .ctl_ld_r(ctl_ld_r),
+        .ctl_prefix(ctl_prefix), .ctl_cbx(ctl_cbx), .ctl_cbr(ctl_cbr),
+        .pfx_next(pfx_next)
+    );
+
+    // =======================================================================
+    // address side
+    // =======================================================================
+    wire [15:0] abus, idu, ea, al_in, a16;
+    z80_addr u_addr (
+        .pc(r_pc), .sp(r_sp), .wz(r_wz), .hl(r_hl), .de(r_de), .bc(r_bc),
+        .hlp(rf_hlp), .rp(rf_rp), .rbyte(rbyte), .a(A_cur), .i_reg(reg_i),
+        .tmp8(tmp8), .b_dec(b_dec), .a16(a16),
+        .ctl_ab(ctl_ab), .ctl_ri(ctl_ri), .ctl_inc(ctl_inc),
+        .ctl_ea_pc(ctl_ea_pc), .ctl_ea_d(ctl_ea_d), .ctl_al(ctl_al),
+        .abus(abus), .idu(idu), .ea(ea), .al_in(al_in)
+    );
 
     // 16-bit ALU: ADD HL,rp / ADC HL,rp / SBC HL,rp (HL is IX/IY under DD/FD)
     wire        a16_sub = (exec_w == `EXEC_SBC16);
     wire        a16_cy  = (exec_w == `EXEC_ADC16) ? F_cur[0] : (a16_sub ? ~F_cur[0] : 1'b0);
     wire [15:0] a16_y   = a16_sub ? ~rf_rp : rf_rp;
     wire [16:0] a16_s   = {1'b0, rf_hlp} + {1'b0, a16_y} + {16'd0, a16_cy};
-    wire [15:0] a16     = a16_s[15:0];
+    assign      a16     = a16_s[15:0];
     wire        a16_c   = a16_s[16] ^ a16_sub;                         // carry / borrow
     wire        a16_h   = a16[12] ^ rf_hlp[12] ^ a16_y[12] ^ a16_sub;  // out of bit 11
     wire        a16_v   = ~(rf_hlp[15] ^ a16_y[15]) & (rf_hlp[15] ^ a16[15]);
@@ -1299,16 +619,6 @@ module z80_core (
     // RRD / RLD: the byte written back to (HL)
     wire [7:0]  rrd_mem = (exec_w == `EXEC_RRD) ? {A_cur[3:0], rbyte[7:4]} : {rbyte[3:0], A_cur[3:0]};
 
-    // address latch input
-    reg  [15:0] al_in;
-    always @* begin
-        case (ctl_al)
-            AL_ABUS: al_in = abus;
-            AL_IDU:  al_in = idu;
-            AL_EA:   al_in = ea;
-            default: al_in = a16;
-        endcase
-    end
     // write-data latch input
     reg  [15:0] db_pair;
     always @* begin
@@ -1415,54 +725,51 @@ module z80_core (
         endcase
     end
 
-    // physical targets of the logical write ports
-    wire [3:0] pw_phys = phys(pw_idx,   xbank, xaf, xdh);
-    wire [3:0] bw_phys = phys(bw_pair,  xbank, xaf, xdh);
-    wire [3:0] af_phys = phys(`RFP_AF,  xbank, xaf, xdh);
-    // exchanges flip the renaming, effective from the next T-state
-    assign xbank_n = xbank ^ (ex_edge & ctl_exx);
-    assign xaf_n   = xaf   ^ (ex_edge & ctl_ex_af);
-    assign xdh_n   = xdh   ^ ((ex_edge & ctl_ex_dehl) ? (xbank ? 2'b10 : 2'b01) : 2'b00);
-
+    // PC / SP / WZ loads
+    reg         pc_we, sp_we, wz_we;
+    reg  [15:0] pc_d, sp_d, wz_d;
     always @* begin
-        for (i = 0; i < 13; i = i + 1) rf_n[i] = rf[i];
-        if (wr_edge) begin
-            for (i = 0; i < 13; i = i + 1) begin
-                if (ctl_pw && pw_phys == i) rf_n[i] = pw_data;
-                if (ctl_bw && bw_en && bw_phys == i) begin
-                    if (bw_hi) rf_n[i][15:8] = bw_data;
-                    else       rf_n[i][7:0]  = bw_data;
-                end
-                if (ctl_fw && af_phys == i) rf_n[i][7:0] = f_data;
-            end
-            case (ctl_pc)
-                PC_IDU:  rf_n[`RFP_PC] = idu;
-                PC_EA:   rf_n[`RFP_PC] = ea;
-                PC_NN:   rf_n[`RFP_PC] = {rbyte, r_wz[7:0]};
-                PC_ABUS: rf_n[`RFP_PC] = abus;
-                PC_VEC:  rf_n[`RFP_PC] = vec;
-                default: ;
-            endcase
-            case (ctl_sp)
-                SP_IDU:  rf_n[`RFP_SP] = idu;
-                SP_ABUS: rf_n[`RFP_SP] = abus;
-                default: ;
-            endcase
-            case (ctl_wz)
-                WZ_IDU:  rf_n[`RFP_WZ] = idu;
-                WZ_ALO:  rf_n[`RFP_WZ] = {A_cur, idu[7:0]};
-                WZ_EA:   rf_n[`RFP_WZ] = ea;
-                WZ_Z:    rf_n[`RFP_WZ] = {r_wz[15:8], rbyte};
-                WZ_W:    rf_n[`RFP_WZ] = {rbyte, r_wz[7:0]};
-                WZ_IV:   rf_n[`RFP_WZ] = {reg_i, tmp8};
-                WZ_VEC:  rf_n[`RFP_WZ] = vec;
-                default: ;
-            endcase
-        end
+        pc_we = 1'b1; sp_we = 1'b1; wz_we = 1'b1;
+        case (ctl_pc)
+            PC_IDU:  pc_d = idu;
+            PC_EA:   pc_d = ea;
+            PC_NN:   pc_d = {rbyte, r_wz[7:0]};
+            PC_ABUS: pc_d = abus;
+            PC_VEC:  pc_d = vec;
+            default: begin pc_we = 1'b0; pc_d = idu; end
+        endcase
+        case (ctl_sp)
+            SP_IDU:  sp_d = idu;
+            SP_ABUS: sp_d = abus;
+            default: begin sp_we = 1'b0; sp_d = idu; end
+        endcase
+        case (ctl_wz)
+            WZ_IDU:  wz_d = idu;
+            WZ_ALO:  wz_d = {A_cur, idu[7:0]};
+            WZ_EA:   wz_d = ea;
+            WZ_Z:    wz_d = {r_wz[15:8], rbyte};
+            WZ_W:    wz_d = {rbyte, r_wz[7:0]};
+            WZ_IV:   wz_d = {reg_i, tmp8};
+            WZ_VEC:  wz_d = vec;
+            default: begin wz_we = 1'b0; wz_d = idu; end
+        endcase
     end
 
-    // logical F after this edge (EX AF,AF' renames AF on the same edge)
-    wire [7:0] f_next = xaf_n ? rf_n[7][7:0] : rf_n[3][7:0];
+    wire [15:0] pc_next;        // PC after this edge (next M1 address)
+    wire [7:0]  f_next;         // F after this edge (Q commit)
+    z80_regfile u_regs (
+        .clk(clk), .reset_n(reset_n), .we(wr_edge), .ex_en(ex_edge),
+        .ex_dehl(ctl_ex_dehl), .ex_af(ctl_ex_af), .exx(ctl_exx),
+        .pw_we(ctl_pw), .pw_sel(pw_idx), .pw_d(pw_data),
+        .bw_we(ctl_bw && bw_en), .bw_sel(bw_pair), .bw_hi(bw_hi), .bw_d(bw_data),
+        .f_we(ctl_fw), .f_d(f_data),
+        .pc_we(pc_we), .pc_d(pc_d), .sp_we(sp_we), .sp_d(sp_d),
+        .wz_we(wz_we), .wz_d(wz_d),
+        .bc(r_bc), .de(r_de), .hl(r_hl), .af(r_af),
+        .bc2(r_bc2), .de2(r_de2), .hl2(r_hl2), .af2(r_af2),
+        .ix(r_ix), .iy(r_iy), .sp(r_sp), .pc(r_pc), .wz(r_wz),
+        .pc_next(pc_next), .f_next(f_next)
+    );
 
     // =======================================================================
     // sequencer
@@ -1608,7 +915,7 @@ module z80_core (
                         halted_n = 1'b0;
                         iff2_n = iff1_n; iff1_n = 1'b0;
                         irq_seq_n = 2'd1;
-                        bus_op_n = `BUSOP_M1; m_addr_n = rf_n[`RFP_PC]; m_wdata_n = 8'h0;
+                        bus_op_n = `BUSOP_M1; m_addr_n = pc_next; m_wdata_n = 8'h0;
                         m_len_n = 4'd5; t_n = 4'd1; m_cycle_n = 3'd1;
                         suppress_decode_n = 1'b1;
                     end else if (allow_int && int_sampled_n && iff1_n) begin
@@ -1616,17 +923,17 @@ module z80_core (
                         // Same: silicon-faithful HALT exit, no PC bump.
                         halted_n = 1'b0; iff1_n = 1'b0; iff2_n = 1'b0;
                         irq_seq_n = 2'd2;
-                        bus_op_n = `BUSOP_INTA; m_addr_n = rf_n[`RFP_PC]; m_wdata_n = 8'h0;
+                        bus_op_n = `BUSOP_INTA; m_addr_n = pc_next; m_wdata_n = 8'h0;
                         // T1 T2 Tw Tw T3 T4 (+1 internal state for IM1/IM2's PC push)
                         m_len_n = (im == 2'd0) ? 4'd6 : 4'd7; t_n = 4'd1; m_cycle_n = 3'd1;
                     end else if (halted_n) begin
                         irq_seq_n = 2'd3;
-                        bus_op_n = `BUSOP_M1; m_addr_n = rf_n[`RFP_PC]; m_wdata_n = 8'h0;
+                        bus_op_n = `BUSOP_M1; m_addr_n = pc_next; m_wdata_n = 8'h0;
                         m_len_n = 4'd4; t_n = 4'd1; m_cycle_n = 3'd1;
                         suppress_decode_n = 1'b1;
                     end else begin
                         irq_seq_n = 2'd0;
-                        bus_op_n = `BUSOP_M1; m_addr_n = rf_n[`RFP_PC]; m_wdata_n = 8'h0;
+                        bus_op_n = `BUSOP_M1; m_addr_n = pc_next; m_wdata_n = 8'h0;
                         m_len_n = 4'd4; t_n = 4'd1; m_cycle_n = 3'd1;
                     end
                 end
@@ -1651,10 +958,6 @@ module z80_core (
     // divergence only, see docs/known-differences.md.
     always @(posedge clk or negedge reset_n) begin
         if (!reset_n) begin
-            // 0x5555 matches perfectz80's gate-level Visual-Z80 netlist
-            // boot pattern; see cmodel/z80_core.c z80_reset() comment.
-            for (ri = 0; ri < 13; ri = ri + 1) rf[ri] <= 16'h5555;
-            rf[`RFP_PC] <= 16'h0000;
             reg_i <= 8'h00; reg_r <= 8'h00; ir <= 8'h00;
             t_state <= 4'd1; m_cycle <= 3'd1;
             bus_op <= `BUSOP_M1; m_len <= 4'd4; m_addr <= 16'h0000; m_wdata <= 8'h00;
@@ -1664,12 +967,9 @@ module z80_core (
             nmi_sampled <= 1'b0; int_sampled <= 1'b0;
             suppress_decode <= 1'b0; bus_granted <= 1'b0; irq_seq <= 2'd0;
             reg_q <= 8'h00; f_modified <= 1'b0;
-            xbank <= 1'b0; xaf <= 1'b0; xdh <= 2'b00;
             in_reset_hold <= 1'b1;
         end else begin
             in_reset_hold <= 1'b0;
-            for (ri = 0; ri < 13; ri = ri + 1) rf[ri] <= rf_n[ri];
-            xbank <= xbank_n; xaf <= xaf_n; xdh <= xdh_n;
             reg_i <= reg_i_n; reg_r <= reg_r_n; ir <= ir_n;
             t_state <= t_n; m_cycle <= m_cycle_n;
             bus_op <= bus_op_n; m_len <= m_len_n; m_addr <= m_addr_n; m_wdata <= m_wdata_n;
