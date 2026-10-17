@@ -3,6 +3,8 @@
 #   make venv    create .venv and pip-install the YoWASP FPGA toolchain
 #   make bit     synthesize + place&route + pack -> build/top.bit  (default)
 #   make sim     Verilator smoke test: boot BASIC, answer prompts over UART
+#   make sim_real  same at true 115200 pacing (exercises the TIE path)
+#   make sim_iverilog  the boot script through iverilog (slow cross-check)
 #   make prog    load bitstream to SRAM (lost on power-cycle)
 #   make flash   write bitstream to SPI flash (persistent)
 #   make timing  show nextpnr's max-frequency summary
@@ -23,7 +25,7 @@ PYTHON   ?= python3
 
 ROM_HEX  ?= $(ROOT)/tests/basic/nascom_basic_4_7_rc2014.hex
 
-CORE_SRCS := $(ROOT)/rtl/z80_core.v $(ROOT)/rtl/z80_pla.v \
+CORE_SRCS := $(ROOT)/rtl/z80_top.v  $(ROOT)/rtl/z80_core.v $(ROOT)/rtl/z80_pla.v \
              $(ROOT)/rtl/z80_alu.v  $(ROOT)/rtl/z80_timing.v
 CORE_INCS := $(ROOT)/rtl/z80_defs.vh
 SOC_SRCS  := top.v uart.v
@@ -69,7 +71,7 @@ $(BUILD)/icepi-zero.lpf: icepi-zero.lpf
 # ---- synth / pnr / pack ----
 $(BUILD)/top.json: $(BUILD)/src $(BUILD)/rom.mem $(VENV)/.ok
 	cd $(BUILD) && $(YOSYS) -q -p \
-	  'read_verilog -Isrc src/z80_core.v src/z80_pla.v src/z80_alu.v src/z80_timing.v src/top.v src/uart.v; hierarchy -top top; proc; async2sync; synth_ecp5 -top top -json top.json' \
+	  'read_verilog -Isrc src/z80_top.v src/z80_core.v src/z80_pla.v src/z80_alu.v src/z80_timing.v src/top.v src/uart.v; hierarchy -top top; proc; async2sync; synth_ecp5 -top top -json top.json' \
 	  2>&1 | tee yosys.log | tail -40
 
 $(BUILD)/top.config: $(BUILD)/top.json $(BUILD)/icepi-zero.lpf
@@ -90,21 +92,28 @@ timing: $(BUILD)/top.config
 # `make sim` (Verilator, fast -- seconds) is the default; the iverilog
 # path is kept as the slow cross-check (`make sim_iverilog`).
 VERILATOR ?= verilator
-# Default: fast serial (16 core clks/bit) so framing doesn't dominate sim
+# Simulation Z80 clock is the /12 stand-in for the PLL: 4.1667 MHz, so
+# -GCORE_HZ overrides the UART divisors to match.
+# Default: fast serial (16 Z80 clks/bit) so framing doesn't dominate sim
 # time. `make sim_real` runs at true 115200 -- that pacing is what
 # exercises the ROM's interrupt-driven TX (TIE) path.
-SIM_BAUD  ?= 781250
+SIM_CORE_HZ := 4166667
+SIM_BAUD  ?= 260417
 
-$(BUILD)/obj_dir/Vtop: $(BUILD)/src sim_top.cpp
-	rm -rf $(BUILD)/obj_dir
+# One object dir per baud: SIM_BAUD is baked into the model (-G/-D), so
+# `make sim_real` after `make sim` must not reuse the fast binary.
+OBJ_DIR := $(BUILD)/obj_dir_$(SIM_BAUD)
+
+$(OBJ_DIR)/Vtop: $(BUILD)/src sim_top.cpp
+	rm -rf $(OBJ_DIR)
 	cd $(BUILD) && $(VERILATOR) --cc --exe --build -j 4 -O2 \
-	  -Wno-fatal -Isrc --Mdir obj_dir --top-module top \
-	  -GBAUD=$(SIM_BAUD) -CFLAGS -DSIM_BAUD=$(SIM_BAUD) \
-	  src/top.v src/uart.v src/z80_core.v src/z80_pla.v src/z80_alu.v src/z80_timing.v \
+	  -Wno-fatal -Isrc --Mdir obj_dir_$(SIM_BAUD) --top-module top \
+	  -GCORE_HZ=$(SIM_CORE_HZ) -GBAUD=$(SIM_BAUD) -CFLAGS -DSIM_BAUD=$(SIM_BAUD) \
+	  src/top.v src/uart.v src/z80_top.v src/z80_core.v src/z80_pla.v src/z80_alu.v src/z80_timing.v \
 	  ../sim_top.cpp > verilator.log 2>&1 || (tail -20 verilator.log; exit 1)
 
-sim: $(BUILD)/obj_dir/Vtop $(BUILD)/rom.mem
-	cd $(BUILD) && ./obj_dir/Vtop
+sim: $(OBJ_DIR)/Vtop $(BUILD)/rom.mem
+	cd $(BUILD) && ./obj_dir_$(SIM_BAUD)/Vtop
 
 sim_real:
 	$(MAKE) sim SIM_BAUD=115200

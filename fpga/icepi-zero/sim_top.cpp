@@ -11,7 +11,7 @@
 //   4. wait for warm-start "C|W"          -> answer "W"
 //   5. wait for "Ok"                      -> PASS (exit 0)
 //
-// Build with -GBAUD=781250 so one UART bit is 16 core clocks. Run from
+// Build with -GBAUD=260417 so one UART bit is 16 Z80 clocks. Run from
 // a directory containing rom.mem (top.v's ROM_FILE default), e.g. build/.
 #include <cstdio>
 #include <cstdint>
@@ -22,15 +22,16 @@
 #include "verilated.h"
 
 // SIM_BAUD must match top's BAUD parameter (-GBAUD). Fast default:
-// 16 core clks per bit. Build with -DSIM_BAUD=115200 -GBAUD=115200 to
+// 16 Z80 clks per bit. Build with -DSIM_BAUD=115200 -GBAUD=115200 to
 // reproduce real-hardware serial pacing (exercises the ROM's
 // interrupt-driven TX path, which fast baud never enters).
 #ifndef SIM_BAUD
-#define SIM_BAUD 781250
+#define SIM_BAUD 260417
 #endif
-static const int CORE_HZ   = 12500000;
+static const int CLK_DIV   = 12;       // top.v PLL stand-in: 50 MHz / 12 = 4.17 MHz Z80 clock
+static const int CORE_HZ   = 50000000 / CLK_DIV;
 static const int BIT_TICKS =           // in half-input-clk (eval) steps
-    ((CORE_HZ + SIM_BAUD / 2) / SIM_BAUD) * 4 * 2;
+    ((CORE_HZ + SIM_BAUD / 2) / SIM_BAUD) * CLK_DIV * 2;
 
 int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);

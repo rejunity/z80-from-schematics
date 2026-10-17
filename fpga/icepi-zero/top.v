@@ -1,12 +1,19 @@
-// top.v - RZ80 SoC for the IcePi Zero (Lattice ECP5, LFE5U-25F CABGA256)
+// top.v - RZ80 BASIC SBC for the IcePi Zero (Lattice ECP5, LFE5U-25F CABGA256)
 //
 // NASCOM BASIC 4.7 (RC2014 build) on the rz80 core, console over the
-// board's FTDI USB-UART (115200 8N1).
+// board's FTDI USB-UART (115200 8N1). A single-board computer in the
+// Grant Searle / RC2014 sense: CPU + ROM + RAM + ACIA, all inside the
+// FPGA, with the CPU bus mirrored on the 40-pin header for probing.
 //
-//   50 MHz board clock -> /4 divider -> 12.5 MHz core clk.
-//   The core's clk runs at 2x the Z80 clock (one edge per phase), so the
-//   Z80 itself runs at 6.25 MHz -- comfortably above an original 3.5 MHz
-//   part, comfortably below the fabric's limits.
+// Clock: the ECP5 PLL makes the Z80 clock, CORE_HZ = 4 MHz by default
+// (a Z80A; 3.5 MHz, the Spectrum/Z80 rate, is the other supported
+// value). That clock IS the Z80's CLK: z80_top runs one T-state per
+// period, all core state on the rising edge and the chip's falling-edge
+// pin behaviour (MREQ/RD/WR, WAIT and data sampling) on the falling
+// edge (docs/clocking.md). There is no 2x clock and no clock enable; the
+// whole SoC (RAM, UART, ACIA shim) lives in this one clock domain. In
+// simulation the PLL is a black box, so a /SIM_CLK_DIV toggle divider
+// stands in and the sim builds override CORE_HZ to match.
 //
 // Memory map: one 64 KiB block RAM, preloaded with the BASIC ROM image
 // at bitstream load. Writes below ROM_PROTECT_TOP are dropped so the
@@ -16,51 +23,102 @@
 //   IN  (0x80) -> ACIA status: bit0 RDRF (RX byte ready), bit1 TDRE (TX idle)
 //   IN  (0x81) -> RX data (consumes one byte from the RX FIFO)
 //   OUT (0x81) -> TX data
-//   OUT (0x80) -> ACIA control (ignored)
+//   OUT (0x80) -> ACIA control (RIE/TIE decoded, rest ignored)
 //   IN  (0x00) -> Tiny BASIC status: 0xFF if RX byte ready else 0x00
 //   IN/OUT (0x01) -> Tiny BASIC data (same UART)
-//   /INT asserted while the RX FIFO is non-empty (NASCOM's RX is
-//   interrupt-driven; required, not an optimisation).
+//   /INT asserted per 68B50 rules: (RIE & RDRF) | (TIE & TDRE).
 //
 // button[0] = Z80 reset (active low, board pull-up).
+//
+// Header mirror (gpio[27:0], the 40-pin Pi-style header): the Z80 bus as
+// OUTPUTS, so a logic analyser or a bus display can watch BASIC run. The
+// header has 28 user I/O, not the 38 of a Z80 DIP, so this is a subset
+// of the Tang Primer's full chip pinout (fpga/tang-primer-25k):
+//
+//   gpio[15:0]  A0..A15        gpio[24] /MREQ      gpio[26] /RD
+//   gpio[23:16] D0..D7         gpio[25] /IORQ      gpio[27] /WR
+//
+// D shows the byte on the internal bus: the CPU's write data while it
+// drives, otherwise what memory / the ACIA returned. The header is
+// 3.3 V and not 5 V tolerant.
 
 module top #(
-    parameter CLK_IN_HZ    = 50_000_000,
-    parameter CLK_DIV_BITS = 2,                 // core clk = CLK_IN_HZ >> CLK_DIV_BITS
-    parameter BAUD         = 115_200,
-    parameter ROM_FILE     = "rom.mem",
+    parameter CORE_HZ     = 4_000_000,          // Z80 clock from the PLL: 4_000_000 or 3_500_000
+    parameter SIM_CLK_DIV = 12,                 // simulation stand-in: 50 MHz / 12 = 4.17 MHz
+    parameter BAUD        = 115_200,
+    parameter ROM_FILE    = "rom.mem",
     parameter ROM_PROTECT_TOP = 16'h2000        // NASCOM 4.7 ROM is 0x0000-0x1FD9
 ) (
-    input  wire       clk,       // 50 MHz MEMS oscillator
-    input  wire       usb_rx,    // FTDI -> FPGA serial
-    output wire       usb_tx,    // FPGA -> FTDI serial
-    input  wire [1:0] button,    // active low
-    output wire [4:0] led
+    input  wire        clk,       // 50 MHz MEMS oscillator
+    input  wire        usb_rx,    // FTDI -> FPGA serial
+    output wire        usb_tx,    // FPGA -> FTDI serial
+    input  wire [1:0]  button,    // active low
+    output wire [4:0]  led,
+    output wire [27:0] gpio       // Z80 bus mirror, see header comment
 );
-    localparam CORE_HZ = CLK_IN_HZ >> CLK_DIV_BITS;
-
-    // ---- clock divider: 50 MHz -> core clk ----
-    reg [CLK_DIV_BITS-1:0] ckdiv = 0;
-    always @(posedge clk) ckdiv <= ckdiv + 1'b1;
-    wire clk_cpu = ckdiv[CLK_DIV_BITS-1];
-
-    // ---- power-on + button-0 reset (core clk domain) ----
-    // One up-counter serves both: it starts at 0 after configuration
-    // (power-on reset) and is cleared whenever button 0 is held, then
-    // must count out ~5 ms after release before reset_n deasserts.
-    // The stretch swallows switch bounce (the board's own counter
-    // example needed a debouncer for these buttons) and is orders of
-    // magnitude longer than the core's ~5-phase reset filter.
-    reg [15:0] rst_cnt  = 16'd0;
-    reg [1:0]  btn_sync = 2'b11;
-    always @(posedge clk_cpu) begin
-        btn_sync <= {btn_sync[0], button[0]};
-        if (!btn_sync[1])              rst_cnt <= 16'd0;      // pressed
-        else if (rst_cnt != 16'hFFFF)  rst_cnt <= rst_cnt + 1'b1;
+    // ---- Z80 clock ----
+`ifdef SYNTHESIS
+    // EHXPLLL, parameters from `ecppll -i 50 -o 4 --highres` (3.5 MHz:
+    // `-o 3.5`). CLKOP is the 50 MHz feedback, CLKOS the Z80 clock:
+    // 50 MHz / CLKI_DIV * CLKFB_DIV * CLKOP_DIV = VCO (500 / 437.5 MHz),
+    // VCO / CLKOS_DIV(125) = 4 / 3.5 MHz.
+    localparam PLL_CLKI_DIV = (CORE_HZ == 3_500_000) ? 4  : 1;
+    localparam PLL_CLKOP_DIV = (CORE_HZ == 3_500_000) ? 35 : 10;
+    wire clk_z80, pll_fb, pll_lock;
+    (* FREQUENCY_PIN_CLKI="50" *)
+    (* ICP_CURRENT="12" *) (* LPF_RESISTOR="8" *) (* MFG_ENABLE_FILTEROPAMP="1" *) (* MFG_GMCREF_SEL="2" *)
+    EHXPLLL #(
+        .PLLRST_ENA("DISABLED"), .INTFB_WAKE("DISABLED"), .STDBY_ENABLE("DISABLED"),
+        .DPHASE_SOURCE("DISABLED"),
+        .OUTDIVIDER_MUXA("DIVA"), .OUTDIVIDER_MUXB("DIVB"),
+        .OUTDIVIDER_MUXC("DIVC"), .OUTDIVIDER_MUXD("DIVD"),
+        .CLKI_DIV(PLL_CLKI_DIV),
+        .CLKOP_ENABLE("ENABLED"), .CLKOP_DIV(PLL_CLKOP_DIV), .CLKOP_CPHASE(9), .CLKOP_FPHASE(0),
+        .CLKOS_ENABLE("ENABLED"), .CLKOS_DIV(125), .CLKOS_CPHASE(0), .CLKOS_FPHASE(0),
+        .FEEDBK_PATH("CLKOP"), .CLKFB_DIV(1)
+    ) pll_i (
+        .RST(1'b0), .STDBY(1'b0), .CLKI(clk),
+        .CLKOP(pll_fb), .CLKOS(clk_z80), .CLKFB(pll_fb), .CLKINTFB(),
+        .PHASESEL0(1'b0), .PHASESEL1(1'b0), .PHASEDIR(1'b1), .PHASESTEP(1'b1),
+        .PHASELOADREG(1'b1), .PLLWAKESYNC(1'b0), .ENCLKOP(1'b0), .LOCK(pll_lock)
+    );
+`else
+    // Simulation stand-in: toggle divider, 50 % duty (both edges matter).
+    localparam HALF = SIM_CLK_DIV / 2;
+    reg [$clog2(HALF)-1:0] ckdiv = 0;
+    reg clk_z80 = 1'b0;
+    always @(posedge clk) begin
+        if (ckdiv == HALF - 1) begin ckdiv <= 0; clk_z80 <= ~clk_z80; end
+        else ckdiv <= ckdiv + 1'b1;
     end
-    wire reset_n = (rst_cnt == 16'hFFFF);
+    wire pll_lock = 1'b1;
+`endif
 
-    // ---- Z80 core ----
+    // ---- power-on + button-0 reset ----
+    // One up-counter on the always-running 50 MHz clock serves both: it
+    // starts at 0 after configuration (power-on reset) and is cleared
+    // whenever button 0 is held or the PLL is unlocked, then must count
+    // out ~5 ms after release before board_reset_n deasserts. The stretch
+    // swallows switch bounce (the board's own counter example needed a
+    // debouncer for these buttons).
+    reg [17:0] rst_cnt  = 18'd0;
+    reg [1:0]  btn_sync = 2'b11;
+    always @(posedge clk) begin
+        btn_sync <= {btn_sync[0], button[0]};
+        if (!btn_sync[1] || !pll_lock)  rst_cnt <= 18'd0;      // pressed / no PLL
+        else if (rst_cnt != 18'h3FFFF)  rst_cnt <= rst_cnt + 1'b1;
+    end
+    wire board_reset_n = (rst_cnt == 18'h3FFFF);
+    // Asynchronous assertion, release synchronized to the Z80 clock, so
+    // z80_top's first T1 starts on a clean rising edge.
+    reg [1:0] rst_sync = 2'b00;
+    always @(posedge clk_z80 or negedge board_reset_n) begin
+        if (!board_reset_n) rst_sync <= 2'b00;
+        else                rst_sync <= {rst_sync[0], 1'b1};
+    end
+    wire reset_n = rst_sync[1];
+
+    // ---- Z80 ----
     wire [15:0] addr;
     wire [7:0]  data_out;
     wire        data_drive;
@@ -68,9 +126,8 @@ module top #(
     reg  [7:0]  data_in;
     wire        int_n;
 
-    z80_core cpu (
-        .clk        (clk_cpu),
-        .cen        (1'b1),      // USE_CEN=0: core steps on every clock
+    z80_top cpu (
+        .clk        (clk_z80),
         .reset_n    (reset_n),
         .addr       (addr),
         .data_in    (data_in),
@@ -89,18 +146,24 @@ module top #(
         .nmi_n      (1'b1),
         .busreq_n   (1'b1),
         .dbg_t      (),
-        .dbg_phi    (),
         .dbg_m      ()
     );
 
+    // ---- header mirror (outputs only) ----
+    wire [7:0] bus_d = data_drive ? data_out : data_in;
+    assign gpio = {wr_n, rd_n, iorq_n, mreq_n, bus_d, addr};
+
     // ---- 64 KiB block RAM, ROM image preloaded at configuration ----
-    // Synchronous read; the Z80 holds the address stable for a full
-    // M-cycle (>= 6 core clks) and samples read data several edges after
-    // asserting RD, so the one-cycle BRAM latency is invisible to it.
+    // Synchronous read, one T-state of latency: the address is on the
+    // pins from the rising edge of T1, the BRAM registers it at T2, and
+    // the core takes the opcode at the rising edge after T2 (M1) or the
+    // falling edge of T3 (memory read). No wait states needed.
+    // Writes: WR is low across the rising edge of T3 only (it asserts at
+    // T2's falling edge and releases at T3's), so each write fires once.
     reg [7:0] ram [0:65535];
     initial $readmemh(ROM_FILE, ram);
     reg [7:0] ram_dout;
-    always @(posedge clk_cpu) begin
+    always @(posedge clk_z80) begin
         if (!mreq_n && !wr_n && data_drive && (addr >= ROM_PROTECT_TOP))
             ram[addr] <= data_out;
         ram_dout <= ram[addr];
@@ -115,11 +178,11 @@ module top #(
     wire       usb_rx_s;
 
     uart_rx #(.CLK_HZ(CORE_HZ), .BAUD(BAUD)) urx (
-        .clk(clk_cpu), .reset_n(reset_n), .rx(usb_rx), .rx_sync(usb_rx_s),
+        .clk(clk_z80), .reset_n(reset_n), .rx(usb_rx), .rx_sync(usb_rx_s),
         .valid(rx_valid), .data(rx_data)
     );
     uart_tx #(.CLK_HZ(CORE_HZ), .BAUD(BAUD)) utx (
-        .clk(clk_cpu), .reset_n(reset_n), .strobe(tx_strobe), .data(tx_data),
+        .clk(clk_z80), .reset_n(reset_n), .strobe(tx_strobe), .data(tx_data),
         .tx(usb_tx), .busy(tx_busy)
     );
 
@@ -131,10 +194,12 @@ module top #(
     wire [7:0] fifo_head = fifo[f_rd];
 
     // ---- ACIA-style I/O decode ----
-    // Bus strobes hold for multiple core clocks; act once per I/O cycle
-    // by edge-detecting each cycle's own "fully active" condition
-    // (same convention as sim_basic.cpp). INTA (iorq+m1, rd high) never
-    // matches iord_active.
+    // IORQ/RD (or WR) assert at the rising edge of T2 and hold through
+    // Tw and T3, so each is seen on two or more rising edges; act once
+    // per I/O cycle by edge-detecting each cycle's own "fully active"
+    // condition (same convention as sim_basic.cpp). The core latches
+    // read data at T3's falling edge, one T-state after io_dout settles.
+    // INTA (iorq+m1, rd high) never matches iord_active.
     wire iord_active = !iorq_n && !rd_n;
     wire iowr_active = !iorq_n && !wr_n;
     wire inta_active = !iorq_n && !m1_n;
@@ -155,7 +220,7 @@ module top #(
     wire rie = acia_ctrl[7];
     wire tie = (acia_ctrl[6:5] == 2'b01);
 
-    always @(posedge clk_cpu) begin
+    always @(posedge clk_z80) begin
         if (!reset_n) begin
             f_rd <= 0; f_wr <= 0; f_cnt <= 0;
             prev_iord <= 0; prev_iowr <= 0;
