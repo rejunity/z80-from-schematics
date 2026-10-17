@@ -20,10 +20,14 @@ fossi-foundation binary cache), then from the repository root:
 
     nix profile install github:librelane/librelane/3.0.14
     make -C asic/sky130                  # RTL -> GDS (~30 min); the PDK is fetched by ciel
-    make -C asic/sky130 summary          # area, per-corner timing, sign-off; non-zero exit on a failure
+    make -C asic/sky130 summary          # area, per-corner timing, sign-off; non-zero exit on a failure (*)
     make -C asic/sky130 sign_of_life     # the routed netlist runs asic/tb_sign_of_life.v
     make -C asic/sky130 sign_of_life_rtl # same program on rtl/
     make -C asic/sky130 synth            # synthesis and its checks only (minutes)
+
+(*) Sign-off as LibreLane counts it: DRC / LVS / antenna / XOR clean,
+no setup violations at the corners in TIMING_VIOLATION_CORNERS (typical),
+no hold violations at any corner; every corner is printed.
 
 Results land in `asic/sky130/runs/<tag>/` (`final/` holds GDS, netlists,
 metrics). CI: `.github/workflows/asic-sky130.yml` runs all of the above on
