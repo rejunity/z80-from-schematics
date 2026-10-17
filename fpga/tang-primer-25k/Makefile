@@ -35,9 +35,8 @@ PYTHON   ?= python3
 
 ROM_HEX  ?= $(ROOT)/tests/basic/nascom_basic_4_7_rc2014.hex
 
-CORE_SRCS := $(ROOT)/rtl/z80_top.v  $(ROOT)/rtl/z80_core.v $(ROOT)/rtl/z80_pla.v \
-             $(ROOT)/rtl/z80_alu.v  $(ROOT)/rtl/z80_timing.v
-CORE_INCS := $(ROOT)/rtl/z80_defs.vh
+CORE_SRCS := $(wildcard $(ROOT)/rtl/*.v)
+CORE_INCS := $(wildcard $(ROOT)/rtl/*.vh)
 SOC_SRCS  := top.v $(ICEPI)/uart.v
 
 YOSYS      := $(abspath $(VENV))/bin/yowasp-yosys
@@ -99,7 +98,7 @@ YOSYS_FILTER := grep --line-buffered -vE 'port Q\[|Drivers conflicting|Replacing
 $(BUILD)/top_%.synth.json: $(BUILD)/src $(BUILD)/rom.mem $(VENV)/.ok
 	@rm -f $@
 	cd $(BUILD) && $(YOSYS) $(YOSYS_QUIET) -l yosys_$(STEM).log -p \
-	  'read_verilog -Isrc src/z80_top.v src/z80_core.v src/z80_pla.v src/z80_alu.v src/z80_timing.v src/top.v src/uart.v; hierarchy -top top -chparam EXTERNAL_BUS $(EXTBUS_$(STEM)); synth_gowin -top top -family gw5a -nolutram -json top_$(STEM).synth.json' \
+	  'read_verilog -Isrc src/*.v; hierarchy -top top -chparam EXTERNAL_BUS $(EXTBUS_$(STEM)); synth_gowin -top top -family gw5a -nolutram -json top_$(STEM).synth.json' \
 	  2>&1 | $(YOSYS_FILTER)
 	@test -f $@ || { echo "yosys failed, see $(BUILD)/yosys_$(STEM).log"; exit 1; }
 
@@ -150,7 +149,7 @@ $(OBJ_DIR)/Vtop: $(BUILD)/src sim_top.cpp
 	  -Wno-fatal -Isrc --Mdir obj_dir_$(SIM_BAUD) --top-module top \
 	  -GCORE_HZ=$(SIM_CORE_HZ) -GBAUD=$(SIM_BAUD) -GEXTERNAL_BUS=0 \
 	  -CFLAGS -DSIM_BAUD=$(SIM_BAUD) \
-	  src/top.v src/uart.v src/z80_top.v src/z80_core.v src/z80_pla.v src/z80_alu.v src/z80_timing.v \
+	  src/*.v \
 	  ../sim_top.cpp > verilator.log 2>&1 || (tail -20 verilator.log; exit 1)
 
 sim: $(OBJ_DIR)/Vtop $(BUILD)/rom.mem
