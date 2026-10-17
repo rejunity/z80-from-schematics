@@ -1,0 +1,4 @@
+# WAIT low across T2.N and Tw1.N of CPIR iteration 2 read (M2): two Tw,
+# BC-1 must happen once, on the edge leaving T2.
+134 wait 0
+138 wait 1

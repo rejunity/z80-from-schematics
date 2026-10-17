@@ -29,7 +29,10 @@ TRACEGEN = os.path.join(ROOT, "build", "bin", "tracegen")
 PZ80     = os.path.join(ROOT, "build", "bin", "perfectz80_runner")
 VVP      = "vvp"
 TB_VVP   = os.path.join(ROOT, "build", "tb_z80.vvp")
-TB_NETLIST_VVP = os.path.join(ROOT, "build", "tb_z80_netlist.vvp")
+# TB_NETLIST_VVP in the environment selects another netlist build (the
+# FPGA-mapped ones from `make luts_netlist`).
+TB_NETLIST_VVP = os.environ.get("TB_NETLIST_VVP",
+                                os.path.join(ROOT, "build", "tb_z80_netlist.vvp"))
 VERILATOR_SIM = os.path.join(ROOT, "build", "obj_dir", "sim_z80")
 
 # tracegen cols: t phi m addr data_o data_i mreq iorq rd wr m1 rfsh halt busack
@@ -365,7 +368,8 @@ def main():
     else:
         hand = [os.path.join(ROOT, f"tests/traces/{n}.hex") for n in (
                     "prog1","prog2","prog3_cb","prog4_ed",
-                    "prog5_ddfd","prog6_block","prog7_ddcb","prog8_nmi")]
+                    "prog5_ddfd","prog6_block","prog7_ddcb","prog8_nmi",
+                    "prog10_exchange")]
         # Random programs from scripts/gen_random_trace_progs.py. Sorted
         # so the seed order is deterministic in the report.
         import glob
@@ -377,14 +381,19 @@ def main():
         "c":         "C model",
         "iverilog":  "iverilog RTL",
         "verilator": "Verilator RTL",
-        "netlist":   "gate-level netlist (sky130 / LibreLane)",
+        "netlist":   "gate-level netlist (" + os.environ.get("NETLIST_LABEL", "sky130 / LibreLane") + ")",
     }[source]
     print(f"{src_label} vs perfectz80 gate-level signal-timing comparison "
           f"({phases} phases per program, {len(COMPARED)} ctrl pins; "
           f"bus addr+data {bus_mode})")
     ok = True
     for p in progs:
-        if not compare(p, phases, source=source): ok = False
+        # a program may ask for a longer run in <prog>.phases (one number)
+        ph = phases
+        side = os.path.splitext(p)[0] + ".phases"
+        if os.path.exists(side):
+            ph = max(phases, int(open(side).read().split()[0]))
+        if not compare(p, ph, source=source): ok = False
     return 0 if ok else 1
 
 if __name__ == "__main__":

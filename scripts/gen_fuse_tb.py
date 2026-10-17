@@ -63,9 +63,11 @@ def emit_test(t):
         (f"`RFP_SP", t["sp"]),  (f"`RFP_PC", t["pc"]),
         (f"`RFP_WZ", t["wz"]),
     ]
+    # u_regs.rf[] is physical, but straight after do_reset() the exchange
+    # flip-flops are clear and physical = logical.
     for sel, val in pokes:
-        body.append(f'        `core.rf[{sel}]   = 16\'h{val:04x};')
-        body.append(f'        `core.rf_n[{sel}] = 16\'h{val:04x};')
+        body.append(f'        `core.u_regs.rf[{sel}]   = 16\'h{val:04x};')
+        body.append(f'        `core.u_regs.rf_n[{sel}] = 16\'h{val:04x};')
     body.append(f'        `core.reg_i      = 8\'h{t["i"]:02x};  `core.reg_i_n   = 8\'h{t["i"]:02x};')
     body.append(f'        `core.reg_r      = 8\'h{t["r"]:02x};  `core.reg_r_n   = 8\'h{t["r"]:02x};')
     body.append(f'        `core.iff1       = 1\'b{t["iff1"]};   `core.iff1_n    = 1\'b{t["iff1"]};')
@@ -84,12 +86,13 @@ def emit_test(t):
     body.append(f'        `core.m_addr     = 16\'h{t["pc"]:04x}; `core.m_addr_n  = 16\'h{t["pc"]:04x};')
     # run cycles: one rising edge per T-state
     body.append(f'        run_tstates({t["tstates"]});')
-    # sample and emit
+    # sample and emit. rfl[] is the logical register view: EX / EXX only flip
+    # the core's exchange flip-flops, so rf[] holds physical pairs.
     body.append('        $display("RESULT %s %04h %04h %04h %04h %04h %04h %04h %04h %04h %04h %04h %04h %04h %02h %02h %b %b %0d %b %0d",')
     body.append(f'                 "{t["name"]}",')
-    body.append('                 `core.rf[`RFP_AF], `core.rf[`RFP_BC], `core.rf[`RFP_DE], `core.rf[`RFP_HL],')
-    body.append('                 `core.rf[`RFP_AF2], `core.rf[`RFP_BC2], `core.rf[`RFP_DE2], `core.rf[`RFP_HL2],')
-    body.append('                 `core.rf[`RFP_IX], `core.rf[`RFP_IY], `core.rf[`RFP_SP], `core.rf[`RFP_PC], `core.rf[`RFP_WZ],')
+    body.append('                 `core.rfl[`RFP_AF], `core.rfl[`RFP_BC], `core.rfl[`RFP_DE], `core.rfl[`RFP_HL],')
+    body.append('                 `core.rfl[`RFP_AF2], `core.rfl[`RFP_BC2], `core.rfl[`RFP_DE2], `core.rfl[`RFP_HL2],')
+    body.append('                 `core.rfl[`RFP_IX], `core.rfl[`RFP_IY], `core.rfl[`RFP_SP], `core.rfl[`RFP_PC], `core.rfl[`RFP_WZ],')
     body.append('                 `core.reg_i, `core.reg_r, `core.iff1, `core.iff2, `core.im, `core.halted, cycle_count);')
     # dump memory that the expected output cares about
     for addr, bytes_ in t["mem"]:

@@ -90,7 +90,12 @@ def main():
 
     ok = True
     for p in progs:
-        if not compare_one(p, phases, oracles):
+        # a program may ask for a longer run in <prog>.phases (one number)
+        ph = phases
+        side = os.path.splitext(p)[0] + ".phases"
+        if len(sys.argv) <= 2 and os.path.exists(side):
+            ph = open(side).read().split()[0]
+        if not compare_one(p, ph, oracles):
             ok = False
     if ok:
         names = ", ".join(oracles.keys())
