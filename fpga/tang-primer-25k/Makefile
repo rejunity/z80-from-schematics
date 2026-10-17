@@ -89,19 +89,34 @@ $(BUILD)/tang_primer_25k.cst: tang_primer_25k.cst
 # the core's async-assert reset constants conflict with FF init values,
 # and the POR holds reset for thousands of clocks so sync semantics
 # are equivalent.
+# Console shows pass headers two levels deep (-v 2) plus warnings; the full
+# log goes to build/yosys_<build>.log (-l). Known-benign warnings are
+# demoted (-w): the core's trace counters and memories, tri-state notes,
+# BRAM map ranges.
+YOSYS_QUIET := -v 2 -Q -T \
+  -w 'Replacing memory|limited support for tri-state|Drivers conflicting|out of bounds on signal'
+
 $(BUILD)/top_%.synth.json: $(BUILD)/src $(BUILD)/rom.mem $(VENV)/.ok
-	cd $(BUILD) && $(YOSYS) -q -p \
-	  'read_verilog -Isrc src/z80_top.v src/z80_core.v src/z80_pla.v src/z80_alu.v src/z80_timing.v src/top.v src/uart.v; hierarchy -top top -chparam EXTERNAL_BUS $(EXTBUS_$(STEM)); proc; async2sync; synth_gowin -top top -family gw5a -nolutram -json top_$(STEM).synth.json' \
-	  2>&1 | tee yosys_$(STEM).log | tail -20
+	cd $(BUILD) && $(YOSYS) $(YOSYS_QUIET) -l yosys_$(STEM).log -p \
+	  'read_verilog -Isrc src/z80_top.v src/z80_core.v src/z80_pla.v src/z80_alu.v src/z80_timing.v src/top.v src/uart.v; hierarchy -top top -chparam EXTERNAL_BUS $(EXTBUS_$(STEM)); proc; async2sync; synth_gowin -top top -family gw5a -nolutram -json top_$(STEM).synth.json'
 
 # sspi_as_gpio is mandatory on GW5A-25 (apycula enforces it), but NOT
 # cpu_as_gpio: apicula's examples pass it, we use no CPU-group pins,
 # and repurposing config-interface pins risks locking out the BL616's
 # JTAG access until the next power cycle.
+# nextpnr: full log in build/nextpnr_<build>.log, console shows the stage
+# lines, placer/router progress and the timing summary. The chip build's
+# per-sink "Failed to route ... using dedicated routing" warnings (the J1
+# clock, see README) are summarised instead of listed.
+NEXTPNR_PROGRESS := grep --line-buffered -E '^(Info: (Pack|Running|Placed|Creating|HeAP|SA |Routing|Router|Max frequency|Program finished|Device util)|Info: +[0-9]+000 \||ERROR|Warning)' \
+  | grep --line-buffered -v 'Failed to route net'
+
 $(BUILD)/top_%.pnr.json: $(BUILD)/top_%.synth.json $(BUILD)/tang_primer_25k.cst
 	cd $(BUILD) && $(NEXTPNR) --top top --json top_$(STEM).synth.json --write top_$(STEM).pnr.json \
 	  --device $(DEVICE) --vopt cst=tang_primer_25k.cst --vopt sspi_as_gpio \
-	  2>&1 | tee nextpnr_$(STEM).log | grep -E "Max frequency|ERROR|error" || true
+	  2>&1 | tee nextpnr_$(STEM).log | $(NEXTPNR_PROGRESS) || true
+	@n=$$(grep -c 'Failed to route net' $(BUILD)/nextpnr_$(STEM).log); \
+	  [ "$$n" = 0 ] || echo "nextpnr: $$n clock sinks not on dedicated routing (see README, clock routing caveat)"
 	@test -f $(BUILD)/top_$(STEM).pnr.json
 
 $(BUILD)/top_%.fs: $(BUILD)/top_%.pnr.json
