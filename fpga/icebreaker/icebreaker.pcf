@@ -1,0 +1,91 @@
+# iCEBreaker (iCE40UP5K-SG48) pin constraints for the RZ80 SoC.
+#
+# Pin numbers checked against the board's official constraints file,
+# icebreaker-fpga/icebreaker-verilog-examples icebreaker/icebreaker.pcf
+# (2026-10). Global-buffer-capable pins (GBIN) from Project IceStorm's
+# icebox database (padin_pio_db / pinloc_db "5k-sg48").
+#
+# Both builds (sbc, chip) use this one file; the Makefile appends the
+# per-build Z80 clock constraint (set_frequency clk_z80 ...).
+
+# 12 MHz oscillator (pin 35 is a GBIN and the PLL's input pad)
+set_io clk        35
+set_frequency clk 12
+
+# FT2232H channel B UART: the FPGA receives on pin 6, transmits on pin 9
+set_io uart_rx     6
+set_io uart_tx     9
+
+# User button (active low) and the two main-board LEDs (active low)
+set_io -pullup yes btn_n 10
+set_io ledr_n     11
+set_io ledg_n     37
+
+# ---- Z80 bus on the three PMODs (3.3 V, NOT 5 V tolerant) ----
+#
+# 24 PMOD pins = the first 24 signals of the shared chip-pinout order:
+# CLK, D0-D7, /MREQ, /RD, /WR, A0-A11 (a 4 KiB address window).
+# Grouped one byte per PMOD:
+#
+#   PMOD pin   FPGA  chip build             sbc build (all outputs)
+#   P1A1        4    A8        out          A8
+#   P1A2        2    A9        out          A9
+#   P1A3       47    A10       out          A10
+#   P1A4       45    A11       out          A11
+#   P1A7        3    /MREQ     out          /MREQ
+#   P1A8       48    /RD       out          /RD
+#   P1A9       46    /WR       out          /WR
+#   P1A10      44    CLK       in (GBIN)    CLK (the internal 4 MHz)
+#   P1B1       43    D0        bidir        D0 (bus byte)
+#   P1B2       38    D1        bidir        D1
+#   P1B3       34    D2        bidir        D2
+#   P1B4       31    D3        bidir        D3
+#   P1B7       42    D4        bidir        D4
+#   P1B8       36    D5        bidir        D5
+#   P1B9       32    D6        bidir        D6
+#   P1B10      28    D7        bidir        D7
+#   P2_1       27    A0        out          A0
+#   P2_2       25    A1        out          A1
+#   P2_3       21    A2        out          A2
+#   P2_4       19    A3        out          A3
+#   P2_7       26    A4        out          A4
+#   P2_8       23    A5        out          A5
+#   P2_9       20    A6        out          A6
+#   P2_10      18    A7        out          A7
+#
+# PMOD pins 5/11 are GND, 6/12 are 3.3 V. Pin 44 (P1A10) is one of the two
+# GBIN pins on the PMODs (the other is pin 20, P2_9), so the external CLK
+# enters the global clock network directly (SB_GB_IO in top.v).
+#
+# P2 is the snap-off button/LED board's PMOD (LED1-5 on P2_7/P2_1/P2_2/
+# P2_8/P2_3, BTN1-3 on P2_9/P2_4/P2_10): snap it off (or unplug it) for
+# the chip build. Left attached in the sbc build, its LEDs glow with
+# address-bus activity; do not press its buttons (they would fight the
+# FPGA's address drivers).
+
+set_io z80_a[8]   4
+set_io z80_a[9]   2
+set_io z80_a[10]  47
+set_io z80_a[11]  45
+set_io z80_mreq_n 3
+set_io z80_rd_n   48
+set_io z80_wr_n   46
+set_io z80_clk    44
+
+set_io z80_d[0]   43
+set_io z80_d[1]   38
+set_io z80_d[2]   34
+set_io z80_d[3]   31
+set_io z80_d[4]   42
+set_io z80_d[5]   36
+set_io z80_d[6]   32
+set_io z80_d[7]   28
+
+set_io z80_a[0]   27
+set_io z80_a[1]   25
+set_io z80_a[2]   21
+set_io z80_a[3]   19
+set_io z80_a[4]   26
+set_io z80_a[5]   23
+set_io z80_a[6]   20
+set_io z80_a[7]   18
