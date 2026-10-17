@@ -111,8 +111,9 @@ deltas:
 and CLKDIV). Flashing is the one native tool: `openFPGALoader`
 (`brew install openfpgaloader`).
 
-Like the ECP5 port, synthesis runs `proc; async2sync` first (FF
-init-value vs async-reset conflict) and sources are staged into
+Like the ECP5 port, synthesis keeps the core's asynchronous reset
+(GW5A DFFC/DFFP flops; no `async2sync`, which cost ~3,900 LUTs by
+defeating clock-enable inference) and sources are staged into
 `build/` for the YoWASP sandbox. The two builds differ only in the
 `-chparam EXTERNAL_BUS` passed to yosys.
 

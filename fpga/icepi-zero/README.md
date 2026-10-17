@@ -72,10 +72,13 @@ Constraints: `icepi-zero.lpf` is vendored from the board repo (v1.3,
 zlib-style licence). The PLL output carries its own frequency attribute,
 so nextpnr times the Z80 domain without an extra constraint.
 
-Synthesis runs `proc; async2sync` first (the core's async-assert reset
-constants conflict with FF init values; the POR holds reset for thousands
-of clocks, so sync semantics are equivalent). `z80_top`'s negative-edge
-flops map onto ECP5's inverted-clock FF mode.
+Synthesis maps the core's async-reset flops directly onto ECP5's
+async set/reset FF mode, so the netlist keeps the RTL's (and the ASIC's)
+reset semantics. Earlier builds ran `proc; async2sync` first; that
+rewrote every flop as sync-reset plus a Q-side `reset ? value : Q` mux,
+which hid the hold paths from yosys' clock-enable inference and cost
+about 3,000 LUT4 (10,244 -> 7,446 for the whole SoC). `z80_top`'s
+negative-edge flops map onto ECP5's inverted-clock FF mode.
 
 ## Simulation
 

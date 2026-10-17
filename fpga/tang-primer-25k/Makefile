@@ -85,10 +85,10 @@ $(BUILD)/tang_primer_25k.cst: tang_primer_25k.cst
 	cp $< $@
 
 # ---- synth / pnr / pack ----
-# proc+async2sync before synth for the same reason as the ECP5 port:
-# the core's async-assert reset constants conflict with FF init values,
-# and the POR holds reset for thousands of clocks so sync semantics
-# are equivalent.
+# No async2sync: the core's async-reset flops map straight onto GW5A
+# DFFC/DFFP(E). async2sync (used before) turned every flop into
+# sync-reset plus a Q-side mux, which hid the hold paths from clock-enable
+# inference: ~3,900 extra LUTs (11,922 -> 8,122 for the sbc build).
 # Console shows pass headers two levels deep (-v 2) plus warnings; the full
 # log goes to build/yosys_<build>.log (-l).
 YOSYS_QUIET := -v 2 -Q -T
@@ -99,7 +99,7 @@ YOSYS_FILTER := grep --line-buffered -vE 'port Q\[|Drivers conflicting|Replacing
 $(BUILD)/top_%.synth.json: $(BUILD)/src $(BUILD)/rom.mem $(VENV)/.ok
 	@rm -f $@
 	cd $(BUILD) && $(YOSYS) $(YOSYS_QUIET) -l yosys_$(STEM).log -p \
-	  'read_verilog -Isrc src/z80_top.v src/z80_core.v src/z80_pla.v src/z80_alu.v src/z80_timing.v src/top.v src/uart.v; hierarchy -top top -chparam EXTERNAL_BUS $(EXTBUS_$(STEM)); proc; async2sync; synth_gowin -top top -family gw5a -nolutram -json top_$(STEM).synth.json' \
+	  'read_verilog -Isrc src/z80_top.v src/z80_core.v src/z80_pla.v src/z80_alu.v src/z80_timing.v src/top.v src/uart.v; hierarchy -top top -chparam EXTERNAL_BUS $(EXTBUS_$(STEM)); synth_gowin -top top -family gw5a -nolutram -json top_$(STEM).synth.json' \
 	  2>&1 | $(YOSYS_FILTER)
 	@test -f $@ || { echo "yosys failed, see $(BUILD)/yosys_$(STEM).log"; exit 1; }
 
