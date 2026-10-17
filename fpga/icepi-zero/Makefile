@@ -84,8 +84,9 @@ $(BUILD)/top.json: $(BUILD)/src $(BUILD)/rom.mem $(VENV)/.ok
 	@test -f $@ || { echo "yosys failed, see $(BUILD)/yosys.log"; exit 1; }
 
 # nextpnr: full log in build/nextpnr.log, console shows the stage lines,
-# placer/router progress and the timing summary.
-NEXTPNR_PROGRESS := grep --line-buffered -E '^(Info: (Pack|Running|Placed|Creating|HeAP|SA |Routing|Router|Max frequency|Program finished|Device util|promoting)|Info: +[0-9]+000 \||ERROR|Warning)'
+# placer/router progress (one router row per 5000 arcs) and the timing
+# summary.
+NEXTPNR_PROGRESS := grep --line-buffered -E '^(Info: (Pack|Running|Placed|Creating|HeAP|SA |Routing|Router|Max frequency|Program finished|Device util|promoting)|Info: +[0-9]*[05]000 \||ERROR|Warning)'
 
 $(BUILD)/top.config: $(BUILD)/top.json $(BUILD)/icepi-zero.lpf
 	cd $(BUILD) && $(NEXTPNR) --$(FPGA_SIZE) --package $(PACKAGE) \
