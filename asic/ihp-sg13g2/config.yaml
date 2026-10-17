@@ -1,0 +1,29 @@
+# LibreLane 3 Classic flow: harden z80_top as a stand-alone macro on
+# ihp-sg13g2 / sg13g2_stdcell -- the PDK and cell library used by the
+# TinyTapeout IHP shuttles (tt-gds-action ttihp26b: LibreLane 3.0.5;
+# 3.0.5 and 3.0.14 both pin IHP-Open-PDK c4b8b4e5).
+#
+# This is a tapeout-readiness probe of the core itself (synthesis ->
+# floorplan -> place -> CTS -> route -> STA -> DRC/LVS/antenna), not a
+# shuttle submission: no TinyTapeout tile wrapper and no pads yet.
+meta:
+  version: 3
+  flow: Classic
+
+DESIGN_NAME: z80_top
+VERILOG_FILES:
+  - dir::../../rtl/*.v
+VERILOG_INCLUDE_DIRS:
+  - dir::../../rtl
+
+# One Z80-rate clock. 50 ns = 20 MHz, the fastest CMOS Z80 grade
+# (Z84C0020). The negedge input samplers and the falling-edge half of
+# the pin former make some paths half-cycle (25 ns).
+CLOCK_PORT: clk
+CLOCK_PERIOD: 50
+
+# Let the die follow the cell area; utilisation is reported so it can be
+# compared with TinyTapeout tile and wafer.space slot sizes.
+FP_SIZING: relative
+FP_CORE_UTIL: 45
+PL_TARGET_DENSITY_PCT: 55
