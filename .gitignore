@@ -42,3 +42,5 @@ __pycache__/
 # from FUSE.app/Contents/Resources/48.rom on macOS.
 spec48.rom
 48.rom
+# yowasp-yosys for `make luts`
+.venv-fpga/

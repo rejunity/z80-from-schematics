@@ -29,7 +29,10 @@ TRACEGEN = os.path.join(ROOT, "build", "bin", "tracegen")
 PZ80     = os.path.join(ROOT, "build", "bin", "perfectz80_runner")
 VVP      = "vvp"
 TB_VVP   = os.path.join(ROOT, "build", "tb_z80.vvp")
-TB_NETLIST_VVP = os.path.join(ROOT, "build", "tb_z80_netlist.vvp")
+# TB_NETLIST_VVP in the environment selects another netlist build (the
+# FPGA-mapped ones from `make luts_netlist`).
+TB_NETLIST_VVP = os.environ.get("TB_NETLIST_VVP",
+                                os.path.join(ROOT, "build", "tb_z80_netlist.vvp"))
 VERILATOR_SIM = os.path.join(ROOT, "build", "obj_dir", "sim_z80")
 
 # tracegen cols: t phi m addr data_o data_i mreq iorq rd wr m1 rfsh halt busack
@@ -377,7 +380,7 @@ def main():
         "c":         "C model",
         "iverilog":  "iverilog RTL",
         "verilator": "Verilator RTL",
-        "netlist":   "gate-level netlist (sky130 / LibreLane)",
+        "netlist":   "gate-level netlist (" + os.environ.get("NETLIST_LABEL", "sky130 / LibreLane") + ")",
     }[source]
     print(f"{src_label} vs perfectz80 gate-level signal-timing comparison "
           f"({phases} phases per program, {len(COMPARED)} ctrl pins; "

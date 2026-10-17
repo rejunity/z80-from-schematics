@@ -546,6 +546,45 @@ all-tests: ctest rtl bus_controls compare fuse fuse_rtl perfectz80
 	@$(PYTHON) $(SCRIPTS)/sigrok_async_timing.py tests/sigrok/kc85-20mhz.sr --silicon-check 2>&1 | tail -6
 	@echo "== all-tests complete =="
 
+# === FPGA LUT budget ========================================================
+# `make luts` synthesizes z80_top alone for iCE40 (synth_ice40 -abc9 -dsp),
+# ECP5 and Gowin GW5A with the same yosys recipe as the fpga-* board builds
+# and prints LUT / carry / mux / FF counts (scripts/fpga_luts.sh,
+# scripts/fpga_luts_table.py). `make luts_netlist` then runs each mapped
+# netlist (yosys' own cell models flattened in) through the gate-level
+# testbench against perfectz80 (same 12 programs as perfectz80_netlist), so
+# an area change is checked at the gates it produced.
+#
+# Toolchain: yowasp-yosys (WebAssembly yosys, pip) in .venv-fpga/, created
+# on first use. Override with YOSYS=<path> to use a native yosys >= 0.50.
+LUTS_FAMILIES := ice40 ecp5 gowin
+LUTS_VENV     := .venv-fpga
+YOSYS         ?= $(abspath $(LUTS_VENV))/bin/yowasp-yosys
+.PHONY: luts luts_netlist luts_venv
+luts_venv: $(LUTS_VENV)/.ok
+$(LUTS_VENV)/.ok:
+	$(PYTHON) -m venv $(LUTS_VENV)
+	$(LUTS_VENV)/bin/pip install -q yowasp-yosys
+	@touch $@
+
+luts: $(foreach f,$(LUTS_FAMILIES),$(BUILD)/luts/$(f)/stat.json)
+	@$(PYTHON) $(SCRIPTS)/fpga_luts_table.py $(LUTS_FAMILIES)
+
+$(BUILD)/luts/%/stat.json: $(RTL_SRCS) $(wildcard $(RTL)/*.vh) $(SCRIPTS)/fpga_luts.sh | $(LUTS_VENV)/.ok
+	@echo "== yosys: z80_top for $* =="
+	@YOSYS=$(YOSYS) $(SCRIPTS)/fpga_luts.sh $* $(BUILD)/luts/$*
+
+$(BUILD)/luts/%/tb.vvp: $(BUILD)/luts/%/stat.json $(TESTS)/iverilog/tb_z80_netlist.v
+	$(IVERILOG) -g2012 -s tb_z80 -o $@ $(TESTS)/iverilog/tb_z80_netlist.v \
+	  $(BUILD)/luts/$*/z80_top_sim.v
+
+luts_netlist: $(foreach f,$(LUTS_FAMILIES),$(BUILD)/luts/$(f)/tb.vvp) $(BIN)/perfectz80_runner
+	@for f in $(LUTS_FAMILIES); do \
+	  echo "== $$f-mapped netlist vs perfectz80 =="; \
+	  TB_NETLIST_VVP=$(abspath $(BUILD))/luts/$$f/tb.vvp NETLIST_LABEL="$$f-mapped" \
+	    $(PYTHON) $(SCRIPTS)/compare_signal_timing.py --rtl=netlist 200 || exit 1; \
+	done
+
 clean:
 	rm -rf $(BUILD)
 	@echo "cleaned."
