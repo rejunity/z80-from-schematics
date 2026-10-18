@@ -1,0 +1,3 @@
+# Chip build only: the Z80 CLK comes in on gpio[25] (header pin 22).
+# Constrained at 8 MHz -- the core itself is good for ~20 MHz here.
+FREQUENCY PORT "gpio[25]" 8 MHZ;

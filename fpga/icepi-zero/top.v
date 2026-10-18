@@ -1,9 +1,15 @@
-// top.v - RZ80 BASIC SBC for the IcePi Zero (Lattice ECP5, LFE5U-25F CABGA256)
+// top.v - RZ80 on the IcePi Zero (Lattice ECP5, LFE5U-25F CABGA256)
 //
-// NASCOM BASIC 4.7 (RC2014 build) on the rz80 core, console over the
-// board's FTDI USB-UART (115200 8N1). A single-board computer in the
-// Grant Searle / RC2014 sense: CPU + ROM + RAM + ACIA, all inside the
-// FPGA, with the CPU bus mirrored on the 40-pin header for probing.
+// Two builds from this one file (EXTERNAL_BUS):
+//   sbc   (0) NASCOM BASIC 4.7 (RC2014 build) on the rz80 core, console
+//             over the board's FTDI USB-UART (115200 8N1). A single-board
+//             computer in the Grant Searle / RC2014 sense: CPU + ROM + RAM
+//             + ACIA, all inside the FPGA, with the CPU bus mirrored on the
+//             40-pin header for probing.
+//   chip  (1) the Z80 as a chip on the 40-pin header, clocked by an
+//             external CLK: memory and I/O live outside the FPGA.
+//
+// The text below describes the sbc build; the header layout is shared.
 //
 // Clock: the ECP5 PLL makes the Z80 clock, CORE_HZ = 4 MHz by default
 // (a Z80A; 3.5 MHz, the Spectrum/Z80 rate, is the other supported
@@ -18,6 +24,9 @@
 // Memory map: one 64 KiB block RAM, preloaded with the BASIC ROM image
 // at bitstream load. Writes below ROM_PROTECT_TOP are dropped so the
 // ROM region behaves like ROM and a button reset warm-restarts cleanly.
+// The Makefile sets ROM_PROTECT_TOP to the end of the ROM image rounded
+// up to 1 KiB: 0x2000 for NASCOM BASIC, 0x0400 for the 1K Tiny BASIC
+// (its variables and stack live at 0x0400-0x07FF).
 //
 // I/O map (matches scripts/basicrunner.c and tests/verilator/sim_basic.cpp):
 //   IN  (0x80) -> ACIA status: bit0 RDRF (RX byte ready), bit1 TDRE (TX idle)
@@ -27,23 +36,34 @@
 //   IN  (0x00) -> Tiny BASIC status: 0xFF if RX byte ready else 0x00
 //   IN/OUT (0x01) -> Tiny BASIC data (same UART)
 //   /INT asserted per 68B50 rules: (RIE & RDRF) | (TIE & TDRE).
+//   A TX write that finds the transmitter still busy holds the CPU with
+//   /WAIT until the previous byte is out (Tiny BASIC writes without
+//   polling TDRE), so no byte is ever dropped.
 //
-// button[0] = Z80 reset (active low, board pull-up).
+// button[0] = Z80 reset (active low, board pull-up), in both builds.
 //
-// Header mirror (gpio[27:0], the 40-pin Pi-style header): the Z80 bus as
-// OUTPUTS, so a logic analyser or a bus display can watch BASIC run. The
-// header has 28 user I/O, not the 38 of a Z80 DIP, so this is a subset
-// of the Tang Primer's full chip pinout (fpga/tang-primer-25k):
+// Header (gpio[27:0], the 40-pin Pi-style header). It has 28 user I/O,
+// not the 38 of a Z80 DIP, so it carries the first 28 signals of the
+// shared priority list (memory strobes first, then as much address bus
+// as fits): CLK, D0..D7, /MREQ, /RD, /WR, A0..A15. /IORQ, /M1, /RFSH,
+// /HALT, /BUSACK are not brought out (an I/O cycle still shows as /RD or
+// /WR with /MREQ high); /WAIT, /INT, /NMI, /BUSREQ are tied inactive in
+// the chip build and /RESET is button 0.
 //
 //   gpio[15:0]  A0..A15        gpio[24] /MREQ      gpio[26] /RD
-//   gpio[23:16] D0..D7         gpio[25] /IORQ      gpio[27] /WR
+//   gpio[23:16] D0..D7         gpio[25] CLK        gpio[27] /WR
 //
-// D shows the byte on the internal bus: the CPU's write data while it
-// drives, otherwise what memory / the ACIA returned. The header is
-// 3.3 V and not 5 V tolerant.
+// sbc: every header pin is an OUTPUT, so a logic analyser or a bus
+// display can watch BASIC run; CLK is the internal Z80 clock and D the
+// byte on the internal bus (the CPU's write data while it drives,
+// otherwise what memory / the ACIA returned).
+// chip: CLK (gpio[25], header pin 22) is an input that clocks the core,
+// D0..D7 are bidirectional (driven while the Z80 writes), the rest are
+// outputs. The header is 3.3 V and not 5 V tolerant.
 
 module top #(
-    parameter CORE_HZ     = 4_000_000,          // Z80 clock from the PLL: 4_000_000 or 3_500_000
+    parameter EXTERNAL_BUS = 0,                 // 0 = sbc, 1 = chip (see header comment)
+    parameter CORE_HZ     = 4_000_000,          // sbc Z80 clock from the PLL: 4_000_000 or 3_500_000
     parameter SIM_CLK_DIV = 12,                 // simulation stand-in: 50 MHz / 12 = 4.17 MHz
     parameter BAUD        = 115_200,
     parameter ROM_FILE    = "rom.mem",
@@ -54,9 +74,20 @@ module top #(
     output wire        usb_tx,    // FPGA -> FTDI serial
     input  wire [1:0]  button,    // active low
     output wire [4:0]  led,
-    output wire [27:0] gpio       // Z80 bus mirror, see header comment
+    inout  wire [27:0] gpio       // Z80 bus, see header comment
 );
-    // ---- Z80 clock ----
+    // ---- Z80 clock: the PLL (sbc) or the CLK header pin (chip) ----
+    wire clk_z80, pll_lock;
+    generate if (EXTERNAL_BUS) begin : g_ext_clk
+`ifdef SYNTHESIS
+    // An explicit input pad: left to itself yosys turns the partly-driven
+    // gpio bus into an output port and ties this undriven bit low.
+    BB clk_pad (.I(1'b0), .T(1'b1), .O(clk_z80), .B(gpio[25]));
+`else
+    assign clk_z80  = gpio[25];
+`endif
+    assign pll_lock = 1'b1;
+    end else begin : g_int_clk
 `ifdef SYNTHESIS
     // EHXPLLL, parameters from `ecppll -i 50 -o 4 --highres` (3.5 MHz:
     // `-o 3.5`). CLKOP is the 50 MHz feedback, CLKOS the Z80 clock:
@@ -64,7 +95,7 @@ module top #(
     // VCO / CLKOS_DIV(125) = 4 / 3.5 MHz.
     localparam PLL_CLKI_DIV = (CORE_HZ == 3_500_000) ? 4  : 1;
     localparam PLL_CLKOP_DIV = (CORE_HZ == 3_500_000) ? 35 : 10;
-    wire clk_z80, pll_fb, pll_lock;
+    wire pll_fb;
     (* FREQUENCY_PIN_CLKI="50" *)
     (* ICP_CURRENT="12" *) (* LPF_RESISTOR="8" *) (* MFG_ENABLE_FILTEROPAMP="1" *) (* MFG_GMCREF_SEL="2" *)
     EHXPLLL #(
@@ -86,13 +117,15 @@ module top #(
     // Simulation stand-in: toggle divider, 50 % duty (both edges matter).
     localparam HALF = SIM_CLK_DIV / 2;
     reg [$clog2(HALF)-1:0] ckdiv = 0;
-    reg clk_z80 = 1'b0;
+    reg clk_div = 1'b0;
     always @(posedge clk) begin
-        if (ckdiv == HALF - 1) begin ckdiv <= 0; clk_z80 <= ~clk_z80; end
+        if (ckdiv == HALF - 1) begin ckdiv <= 0; clk_div <= ~clk_div; end
         else ckdiv <= ckdiv + 1'b1;
     end
-    wire pll_lock = 1'b1;
+    assign clk_z80  = clk_div;
+    assign pll_lock = 1'b1;
 `endif
+    end endgenerate
 
     // ---- power-on + button-0 reset ----
     // One up-counter on the always-running 50 MHz clock serves both: it
@@ -123,8 +156,9 @@ module top #(
     wire [7:0]  data_out;
     wire        data_drive;
     wire        m1_n, mreq_n, iorq_n, rd_n, wr_n, rfsh_n, halt_n, busack_n;
-    reg  [7:0]  data_in;
+    wire [7:0]  data_in;
     wire        int_n;
+    wire        wait_n;
 
     z80_top cpu (
         .clk        (clk_z80),
@@ -141,7 +175,7 @@ module top #(
         .rfsh_n     (rfsh_n),
         .halt_n     (halt_n),
         .busack_n   (busack_n),
-        .wait_n     (1'b1),
+        .wait_n     (wait_n),
         .int_n      (int_n),
         .nmi_n      (1'b1),
         .busreq_n   (1'b1),
@@ -149,9 +183,11 @@ module top #(
         .dbg_m      ()
     );
 
+    // ======================= sbc: BASIC on the FPGA =======================
+    generate if (!EXTERNAL_BUS) begin : g_sbc
     // ---- header mirror (outputs only) ----
     wire [7:0] bus_d = data_drive ? data_out : data_in;
-    assign gpio = {wr_n, rd_n, iorq_n, mreq_n, bus_d, addr};
+    assign gpio = {wr_n, rd_n, clk_z80, mreq_n, bus_d, addr};
 
     // ---- 64 KiB block RAM, ROM image preloaded at configuration ----
     // Synchronous read, one T-state of latency: the address is on the
@@ -211,6 +247,17 @@ module top #(
     wire fifo_pop  = iord_active && !prev_iord && (port == 8'h81 || port == 8'h01) && rx_avail;
     wire fifo_push = rx_valid && (f_cnt != 6'd32);
 
+    // TX: an OUT to the data port hands its byte to the transmitter on
+    // the first rising edge of the cycle that finds it idle (tx_taken:
+    // once per cycle). NASCOM BASIC checks TDRE first, so that is the
+    // cycle's first edge, as before. Tiny BASIC writes without looking,
+    // faster than the line drains: while the previous byte is still
+    // shifting out, /WAIT holds the cycle in Tw (sampled at the falling
+    // edge of Tw; IORQ and WR are low from T2, 1.5 clocks earlier).
+    wire tx_wr = iowr_active && (port == 8'h81 || port == 8'h01);
+    reg  tx_taken = 1'b0;
+    assign wait_n = !(tx_wr && !tx_taken && tx_busy);
+
     // 68B50 control register: bit7 RIE (RX-interrupt enable), bits 6:5
     // = 01 -> TIE (TX interrupt on TDRE). The NASCOM/z88dk ACIA driver
     // uses interrupt-driven TX: when it sees TDRE=0 it queues the byte
@@ -224,7 +271,7 @@ module top #(
         if (!reset_n) begin
             f_rd <= 0; f_wr <= 0; f_cnt <= 0;
             prev_iord <= 0; prev_iowr <= 0;
-            tx_strobe <= 0;
+            tx_strobe <= 0; tx_taken <= 0;
             acia_ctrl <= 8'h00;
         end else begin
             prev_iord <= iord_active;
@@ -252,14 +299,15 @@ module top #(
                 endcase
             end
 
-            if (iowr_active && !prev_iowr) begin
-                if (port == 8'h81 || port == 8'h01) begin
-                    tx_data   <= data_out;
-                    tx_strobe <= 1'b1;
-                end else if (port == 8'h80) begin
-                    acia_ctrl <= data_out;   // divisor/format bits ignored
-                end
+            if (!tx_wr)
+                tx_taken <= 1'b0;
+            else if (!tx_taken && !tx_busy) begin
+                tx_data   <= data_out;
+                tx_strobe <= 1'b1;
+                tx_taken  <= 1'b1;
             end
+            if (iowr_active && !prev_iowr && port == 8'h80)
+                acia_ctrl <= data_out;       // divisor/format bits ignored
         end
     end
 
@@ -270,11 +318,7 @@ module top #(
 
     // Data-bus input mux. INTA in IM 1 ignores the bus; 0xFF (= RST 38h)
     // is also the correct IM 0 behaviour of an open bus.
-    always @(*) begin
-        if (inta_active)      data_in = 8'hFF;
-        else if (iord_active) data_in = io_dout;
-        else                  data_in = ram_dout;
-    end
+    assign data_in = inta_active ? 8'hFF : iord_active ? io_dout : ram_dout;
 
     // ---- LEDs: heartbeat + life signs ----
     reg [24:0] beat = 0;
@@ -284,4 +328,35 @@ module top #(
     assign led[2] = ~usb_rx_s;      // RX activity
     assign led[3] = rx_avail;       // RX FIFO non-empty
     assign led[4] = ~halt_n;        // CPU halted
+
+    // ======================= chip: the Z80 on the header =======================
+    end else begin : g_chip
+    assign gpio[15:0]  = addr;
+    assign gpio[24]    = mreq_n;
+    // gpio[25] is the CLK input (g_ext_clk)
+    assign gpio[26]    = rd_n;
+    assign gpio[27]    = wr_n;
+    // bidirectional data bus, driven while the Z80 writes
+`ifdef SYNTHESIS
+    genvar k;
+    for (k = 0; k < 8; k = k + 1) begin : g_d
+        BB d_pad (.I(data_out[k]), .T(~data_drive), .O(data_in[k]), .B(gpio[16 + k]));
+    end
+`else
+    assign gpio[23:16] = data_drive ? data_out : 8'hzz;
+    assign data_in = gpio[23:16];
+`endif
+    assign int_n   = 1'b1;
+    assign wait_n  = 1'b1;
+    assign usb_tx  = 1'b1;                                  // serial idle
+    reg [24:0] beat = 0;
+    always @(posedge clk) beat <= beat + 1'b1;
+    reg [21:0] zbeat = 0;                                   // blinks while CLK runs
+    always @(posedge clk_z80) zbeat <= zbeat + 1'b1;
+    assign led[0] = beat[24];       // ~1.5 Hz heartbeat
+    assign led[1] = zbeat[21];      // external CLK alive (~1 Hz at 4 MHz)
+    assign led[2] = ~mreq_n;        // memory cycle
+    assign led[3] = ~reset_n;       // held in reset
+    assign led[4] = ~halt_n;        // CPU halted
+    end endgenerate
 endmodule
