@@ -48,8 +48,8 @@ the FPGA (ICE10), resets the Z80 — RAM survives, so you get the ROM's
 warm-start `C|W` prompt. SW1 resets the RP2040, which also reconfigures
 the FPGA from its flash.
 
-Terminal notes: BASIC wants CR line endings (screen sends CR — good), and
-Ctrl-C is BREAK. The stock bridge has no flow control and drops host bytes
+Terminal notes: BASIC wants CR line endings (screen sends CR — good),
+Ctrl-C is BREAK, and the backspace key works as in `make basic`: the ACIA hands BASIC a DEL (7Fh, what macOS terminals send for ⌫) as BS (08h). Tiny BASIC has no line editing. The stock bridge has no flow control and drops host bytes
 when the RP2040's 32-byte UART FIFO is full, so paste long programs with a
 per-character delay.
 
