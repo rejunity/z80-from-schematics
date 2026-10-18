@@ -220,8 +220,10 @@ openFPGALoader can be used instead:
     make sim_real       # same at true 115200 pacing (exercises the TIE path)
     make sim_iverilog   # same script through iverilog (~11 min)
     make sim_gl         # the script on the *synthesized* sbc netlist (~1.5 min)
+    make sim_pnr        # the script on the *routed* sbc netlist, as in the bitstream (~1.5 min)
     make sim_chip       # chip build with an external RAM, RTL + netlist
     make sim_tiny       # 1K Tiny BASIC (SIM_BAUD=115200: real pacing)
+    make sim_pnr_tiny   # Tiny BASIC on its own bitstream's routed netlist (build_tiny/)
     make ci             # all of these, both bitstreams and the Tiny BASIC bitstream
 
 The PLL is a black box in simulation: the testbench clock stands in for its
@@ -233,6 +235,15 @@ real top level over the UART pins: answer `Memory top?`, `PRINT 123+456` →
 `C|W` prompt, answer `W`, expect `Ok`. `make sim_gl` runs the same script
 on yosys' iCE40 cell models (EBR ROM image, SPRAM byte lanes, negedge
 flops) and finishes on exactly the same clock as the RTL at 115200.
+`make sim_pnr` goes one step further, to nextpnr's routed netlist
+(`build/top_sbc.pnr.json`): the design as icepack packs it into the
+bitstream, every logic cell's LUT and flop as placed, the EBR ROM image,
+SPRAM, global buffers and pads, on the same cell models. `sim_pnr.py` ties
+the inputs nextpnr left unrouted to the level the hardware reads there
+and drives the PLL's dedicated clock paths from the testbench clock, and
+both BASICs again finish on exactly the RTL's clock. It is a zero-delay
+check of function: timing is nextpnr's job, and icepack's bit encoding
+of the `.asc` is not covered.
 `make sim_tiny` runs the 1K Tiny BASIC ROM with RAM from 0x0400: it types
 a short session one character per echo and compares the whole console
 transcript byte for byte with the C model's (`scripts/basicrunner`), so a

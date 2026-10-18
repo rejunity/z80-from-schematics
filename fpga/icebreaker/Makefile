@@ -17,6 +17,8 @@
 #   make sim_iverilog  the boot script through iverilog (slow cross-check)
 #   make sim_gl  the boot script on the synthesized sbc netlist (iCE40 cell models)
 #   make sim_chip  chip build on an external RAM: RTL and synthesized netlist
+#   make sim_pnr the boot script on the routed sbc netlist, as packed into
+#                the bitstream (sim_pnr_tiny: Tiny BASIC on build_tiny/'s)
 #   make prog MODE=sbc|chip    write the bitstream to the SPI flash (iceprog)
 #   make timing  nextpnr's Fmax and utilisation summary for both builds
 #   make pins    PMOD pin directions as placed (reads the routed netlists)
@@ -74,7 +76,7 @@ MODE ?= sbc
 # stem of the pattern rules below without any directory part
 STEM = $(notdir $*)
 
-.PHONY: all venv bin sbc chip sim sim_real sim_tiny sim_iverilog sim_gl sim_chip prog timing pins ci clean distclean FORCE
+.PHONY: all venv bin sbc chip sim sim_real sim_tiny sim_iverilog sim_gl sim_chip sim_pnr sim_pnr_tiny prog timing pins ci clean distclean FORCE
 all: bin
 
 # ---- toolchain venv (created before any tools are installed/used) ----
@@ -133,19 +135,19 @@ $(BUILD)/top_%.json: $(BUILD)/src $(BUILD)/rom.mem $(BUILD)/variant $(VENV)/.ok
 # nextpnr: full log in build/nextpnr_<build>.log, console shows the stage
 # lines, placer/router progress (one router row per 5000 arcs) and the
 # timing summary. --report writes utilisation + Fmax as JSON, --write the
-# routed netlist (`make pins` reads the IO configuration from it).
-# nextpnr's own exit status is saved ahead of the console filter, which
-# would otherwise replace it: any nextpnr ERROR fails the build and
-# removes the .asc.
+# routed netlist (`make pins` reads the IO configuration from it, `make
+# sim_pnr` simulates it). nextpnr's own exit status is saved ahead of the
+# console filter, which would otherwise replace it: any nextpnr ERROR
+# fails the build and removes the .asc and the routed netlist.
 NEXTPNR_PROGRESS := grep --line-buffered -E '^(Info: (Pack|Promot|Running|Placed|Creating|HeAP|SA |Routing|Router|Max frequency|Program finished|Device util)|Info: +[0-9]*[05]000 \||ERROR|Warning)'
 
-$(BUILD)/top_%.asc: $(BUILD)/top_%.json $(BUILD)/icebreaker_%.pcf
-	@rm -f $@
+$(BUILD)/top_%.asc $(BUILD)/top_%.pnr.json: $(BUILD)/top_%.json $(BUILD)/icebreaker_%.pcf
+	@rm -f $(BUILD)/top_$(STEM).asc $(BUILD)/top_$(STEM).pnr.json
 	cd $(BUILD) && { $(NEXTPNR) --up5k --package sg48 --json top_$(STEM).json \
 	  --pcf icebreaker_$(STEM).pcf --asc top_$(STEM).asc \
 	  --report report_$(STEM).json --write top_$(STEM).pnr.json 2>&1; \
 	  echo $$? > nextpnr_$(STEM).rc; } | tee nextpnr_$(STEM).log | $(NEXTPNR_PROGRESS); \
-	  rc=$$(cat nextpnr_$(STEM).rc); [ "$$rc" = 0 ] || { rm -f top_$(STEM).asc; \
+	  rc=$$(cat nextpnr_$(STEM).rc); [ "$$rc" = 0 ] || { rm -f top_$(STEM).asc top_$(STEM).pnr.json; \
 	  echo "nextpnr failed (exit $$rc), see $(BUILD)/nextpnr_$(STEM).log"; exit 1; }
 	@test -f $@
 
@@ -269,6 +271,48 @@ sim_chip: $(BUILD)/tb_chip_rtl.vvp $(BUILD)/gl/tb_chip_gl.vvp
 	@echo "== chip build, synthesized netlist"
 	@$(VVP) -n $(BUILD)/gl/tb_chip_gl.vvp
 
+# ---- post-place-and-route simulation: the routed sbc netlist ----
+# nextpnr's routed netlist (top_sbc.pnr.json) is the design as icepack
+# packs it into the bitstream: every ICESTORM_LC with its LUT and flop as
+# placed, the EBR ROM image, the SPRAM, global buffers, pads. Here it runs
+# on yosys' cell models, zero delay. sim_pnr.py ties the inputs nextpnr
+# left unrouted to the level the hardware reads there and feeds the PLL's
+# dedicated clock paths from the testbench clock (as sim_pll.v does);
+# sim_pnr_io.v turns the pads into wires, sim_pnr_cells.v models the PLL
+# and SPRAM cells. BAUD = 115200 is baked in, so this is real serial
+# pacing, and each script ends on the same clock as the RTL at 115200.
+#   make sim_pnr        the boot script on build/'s routed netlist
+#   make sim_pnr_tiny   Tiny BASIC on build_tiny/'s (built if needed)
+PNR_DIR := $(BUILD)/pnr
+SIM_PNR_ARGS ?=
+# A broken netlist mostly hangs the CPU instead of failing a check, and
+# at this speed the testbench's own step limit is over an hour away: give
+# up after SIM_PNR_SECONDS (a healthy run takes 1-2 minutes).
+SIM_PNR_SECONDS ?= 900
+
+$(PNR_DIR)/top_sbc_pnr.v: $(BUILD)/top_sbc.pnr.json sim_pnr.py sim_pnr_io.v $(VENV)/.ok
+	@mkdir -p $(PNR_DIR)
+	$(PYTHON) sim_pnr.py $(YOSYS_SHARE)/ice40/cells_sim.v $< \
+	  $(PNR_DIR)/top_sbc_sim.json $(PNR_DIR)/cells_sim.v
+	cp sim_pnr_io.v $(PNR_DIR)/
+	cd $(PNR_DIR) && $(YOSYS) -q -p \
+	  'read_json top_sbc_sim.json; techmap -map sim_pnr_io.v t:SB_IO; select -assert-none t:SB_IO; opt_clean; write_verilog -noattr top_sbc_pnr.v'
+
+$(PNR_DIR)/obj/Vtop: $(PNR_DIR)/top_sbc_pnr.v sim_pnr_cells.v sim_top.cpp
+	rm -rf $(PNR_DIR)/obj
+	cd $(PNR_DIR) && $(VERILATOR) --cc --exe --build -j 4 -O1 \
+	  -Wno-fatal -Wno-lint -Wno-style --no-timing -DNO_ICE40_DEFAULT_ASSIGNMENTS \
+	  --top-module top --Mdir obj -CFLAGS -DSIM_BAUD=115200 \
+	  cells_sim.v ../../sim_pnr_cells.v top_sbc_pnr.v ../../sim_top.cpp \
+	  > verilator.log 2>&1 || (tail -20 verilator.log; exit 1)
+
+sim_pnr: $(PNR_DIR)/obj/Vtop
+	cd $(PNR_DIR) && timeout $(SIM_PNR_SECONDS) stdbuf -oL ./obj/Vtop $(SIM_PNR_ARGS) || { rc=$$?; \
+	  [ $$rc != 124 ] || echo "sim_pnr: no result after $(SIM_PNR_SECONDS) s (a healthy run takes 1-2 min)"; exit $$rc; }
+
+sim_pnr_tiny:
+	$(MAKE) sim_pnr BUILD=build_tiny ROM_HEX=$(TINY_HEX) SIM_PNR_ARGS=tiny
+
 # ---- board ----
 # iceprog (native IceStorm) writes the SPI flash over the FT2232H's
 # channel A; the FPGA reconfigures from it straight away and on every
@@ -279,10 +323,11 @@ prog: $(BUILD)/top_$(MODE).bin
 
 # ---- CI (.github/workflows/fpga-board.yml) ----
 # Both bitstreams, the Tiny BASIC bitstream (build_tiny/) and every
-# simulation, Tiny BASIC at both serial pacings.
-ci: sbc chip sim sim_real sim_tiny sim_iverilog sim_gl sim_chip
+# simulation, Tiny BASIC at both serial pacings and on its routed netlist.
+ci: sbc chip sim sim_real sim_tiny sim_iverilog sim_gl sim_chip sim_pnr
 	$(MAKE) sim_tiny SIM_BAUD=115200
 	$(MAKE) sbc BUILD=build_tiny ROM_HEX=$(TINY_HEX)
+	$(MAKE) sim_pnr_tiny
 
 clean:
 	rm -rf $(BUILD) build_tiny
