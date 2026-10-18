@@ -59,7 +59,8 @@ def main():
         args = ["-DFUNCTIONAL", "-DUNIT_DELAY=#1", netlist] + list(cfg["CELL_VERILOG_MODELS"])
         if cfg["DESIGN_NAME"] == "z80_chip":
             macros = [nl for m in (cfg.get("MACROS") or {}).values() for nl in m.get("nl") or []]
-            args += ["-DDUT=z80_chip_shim"] + macros + pad_models(cfg) + [os.path.join(HERE, "chip_shim.v")]
+            extra = list(cfg.get("EXTRA_VERILOG_MODELS") or [])   # e.g. IHP's bond pad cell
+            args += ["-DDUT=z80_chip_shim"] + macros + pad_models(cfg) + extra + [os.path.join(HERE, "chip_shim.v")]
         what = f"{cfg['PDK']} gate-level netlist ({os.path.basename(os.path.normpath(run))})"
     with tempfile.TemporaryDirectory() as tmp:
         vvp = os.path.join(tmp, "sol.vvp")

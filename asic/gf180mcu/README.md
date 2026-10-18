@@ -76,15 +76,18 @@ TinyTapeout gf180 tiles are 347 × 161 µm (up to 4x4); at 60 % density the core
 
 `chip/` builds `z80_chip`: the hardened `z80_top` as a hard macro in a ring
 of 40 `gf180mcu_fd_io` pads, one per pin of the 40-pin Z80, each on the
-side of the die where the original's bond pad is (Visual Z80 die scan), in
-the same order and with its spacing scaled (`chip/pads.tcl`):
+side of the die where the original's bond pad is (Visual Z80 die scan) and
+in the same order:
 
     south  A5 A6 A7 A8 A9 A10 A11 A12 A13 A14 A15 CLK   (left to right)
     east   D4 D3 D5 D6 VCC D2 D7 D0 D1                  (bottom to top)
     north  INT NMI HALT MREQ IORQ RD WR BUSAK WAIT       (right to left)
     west   BUSRQ RESET M1 RFSH GND A0 A1 A2 A3 A4       (top to bottom)
 
-`z80_top`'s own pins sit on the same sides in the same order
+The spacing is the pads' own, not the Z80's: the die is as small as the
+pads allow, the 12 pads along the bottom and the 10 up the left side abut
+at their 75 µm pitch, and LibreLane's pad ring spreads the other two sides'
+pads evenly. `z80_top`'s own pins sit on the same sides in the same order
 (`pin_order.cfg`), so the pad wires are short. The foundry pad ring shorts
 the core supply to the 5 V I/O supply, so VCC and GND are the only supply
 pads -- exactly the Z80's two. As on the Z80, the address bus floats during
@@ -98,11 +101,11 @@ CPU does not drive it (`chip/z80_chip.v`; `z80_top` itself is unchanged).
 
 | | |
 |---|---|
-| Die | 1936 × 2060 µm, pad-limited (12 pads along the bottom, with the Z80's spacing) |
+| Die | 1662 × 1512 µm = 2.5 mm², pad-limited (the bottom and left pad rows abut) |
 | Pads | 40: `bi_24t` (address and control outputs with their enables, the data bus), `in_c` / `in_s` (inputs; Schmitt for CLK and RESET), `dvdd` / `dvss` (VCC, GND) |
 | Sign-off | DRC, LVS, antenna, XOR all 0; typical-corner setup met; 7 unconnected outputs (`z80_top`'s debug pins, no pads) |
 | Signs of life through the pads | PASS (HALT after 554 clocks) |
-| Runtime | 8 min after `make` (the core is not re-synthesized or re-routed) |
+| Runtime | 8.5 min after `make` (the core is not re-synthesized or re-routed) |
 
 The pad ring settings follow open-pdks' LibreLane config for
 `gf180mcu_fd_io` (the PDK version LibreLane 3.0.14 pins predates it) and

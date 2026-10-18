@@ -1,7 +1,7 @@
 # LibreLane Chip flow: z80_chip, the Z80 as a chip on gf180mcuD --
-# z80_top, hardened as a macro, in a ring of 40 I/O pads placed like the original Z80's
-# bond pads (z80_chip.v, pads.tcl), with the seal ring, metal fill and the
-# chip-level checks. `make chip` runs it; ../config.yaml still hardens
+# z80_top, hardened as a macro, in a ring of 40 I/O pads, each on the side
+# of the die where the original Z80 has its bond pad and in the same order
+# (z80_chip.v), with the seal ring, metal fill and the chip-level checks. `make chip` runs it; ../config.yaml still hardens
 # z80_top alone (`make`), and the two never share a run directory.
 #
 # The pad ring follows open-pdks' LibreLane config for gf180mcu_fd_io
@@ -25,12 +25,13 @@ SIGNOFF_SDC_FILE: dir::chip.sdc
 VDD_NETS: [VDD]
 GND_NETS: [VSS]
 
-# Pad-limited die: 12 pads along the bottom as on the Z80, with room for
-# its spacing. Aspect 0.94, the Z80 die's; width as wafer.space's half
-# slot. The core sits inside the pad ring and its supply ring.
+# Pad-limited die, as small as the pads allow: the 12 pads along the
+# bottom and the 10 up the left side abut (75 um pitch, between 355 um
+# corners and 26 um from the die edge); LibreLane spreads the other sides'
+# pads evenly. The core sits inside the pad ring and its supply ring.
 FP_SIZING: absolute
-DIE_AREA: [0, 0, 1936, 2060]
-CORE_AREA: [442, 442, 1494, 1618]
+DIE_AREA: [0, 0, 1662, 1512]
+CORE_AREA: [442, 442, 1220, 1070]
 GRT_ALLOW_CONGESTION: true
 
 # ---- the core: z80_top as a hard macro ----
@@ -51,13 +52,13 @@ MACROS:
       "*_ff_n40C_5v50": [dir::macro/lib/ff.lib]
     instances:
       u_top:
-        location: [695, 745]
+        location: [559, 475]
         orientation: N
 PDN_MACRO_CONNECTIONS:
   - "u_top VDD VSS VDD VSS"
 
 # ---- pad ring (gf180mcu_fd_io) ----
-PAD_CFG: dir::pads.tcl
+# bottom and top left to right, sides bottom to top (LibreLane's pad ring)
 PAD_SOUTH: [pad_A5, pad_A6, pad_A7, pad_A8, pad_A9, pad_A10, pad_A11, pad_A12, pad_A13, pad_A14, pad_A15, pad_CLK]
 PAD_EAST: [pad_D4, pad_D3, pad_D5, pad_D6, pad_VCC, pad_D2, pad_D7, pad_D0, pad_D1]
 PAD_NORTH: [pad_WAIT_n, pad_BUSAK_n, pad_WR_n, pad_RD_n, pad_IORQ_n, pad_MREQ_n, pad_HALT_n, pad_NMI_n, pad_INT_n]

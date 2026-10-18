@@ -1,9 +1,9 @@
 // z80_chip.v - the Z80 as a chip on gf180mcu: z80_top (rtl/, unchanged) in a
 // ring of 40 I/O pads, one per pin of the 40-pin Z80 in the DIP's order.
-// The pads sit on the sides of the die where the original Z80's bond pads
-// are (Visual Z80 die scan), in the same order and with their spacing
-// scaled: pads.tcl places them. Built by chip/config.yaml (LibreLane
-// Chip flow); ../config.yaml still hardens z80_top alone.
+// Each pad sits on the side of the die where the original Z80 has its bond
+// pad (Visual Z80 die scan), in the same order; LibreLane spreads them
+// along their side at the pads' own pitch. Built by chip/config.yaml
+// (LibreLane Chip flow); ../config.yaml still hardens z80_top alone.
 //
 //   south  A5 A6 A7 A8 A9 A10 A11 A12 A13 A14 A15 CLK   (left to right)
 //   east   D4 D3 D5 D6 VCC D2 D7 D0 D1                  (bottom to top)
