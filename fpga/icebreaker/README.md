@@ -24,7 +24,7 @@ Press Enter at the `Memory top?` cold-start prompt and you're at
 `Z80 BASIC Ver 4.7c` / `Ok`. The **user button** (next to the USB
 connector) resets the Z80; RAM survives, so you get the ROM's warm-start
 `C|W` prompt. BASIC wants CR line endings (screen sends CR), Ctrl-C is
-BREAK.
+BREAK, and the backspace key works as in `make basic`: the ACIA hands BASIC a DEL (7Fh, what macOS terminals send for ⌫) as BS (08h). Tiny BASIC has no line editing.
 
 LEDs: **green** blinks (~1.4 Hz) while the bitstream runs; **red** shows
 serial activity (sbc) or a Z80 that is held in reset / halted (chip — it

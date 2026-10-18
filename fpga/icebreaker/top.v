@@ -437,7 +437,11 @@ module top #(
                 tx_strobe <= 1'b0;
 
                 if (fifo_push) begin
-                    fifo[f_wr] <= rx_data;
+                    // The backspace key of macOS terminals sends DEL (7Fh). NASCOM
+                    // BASIC deletes with BS (08h) and takes DEL as a Teletype
+                    // rubout (it reprints the deleted character), so DEL reaches
+                    // the CPU as BS, as in scripts/basicrunner.c.
+                    fifo[f_wr] <= (rx_data == 8'h7F) ? 8'h08 : rx_data;
                     f_wr <= f_wr + 1'b1;
                 end
                 if (fifo_pop) f_rd <= f_rd + 1'b1;
