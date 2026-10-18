@@ -16,11 +16,13 @@
 #   make prog MODE=sbc|chip    load bitstream to SRAM (lost on power-cycle)
 #   make flash MODE=sbc|chip   write bitstream to SPI flash (persistent)
 #   make timing  show nextpnr's max-frequency summary for both builds
-#   make clean   remove build/;  make distclean also removes .venv
+#   make ci      everything CI runs (fpga-board.yml): both bitstreams, the
+#                Tiny BASIC bitstream in build_tiny/ and every simulation
+#   make clean   remove build/ and build_tiny/;  make distclean also .venv
 #
 #   make sbc ROM_HEX=../../tests/basic/tinybasic_1k.hex   Tiny BASIC instead
 #
-# The sbc build runs the top-level `make bus_controls` regressions too
+# `make ci` also runs the top-level `make bus_controls` regressions
 # (tb_wait_top / tb_reset_top drive the chip build's header).
 #
 # Whole flow is pip-installed into .venv: yowasp-yosys (synth_gowin),
@@ -69,7 +71,7 @@ MODE ?= sbc
 # stem of the pattern rules below without any directory part
 STEM = $(notdir $*)
 
-.PHONY: all venv fs sbc chip sim sim_real sim_tiny prog flash timing clean distclean FORCE
+.PHONY: all venv fs sbc chip sim sim_real sim_tiny prog flash timing ci clean distclean FORCE
 all: fs
 
 # ---- toolchain venv (created before any tools are installed/used) ----
@@ -215,8 +217,17 @@ prog: $(BUILD)/top_$(MODE).fs
 flash: $(BUILD)/top_$(MODE).fs
 	$(OPENFPGALOADER) -b $(BOARD) -f $(BUILD)/top_$(MODE).fs
 
+# ---- CI (.github/workflows/fpga-board.yml) ----
+# Both bitstreams, the Tiny BASIC bitstream (build_tiny/), every
+# simulation (Tiny BASIC at both serial pacings) and the top-level
+# bus_controls regressions, which drive the chip build's header.
+ci: sbc chip sim sim_real sim_tiny
+	$(MAKE) sim_tiny SIM_BAUD=115200
+	$(MAKE) sbc BUILD=build_tiny ROM_HEX=$(TINY_HEX)
+	$(MAKE) -C $(ROOT) bus_controls
+
 clean:
-	rm -rf $(BUILD)
+	rm -rf $(BUILD) build_tiny
 
 distclean: clean
 	rm -rf $(VENV)

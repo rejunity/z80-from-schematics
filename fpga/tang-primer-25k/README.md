@@ -128,6 +128,8 @@ defeating clock-enable inference) and sources are staged into
     make sim_real   # true 115200 pacing — exercises the ROM's
                     # interrupt-driven TX (TIE) path
     make sim_tiny   # 1K Tiny BASIC (SIM_BAUD=115200: real pacing)
+    make ci         # all of these, both bitstreams, the Tiny BASIC
+                    # bitstream and the top-level `make bus_controls`
 
 The PLL is a black box in simulation; a /12 toggle divider stands in
 (4.17 MHz) and the Makefile overrides `CORE_HZ` to match. Script: answer
@@ -142,6 +144,11 @@ console transcript byte for byte with the C model's
 The chip build is exercised by the repo-level `make bus_controls`
 (`tests/iverilog/tb_wait_top.v`, `tb_reset_top.v`), which instantiate
 this `top.v` with an external 1 MHz clock on the header.
+
+`make ci` is what GitHub Actions runs: on every push to this branch
+(`.github/workflows/fpga-tang-primer-25k.yml`) and nightly with this branch
+merged into main (`targets.yml`), so a core change on main that
+breaks the board shows up within a day.
 
 ## Known issue: stock BL616 debugger firmware vs openFPGALoader
 

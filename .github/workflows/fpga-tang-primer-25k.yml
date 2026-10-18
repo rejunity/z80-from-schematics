@@ -1,0 +1,15 @@
+# This board's bitstreams and simulations (`make ci` in fpga/tang-primer-25k/)
+# on every push to this branch and on demand. The job is fpga-board.yml,
+# which targets.yml also runs nightly on main's core.
+name: fpga-tang-primer-25k
+
+on:
+  push:
+    branches: [fpga-tang-primer-25k-basic]
+  workflow_dispatch: {}
+
+jobs:
+  board:
+    uses: ./.github/workflows/fpga-board.yml
+    with:
+      board: tang-primer-25k
