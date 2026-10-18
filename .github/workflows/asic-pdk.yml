@@ -1,9 +1,10 @@
 # One ASIC PDK: RTL-to-GDS of z80_top with LibreLane (Classic flow, the
 # bare core -- no pad ring), the sign-off checks, and the signs-of-life
 # program on the RTL and on the routed netlist (asic/<pdk>/Makefile).
-# Artifacts: asic-<pdk>-gds (the GDS and LibreLane's KLayout render of
-# it, .github/scripts/dist.py; targets.yml also publishes them on GitHub
-# Pages) and asic-<pdk>-results (metrics, netlists, timing, logs).
+# Artifacts: asic-<pdk>-gds (the GDS and a picture of it,
+# .github/scripts/dist.py; targets.yml also publishes them on GitHub
+# Pages) and asic-<pdk>-results (metrics, netlists, timing, LibreLane's
+# own KLayout render, logs).
 #
 # Called by targets.yml (main: every push and nightly) and by each PDK
 # branch's own asic-<pdk>.yml (every push to that branch). asic/ lives
@@ -95,11 +96,19 @@ jobs:
       - name: Signs of life (routed netlist, PDK cell models)
         run: make -C asic/$PDK sign_of_life
 
-      # rz80-<pdk>.gds, rz80-<pdk>.png (final/render: the Classic flow's
-      # KLayout.Render step) and the headline numbers, if the flow finished
-      - name: Collect the GDS and its render
+      - uses: actions/setup-python@v5
         if: always()
-        run: python3 .github/scripts/dist.py asic $PDK dist
+        with:
+          python-version: '3.12'
+
+      # rz80-<pdk>.gds, rz80-<pdk>.png (dist.py draws the cell rows and the
+      # metal stack with gdstk + Pillow) and the headline numbers, if the
+      # flow finished
+      - name: Collect the GDS and render it
+        if: always()
+        run: |
+          pip install --quiet gdstk numpy pillow
+          python .github/scripts/dist.py asic $PDK dist
 
       - name: Upload the GDS and its render
         id: gds
@@ -119,6 +128,7 @@ jobs:
           path: |
             asic/${{ inputs.pdk }}/runs/*/final/metrics.*
             asic/${{ inputs.pdk }}/runs/*/final/nl/
+            asic/${{ inputs.pdk }}/runs/*/final/render/
             asic/${{ inputs.pdk }}/runs/*/*-openroad-stapostpnr/summary.rpt
             asic/${{ inputs.pdk }}/runs/*/flow.log
             asic/${{ inputs.pdk }}/runs/*/warning.log

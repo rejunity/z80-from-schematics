@@ -4,8 +4,8 @@
   dist.py fpga <board> <out>   fpga/<board>'s bitstreams after `make ci`,
                                named for download, + rz80-<board>.json
   dist.py asic <pdk> <out>     asic/<pdk>'s latest LibreLane run: the GDS,
-                               its KLayout render (final/render, made by
-                               LibreLane's Classic flow) + rz80-<pdk>.json
+                               a picture of it (render(), needs gdstk,
+                               numpy and Pillow) + rz80-<pdk>.json
   dist.py site <in> <out>      index.html over everything fpga/asic made
   dist.py summary <in> <url>   job-summary markdown: the layout renders as
                                served by the site deployed at <url>
@@ -40,6 +40,25 @@ PDKS = {
     'ihp-sg13g2': 'IHP SG13G2',
     'gf180mcu':   'GlobalFoundries GF180MCU',
 }
+# Layout pictures: each PDK's drawn device and metal layers, bottom to top,
+# blended as translucent colours over a dark background, so the cell rows,
+# the routing and the power straps all show at die scale. (LibreLane's own
+# KLayout render uses the PDK's layer properties, which read badly at this
+# scale: sky130's is one magenta block of met2. It stays in the results
+# artifact and stands in if render() fails.)
+STYLE = {'diff': ((70, 110, 80), .5), 'poly': ((150, 70, 70), .5), 'li': ((150, 130, 100), .45),
+         'm1': ((60, 130, 246), .55), 'm2': ((217, 70, 239), .5), 'm3': ((34, 211, 238), .5),
+         'm4': ((132, 204, 22), .5), 'm5': ((245, 158, 11), .55),
+         'top1': ((253, 224, 71), .55), 'top2': ((249, 115, 22), .55)}
+STACKS = {  # (GDS layer, datatype, style) of the drawing layers, bottom to top
+    'sky130':     [(65, 20, 'diff'), (66, 20, 'poly'), (67, 20, 'li'), (68, 20, 'm1'), (69, 20, 'm2'),
+                   (70, 20, 'm3'), (71, 20, 'm4'), (72, 20, 'm5')],
+    'ihp-sg13g2': [(1, 0, 'diff'), (5, 0, 'poly'), (8, 0, 'm1'), (10, 0, 'm2'), (30, 0, 'm3'),
+                   (50, 0, 'm4'), (67, 0, 'm5'), (126, 0, 'top1'), (134, 0, 'top2')],
+    'gf180mcu':   [(22, 0, 'diff'), (30, 0, 'poly'), (34, 0, 'm1'), (36, 0, 'm2'), (42, 0, 'm3'),
+                   (46, 0, 'm4'), (81, 0, 'm5'), (53, 0, 'top1')],
+}
+BACKGROUND = (13, 17, 23)
 # (make ci's build, download name): the sbc build with NASCOM BASIC, the
 # same with Tiny BASIC (build_tiny/), the Z80 chip replacement
 VARIANTS = (('build/top_sbc', 'basic'), ('build_tiny/top_sbc', 'tinybasic'), ('build/top_chip', 'chip'))
@@ -80,6 +99,33 @@ def fpga(board, out):
     open(os.path.join(out, f'rz80-{board}-README.txt'), 'w').write('\n'.join(lines) + '\n')
 
 
+def render(gds, png, stack, width=1200, supersample=3):
+    """Draw each layer's polygons (flattened) at supersample x the final
+    size, box-filter that down to the layer's coverage per pixel and blend
+    its colour in by coverage x opacity; save as a 256-colour PNG."""
+    import gdstk
+    import numpy as np
+    from PIL import Image, ImageDraw
+    top = gdstk.read_gds(gds).top_level()[0]
+    (x0, y0), (x1, y1) = top.bounding_box()
+    w, h = width, round(width * (y1 - y0) / (x1 - x0))
+    k = w * supersample / (x1 - x0)
+    img = np.empty((h, w, 3))
+    img[:] = BACKGROUND
+    for layer, datatype, style in stack:
+        polygons = top.get_polygons(layer=layer, datatype=datatype)
+        if not polygons:
+            continue
+        mask = Image.new('L', (w * supersample, h * supersample), 0)
+        draw = ImageDraw.Draw(mask)
+        for p in polygons:
+            draw.polygon(((p.points - (x0, y1)) * (k, -k)).ravel().tolist(), fill=255)
+        rgb, opacity = STYLE[style]
+        a = np.asarray(mask.resize((w, h), Image.BOX), float)[..., None] / 255 * opacity
+        img = img * (1 - a) + np.array(rgb, float) * a
+    Image.fromarray(img.round().astype(np.uint8)).quantize(256).save(png, optimize=True)
+
+
 def asic(pdk, out):
     runs = sorted(glob.glob(os.path.join('asic', pdk, 'runs', '*', '')), key=os.path.getmtime)
     if not runs or not os.path.isfile(runs[-1] + 'final/metrics.json'):
@@ -90,11 +136,19 @@ def asic(pdk, out):
     design = cfg['DESIGN_NAME']
     os.makedirs(out, exist_ok=True)
     files = []
-    for src, name in ((f'final/gds/{design}.gds', f'rz80-{pdk}.gds'),
-                      (f'final/render/{design}.png', f'rz80-{pdk}.png')):
-        if os.path.isfile(run + src):
-            shutil.copy(run + src, os.path.join(out, name))
-            files.append(name)
+    gds = run + f'final/gds/{design}.gds'
+    if os.path.isfile(gds):
+        shutil.copy(gds, os.path.join(out, f'rz80-{pdk}.gds'))
+        files.append(f'rz80-{pdk}.gds')
+        png = os.path.join(out, f'rz80-{pdk}.png')
+        try:
+            render(gds, png, STACKS[pdk])
+            files.append(f'rz80-{pdk}.png')
+        except Exception as e:
+            print(f"::warning::dist.py: no render of {pdk} ({e!r}), LibreLane's instead")
+            if os.path.isfile(run + f'final/render/{design}.png'):
+                shutil.copy(run + f'final/render/{design}.png', png)
+                files.append(f'rz80-{pdk}.png')
     x0, y0, x1, y1 = (float(v) for v in m['design__die__bbox'].split())
     # worst setup slack over the corners the flow signs off (summary.py's rule)
     gate = cfg.get('TIMING_VIOLATION_CORNERS') or ['*tt*']
@@ -197,7 +251,7 @@ a {{ color: var(--link); }}
 .size {{ font-size: 12px; }}
 .grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }}
 .card {{ background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }}
-.card img, .noimg {{ display: block; width: 100%; aspect-ratio: 1; object-fit: contain; background: #fff; }}
+.card img, .noimg {{ display: block; width: 100%; aspect-ratio: 1; object-fit: contain; background: #0d1117; }}
 .noimg {{ display: grid; place-items: center; color: #888; }}
 .body {{ padding: 12px 14px 4px; border-top: 1px solid var(--line); }}
 .body .muted {{ font-size: 13px; margin: 0 0 8px; }}
@@ -219,7 +273,8 @@ footer {{ color: var(--muted); font-size: 13px; margin-top: 36px; }}
 from the latest {run} on main where all of them passed: {commit}, published {when}.</p>
 
 <h2>ASIC layouts</h2>
-<p class="muted">The bare core (no pad ring), RTL to GDS with LibreLane; the pictures are its KLayout renders.</p>
+<p class="muted">The bare core (no pad ring), RTL to GDS with LibreLane. The pictures are the GDS:
+cell rows (diffusion, poly) and the metal stack, bottom metal blue to top metal yellow.</p>
 <div class="grid">
 {chr(10).join(cards) or '<p>none in this build</p>'}
 </div>
@@ -248,7 +303,7 @@ as artifacts on the <a href="{SERVER}/{REPO}/actions/workflows/targets.yml">Acti
 def summary(src, url):
     _, pdks = load(src)
     url = url.rstrip('/') + '/'
-    print(f'## Layouts\n\nKLayout renders of the GDS, from the [site]({url}) this run deployed.\n')
+    print(f'## Layouts\n\nThe GDS of each PDK (cell rows and metal stack), from the [site]({url}) this run deployed.\n')
     print('| ' + ' | '.join(p['name'] for p in pdks) + ' |')
     print('|' + '---|' * len(pdks))
     print('| ' + ' | '.join(f"[![{p['pdk']}]({url}rz80-{p['pdk']}.png?run={RUN_ID})]({url}rz80-{p['pdk']}.png)"
