@@ -4,8 +4,9 @@
   dist.py fpga <board> <out>   fpga/<board>'s bitstreams after `make ci`,
                                named for download, + rz80-<board>.json
   dist.py asic <pdk> <out>     asic/<pdk>'s latest LibreLane run: the GDS,
-                               a picture of it (render(), needs gdstk,
-                               numpy and Pillow) + rz80-<pdk>.json
+                               a picture of it, a map of its standard
+                               cells by kind (needs gdstk, numpy and
+                               Pillow) + rz80-<pdk>.json
   dist.py site <in> <out>      index.html over everything fpga/asic made
   dist.py summary <in> <url>   job-summary markdown: the layout renders as
                                served by the site deployed at <url>
@@ -20,6 +21,7 @@ import glob
 import html
 import json
 import os
+import re
 import shutil
 import sys
 from datetime import datetime, timezone
@@ -59,6 +61,19 @@ STACKS = {  # (GDS layer, datatype, style) of the drawing layers, bottom to top
                    (46, 0, 'm4'), (81, 0, 'm5'), (53, 0, 'top1')],
 }
 BACKGROUND = (13, 17, 23)
+# Cell map: every standard-cell instance (a reference in the GDS) as its
+# outline, coloured by the kind of library cell. First match wins, on the
+# cell name without library prefix and drive strength (sky130 dfrtp_1,
+# IHP dfrbpq_1, gf180 dffrnq_1; dlygate / dlyb are delay buffers, not
+# latches).
+CELL_KINDS = {  # kind: (name pattern, colour), in legend order
+    'flip-flops': (r'(s?df|edf)', (255, 90, 54)),
+    'latches': (r'(dl[xrhl]|s?dlclkp|lat|icg|s?lgcp)', (236, 72, 153)),
+    'buffers and delays': (r'(buf|inv|clkbuf|clkinv|clkdlybuf|dly)', (20, 184, 166)),
+    'logic': (None, (79, 111, 174)),   # everything else
+    'fill/decap/tap': (r'(fill|decap|tap|endcap|diode|antenna|tie|conb)', (43, 49, 59)),
+}
+CELL_LIBRARY_PREFIX = r'^(sky130_fd_sc_\w+?__|sg13g2_|gf180mcu_fd_sc_mcu\w+?__)'
 # (make ci's build, download name): the sbc build with NASCOM BASIC, the
 # same with Tiny BASIC (build_tiny/), the Z80 chip replacement
 VARIANTS = (('build/top_sbc', 'basic'), ('build_tiny/top_sbc', 'tinybasic'), ('build/top_chip', 'chip'))
@@ -99,14 +114,12 @@ def fpga(board, out):
     open(os.path.join(out, f'rz80-{board}-README.txt'), 'w').write('\n'.join(lines) + '\n')
 
 
-def render(gds, png, stack, width=1200, supersample=3):
+def render(top, png, stack, width=1200, supersample=3):
     """Draw each layer's polygons (flattened) at supersample x the final
     size, box-filter that down to the layer's coverage per pixel and blend
     its colour in by coverage x opacity; save as a 256-colour PNG."""
-    import gdstk
     import numpy as np
     from PIL import Image, ImageDraw
-    top = gdstk.read_gds(gds).top_level()[0]
     (x0, y0), (x1, y1) = top.bounding_box()
     w, h = width, round(width * (y1 - y0) / (x1 - x0))
     k = w * supersample / (x1 - x0)
@@ -126,6 +139,33 @@ def render(gds, png, stack, width=1200, supersample=3):
     Image.fromarray(img.round().astype(np.uint8)).quantize(256).save(png, optimize=True)
 
 
+def cell_kind(name):
+    base = re.sub(r'_\d+$', '', re.sub(CELL_LIBRARY_PREFIX, '', name))
+    return next((kind for kind, (pattern, _) in CELL_KINDS.items() if pattern and re.match(pattern, base)), 'logic')
+
+
+def render_cells(top, png, width=1200, supersample=3):
+    """The cell map; returns the instance count per kind."""
+    import gdstk
+    from PIL import Image, ImageDraw
+    (x0, y0), (x1, y1) = top.bounding_box()
+    w, h = width, round(width * (y1 - y0) / (x1 - x0))
+    k = w * supersample / (x1 - x0)
+    im = Image.new('RGB', (w * supersample, h * supersample), BACKGROUND)
+    draw = ImageDraw.Draw(im)
+    counts = dict.fromkeys(CELL_KINDS, 0)
+    cells = [(cell_kind(r.cell.name), r) for r in top.references if isinstance(r.cell, gdstk.Cell)]
+    cells.sort(key=lambda c: c[0] != 'fill/decap/tap')   # fillers first: real cells draw over them
+    for kind, r in cells:
+        counts[kind] += 1
+        rgb = CELL_KINDS[kind][1]
+        (a, b), (c, d) = r.bounding_box()
+        draw.rectangle(((a - x0) * k, (y1 - d) * k, (c - x0) * k, (y1 - b) * k),
+                       fill=rgb, outline=tuple(int(v * .55) for v in rgb), width=max(1, supersample // 2))
+    im.resize((w, h), Image.LANCZOS).quantize(256).save(png, optimize=True)
+    return counts
+
+
 def asic(pdk, out):
     runs = sorted(glob.glob(os.path.join('asic', pdk, 'runs', '*', '')), key=os.path.getmtime)
     if not runs or not os.path.isfile(runs[-1] + 'final/metrics.json'):
@@ -135,18 +175,22 @@ def asic(pdk, out):
     m = json.load(open(run + 'final/metrics.json'))
     design = cfg['DESIGN_NAME']
     os.makedirs(out, exist_ok=True)
-    files = []
+    files, cells = [], None
     gds = run + f'final/gds/{design}.gds'
     if os.path.isfile(gds):
         shutil.copy(gds, os.path.join(out, f'rz80-{pdk}.gds'))
         files.append(f'rz80-{pdk}.gds')
         png = os.path.join(out, f'rz80-{pdk}.png')
         try:
-            render(gds, png, STACKS[pdk])
+            import gdstk
+            top = gdstk.read_gds(gds).top_level()[0]
+            render(top, png, STACKS[pdk])
             files.append(f'rz80-{pdk}.png')
+            cells = render_cells(top, os.path.join(out, f'rz80-{pdk}-cells.png'))
+            files.append(f'rz80-{pdk}-cells.png')
         except Exception as e:
-            print(f"::warning::dist.py: no render of {pdk} ({e!r}), LibreLane's instead")
-            if os.path.isfile(run + f'final/render/{design}.png'):
+            print(f"::warning::dist.py: no pictures of {pdk} ({e!r}), LibreLane's render instead")
+            if os.path.isfile(run + f'final/render/{design}.png') and not os.path.isfile(png):
                 shutil.copy(run + f'final/render/{design}.png', png)
                 files.append(f'rz80-{pdk}.png')
     x0, y0, x1, y1 = (float(v) for v in m['design__die__bbox'].split())
@@ -161,7 +205,7 @@ def asic(pdk, out):
             'utilisation': m.get('design__instance__utilization'),
             'clock_period_ns': cfg.get('CLOCK_PERIOD'),
             'signoff_corners': gate, 'setup_ws_ns': min(ws) if ws else None,
-            'built_from': os.environ.get('BUILT_FROM', ''), 'run': RUN_URL}
+            'cells': cells, 'built_from': os.environ.get('BUILT_FROM', ''), 'run': RUN_URL}
     json.dump(info, open(os.path.join(out, f'rz80-{pdk}.json'), 'w'), indent=1)
 
 
@@ -206,16 +250,25 @@ def site(src, out):
 
     cards = []
     for p in pdks:
-        png = f"rz80-{p['pdk']}.png"
-        img = (f'<a href="{png}"><img src="{png}" alt="{e(p["name"])} layout of {e(p["design"])}" loading="lazy"></a>'
-               if png in p['files'] else '<div class="noimg">no render</div>')
+        def picture(f, caption):
+            img = (f'<a href="{f}"><img src="{f}" alt="{e(p["name"])}: {caption}" loading="lazy"></a>'
+                   if f in p['files'] else '<div class="noimg">no picture</div>')
+            return f'<figure>{img}<figcaption>{caption}</figcaption></figure>'
         facts = ''.join(f'<dt>{k}</dt><dd>{e(v)}</dd>' for k, v in asic_facts(p))
-        links = [f'<a href="{f}"{" download" if f.endswith(".gds") else ""}>{f.rsplit(".", 1)[1].upper()}</a>'
-                 f' <span class="size">{size(os.path.join(out, f))}</span>' for f in p['files']]
+        legend = ''.join(f'<li><span class="swatch" style="background: rgb{rgb}"></span>{kind}'
+                         f' <span class="muted">{p["cells"][kind]:,}</span></li>'
+                         for kind, (_, rgb) in CELL_KINDS.items() if (p.get('cells') or {}).get(kind))
+        links = [f'<a href="{f}"{" download" if f.endswith(".gds") else ""}>{label}</a>'
+                 f' <span class="size">{size(os.path.join(out, f))}</span>'
+                 for f, label in ((f"rz80-{p['pdk']}.gds", 'GDS'), (f"rz80-{p['pdk']}.png", 'layout PNG'),
+                                  (f"rz80-{p['pdk']}-cells.png", 'cells PNG')) if f in p['files']]
         links.append(f'<a href="{readme_url("asic", p["pdk"])}">README</a>')
-        cards.append(f"""<article class="card">{img}<div class="body">
-<h3>{e(p['name'])}</h3><p class="muted">{e(p.get('pdk_variant') or '')} · {e(p.get('library') or '')}</p>
-<dl>{facts}</dl><p class="links">{' · '.join(links)}</p></div></article>""")
+        cards.append(f"""<article class="pdk">
+{picture(f"rz80-{p['pdk']}.png", 'layout')}
+{picture(f"rz80-{p['pdk']}-cells.png", 'standard cells')}
+<div class="body"><h3>{e(p['name'])}</h3><p class="muted">{e(p.get('pdk_variant') or '')} · {e(p.get('library') or '')}</p>
+<dl>{facts}</dl>{f'<ul class="legend">{legend}</ul>' if legend else ''}<p class="links">{' · '.join(links)}</p></div>
+</article>""")
 
     rows = []
     for b in boards:
@@ -249,12 +302,22 @@ p {{ margin: 0 0 12px; }}
 a {{ color: var(--link); }}
 .muted, .size {{ color: var(--muted); }}
 .size {{ font-size: 12px; }}
-.grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }}
-.card {{ background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }}
-.card img, .noimg {{ display: block; width: 100%; aspect-ratio: 1; object-fit: contain; background: #0d1117; }}
+.pdk {{ display: grid; grid-template-columns: 1fr 1fr minmax(240px, .8fr); background: var(--card);
+  border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin: 0 0 16px; }}
+figure {{ margin: 0; position: relative; background: #0d1117; }}
+figure img, .noimg {{ display: block; width: 100%; aspect-ratio: 1; object-fit: contain; }}
 .noimg {{ display: grid; place-items: center; color: #888; }}
-.body {{ padding: 12px 14px 4px; border-top: 1px solid var(--line); }}
+figcaption {{ position: absolute; left: 8px; top: 8px; padding: 1px 7px; border-radius: 4px; font-size: 12px;
+  color: #d6dbe1; background: rgba(13, 17, 23, .75); }}
+.body {{ padding: 14px 16px 6px; border-left: 1px solid var(--line); }}
 .body .muted {{ font-size: 13px; margin: 0 0 8px; }}
+.legend {{ list-style: none; padding: 0; margin: 0 0 10px; font-size: 13px; }}
+.legend li {{ display: flex; align-items: center; gap: 7px; }}
+.swatch {{ width: 10px; height: 10px; border-radius: 2px; flex: none; }}
+@media (max-width: 820px) {{
+  .pdk {{ grid-template-columns: 1fr 1fr; }}
+  .body {{ grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--line); }}
+}}
 dl {{ display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 0 0 10px; font-size: 14px; }}
 dt {{ color: var(--muted); }}
 dd {{ margin: 0; font-variant-numeric: tabular-nums; }}
@@ -273,11 +336,10 @@ footer {{ color: var(--muted); font-size: 13px; margin-top: 36px; }}
 from the latest {run} on main where all of them passed: {commit}, published {when}.</p>
 
 <h2>ASIC layouts</h2>
-<p class="muted">The bare core (no pad ring), RTL to GDS with LibreLane. The pictures are the GDS:
-cell rows (diffusion, poly) and the metal stack, bottom metal blue to top metal yellow.</p>
-<div class="grid">
+<p class="muted">The bare core (no pad ring), RTL to GDS with LibreLane. Both pictures are drawn from the GDS:
+the layout shows the cell rows and the metal stack, bottom metal blue to top metal yellow; the cell map
+shows every standard cell, coloured by kind.</p>
 {chr(10).join(cards) or '<p>none in this build</p>'}
-</div>
 
 <h2>FPGA bitstreams</h2>
 <p class="muted">BASIC computer: NASCOM BASIC 4.7 on the board's serial console. Tiny BASIC: the same computer
@@ -303,12 +365,22 @@ as artifacts on the <a href="{SERVER}/{REPO}/actions/workflows/targets.yml">Acti
 def summary(src, url):
     _, pdks = load(src)
     url = url.rstrip('/') + '/'
-    print(f'## Layouts\n\nThe GDS of each PDK (cell rows and metal stack), from the [site]({url}) this run deployed.\n')
+
+    def picture(p, suffix):
+        f = f"rz80-{p['pdk']}{suffix}.png"
+        return f'[![{f}]({url}{f}?run={RUN_ID})]({url}{f})' if f in p['files'] else '–'
+
+    def kinds(p):
+        return ', '.join(f'{n:,} {kind}' for kind, n in (p.get('cells') or {}).items() if n)
+    print(f'## Layouts\n\nDrawn from each GDS, as on the [site]({url}) this run deployed: the cell rows and '
+          'metal stack, then every standard cell by kind (flip-flops orange, buffers and delays teal, '
+          'other logic blue, fill/decap/tap dark).\n')
     print('| ' + ' | '.join(p['name'] for p in pdks) + ' |')
     print('|' + '---|' * len(pdks))
-    print('| ' + ' | '.join(f"[![{p['pdk']}]({url}rz80-{p['pdk']}.png?run={RUN_ID})]({url}rz80-{p['pdk']}.png)"
-                            if f"rz80-{p['pdk']}.png" in p['files'] else 'no render' for p in pdks) + ' |')
-    print('| ' + ' | '.join('<br>'.join(f'{k}: {v}' for k, v in asic_facts(p)) for p in pdks) + ' |')
+    print('| ' + ' | '.join(picture(p, '') for p in pdks) + ' |')
+    print('| ' + ' | '.join(picture(p, '-cells') for p in pdks) + ' |')
+    print('| ' + ' | '.join('<br>'.join([f'{k}: {v}' for k, v in asic_facts(p)] + ([f'Cells: {kinds(p)}'] if kinds(p) else []))
+                            for p in pdks) + ' |')
 
 
 if __name__ == '__main__':

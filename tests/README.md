@@ -391,7 +391,7 @@ job first merges its branch into main's tree.
 | Job (matrix) | Branch merged | Runs |
 |--------------|---------------|------|
 | `fpga`: icepi-zero, tang-primer-25k, icebreaker, pico-ice | `fpga-<board>-basic` | `make ci` in `fpga/<board>/`: sbc + chip bitstreams, the Tiny BASIC bitstream, and every board simulation (Verilator boot and Tiny BASIC at fast and real serial pacing, iverilog, gate-level where the board has one; on the iCE40 boards also both BASICs on nextpnr's routed netlist, `make sim_pnr`); timing summary; artifacts `fpga-<board>-bitstreams` (named downloads) and `fpga-<board>-logs` (`fpga-board.yml`) |
-| `asic`: sky130, ihp-sg13g2, gf180mcu | `asic-<pdk>` | signs of life on the RTL, LibreLane RTL-to-GDS, sign-off summary (fails on DRC / LVS / antenna / XOR / timing), signs of life on the routed netlist; artifacts `asic-<pdk>-gds` (the GDS and a picture of it) and `asic-<pdk>-results` (`asic-pdk.yml`) |
+| `asic`: sky130, ihp-sg13g2, gf180mcu | `asic-<pdk>` | signs of life on the RTL, LibreLane RTL-to-GDS, sign-off summary (fails on DRC / LVS / antenna / XOR / timing), signs of life on the routed netlist; artifacts `asic-<pdk>-gds` (the GDS, a picture of it and its cell map) and `asic-<pdk>-results` (`asic-pdk.yml`) |
 
 The branches run the same jobs on their own pushes (`fpga-<board>.yml`,
 `asic-<pdk>.yml` there). A branch that no longer merges cleanly into main
@@ -400,13 +400,15 @@ latest YoWASP builds, so the nightly run also catches toolchain drift.
 
 When every board and PDK passed on main, the `pages` job publishes that
 build on GitHub Pages, <https://rejunity.github.io/z80-from-schematics/>:
-a picture of each layout with its die size, cell count and timing, and
-the GDS and bitstream files under stable names (`rz80-<pdk>.gds`,
+two pictures of each layout with its die size, cell counts and timing,
+and the GDS and bitstream files under stable names (`rz80-<pdk>.gds`,
 `rz80-<board>-basic|tinybasic|chip.<ext>`). The pictures also appear in
 that job's summary on the run page. `.github/scripts/dist.py` names the
-files, draws the pictures (cell rows and the metal stack as translucent
-layers, with gdstk and Pillow; LibreLane's own KLayout render reads badly
-at die scale) and builds the page. Artifacts keep every run's files,
+files, draws the pictures with gdstk and Pillow -- the cell rows and the
+metal stack as translucent layers (LibreLane's own KLayout render reads
+badly at die scale), and a cell map: every standard-cell instance in the
+GDS coloured by kind, flip-flops, buffers and delays, other logic,
+fill/decap/tap -- and builds the page. Artifacts keep every run's files,
 failed runs included, for 14 days.
 
 
