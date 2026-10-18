@@ -44,7 +44,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
-.PHONY: all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test verilator_z80test z80test_rtl halt2int halt2int_probe
+.PHONY: equiv all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test verilator_z80test z80test_rtl halt2int halt2int_probe
 
 all: cmodel ctest
 
@@ -177,6 +177,15 @@ perfectz80: tracegen $(BIN)/perfectz80_runner
 # INT / WAIT / BUSREQ / RESET events still go through the C-only path.
 perfectz80_rtl: iverilog $(BIN)/perfectz80_runner
 	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --rtl=iverilog 200
+
+# === Formal equivalence of z80_core against a git revision ===============
+# For pure restructurings (same registers, moved or renamed): proves the
+# work tree's z80_core identical to REF's for every state and input --
+# next-state, reset values and every pin image (scripts/equiv_rtl.py).
+# Needs a native yosys on PATH (or YOSYS=...). `make equiv REF=main`.
+REF ?= main
+equiv:
+	@$(PYTHON) $(SCRIPTS)/equiv_rtl.py $(REF)
 
 # === LibreLane gate-level flow — "ultimate test" =============================
 # Synthesise rtl/*.v through LibreLane (Yosys.Synthesis step only — no
@@ -553,6 +562,45 @@ all-tests: ctest rtl bus_controls compare fuse fuse_rtl perfectz80
 	@echo "== real-silicon clock + sub-T-state (sigrok kc85 20 MHz async) =="
 	@$(PYTHON) $(SCRIPTS)/sigrok_async_timing.py tests/sigrok/kc85-20mhz.sr --silicon-check 2>&1 | tail -6
 	@echo "== all-tests complete =="
+
+# === FPGA LUT budget ========================================================
+# `make luts` synthesizes z80_top alone for iCE40 (synth_ice40 -abc9 -dsp),
+# ECP5 and Gowin GW5A with the same yosys recipe as the fpga-* board builds
+# and prints LUT / carry / mux / FF counts (scripts/fpga_luts.sh,
+# scripts/fpga_luts_table.py). `make luts_netlist` then runs each mapped
+# netlist (yosys' own cell models flattened in) through the gate-level
+# testbench against perfectz80 (same 12 programs as perfectz80_netlist), so
+# an area change is checked at the gates it produced.
+#
+# Toolchain: yowasp-yosys (WebAssembly yosys, pip) in .venv-fpga/, created
+# on first use. Override with YOSYS=<path> to use a native yosys >= 0.50.
+LUTS_FAMILIES := ice40 ecp5 gowin
+LUTS_VENV     := .venv-fpga
+YOSYS         ?= $(abspath $(LUTS_VENV))/bin/yowasp-yosys
+.PHONY: luts luts_netlist luts_venv
+luts_venv: $(LUTS_VENV)/.ok
+$(LUTS_VENV)/.ok:
+	$(PYTHON) -m venv $(LUTS_VENV)
+	$(LUTS_VENV)/bin/pip install -q yowasp-yosys
+	@touch $@
+
+luts: $(foreach f,$(LUTS_FAMILIES),$(BUILD)/luts/$(f)/stat.json)
+	@$(PYTHON) $(SCRIPTS)/fpga_luts_table.py $(LUTS_FAMILIES)
+
+$(BUILD)/luts/%/stat.json: $(RTL_SRCS) $(wildcard $(RTL)/*.vh) $(SCRIPTS)/fpga_luts.sh | $(LUTS_VENV)/.ok
+	@echo "== yosys: z80_top for $* =="
+	@YOSYS=$(YOSYS) $(SCRIPTS)/fpga_luts.sh $* $(BUILD)/luts/$*
+
+$(BUILD)/luts/%/tb.vvp: $(BUILD)/luts/%/stat.json $(TESTS)/iverilog/tb_z80_netlist.v
+	$(IVERILOG) -g2012 -s tb_z80 -o $@ $(TESTS)/iverilog/tb_z80_netlist.v \
+	  $(BUILD)/luts/$*/z80_top_sim.v
+
+luts_netlist: $(foreach f,$(LUTS_FAMILIES),$(BUILD)/luts/$(f)/tb.vvp) $(BIN)/perfectz80_runner
+	@for f in $(LUTS_FAMILIES); do \
+	  echo "== $$f-mapped netlist vs perfectz80 =="; \
+	  TB_NETLIST_VVP=$(abspath $(BUILD))/luts/$$f/tb.vvp NETLIST_LABEL="$$f-mapped" \
+	    $(PYTHON) $(SCRIPTS)/compare_signal_timing.py --rtl=netlist 200 || exit 1; \
+	done
 
 clean:
 	rm -rf $(BUILD)

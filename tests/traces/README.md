@@ -2,7 +2,7 @@
 
 Tiny Z80 hex programs used by the **C ↔ RTL** trace-comparison harness
 (`make compare`). Each program is loaded at address `0x0000`, run for **400
-phases** (= 200 T-states = 100 modern-clock cycles), and the per-phase bus-cycle
+phases** (or the count in an optional `<prog>.phases` file next to it) (= 200 T-states = 100 modern-clock cycles), and the per-phase bus-cycle
 trace produced by
 
   - the C model       (`scripts/tracegen.c`),
@@ -28,6 +28,7 @@ The trace columns (one line per modern-clock phase) are:
 | `prog5_ddfd.hex`      |  43  | `DD` / `FD` prefixes — `LD IX/IY,nn`, `LD A,(IX+d)`, `LD (IY+d),n`, `ADD A,IXH`, `INC (IX+d)`   |
 | `prog6_block.hex`     |  33  | ED block ops — `LDI` / `LDIR`, `CPI` / `CPIR` with both BC-exhausted and Z-hit terminations    |
 | `prog7_ddcb.hex`      |  25  | `DDCB` / `FDCB` — bit ops on `(IX+d)` including the undocumented copy-into-r[z] for `z ≠ 6`, plus `HALT` |
+| `prog10_exchange.hex` |  62  | exchange renaming — `EX DE,HL` in both banks across `EXX`, writes after renaming, both `EX AF,AF'` directions, `DD EB`, `EX (SP),HL` with DE/HL swapped; every pair pushed so the bus shows it. Runs 800 phases (`prog10_exchange.phases`) |
 | `prog8_nmi.hex`       |  16  | NMI handling — an NMI is pulsed at phase 30 by both the iverilog tb and the C tracegen; the acknowledge M1 (5 T-states, suppressed decode) plus the implicit `CALL 0x0066` are visible in the trace |
 
 The numbers in the "Size" column are byte counts; all programs fit in a single
@@ -105,6 +106,8 @@ the pin, `<pin>` is one of `nmi`, `int`, `wait`, `busreq`, `reset`, and
 | `prog18_di_then_int.hex`      | INT held while DI cleared IFF1 — `IM 1 + DI + NOP loop`. INT pulsed for a long window (phases 40..80); expects **no** INTA M-cycle (no `M1` + `IORQ` combo) anywhere in the trace. |
 | `prog19_nmi_in_int.hex`       | NMI arrives during an INTA cycle. INT pulse, then NMI pulse a few phases later — inside the would-be INTA M-cycle. Expects INTA to complete first, then NMI ack to fire immediately after (edge-triggered NMI is latched). |
 | `prog20_block_int.hex`        | INT during a block move — `LDIR` of 16 bytes. INT pulsed mid-iteration; expects the current iteration to complete, PC to be **rewound** to the LDIR opcode (so the block-op resumes after the ISR), then INTA + RST 38h. |
+| `prog21_wait_ldir.hex`        | WAIT on the T2 sample of `LDIR`'s write M-cycle (two Tw) — the T-state on whose edge the RTL's incrementer does BC-1; BC / DE / HL pushed at the end. |
+| `prog22_wait_cpir.hex`        | WAIT on the T2 sample of `CPIR`'s read M-cycle (two Tw), the RTL's BC-1 edge; stops on a match, pushes BC / HL / AF. |
 
 `scripts/compare_signal_timing.py` now also compares `addr` (where
 `mreq`||`iorq` is low on both sides) and `data_o` (where `wr` is low on
