@@ -89,6 +89,27 @@ module tb_z80;
         if (!mreq_n && !wr_n) mem[addr] = data_out;
     endtask
 
+    // pin events of phase k, applied just before the edge that enters
+    // phase k -- the way perfectz80_runner and the C tracegen apply them:
+    // the DUT samples them on that edge, as a pin meeting its setup time,
+    // and they hold until a later event
+    task events(input integer k);
+        begin
+            if (k == nmi_hi)    nmi_n    = 1'b1;
+            if (k == nmiph || k == nmi_lo) nmi_n = 1'b0;
+            if (k == int_hi)    int_n    = 1'b1;
+            if (k == int_lo)    int_n    = 1'b0;
+            if (k == wait_hi)   wait_n   = 1'b1;
+            if (k == wait_lo)   wait_n   = 1'b0;
+            if (k == busreq_hi) busreq_n = 1'b1;
+            if (k == busreq_lo) busreq_n = 1'b0;
+            if (k == reset_hi)  reset_n  = 1'b1;
+            if (k == reset_lo)  reset_n  = 1'b0;
+            // legacy single-phase NMI shorthand: high outside that phase
+            if (nmiph >= 0 && k != nmiph && nmi_lo < 0 && nmi_hi < 0) nmi_n = 1'b1;
+        end
+    endtask
+
     initial begin
         if (!$value$plusargs("prog=%s", progf)) progf = "prog.hex";
         if (!$value$plusargs("phases=%d", phases)) phases = 200;
@@ -112,31 +133,18 @@ module tb_z80;
         reset_n = 1'b0;
         repeat (2) @(negedge clk);
         #1 reset_n = 1'b1;
+        events(0);
         @(posedge clk); #1;
-
-        nmi_n    = (0 == nmiph || 0 == nmi_lo) ? 1'b0 : 1'b1;
-        int_n    = (0 == int_lo)    ? 1'b0 : 1'b1;
-        wait_n   = (0 == wait_lo)   ? 1'b0 : 1'b1;
-        busreq_n = (0 == busreq_lo) ? 1'b0 : 1'b1;
-        if (0 == reset_lo) reset_n = 1'b0;
         dbg_phi = 1'b0;
         service;
         dump;                                 // line 0 = T1.P
         for (i = 1; i < phases; i = i + 1) begin
+            events(i);
+            // odd phase: falling edge; even phase: rising edge. Settle #1
+            // past the edge before sampling outputs.
             if (i[0]) @(negedge clk); else @(posedge clk);
             #1;
             dbg_phi = i[0];
-            if (i == nmi_hi)    nmi_n    = 1'b1;
-            if (i == nmiph || i == nmi_lo) nmi_n = 1'b0;
-            if (i == int_hi)    int_n    = 1'b1;
-            if (i == int_lo)    int_n    = 1'b0;
-            if (i == wait_hi)   wait_n   = 1'b1;
-            if (i == wait_lo)   wait_n   = 1'b0;
-            if (i == busreq_hi) busreq_n = 1'b1;
-            if (i == busreq_lo) busreq_n = 1'b0;
-            if (i == reset_hi)  reset_n  = 1'b1;
-            if (i == reset_lo)  reset_n  = 1'b0;
-            if (nmiph >= 0 && i != nmiph && nmi_lo < 0 && nmi_hi < 0) nmi_n = 1'b1;
             service;
             dump;
         end

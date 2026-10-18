@@ -65,7 +65,7 @@ module z80_core (
     input  wire        nmi_n,          // NMI edge detect, clock-low half
     // inputs sampled on the falling edge by z80_top
     input  wire [7:0]  data_in_neg,    // MRD data at T3, IORD data at T4
-    input  wire        int_n_neg,      // INT level at T_last.P
+    input  wire        int_n_rise,     // INT level at this T-state's rising edge
     input  wire        nmi_n_neg,      // NMI edge detect, clock-high half
     input  wire        wait_n_neg,     // WAIT at the falling edge of T2 / Tw
     // pin images -- *_pos: clock-high half of the NEXT T-state (from
@@ -806,14 +806,15 @@ module z80_core (
         // rising edge and this T-state's falling edge.
         nmi_pending_mid = nmi_pending | (prev_nmi_n & ~nmi_n_neg);
 
-        // NMI/INT silicon sample point: rising edge of the last T-state of
-        // the current M-cycle (= T_last.P) per Zilog UM0080 -- the level
-        // present during the clock-high half, as captured by the negedge
-        // sampler. Refreshed once per M-cycle; the last M-cycle's sample is
-        // the one the instruction boundary uses to accept.
+        // NMI/INT silicon sample point: the rising edge that starts the
+        // last T-state of the current M-cycle (Zilog PS0178 Figure 8,
+        // TsINT/ThINT; perfectz80): the INT level z80_top latched on that
+        // edge, and the NMI edges seen up to it (nmi_pending as that edge
+        // left it). Refreshed once per M-cycle; the last M-cycle's sample
+        // is the one the instruction boundary uses to accept.
         if (t_state == m_len) begin
-            nmi_sampled_n = nmi_pending_mid;
-            int_sampled_n = ~int_n_neg;
+            nmi_sampled_n = nmi_pending;
+            int_sampled_n = ~int_n_rise;
         end
 
         // read-data latch at the falling edge of T3 (MRD) / T4 (IORD)

@@ -60,7 +60,10 @@ module z80_timing (
             // This decodes the initial T2.P. The core's WR register keeps
             // the strobe low when WAIT repeats T2 as Tw.P.
             if (!((t == 3'd1) && (phi == 1'b0)) && !((t == 3'd3) && (phi == 1'b1)) && (t <= 3'd3))
-                begin mreq_n = 1'b0; data_drive = 1'b1; end
+                mreq_n = 1'b0;
+            // data T1.N .. T3.N: driven past WR's rise, floats at the next
+            // rising edge (PS0178 Figure 6, TdWRr(D) / TdCr(Dz); perfectz80)
+            if (!((t == 3'd1) && (phi == 1'b0)) && (t <= 3'd3)) data_drive = 1'b1;
             if (((t == 3'd2) && (phi == 1'b1)) || ((t == 3'd3) && (phi == 1'b0))) wr_n = 1'b0;
         end
         `BUSOP_IORD: begin
@@ -68,9 +71,12 @@ module z80_timing (
                 begin iorq_n = 1'b0; rd_n = 1'b0; end
         end
         `BUSOP_IOWR: begin
+            // IORQ and WR together, T2.P .. T3(4).P (PS0178 Figure 7,
+            // TdCr(WRf); perfectz80); data T1.N .. T3(4).N, floating at the
+            // next rising edge, as in a memory write
             if ((t >= 3'd2) && !((t == 3'd4) && (phi == 1'b1)) && (t <= 3'd4))
-                begin iorq_n = 1'b0; data_drive = 1'b1; end
-            if (((t == 3'd2) && (phi == 1'b1)) || (t == 3'd3) || ((t == 3'd4) && (phi == 1'b0))) wr_n = 1'b0;
+                begin iorq_n = 1'b0; wr_n = 1'b0; end
+            if (!((t == 3'd1) && (phi == 1'b0)) && (t <= 3'd4)) data_drive = 1'b1;
         end
         `BUSOP_INTA: begin
             // T1, T2, two automatic Tw, then refresh T3/T4 (counts 5/6).
