@@ -118,9 +118,11 @@ $(BUILD)/top_%.json: $(BUILD)/src $(BUILD)/rom.mem $(VENV)/.ok
 	  2>&1 | $(YOSYS_FILTER)
 	@test -f $@ || { echo "yosys failed, see $(BUILD)/yosys_$(STEM).log"; exit 1; }
 
-# nextpnr: full log in build/nextpnr.log, console shows the stage lines,
-# placer/router progress (one router row per 5000 arcs) and the timing
-# summary.
+# nextpnr: full log in build/nextpnr_<build>.log, console shows the stage
+# lines, placer/router progress (one router row per 5000 arcs) and the
+# timing summary. nextpnr's own exit status is saved ahead of that console
+# filter, which would otherwise replace it: any nextpnr ERROR fails the
+# build and removes its output.
 NEXTPNR_PROGRESS := grep --line-buffered -E '^(Info: (Pack|Running|Placed|Creating|HeAP|SA |Routing|Router|Max frequency|Program finished|Device util|promoting)|Info: +[0-9]*[05]000 \||ERROR|Warning)'
 
 # the chip build adds the external-CLK constraint (icepi-zero-chip.lpf)
@@ -128,9 +130,12 @@ LPF_sbc  := icepi-zero.lpf
 LPF_chip := icepi-zero.lpf icepi-zero-chip.lpf
 
 $(BUILD)/top_%.config: $(BUILD)/top_%.json $(BUILD)/icepi-zero.lpf $(BUILD)/icepi-zero-chip.lpf
-	cd $(BUILD) && $(NEXTPNR) --$(FPGA_SIZE) --package $(PACKAGE) \
-	  $(addprefix --lpf ,$(LPF_$(STEM))) --json top_$(STEM).json --textcfg top_$(STEM).config \
-	  2>&1 | tee nextpnr_$(STEM).log | $(NEXTPNR_PROGRESS) || true
+	@rm -f $@
+	cd $(BUILD) && { $(NEXTPNR) --$(FPGA_SIZE) --package $(PACKAGE) \
+	  $(addprefix --lpf ,$(LPF_$(STEM))) --json top_$(STEM).json --textcfg top_$(STEM).config 2>&1; \
+	  echo $$? > nextpnr_$(STEM).rc; } | tee nextpnr_$(STEM).log | $(NEXTPNR_PROGRESS); \
+	  rc=$$(cat nextpnr_$(STEM).rc); [ "$$rc" = 0 ] || { rm -f top_$(STEM).config; \
+	  echo "nextpnr failed (exit $$rc), see $(BUILD)/nextpnr_$(STEM).log"; exit 1; }
 	@test -f $@
 
 $(BUILD)/top_%.bit: $(BUILD)/top_%.config
