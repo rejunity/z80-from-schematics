@@ -1,0 +1,41 @@
+# Main's core on every FPGA board and ASIC PDK. Each board branch
+# (fpga-<board>-basic) and PDK branch (asic-<pdk>) is merged into main's
+# tree and run through its flow: FPGA bitstreams + simulations
+# (fpga-board.yml), ASIC RTL-to-GDS + sign-off + gate-level signs of life
+# (asic-pdk.yml). The branches run the same jobs on their own pushes
+# (fpga-<board>.yml, asic-<pdk>.yml).
+#
+# Every push to main, nightly -- the FPGA tools are pip's latest, so this
+# also catches toolchain drift -- and on demand.
+name: Targets
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', 'docs/**']
+  schedule:
+    - cron: '30 4 * * *'        # 04:30 UTC daily, after CI's 04:00
+  workflow_dispatch: {}
+
+concurrency:
+  group: targets-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fpga:
+    strategy:
+      fail-fast: false
+      matrix:
+        board: [icepi-zero, tang-primer-25k, icebreaker, pico-ice]
+    uses: ./.github/workflows/fpga-board.yml
+    with:
+      board: ${{ matrix.board }}
+
+  asic:
+    strategy:
+      fail-fast: false
+      matrix:
+        pdk: [sky130, ihp-sg13g2, gf180mcu]
+    uses: ./.github/workflows/asic-pdk.yml
+    with:
+      pdk: ${{ matrix.pdk }}
