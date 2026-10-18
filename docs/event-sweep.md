@@ -1,0 +1,192 @@
+# RESET / INT / NMI timing sweep
+
+`make event_sweep` drives RESET, INT and NMI pulses into the iverilog RTL and
+into the perfectz80 transistor-level netlist at every T-state of a set of
+instructions. It compares the two half-cycle by half-cycle. CI runs it on
+every push; it takes about 45 s on 10 cores and about 2 minutes on a GitHub
+runner.
+
+Files:
+
+- `scripts/event_sweep.py`: case list, program, runner, comparison, report
+- `tests/iverilog/tb_event_sweep.v`: RTL side (1/16-T event resolution)
+- `scripts/event_sweep_pz80.c`: perfectz80 side
+- `tests/event_sweep/baseline.txt`: cases where the RTL differs today
+
+## How a case works
+
+Every case runs the same small program:
+
+| address | code |
+|---|---|
+| 0000 | stores SP, BC, DE, HL, I, AF and R at 7000.., then `JP 0100` |
+| 0038 | IM1 handler: counts in 6000, `EI; RETI` |
+| 0066 | NMI handler: counts in 6001, optional NOPs, `RETN` |
+| 0100 | `DI`, SP=9000, IMn, BC=3 DE=8300 HL=8000 IX=8200 I=3F A=42, optional `EI` |
+| 0200 | marker NOP, the instruction under test, 24 NOPs, `HALT` |
+
+Times are counted from the rising edge that starts the marker fetch's T1.
+A pulse is placed at T-state `n` of the target (`M4` is the marker's T4, `T1`
+is the target's T1), `j`/16 of a clock after that T-state's rising edge.
+Both sides then dump `mreq iorq rd wr m1 rfsh halt busack`, the address and
+the data bus for every half-cycle from the marker on.
+
+A case matches when:
+- every control pin agrees in every half-cycle;
+- the address agrees wherever both sides transfer data (MREQ or IORQ with RD
+  or WR);
+- the data agrees wherever both sides drive WR.
+
+Refresh and idle addresses are don't-care, as in `compare_signal_timing.py`.
+
+Instructions under test:
+- INC A (no memory access)
+- LD A,(HL) (read)
+- LD (HL),A (write)
+- INC (HL) (read and write)
+- PUSH BC
+- LD (nn),HL
+- JR
+- CALL
+- LD (IX+d),A
+- NEG
+- RLC (HL)
+- LDIR
+- HALT
+
+| group | pulses |
+|---|---|
+| `int` | INT from every T-state of five instructions until INTA (IM1, EI) |
+| `nmi` | 1 T NMI pulse at every T-state of all 13 instructions |
+| `nmi_short` | 1/16 T and 1/4 T NMI pulses at every 1/16 T of INC A, LD A,(HL), LD (HL),A, INC (HL) |
+| `nmi_reentry` | NMI held low; two pulses before acceptance; a second pulse during the response; nested; RETN with INT pending |
+| `reset` | 4 T RESET at every T-state of six instructions |
+| `reset_release` | release swept over a clock, 3 and 4 T after assertion |
+| `reset_wait` | RESET while a read is held by WAIT |
+| `reset_short` | 1/4 to 2 T RESET around M1 (the special-reset window) |
+| `combo` | RESET during an INT or NMI response; an NMI edge while RESET is low; NMI or INT held across RESET |
+
+### What a simulation can and can't tell
+
+Neither side models gate delay. Within one clock half, only the order of
+events relative to the clock edges matters. So by default each T-state gets
+one position per half (`--phases 2`). `--phases 16` runs every 1/16 T, the
+grid used on hardware. On the current RTL, `--phases 16` gives exactly 8× the
+differing cases with identical grids, so nothing is lost by default.
+
+Pulses shorter than T always sweep all 16 positions, because whether they
+span a clock edge depends on that position.
+
+perfectz80 advances in whole half-cycles: a transition is applied at the
+start of the half-cycle that contains it. A pulse that starts and ends
+inside one half-cycle is applied and removed between two clock steps. The
+netlist settles after each write, so a latch that is transparent during
+that half sees the pulse. The sweep therefore shows whether the chip's
+input logic can catch such a pulse; it does not test the data sheet's
+minimum widths, which depend on analog timing.
+
+## Results (rejunity `main`, October 2026)
+
+| group | cases | match | differ |
+|---|---|---|---|
+| int | 86 | 66 | 20 |
+| nmi | 430 | 392 | 38 |
+| nmi_short | 1184 | 330 | 854 |
+| nmi_reentry | 43 | 21 | 22 |
+| reset | 112 | 0 | 112 |
+| reset_release | 64 | 0 | 64 |
+| reset_wait | 32 | 0 | 32 |
+| reset_short | 240 | 0 | 240 |
+| combo | 96 | 0 | 96 |
+
+`build/event_sweep/report.md` has the per-instruction grids.
+`build/event_sweep/diff/` has a side-by-side trace for every differing case.
+
+Where the RTL matches perfectz80:
+- INT and NMI are taken at the right instruction boundary from every other
+  position, for every instruction tried.
+- The stacked PC and the response cycles are the same, including LDIR
+  between iterations, CALL, JR and prefixed instructions.
+- NMI held low, two pulses before acceptance, and nested NMIs all match.
+
+The differences fall into six groups.
+
+1. **INT and NMI are sampled half a clock late.** Take an INT or NMI that
+   arrives in the high half of an instruction's last T-state. perfectz80
+   does not take it until after the next instruction. RZ80 samples at the
+   falling edge in that T-state (`docs/clocking.md`, "T_last.P"), so it
+   takes it one instruction earlier. This is the `e` column in the INT and
+   NMI grids.
+
+2. **Short NMI pulses.** perfectz80 takes every NMI pulse in the sweep,
+   including a 1/16 T pulse that starts and ends inside one clock half. Its
+   NMI input latch is transparent while the clock is high and while it is
+   low. RZ80 detects NMI only at a falling edge, so it takes a sub-T pulse
+   only when the pulse covers one. This is the `m` cells in the short-pulse
+   grids.
+
+3. **NMI during the NMI response.** A second NMI edge arriving during the
+   NMI response (from the response M1 to the end of its two pushes) is lost
+   in perfectz80: there is one NMI and the program resumes. RZ80 latches it
+   and enters the handler a second time before running the handler's first
+   instruction. A pulse after the response starts a nested NMI in both.
+
+4. **RETN with INT pending.** INT is held low from the NMI handler's first
+   fetch, and EI was in effect before the NMI. perfectz80 runs one
+   instruction after RETN before acknowledging the INT. RZ80 acknowledges
+   it right after RETN.
+
+5. **HALT pin.** When an INT or NMI ends HALT, perfectz80 releases HALT in
+   the low half of the last T4. RZ80 releases it half a clock later.
+   If the interrupt is already pending at the HALT fetch, perfectz80 never
+   asserts HALT; RZ80 drives it low for one half-cycle.
+
+6. **RESET.** perfectz80 treats RESET as a sampled input. RZ80 resets
+   asynchronously:
+   - **Assertion.** perfectz80 samples RESET at rising edges. It finishes
+     the bus cycle in progress and goes idle 0–8 half-cycles after RESET
+     falls, and it ignores a pulse that covers no rising edge. RZ80 drops
+     every strobe at once and resets on any pulse.
+   - **Restart.** The first T1 at 0000 comes 3 rising edges after release
+     in perfectz80, at every release phase. In RZ80 it comes after 1.
+   - **Registers.** perfectz80 keeps SP, BC, DE and HL across reset. An SP
+     half-decremented by an interrupted PUSH or interrupt response
+     (8FFF/8FFE/8FFD) is kept too. RZ80 sets them to 5555 (known
+     difference 1).
+   - **Special reset.** RESET can cover only the rising edge that starts T2
+     of an M1 cycle: low somewhere in T1, high again before T3. Then
+     perfectz80 restarts at 0000 with I kept (3F), the "special reset"
+     (`reset_short`, 36 of 240 cases). A pulse that covers only the rising
+     edge into T3 or T4 gives a normal reset, and so does any pulse covering
+     two or more rising edges. RZ80 has no special reset.
+
+## The baseline
+
+`tests/event_sweep/baseline.txt` has one line per case that differs today:
+
+```
+<case> <first differing half-cycle> <what differs> <hash of the RTL's compared pins>
+```
+
+`make event_sweep` fails in two situations:
+
+- **New difference:** a case differs that isn't listed.
+- **Changed difference:** a listed case now differs in another way. Any
+  change in the RTL's pins for that case changes the hash.
+
+A listed case that now matches is reported as a warning.
+
+After an intended RTL change:
+
+```
+make event_sweep EVENT_SWEEP_ARGS=--update-baseline
+git diff tests/event_sweep/baseline.txt
+```
+
+Review the baseline diff with `build/event_sweep/diff/<case>.txt` before
+committing it.
+
+Useful options (`scripts/event_sweep.py --help`):
+- `--groups nmi,reset` and `--match inc_hl` run a subset.
+- `--phases 16` runs the full 1/16-T grid.
+- `--jobs N` sets the parallelism.

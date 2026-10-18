@@ -44,7 +44,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
-.PHONY: timing_sdc timing_sdc_check equiv all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test verilator_z80test z80test_rtl halt2int halt2int_probe
+.PHONY: timing_sdc timing_sdc_check equiv all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist event_sweep basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test verilator_z80test z80test_rtl halt2int halt2int_probe
 
 all: cmodel ctest
 
@@ -345,6 +345,22 @@ pin_scenarios_rtl: iverilog $(BIN)/perfectz80_runner
 pin_scenarios_netlist: iverilog_netlist $(BIN)/perfectz80_runner
 	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --rtl=netlist 200 $(PIN_SCENARIOS) \
 	  || echo "(pin_scenarios_netlist is informational; failures are expected silicon-faithfulness findings)"
+
+# RESET / INT / NMI timing sweep: the iverilog RTL against perfectz80, with
+# pulses placed at every T-state of a set of instructions (one position per
+# clock half; sub-T pulses at every 1/16 T). Fails on any difference not in
+# tests/event_sweep/baseline.txt; see docs/event-sweep.md.
+# EVENT_SWEEP_ARGS=--update-baseline regenerates the baseline.
+event_sweep: $(BUILD)/tb_event_sweep.vvp $(BIN)/event_sweep_pz80
+	@$(PYTHON) $(SCRIPTS)/event_sweep.py $(EVENT_SWEEP_ARGS)
+
+$(BUILD)/tb_event_sweep.vvp: $(RTL_SRCS) $(TESTS)/iverilog/tb_event_sweep.v
+	@mkdir -p $(BUILD)
+	$(IVERILOG) -g2001 -I$(RTL) -s tb_event_sweep -o $@ $(RTL_SRCS) $(TESTS)/iverilog/tb_event_sweep.v
+
+$(BIN)/event_sweep_pz80: $(SCRIPTS)/event_sweep_pz80.c $(SCRIPTS)/refs/perfectz80/perfectz80.c $(SCRIPTS)/refs/perfectz80/netlist_sim.c
+	@mkdir -p $(BIN)
+	$(CC) -std=c99 -O2 -I$(SCRIPTS) $^ -o $@
 
 $(BIN)/perfectz80_runner: $(SCRIPTS)/perfectz80_runner.c $(SCRIPTS)/refs/perfectz80/perfectz80.c $(SCRIPTS)/refs/perfectz80/netlist_sim.c
 	@mkdir -p $(BIN)
