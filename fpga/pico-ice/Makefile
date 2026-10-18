@@ -138,14 +138,20 @@ $(BUILD)/top_%.json: $(BUILD)/src $(BUILD)/rom.mem $(VENV)/.ok
 # nextpnr: full log in build/nextpnr_<build>.log, console shows the clock
 # constraints (set and PLL-derived), the main utilisation rows, placer and
 # router progress (one router row per 5000 arcs) and the timing summary --
-# about 30 lines. nextpnr fails the build if a clock misses its constraint.
+# about 30 lines. nextpnr fails the build if a clock misses its constraint;
+# its own exit status is saved ahead of the console filter, which would
+# otherwise replace it, so any nextpnr ERROR fails the build and removes
+# the .asc.
 NEXTPNR_PROGRESS := grep --line-buffered -E '^(Info: (constraining clock|HeAP Placer Time|SA placement time|Routing [0-9]|Routing complete|Router1 time|Max frequency|Program finished)|Info: +Derived frequency|Info:[[:space:]]+(ICESTORM_(LC|RAM|SPRAM|PLL)|SB_IO|SB_GB):|Info: +[0-9]*[05]000 \||ERROR|Warning)'
 
 $(BUILD)/top_%.asc: $(BUILD)/top_%.json $(BUILD)/pico-ice_%.pcf
-	cd $(BUILD) && $(NEXTPNR) --up5k --package sg48 --pcf pico-ice_$(STEM).pcf \
-	  --json top_$(STEM).json --asc top_$(STEM).asc --report report_$(STEM).json \
-	  2>&1 | tee nextpnr_$(STEM).log | $(NEXTPNR_PROGRESS) || true
-	@test -f $(BUILD)/top_$(STEM).asc
+	@rm -f $@
+	cd $(BUILD) && { $(NEXTPNR) --up5k --package sg48 --pcf pico-ice_$(STEM).pcf \
+	  --json top_$(STEM).json --asc top_$(STEM).asc --report report_$(STEM).json 2>&1; \
+	  echo $$? > nextpnr_$(STEM).rc; } | tee nextpnr_$(STEM).log | $(NEXTPNR_PROGRESS); \
+	  rc=$$(cat nextpnr_$(STEM).rc); [ "$$rc" = 0 ] || { rm -f top_$(STEM).asc; \
+	  echo "nextpnr failed (exit $$rc), see $(BUILD)/nextpnr_$(STEM).log"; exit 1; }
+	@test -f $@
 
 $(BUILD)/top_%.bin: $(BUILD)/top_%.asc
 	cd $(BUILD) && $(ICEPACK) top_$(STEM).asc top_$(STEM).bin
