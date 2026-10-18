@@ -128,7 +128,10 @@ $(BUILD)/top_%.synth.json: $(BUILD)/src $(BUILD)/rom.mem $(VENV)/.ok
 # JTAG access until the next power cycle.
 # nextpnr: full log in build/nextpnr_<build>.log, console shows the stage
 # lines, placer/router progress (one router row per 5000 arcs) and the
-# timing summary.
+# timing summary. nextpnr's own exit status is saved ahead of that console
+# filter, which would otherwise replace it: any nextpnr ERROR fails the
+# build and removes the netlist -- a hold violation included, after which
+# nextpnr still writes one.
 # Each build has one "Failed to route ... using dedicated routing"
 # warning: the LUT that inverts the Z80 clock for the falling-edge flops
 # takes it on a logic input. It is left off the console; more than one
@@ -137,12 +140,15 @@ NEXTPNR_PROGRESS := grep --line-buffered -E '^(Info: (Pack|Running|Placed|Creati
   | grep --line-buffered -v 'Failed to route net'
 
 $(BUILD)/top_%.pnr.json: $(BUILD)/top_%.synth.json $(BUILD)/tang_primer_25k.cst
-	cd $(BUILD) && $(NEXTPNR) --top top --json top_$(STEM).synth.json --write top_$(STEM).pnr.json \
-	  --device $(DEVICE) --vopt cst=tang_primer_25k.cst --vopt sspi_as_gpio \
-	  2>&1 | tee nextpnr_$(STEM).log | $(NEXTPNR_PROGRESS) || true
+	@rm -f $@
+	cd $(BUILD) && { $(NEXTPNR) --top top --json top_$(STEM).synth.json --write top_$(STEM).pnr.json \
+	  --device $(DEVICE) --vopt cst=tang_primer_25k.cst --vopt sspi_as_gpio 2>&1; \
+	  echo $$? > nextpnr_$(STEM).rc; } | tee nextpnr_$(STEM).log | $(NEXTPNR_PROGRESS); \
+	  rc=$$(cat nextpnr_$(STEM).rc); [ "$$rc" = 0 ] || { rm -f top_$(STEM).pnr.json; \
+	  echo "nextpnr failed (exit $$rc), see $(BUILD)/nextpnr_$(STEM).log"; exit 1; }
 	@n=$$(grep -c 'Failed to route net' $(BUILD)/nextpnr_$(STEM).log); \
 	  [ "$$n" -le 1 ] || echo "nextpnr: $$n clock sinks on general routing, expected 1 (see README, Clocking)"
-	@test -f $(BUILD)/top_$(STEM).pnr.json
+	@test -f $@
 
 $(BUILD)/top_%.fs: $(BUILD)/top_%.pnr.json
 	cd $(BUILD) && $(GOWIN_PACK) --sspi_as_gpio -d $(PACK_DEV) -o top_$(STEM).fs top_$(STEM).pnr.json
