@@ -1,9 +1,9 @@
 # One ASIC PDK: RTL-to-GDS of z80_top with LibreLane (Classic flow, the
 # bare core -- no pad ring), the sign-off checks, and the signs-of-life
 # program on the RTL and on the routed netlist (asic/<pdk>/Makefile).
-# Artifacts: asic-<pdk>-gds (the GDS, a picture of it and a map of its
-# standard cells by kind, .github/scripts/dist.py; targets.yml also
-# publishes them on GitHub
+# Artifacts: asic-<pdk>-gds (the GDS, a picture of it and maps of its
+# standard cells by kind and by Z80 block, .github/scripts/dist.py;
+# targets.yml also publishes them on GitHub
 # Pages) and asic-<pdk>-results (metrics, netlists, timing, LibreLane's
 # own KLayout render, logs).
 #
@@ -104,8 +104,9 @@ jobs:
 
       # rz80-<pdk>.gds, rz80-<pdk>.png (dist.py draws the cell rows and the
       # metal stack with gdstk + Pillow), rz80-<pdk>-cells.png (every
-      # standard cell, coloured by kind: flip-flops, buffers, logic, fill)
-      # and the headline numbers, if the flow finished
+      # standard cell, coloured by kind: flip-flops, buffers, logic, fill),
+      # rz80-<pdk>-blocks.png (every cell by its Z80 block, from the final
+      # DEF) and the headline numbers, if the flow finished
       - name: Collect the GDS and render it
         if: always()
         run: |
