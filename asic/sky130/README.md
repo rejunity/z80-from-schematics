@@ -32,7 +32,9 @@ no hold violations at any corner; every corner is printed.
 Results land in `asic/sky130/runs/<tag>/` (`final/` holds GDS, netlists,
 metrics). CI: `.github/workflows/asic-sky130.yml` runs all of the above on
 every push to this branch (and on demand), and keeps the GDS, netlist and
-metrics as artifacts.
+metrics as artifacts. The job itself is `asic-pdk.yml`, which main's
+`targets.yml` also runs nightly with this branch merged into main, so a
+core change on main that breaks the flow shows up within a day.
 
 ## Signs of life
 
