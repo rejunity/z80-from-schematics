@@ -1,11 +1,11 @@
-# RZ80 -> iCEBreaker (Lattice iCE40UP5K-SG48)
+# RZ80 -> iCESugar (MuseLab, Lattice iCE40UP5K-SG48)
 #
 # Two bitstreams from one top.v (EXTERNAL_BUS parameter):
 #   sbc   BASIC single-board computer, PLL 4 MHz Z80 clock, UART console on
-#         the board's USB serial port, PMODs mirror the bus as outputs
+#         the iCELink's USB serial port, PMODs mirror the bus as outputs
 #                                                  -> build/top_sbc.bin
 #   chip  Z80 chip replacement: the PMODs are the live bus, CLK comes in on
-#         P1A10                                    -> build/top_chip.bin
+#         P2_2                                     -> build/top_chip.bin
 #
 #   make venv    create .venv and pip-install the YoWASP toolchain
 #   make         both bitstreams;  make sbc / make chip for one
@@ -19,7 +19,8 @@
 #   make sim_chip  chip build on an external RAM: RTL and synthesized netlist
 #   make sim_pnr the boot script on the routed sbc netlist, as packed into
 #                the bitstream (sim_pnr_tiny: Tiny BASIC on build_tiny/'s)
-#   make prog MODE=sbc|chip    write the bitstream to the SPI flash (iceprog)
+#   make prog MODE=sbc|chip    copy the bitstream onto the iCELink's USB
+#                drive (the board programs its SPI flash from it)
 #   make timing  nextpnr's Fmax and utilisation summary for both builds
 #   make pins    PMOD pin directions as placed (reads the routed netlists)
 #   make ci      everything CI runs (fpga-board.yml): both bitstreams, the
@@ -31,7 +32,8 @@
 # Synthesis and place & route are pip-installed into .venv: yowasp-yosys
 # (synth_ice40) and yowasp-nextpnr-ice40, which also ships yowasp-icepack
 # (and yowasp-icepll, used for the PLL settings in top.v). Programming
-# needs a native iceprog (IceStorm) or openFPGALoader, see README.md.
+# needs no tool: the board's iCELink takes the .bin on its USB drive (or
+# MuseLab's icesprog), see README.md.
 #
 # Sources are staged into build/ and the tools run from there: the YoWASP
 # sandbox only sees the current directory tree, and it also makes top.v's
@@ -59,7 +61,9 @@ SOC_SRCS  := top.v uart.v
 YOSYS    := $(abspath $(VENV))/bin/yowasp-yosys
 NEXTPNR  := $(abspath $(VENV))/bin/yowasp-nextpnr-ice40
 ICEPACK  := $(abspath $(VENV))/bin/yowasp-icepack
-ICEPROG  ?= iceprog
+# the iCELink's USB drive (macOS, Linux desktops); `make prog ICELINK=...`
+ICELINK  ?= $(firstword $(wildcard /Volumes/iCELink /media/*/iCELink /run/media/*/iCELink))
+ICESPROG ?=
 IVERILOG ?= iverilog
 VVP      ?= vvp
 
@@ -105,7 +109,7 @@ $(BUILD)/src: $(CORE_SRCS) $(CORE_INCS) $(SOC_SRCS)
 
 # Shared pin constraints + this build's Z80 clock constraint (rewritten
 # only when it changes, e.g. `make chip Z80_MHZ_chip=10`).
-$(BUILD)/icebreaker_%.pcf: icebreaker.pcf FORCE
+$(BUILD)/icesugar_%.pcf: icesugar.pcf FORCE
 	@mkdir -p $(BUILD)
 	@{ cat $<; echo; echo "# $(STEM) build: Z80 clock (MHz)"; \
 	  echo "set_frequency clk_z80 $(Z80_MHZ_$(STEM))"; } > $@.tmp
@@ -141,10 +145,10 @@ $(BUILD)/top_%.json: $(BUILD)/src $(BUILD)/rom.mem $(BUILD)/variant $(VENV)/.ok
 # fails the build and removes the .asc and the routed netlist.
 NEXTPNR_PROGRESS := grep --line-buffered -E '^(Info: (Pack|Promot|Running|Placed|Creating|HeAP|SA |Routing|Router|Max frequency|Program finished|Device util)|Info: +[0-9]*[05]000 \||ERROR|Warning)'
 
-$(BUILD)/top_%.asc $(BUILD)/top_%.pnr.json: $(BUILD)/top_%.json $(BUILD)/icebreaker_%.pcf
+$(BUILD)/top_%.asc $(BUILD)/top_%.pnr.json: $(BUILD)/top_%.json $(BUILD)/icesugar_%.pcf
 	@rm -f $(BUILD)/top_$(STEM).asc $(BUILD)/top_$(STEM).pnr.json
 	cd $(BUILD) && { $(NEXTPNR) --up5k --package sg48 --json top_$(STEM).json \
-	  --pcf icebreaker_$(STEM).pcf --asc top_$(STEM).asc \
+	  --pcf icesugar_$(STEM).pcf --asc top_$(STEM).asc \
 	  --report report_$(STEM).json --write top_$(STEM).pnr.json 2>&1; \
 	  echo $$? > nextpnr_$(STEM).rc; } | tee nextpnr_$(STEM).log | $(NEXTPNR_PROGRESS); \
 	  rc=$$(cat nextpnr_$(STEM).rc); [ "$$rc" = 0 ] || { rm -f top_$(STEM).asc top_$(STEM).pnr.json; \
@@ -168,7 +172,7 @@ timing: $(BUILD)/top_sbc.asc $(BUILD)/top_chip.asc
 
 pins: $(BUILD)/top_sbc.asc $(BUILD)/top_chip.asc
 	@for m in $(MODES); do echo "== $$m"; \
-	  $(PYTHON) pins.py $(BUILD)/top_$$m.pnr.json icebreaker.pcf; done
+	  $(PYTHON) pins.py $(BUILD)/top_$$m.pnr.json icesugar.pcf; done
 
 # ---- simulation ----
 # `make sim` (Verilator, fast -- seconds) is the default; the iverilog
@@ -256,7 +260,7 @@ $(BUILD)/gl/obj/Vtop: $(BUILD)/gl/top_sbc_gl.v $(BUILD)/gl/cells_sim.v sim_pll.v
 sim_gl: $(BUILD)/gl/obj/Vtop
 	cd $(BUILD)/gl && ./obj/Vtop
 
-# chip: tb_chip.v (external 4 KiB RAM + CLK on the PMOD pins), on the RTL
+# chip: tb_chip.v (external 1 KiB RAM + CLK on the PMOD pins), on the RTL
 # and on the netlist (iverilog: the pads are real tristates there).
 $(BUILD)/tb_chip_rtl.vvp: $(BUILD)/src tb_chip.v
 	$(IVERILOG) -g2012 -I$(BUILD)/src -s tb_chip -o $@ $(BUILD)/src/*.v tb_chip.v
@@ -314,12 +318,16 @@ sim_pnr_tiny:
 	$(MAKE) sim_pnr BUILD=build_tiny ROM_HEX=$(TINY_HEX) SIM_PNR_ARGS=tiny
 
 # ---- board ----
-# iceprog (native IceStorm) writes the SPI flash over the FT2232H's
-# channel A; the FPGA reconfigures from it straight away and on every
-# power-up. openFPGALoader can be used instead:
-#   make prog ICEPROG="openFPGALoader -b ice40_generic -f"
+# The iCELink (the board's STM32 debugger, DAPLink firmware) programs the
+# SPI flash by drag and drop: a .bin copied onto its USB drive is written
+# to the flash, and the FPGA configures from it straight away and on every
+# power-up. `make prog` copies it there (ICELINK=<mount point> if the
+# drive is not found); ICESPROG=icesprog uses MuseLab's command-line tool
+# (wuxx/icesugar tools/) instead.
 prog: $(BUILD)/top_$(MODE).bin
-	$(ICEPROG) $(BUILD)/top_$(MODE).bin
+	@if [ -n "$(ICESPROG)" ]; then $(ICESPROG) $<; \
+	elif [ -n "$(ICELINK)" ] && [ -d "$(ICELINK)" ]; then cp $< "$(ICELINK)"/ && sync && echo "copied $< to $(ICELINK)"; \
+	else echo "no iCELink drive found: make prog ICELINK=<its mount point> (or ICESPROG=icesprog)"; exit 1; fi
 
 # ---- CI (.github/workflows/fpga-board.yml) ----
 # Both bitstreams, the Tiny BASIC bitstream (build_tiny/) and every

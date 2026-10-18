@@ -1,4 +1,4 @@
-// sim_top.cpp - Verilator smoke test of the iCEBreaker RZ80 SoC (sbc build).
+// sim_top.cpp - Verilator smoke test of the iCESugar RZ80 SoC (sbc build).
 //
 // Same script as the IcePi Zero port's sim_top.cpp (branch
 // fpga-icepi-zero-basic): boots the real NASCOM BASIC 4.7 ROM through the
@@ -8,8 +8,8 @@
 //   1. wait for cold-start "Memory top?"  -> answer CR
 //   2. wait for the banner "Ok"           -> type "PRINT 123+457", DEL, "6", CR
 //                                         (BS echoed: top.v maps DEL to BS)
-//   3. wait for "579"                     -> press the user button (~2 ms,
-//      with a bouncy release, like the real switch)
+//   3. wait for "579"                     -> flip DIP switch 1 on and off
+//      (~2 ms, with a bouncy release, like the real switch): /RESET
 //   4. wait for warm-start "C|W"          -> answer "W" (RAM survived)
 //   5. wait for "Ok"                      -> PASS (exit 0)
 //
@@ -93,7 +93,7 @@ int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);
     const bool tiny = argc > 1 && strcmp(argv[argc - 1], "tiny") == 0;
     Vtop* t = new Vtop;
-    t->btn_n = 1;       // not pressed (active low)
+    t->btn_n = 1;       // DIP switch 1 off (on = low = reset)
     t->uart_rx = 1;
 
     // host -> DUT serial: queue of pending line levels, one per BIT_TICKS
@@ -120,13 +120,13 @@ int main(int argc, char** argv) {
 
     long long tx_wait = 0, tx_cnt = 0;
     long long steps = 0;
-    long long btn_timer = 0;      // >0: button press in progress
+    long long btn_timer = 0;      // >0: DIP switch 1 on (reset) in progress
     const long long BTN_PRESS  = 200000;   // in half-clk steps
     const long long BTN_BOUNCE = 20000;    // bouncy tail of the release
     const long long MAX_STEPS = tiny ? 400000000LL : 4000000000LL;   // hard stop
 
     while (steps < MAX_STEPS) {
-        // button press with a bouncing release: solid low, then chatter
+        // switch on, then off with a bouncing release: solid low, then chatter
         // between low/high, then released. The reset stretch in top.v
         // must swallow the chatter and emit ONE clean reset.
         if (btn_timer > 0) {
@@ -212,7 +212,7 @@ int main(int argc, char** argv) {
                             delete t;
                             return 1;
                         }
-                        printf("\n[sim_top] 123+457<DEL>6 = 579 OK -- pressing the user button (reset)\n");
+                        printf("\n[sim_top] 123+457<DEL>6 = 579 OK -- flipping DIP switch 1 (reset)\n");
                         tail.clear();
                         btn_timer = BTN_PRESS;
                         stage = 4;
@@ -221,7 +221,7 @@ int main(int argc, char** argv) {
                         tx_wait = 20LL * BIT_TICKS;
                         send_byte('W');
                     } else if (stage == 5 && tail.find("Ok") != std::string::npos) {
-                        printf("\n[sim_top] PASS: boot, arithmetic, button warm-restart all good (%lld half-clks)\n", steps);
+                        printf("\n[sim_top] PASS: boot, arithmetic, DIP-switch warm-restart all good (%lld half-clks)\n", steps);
                         delete t;
                         return 0;
                     }

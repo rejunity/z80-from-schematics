@@ -1,5 +1,5 @@
 // tb_chip.v - bus test of the chip build: the Z80 on the PMOD pins, with
-// an external 4 KiB RAM and an external CLK wired to them, the way the
+// an external 1 KiB RAM and an external CLK wired to them, the way the
 // chip build is used on hardware.
 //
 // `make sim_chip` runs it twice: against the RTL (top.v's behavioural pad
@@ -9,7 +9,7 @@
 // input path, the rest plain outputs.
 //
 // The RAM is preloaded with a program that writes a table, reads it back,
-// calls / returns through a stack at the top of the 4 KiB window, and does
+// calls / returns through a stack at the top of the 1 KiB window, and does
 // one IN and one OUT. I/O cycles are what the PMOD bus shows as /RD or /WR
 // with /MREQ high (no /IORQ on this board): the RAM ignores them, the IN
 // reads the pulled-up open bus (0xFF), the testbench logs the OUT. The red
@@ -26,9 +26,9 @@ module tb_chip;
 
     wire        z80_clk = zclk;
     wire [7:0]  d;
-    wire [11:0] a;
+    wire [9:0]  a;
     wire        mreq_n, rd_n, wr_n;
-    wire        uart_tx, ledr_n, ledg_n;
+    wire        uart_tx, ledr_n, ledg_n, ledb_n;
     pullup pu[7:0] (d);         // the board's open bus reads 0xFF
 
     // top.v's default EXTERNAL_BUS = 1 is the chip build (the netlist has
@@ -40,6 +40,7 @@ module tb_chip;
         .btn_n      (1'b1),
         .ledr_n     (ledr_n),
         .ledg_n     (ledg_n),
+        .ledb_n     (ledb_n),
         .z80_clk    (z80_clk),
         .z80_d      (d),
         .z80_mreq_n (mreq_n),
@@ -54,7 +55,7 @@ module tb_chip;
     // the netlist's pins read 0 (active strobes) until the first CLK edge.
     // (On the iCE40 the flops are cleared at configuration and the level-
     // sensitive async reset holds the strobes idle from the start.)
-    reg [7:0] mem [0:4095];
+    reg [7:0] mem [0:1023];
     reg       running = 1'b0;
     always @(posedge ledr_n) running = 1'b1;
     assign d = (!mreq_n && !rd_n) ? mem[a] : 8'hzz;
@@ -70,50 +71,50 @@ module tb_chip;
 
     integer i;
     initial begin
-        for (i = 0; i < 4096; i = i + 1) mem[i] = 8'h00;
-        // 0000  LD SP,1000h      ; stack grows down from the top of the window
-        // 0003  LD HL,0800h
+        for (i = 0; i < 1024; i = i + 1) mem[i] = 8'h00;
+        // 0000  LD SP,0400h      ; stack grows down from the top of the window
+        // 0003  LD HL,0200h
         // 0006  LD B,10h
         // 0008  LD A,01h
-        // 000A  LD (HL),A        ; 0800..080F = 01..10
+        // 000A  LD (HL),A        ; 0200..020F = 01..10
         // 000B  INC HL
         // 000C  INC A
         // 000D  DJNZ 000Ah
-        // 000F  CALL 0020h       ; return address 0012 -> 0FFE/0FFF
+        // 000F  CALL 0020h       ; return address 0012 -> 03FE/03FF
         // 0012  HALT
-        {mem[12'h000], mem[12'h001], mem[12'h002]} = {8'h31, 8'h00, 8'h10};
-        {mem[12'h003], mem[12'h004], mem[12'h005]} = {8'h21, 8'h00, 8'h08};
-        {mem[12'h006], mem[12'h007]}               = {8'h06, 8'h10};
-        {mem[12'h008], mem[12'h009]}               = {8'h3E, 8'h01};
-        mem[12'h00A] = 8'h77;
-        mem[12'h00B] = 8'h23;
-        mem[12'h00C] = 8'h3C;
-        {mem[12'h00D], mem[12'h00E]}               = {8'h10, 8'hFB};
-        {mem[12'h00F], mem[12'h010], mem[12'h011]} = {8'hCD, 8'h20, 8'h00};
-        mem[12'h012] = 8'h76;
-        // 0020  LD A,(0805h)     ; 06
-        // 0023  LD (0FF0h),A
-        // 0026  LD HL,(0800h)    ; 0201h
-        // 0029  LD (0FF2h),HL
+        {mem[10'h000], mem[10'h001], mem[10'h002]} = {8'h31, 8'h00, 8'h04};
+        {mem[10'h003], mem[10'h004], mem[10'h005]} = {8'h21, 8'h00, 8'h02};
+        {mem[10'h006], mem[10'h007]}               = {8'h06, 8'h10};
+        {mem[10'h008], mem[10'h009]}               = {8'h3E, 8'h01};
+        mem[10'h00A] = 8'h77;
+        mem[10'h00B] = 8'h23;
+        mem[10'h00C] = 8'h3C;
+        {mem[10'h00D], mem[10'h00E]}               = {8'h10, 8'hFB};
+        {mem[10'h00F], mem[10'h010], mem[10'h011]} = {8'hCD, 8'h20, 8'h00};
+        mem[10'h012] = 8'h76;
+        // 0020  LD A,(0205h)     ; 06
+        // 0023  LD (03F0h),A
+        // 0026  LD HL,(0200h)    ; 0201h
+        // 0029  LD (03F2h),HL
         // 002C  IN A,(55h)       ; open bus: FFh
-        // 002E  LD (0FF4h),A
+        // 002E  LD (03F4h),A
         // 0031  LD A,5Ah
         // 0033  OUT (0AAh),A
         // 0035  RET
-        {mem[12'h020], mem[12'h021], mem[12'h022]} = {8'h3A, 8'h05, 8'h08};
-        {mem[12'h023], mem[12'h024], mem[12'h025]} = {8'h32, 8'hF0, 8'h0F};
-        {mem[12'h026], mem[12'h027], mem[12'h028]} = {8'h2A, 8'h00, 8'h08};
-        {mem[12'h029], mem[12'h02A], mem[12'h02B]} = {8'h22, 8'hF2, 8'h0F};
-        {mem[12'h02C], mem[12'h02D]}               = {8'hDB, 8'h55};
-        {mem[12'h02E], mem[12'h02F], mem[12'h030]} = {8'h32, 8'hF4, 8'h0F};
-        {mem[12'h031], mem[12'h032]}               = {8'h3E, 8'h5A};
-        {mem[12'h033], mem[12'h034]}               = {8'hD3, 8'hAA};
-        mem[12'h035] = 8'hC9;
+        {mem[10'h020], mem[10'h021], mem[10'h022]} = {8'h3A, 8'h05, 8'h02};
+        {mem[10'h023], mem[10'h024], mem[10'h025]} = {8'h32, 8'hF0, 8'h03};
+        {mem[10'h026], mem[10'h027], mem[10'h028]} = {8'h2A, 8'h00, 8'h02};
+        {mem[10'h029], mem[10'h02A], mem[10'h02B]} = {8'h22, 8'hF2, 8'h03};
+        {mem[10'h02C], mem[10'h02D]}               = {8'hDB, 8'h55};
+        {mem[10'h02E], mem[10'h02F], mem[10'h030]} = {8'h32, 8'hF4, 8'h03};
+        {mem[10'h031], mem[10'h032]}               = {8'h3E, 8'h5A};
+        {mem[10'h033], mem[10'h034]}               = {8'hD3, 8'hAA};
+        mem[10'h035] = 8'hC9;
     end
 
     // ---- run: reset release (red LED off), then HALT (red LED on) ----
     integer errors = 0;
-    task expect8(input [11:0] addr, input [7:0] want);
+    task expect8(input [9:0] addr, input [7:0] want);
         if (mem[addr] !== want) begin
             $display("[tb_chip] FAIL: mem[%03h] = %02h, want %02h", addr, mem[addr], want);
             errors = errors + 1;
@@ -126,13 +127,13 @@ module tb_chip;
         $display("[tb_chip] reset released at %0t", $realtime);
         wait (ledr_n === 1'b0);
         $display("[tb_chip] HALT at %0t", $realtime);
-        for (i = 0; i < 16; i = i + 1) expect8(12'h800 + i, i + 1);
-        expect8(12'hFF0, 8'h06);
-        expect8(12'hFF2, 8'h01);
-        expect8(12'hFF3, 8'h02);
-        expect8(12'hFF4, 8'hFF);
-        expect8(12'hFFE, 8'h12);
-        expect8(12'hFFF, 8'h00);
+        for (i = 0; i < 16; i = i + 1) expect8(10'h200 + i, i + 1);
+        expect8(10'h3F0, 8'h06);
+        expect8(10'h3F2, 8'h01);
+        expect8(10'h3F3, 8'h02);
+        expect8(10'h3F4, 8'hFF);
+        expect8(10'h3FE, 8'h12);
+        expect8(10'h3FF, 8'h00);
         if (io_writes != 1 || io_port != 8'hAA || io_data != 8'h5A) begin
             $display("[tb_chip] FAIL: %0d I/O writes, last OUT (%02h),%02h; want one OUT (AA),5A",
                      io_writes, io_port, io_data);

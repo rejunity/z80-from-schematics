@@ -1,4 +1,4 @@
-// tb_top.v - end-to-end smoke test of the iCEBreaker RZ80 SoC (sbc build).
+// tb_top.v - end-to-end smoke test of the iCESugar RZ80 SoC (sbc build).
 //
 // Boots the real NASCOM BASIC 4.7 ROM through the real top-level (/12
 // clock divider, POR, EBR ROM, SPRAM model, UART, ACIA shim, /INT RX
@@ -32,19 +32,20 @@ module tb_top;
 
     reg  uart_rx = 1'b1;
     wire uart_tx;
-    wire ledr_n, ledg_n;
+    wire ledr_n, ledg_n, ledb_n;
     wire z80_clk;
     wire [7:0] z80_d;
     wire z80_mreq_n, z80_rd_n, z80_wr_n;
-    wire [11:0] z80_a;
+    wire [9:0]  z80_a;
 
     top #(.CORE_HZ(CORE_HZ), .BAUD(SIM_BAUD), .EXTERNAL_BUS(1'b0)) dut (
         .clk        (clk),
         .uart_rx    (uart_rx),
         .uart_tx    (uart_tx),
-        .btn_n      (1'b1),             // not pressed
+        .btn_n      (1'b1),             // DIP switch 1 off
         .ledr_n     (ledr_n),
         .ledg_n     (ledg_n),
+        .ledb_n     (ledb_n),
         .z80_clk    (z80_clk),
         .z80_d      (z80_d),
         .z80_mreq_n (z80_mreq_n),

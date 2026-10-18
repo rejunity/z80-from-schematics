@@ -2,7 +2,7 @@
 """Print every placed I/O pad of a routed iCE40 netlist: package pin,
 PMOD name, top-level port, and the direction the pad is configured for.
 
-Usage: pins.py <top_<build>.pnr.json> <icebreaker.pcf>
+Usage: pins.py <top_<build>.pnr.json> <icesugar.pcf>
 
 Reads nextpnr's --write output, so it shows what the bitstream really
 does, not what top.v intended: the SB_IO PIN_TYPE output mode (bits 5:4:
@@ -14,17 +14,16 @@ import json
 import re
 import sys
 
-# iCEBreaker board pins (icebreaker-fpga/icebreaker-verilog-examples
-# icebreaker.pcf) -> connector names, for the table
+# iCESugar v1.5 board pins (wuxx/icesugar src/common/io.pcf and the
+# v1.5 schematic) -> connector names, for the table
 BOARD = {
-    35: "CLK 12MHz", 6: "UART RX", 9: "UART TX", 10: "BTN_N",
-    11: "LEDR_N", 37: "LEDG_N",
-    4: "P1A1", 2: "P1A2", 47: "P1A3", 45: "P1A4",
-    3: "P1A7", 48: "P1A8", 46: "P1A9", 44: "P1A10",
-    43: "P1B1", 38: "P1B2", 34: "P1B3", 31: "P1B4",
-    42: "P1B7", 36: "P1B8", 32: "P1B9", 28: "P1B10",
-    27: "P2_1", 25: "P2_2", 21: "P2_3", 19: "P2_4",
-    26: "P2_7", 23: "P2_8", 20: "P2_9", 18: "P2_10",
+    35: "CLK 12MHz", 4: "UART RX (P1_11)", 6: "UART TX (P1_2)",
+    18: "DIP SW1 (P4_4)", 39: "LED_B", 40: "LED_R", 41: "LED_G",
+    10: "P1_1", 3: "P1_3", 48: "P1_4", 47: "P1_9", 2: "P1_10", 9: "P1_12",
+    46: "P2_1", 44: "P2_2", 42: "P2_3", 37: "P2_4",
+    36: "P2_9", 38: "P2_10", 43: "P2_11", 45: "P2_12",
+    34: "P3_1", 31: "P3_2", 27: "P3_3", 25: "P3_4",
+    23: "P3_9", 26: "P3_10", 28: "P3_11", 32: "P3_12",
 }
 
 
@@ -105,9 +104,10 @@ def main():
 
     order = list(BOARD.values())
     rows.sort(key=lambda r: (order.index(r[0]) if r[0] in order else 99, str(r[2])))
-    print(f"{'board pin':10} {'FPGA':>4}  {'port':12} {'PIN_TYPE':8}  direction")
+    w = max(len("board pin"), *(len(r[0]) for r in rows))
+    print(f"{'board pin':{w}} {'FPGA':>4}  {'port':12} {'PIN_TYPE':8}  direction")
     for b, pin, port, kind, pt in rows:
-        print(f"{b:10} {pin!s:>4}  {re.sub(r'^.*/', '', port):12} {pt:8}  {kind}")
+        print(f"{b:{w}} {pin!s:>4}  {re.sub(r'^.*/', '', port):12} {pt:8}  {kind}")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,91 @@
+# iCESugar v1.5 (MuseLab, iCE40UP5K-SG48) pin constraints for the RZ80 SoC.
+#
+# Pin numbers checked against the board's schematic and constraints file
+# in the official repository, wuxx/icesugar schematic/iCESugar-v1.5.pdf and
+# src/common/io.pcf (2026-10). PMOD pin names are the board's own
+# numbering from io.pcf (P<pmod>_<pin>; pins 1-4 and 9-12 are I/O). Global-
+# buffer-capable pins (GBIN) from Project IceStorm's icebox database
+# (pinloc_db "5k-sg48").
+#
+# Both builds (sbc, chip) use this one file; the Makefile appends the
+# per-build Z80 clock constraint (set_frequency clk_z80 ...).
+
+# 12 MHz from the iCELink's MCO (pin 35 is a GBIN and the PLL's input pad)
+set_io clk        35
+set_frequency clk 12
+
+# iCELink UART3 through jumper header J5 (both jumpers fitted): the FPGA
+# receives on pin 4 and transmits on pin 6, which are also PMOD1's P1_11
+# and P1_2 -- the bus does not use them
+set_io uart_rx     4
+set_io uart_tx     6
+
+# DIP switch 1 (S1-1, SW[0] in io.pcf; ON pulls the pin low through the
+# switch, 4.7 k pull-up on the board) is /RESET. The RGB LED sits on the
+# UP5K's RGB pins, cathodes through 470 R and jumper header J6, active low.
+set_io -pullup yes btn_n 18
+set_io ledb_n     39
+set_io ledr_n     40
+set_io ledg_n     41
+
+# ---- Z80 bus on PMOD1-3 (3.3 V, NOT 5 V tolerant) ----
+#
+# 22 free PMOD pins = the first 22 signals of the shared chip-pinout order:
+# CLK, D0-D7, /MREQ, /RD, /WR, A0-A9 (a 1 KiB address window). PMOD1 loses
+# two pins to the console UART, PMOD4 is the DIP switch.
+#
+#   PMOD pin   FPGA  chip build             sbc build (all outputs)
+#   P1_1       10    A0        out          A0
+#   P1_3        3    A1        out          A1
+#   P1_4       48    A2        out          A2
+#   P1_9       47    A3        out          A3
+#   P1_10       2    A4        out          A4
+#   P1_12       9    A5        out          A5
+#   P2_1       46    /MREQ     out          /MREQ
+#   P2_2       44    CLK       in (GBIN)    CLK (the internal 4 MHz)
+#   P2_3       42    /RD       out          /RD
+#   P2_4       37    /WR       out          /WR
+#   P2_9       36    A6        out          A6
+#   P2_10      38    A7        out          A7
+#   P2_11      43    A8        out          A8
+#   P2_12      45    A9        out          A9
+#   P3_1       34    D0        bidir        D0 (bus byte)
+#   P3_2       31    D1        bidir        D1
+#   P3_3       27    D2        bidir        D2
+#   P3_4       25    D3        bidir        D3
+#   P3_9       23    D4        bidir        D4
+#   P3_10      26    D5        bidir        D5
+#   P3_11      28    D6        bidir        D6
+#   P3_12      32    D7        bidir        D7
+#
+# Pin 44 (P2_2) is a GBIN, so the external CLK enters the global clock
+# network directly (SB_GB_IO in top.v). Pin 37 (P2_4, also a GBIN) carries
+# the sbc PLL's second output through its input path, so it is an output
+# in both builds. Pins 10 and 9 (P1_1, P1_12) are also the FPGA's own
+# micro-USB D+/D- (J8, with a 1.5 k pull-up switched by pin 11): leave that
+# connector unplugged when the bus is in use.
+
+set_io z80_a[0]   10
+set_io z80_a[1]   3
+set_io z80_a[2]   48
+set_io z80_a[3]   47
+set_io z80_a[4]   2
+set_io z80_a[5]   9
+
+set_io z80_mreq_n 46
+set_io z80_clk    44
+set_io z80_rd_n   42
+set_io z80_wr_n   37
+set_io z80_a[6]   36
+set_io z80_a[7]   38
+set_io z80_a[8]   43
+set_io z80_a[9]   45
+
+set_io z80_d[0]   34
+set_io z80_d[1]   31
+set_io z80_d[2]   27
+set_io z80_d[3]   25
+set_io z80_d[4]   23
+set_io z80_d[5]   26
+set_io z80_d[6]   28
+set_io z80_d[7]   32

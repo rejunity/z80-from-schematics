@@ -8,7 +8,7 @@ Same record subset as scripts/basicrunner.c's loader: type 00 data
 records honoured, type 01 ends the file, everything else skipped.
 The image covers addresses 0 .. size-1 (default 65536); unused
 addresses are zero-filled (keeps the image explicit and simulation
-X-free). A data byte at or above `size` is an error: on the iCEBreaker
+X-free). A data byte at or above `size` is an error: on the iCESugar
 the image is the 8 KiB ROM window (block RAM), not a 64 KiB RAM.
 
 --top prints the end of the image rounded up to 1 KiB, in decimal: the

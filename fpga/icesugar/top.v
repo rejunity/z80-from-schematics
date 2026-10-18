@@ -1,33 +1,35 @@
-// top.v - RZ80 for the iCEBreaker (Lattice iCE40UP5K-SG48)
+// top.v - RZ80 for the iCESugar (MuseLab, Lattice iCE40UP5K-SG48)
 //
 // Two builds from this one file, selected by EXTERNAL_BUS (see Makefile:
 // `make sbc`, `make chip`):
 //
 //   EXTERNAL_BUS=0  "sbc": a BASIC single-board computer. NASCOM BASIC 4.7
 //     (RC2014 build) in an 8 KiB block-RAM ROM, 32 KiB of SPRAM, and a
-//     68B50-style ACIA on the FT2232H's second channel (the board's USB
-//     serial port) at 115200 8N1; Z80 clock 4 MHz from the PLL. The PMODs
-//     carry the bus as OUTPUTS in the chip-build pinout below (CLK
-//     included), so a logic analyser sees what a Z80 would drive.
+//     68B50-style ACIA on the iCELink's USB serial port (CDC) at 115200
+//     8N1; Z80 clock 4 MHz from the PLL. The PMODs carry the bus as
+//     OUTPUTS in the chip-build pinout below (CLK included), so a logic
+//     analyser sees what a Z80 would drive.
 //
 //   EXTERNAL_BUS=1  "chip": a Z80 chip replacement. The PMODs are the live
-//     CPU bus; CLK comes IN on P1A10 and is the clock of z80_top; memory
-//     and peripherals are whatever is wired to the PMODs. The USB UART is
-//     unused (TX idles high).
+//     CPU bus; CLK comes IN on P2_2 and is the clock of z80_top; memory
+//     and peripherals are whatever is wired to the PMODs. The USB serial
+//     port is unused (TX idles high).
 //
-// PMOD pinout. The three PMODs have 24 user I/O, so they carry the first
-// 24 signals of the pinout order shared by all our boards (strobes first,
-// then as much address bus as fits): CLK, D0-D7, /MREQ, /RD, /WR, A0-A11.
-// One byte per PMOD (table in icebreaker.pcf):
+// PMOD pinout. PMOD1-3 have 24 I/O, but two of PMOD1's are the iCELink
+// UART (P1_2 = pin 6, P1_11 = pin 4, through jumper header J5) and PMOD4's
+// four are wired to the DIP switch, so 22 are free: they carry the first
+// 22 signals of the pinout order shared by all our boards (strobes first,
+// then as much address bus as fits): CLK, D0-D7, /MREQ, /RD, /WR, A0-A9.
+// (Table in icesugar.pcf; P<n>_<m> is the board's own numbering, as in
+// wuxx/icesugar src/common/io.pcf.)
 //
-//   P1A  A8-A11, /MREQ, /RD, /WR, CLK (P1A10 = pin 44, a GBIN)
-//   P1B  D0-D7
-//   P2   A0-A7   (the snap-off button/LED board's PMOD: snap it off for
-//                 the chip build)
+//   PMOD1  A0-A5                         (P1_2 / P1_11: the console UART)
+//   PMOD2  /MREQ, CLK, /RD, /WR, A6-A9   (P2_2 = pin 44, a GBIN)
+//   PMOD3  D0-D7
 //
-// A12-A15, /IORQ, /M1, /RFSH, /HALT, /BUSACK are not brought out (the chip
-// build is a 4 KiB-window memory-only Z80); /WAIT, /INT, /NMI, /BUSREQ are
-// tied inactive; /RESET is the user button. All PMOD I/O is 3.3 V and NOT
+// A10-A15, /IORQ, /M1, /RFSH, /HALT, /BUSACK are not brought out (the chip
+// build is a 1 KiB-window memory-only Z80); /WAIT, /INT, /NMI, /BUSREQ are
+// tied inactive; /RESET is DIP switch 1. All PMOD I/O is 3.3 V and NOT
 // 5 V tolerant: use level translators towards a 5 V Z80 system.
 //
 // Clocking. The Z80 clock is a real clock, one T-state per period:
@@ -37,29 +39,31 @@
 // No 2x clock, no clock enable, nothing resamples the Z80 clock.
 //
 //   - sbc: the iCE40 PLL cannot go below 16 MHz, so 4 MHz is the PLL plus
-//     a fabric divider: 12 MHz (pin 35) -> SB_PLL40_2_PAD -> 48 MHz ->
-//     /12 toggle divider (6 PLL periods high, 6 low: exact 50 % duty) ->
-//     SB_GB -> 4.000 MHz on a global net. CORE_HZ = 3_500_000 picks a
-//     42 MHz PLL output instead (3.500 MHz). The PLL's port A passes the
-//     12 MHz reference through onto a second global net, which clocks the
-//     reset stretch and the heartbeat. In simulation the PLL is a black
-//     box: the testbench clock stands in for its 48 MHz output (and for
-//     the 12 MHz domain), so the real /12 divider runs and CORE_HZ needs
-//     no override.
-//   - chip: CLK on P1A10 (pin 44, a global-buffer input pin) enters the
+//     a fabric divider: 12 MHz (pin 35, from the iCELink's MCO) ->
+//     SB_PLL40_2_PAD -> 48 MHz -> /12 toggle divider (6 PLL periods high,
+//     6 low: exact 50 % duty) -> SB_GB -> 4.000 MHz on a global net.
+//     CORE_HZ = 3_500_000 picks a 42 MHz PLL output instead (3.500 MHz).
+//     The PLL's port A passes the 12 MHz reference through onto a second
+//     global net, which clocks the reset stretch and the heartbeat. In
+//     simulation the PLL is a black box: the testbench clock stands in for
+//     its 48 MHz output (and for the 12 MHz domain), so the real /12
+//     divider runs and CORE_HZ needs no override.
+//   - chip: CLK on P2_2 (pin 44, a global-buffer input pin) enters the
 //     global network through SB_GB_IO and clocks z80_top directly. Every
 //     rising edge is one T-state; read data must be valid around the
 //     clock edge the Z80 samples it on (rising edge ending T2 for M1, the
 //     falling edge of T3 for MRD), the Z80's own setup/hold contract --
 //     with one difference: the core decodes the M1 opcode in the same
-//     clock, so it needs ~58 ns of setup (nextpnr), a Z80A 35 ns. Holding
+//     clock, so it needs ~57 ns of setup (nextpnr), a Z80A 35 ns. Holding
 //     CLK stops the CPU, as on a CMOS Z80.
 //
-// RESET: power-on + the user button (pin 10, active low), stretched ~5 ms
-// on the 12 MHz clock, asynchronous assertion, release synchronized to the
-// Z80 clock so the first T1 always starts on a clean rising edge. (In the
-// chip build that release needs CLK edges; the red LED shows a Z80 that is
-// held in reset or halted.)
+// RESET: power-on + DIP switch 1 (S1-1, pin 18; ON pulls it low: the Z80
+// is held in reset while the switch is on). The board has no user push
+// button (S2 is the FPGA's CRESET). Stretched ~5 ms on the 12 MHz clock,
+// asynchronous assertion, release synchronized to the Z80 clock so the
+// first T1 always starts on a clean rising edge. (In the chip build that
+// release needs CLK edges; the red LED shows a Z80 that is held in reset
+// or halted.)
 //
 // sbc memory map (NASCOM BASIC 4.7 for the RC2014: 8 KiB ROM at 0x0000,
 // RAM at 0x8000-0xFFFF):
@@ -83,12 +87,14 @@
 // busy holds the CPU with /WAIT until the previous byte is out (Tiny BASIC
 // writes without polling TDRE), so no byte is dropped.
 //
-// Board: 12 MHz oscillator on pin 35; FT2232H channel B UART: FPGA RX
-// pin 6, TX pin 9; user button pin 10 (active low); red LED pin 11 and
-// green LED pin 37 (active low).
+// Board (iCESugar v1.5 schematic, wuxx/icesugar): 12 MHz clock on pin 35
+// from the iCELink's MCO; iCELink UART3 through jumper header J5: FPGA RX
+// pin 4, TX pin 6; DIP switch S1-1..4 on pins 18-21 (4.7 k pull-ups, ON =
+// low); RGB LED on the UP5K's RGB pins, cathodes through 470 R, active
+// low: blue 39, red 40, green 41.
 //   green: heartbeat (~1.4 Hz, the 12 MHz domain is alive)
 //   red:   sbc: serial activity (TX or RX); chip: Z80 in reset or halted
-
+//   blue:  off
 module top #(
     parameter CORE_HZ  = 4_000_000,             // sbc Z80 clock: 4_000_000 or 3_500_000 (PLL 48 / 42 MHz, /12)
     parameter BAUD     = 115_200,
@@ -96,21 +102,22 @@ module top #(
     parameter ROM_PROTECT_TOP = 16'h2000,       // NASCOM 4.7 ROM is 0x0000-0x1FD9; writes below are dropped
     parameter EXTERNAL_BUS = 1'b1               // 1: chip build (PMODs are the live CPU bus); 0: BASIC sbc build
 ) (
-    input  wire        clk,         // 12 MHz oscillator (pin 35)
-    input  wire        uart_rx,     // FT2232H channel B -> FPGA serial (pin 6)
-    output wire        uart_tx,     // FPGA -> FT2232H channel B serial (pin 9)
-    input  wire        btn_n,       // user button, active low (pin 10)
-    output wire        ledr_n,      // red LED, active low (pin 11)
-    output wire        ledg_n,      // green LED, active low (pin 37)
+    input  wire        clk,         // 12 MHz from the iCELink (pin 35)
+    input  wire        uart_rx,     // iCELink UART3 -> FPGA serial (pin 4)
+    output wire        uart_tx,     // FPGA -> iCELink UART3 serial (pin 6)
+    input  wire        btn_n,       // DIP switch 1, ON = low = reset (pin 18)
+    output wire        ledr_n,      // RGB LED red, active low (pin 40)
+    output wire        ledg_n,      // RGB LED green, active low (pin 41)
+    output wire        ledb_n,      // RGB LED blue, active low (pin 39)
 
-    // Z80 bus on the PMODs (pinout above and in icebreaker.pcf). chip
+    // Z80 bus on the PMODs (pinout above and in icesugar.pcf). chip
     // build: CLK in, D bidirectional, the rest out. sbc build: all out.
-    inout  wire        z80_clk,     // P1A10: chip: CLK input; sbc: the Z80 clock out
-    inout  wire [7:0]  z80_d,       // P1B
-    output wire        z80_mreq_n,  // P1A7
-    output wire        z80_rd_n,    // P1A8
-    output wire        z80_wr_n,    // P1A9
-    output wire [11:0] z80_a        // A0-A7 on P2, A8-A11 on P1A1-P1A4
+    inout  wire        z80_clk,     // P2_2: chip: CLK input; sbc: the Z80 clock out
+    inout  wire [7:0]  z80_d,       // PMOD3
+    output wire        z80_mreq_n,  // P2_1
+    output wire        z80_rd_n,    // P2_3
+    output wire        z80_wr_n,    // P2_4
+    output wire [9:0]  z80_a        // A0-A5 on PMOD1, A6-A9 on P2_9-P2_12
 );
     // ---- clocks ----
     // Each build has exactly one Z80 clock source and no clock mux in the
@@ -130,7 +137,7 @@ module top #(
         // 2_PAD variant also hands the pad's own 12 MHz to the fabric
         // (port A): pin 35 is the PLL's dedicated input pad, so it cannot
         // be a plain clock input as well. Port B leaves through the input
-        // path of pin 37 (the green LED), which therefore stays an output.
+        // path of pin 37 (P2_4, /WR), which therefore stays an output.
         SB_PLL40_2_PAD #(
             .FEEDBACK_PATH("SIMPLE"),
             .PLLOUT_SELECT_PORTB("GENCLK"),
@@ -178,7 +185,7 @@ module top #(
 `else
         assign clk_z80 = clk_div;
 `endif
-        assign z80_clk = clk_div;           // P1A10 mirrors the Z80 clock
+        assign z80_clk = clk_div;           // P2_2 mirrors the Z80 clock
     end else begin : g_clk_chip
         assign clk12    = clk;              // no PLL in the chip build
         assign pll_lock = 1'b1;
@@ -197,12 +204,13 @@ module top #(
 `endif
     end endgenerate
 
-    // ---- power-on + button reset ----
+    // ---- power-on + DIP switch reset ----
     // One up-counter on the always-running 12 MHz clock (the Z80 clock may
     // be external and stopped): it starts at 0 after configuration
-    // (power-on reset) and is cleared while the button is held or the PLL
-    // is unlocked, then must count out 2^16 cycles (~5.5 ms) after release
-    // before board_reset_n deasserts. The stretch swallows switch bounce.
+    // (power-on reset) and is cleared while DIP switch 1 is on or the PLL
+    // is unlocked, then must count out 2^16 cycles (~5.5 ms) after the
+    // switch goes off before board_reset_n deasserts. The stretch swallows
+    // switch bounce.
     // board_reset_n is a flop, so the async reset below never sees a
     // decoder glitch.
     reg [15:0] rst_cnt       = 16'd0;
@@ -210,7 +218,7 @@ module top #(
     reg        board_reset_n = 1'b0;
     always @(posedge clk12) begin
         btn_sync <= {btn_sync[0], btn_n && pll_lock};
-        if (!btn_sync[1])              rst_cnt <= 16'd0;    // pressed / no PLL
+        if (!btn_sync[1])              rst_cnt <= 16'd0;    // switch on / no PLL
         else if (rst_cnt != 16'hFFFF)  rst_cnt <= rst_cnt + 16'd1;
         board_reset_n <= btn_sync[1] && (rst_cnt == 16'hFFFF);
     end
@@ -291,7 +299,7 @@ module top #(
         assign z80_d = data_drive ? data_out : data_in;
         assign pad_d = 8'hFF;
     end endgenerate
-    assign z80_a      = addr[11:0];
+    assign z80_a      = addr[9:0];
     assign z80_mreq_n = mreq_n;
     assign z80_rd_n   = rd_n;
     assign z80_wr_n   = wr_n;
@@ -495,4 +503,5 @@ module top #(
     assign ledg_n = ~beat[22];                      // ~1.4 Hz heartbeat
     assign ledr_n = EXTERNAL_BUS ? (cpu_reset_n && halt_n)   // lit: Z80 in reset or halted
                                  : (uart_tx && uart_rx_s);   // lit: serial activity
+    assign ledb_n = 1'b1;                           // blue: off
 endmodule
