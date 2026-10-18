@@ -46,17 +46,20 @@ clock, no clock enable, nothing resamples the clock.
   setup/hold contract. Holding CLK stops the CPU, as on a CMOS Z80. Keep
   external CLK at or below 10 MHz.
 
-  *Clock routing caveat.* J1 is a Gowin clock pin (`GCLKT_5`), but the
-  open flow (apicula / nextpnr-himbaechel as of 2026-10) does not yet put
-  that pin on the dedicated clock network: nextpnr warns
-  `Failed to route net 'clk_z80' ... using dedicated routing` and the
-  clock reaches the flops through general fabric routing, i.e. with
-  clock skew the tool does not check for hold. It still reports Fmax
-  ≈ 38 MHz for that clock. Of the header balls, only **E1** (J3-18, D5 in
-  this layout) gets dedicated routing today; swapping CLK and D5 between
-  J1 and E1 is a two-line change in `tang_primer_25k.cst` plus the same
-  swap on the adapter. The sbc build is unaffected (PLLA and CLKDIV are
-  on the global network).
+  *Clock routing.* J1 is a Gowin clock pin (`GCLKT_5`) and the right
+  ball for CLK, but the open flow (apicula / nextpnr-himbaechel as of
+  2026-10) describes the dedicated pin-to-clock-network path on GW5A-25
+  only for the crystal ball E2. Left to itself, nextpnr routes CLK to
+  each of the ~350 flops through general fabric (`Failed to route net
+  'clk_z80' ... using dedicated routing`), with skew that shows up as
+  placement-dependent hold violations. So `tang_primer_25k.cst` has
+  `CLOCK_LOC "z80_clk" BUFG;`: J1 makes one short fabric hop to a BUFG
+  beside it and then rides the global clock network, like the sbc
+  build's clock. No hold violations in four placement seeds, and the few
+  ns of insertion delay are the same for every flop. Header balls that
+  are not GCLKT pins get such a BUFG automatically, so moving CLK gains
+  nothing; Gowin's own tools route J1 on its dedicated path. In the sbc
+  build z80_clk is an output and the line changes nothing.
 
 RESET (power-on, key[0], header /RESET) asserts asynchronously and its
 release is synchronized to the Z80 clock, so the first T1 starts on a

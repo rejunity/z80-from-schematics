@@ -36,13 +36,11 @@
 //     T2, read data around the falling edge of T3, exactly the Z80
 //     setup/hold contract. Holding CLK stops the CPU, as on a CMOS Z80.
 //     Ball J1 is a Gowin clock pin (GCLKT_5), but the open flow
-//     (apicula/nextpnr-himbaechel, 2026-10) does not yet route that pin
-//     onto the dedicated clock network: CLK reaches the flops through
-//     general fabric routing, with the clock skew that implies (nextpnr
-//     reports Fmax ~38 MHz but does not check hold). Of the header balls
-//     only E1 (J3-18, D5 in this layout) gets dedicated routing today;
-//     swapping CLK and D5 there is a two-line change to the .cst. Keep
-//     external CLK <= 10 MHz.
+//     (apicula/nextpnr-himbaechel, 2026-10) has no dedicated path from it
+//     to the clock network on GW5A-25 and would route CLK to every flop
+//     through general fabric (skew, hold violations). The .cst marks it
+//     CLOCK_LOC BUFG: one short fabric hop to a BUFG beside J1, then the
+//     global clock network. Keep external CLK <= 10 MHz.
 //
 // RESET: power-on + key[0] (H10, active HIGH: board pull-down) + header
 // /RESET, asynchronous assertion, release synchronized to the Z80 clock

@@ -128,9 +128,11 @@ $(BUILD)/top_%.synth.json: $(BUILD)/src $(BUILD)/rom.mem $(VENV)/.ok
 # JTAG access until the next power cycle.
 # nextpnr: full log in build/nextpnr_<build>.log, console shows the stage
 # lines, placer/router progress (one router row per 5000 arcs) and the
-# timing summary. The chip build's
-# per-sink "Failed to route ... using dedicated routing" warnings (the J1
-# clock, see README) are summarised instead of listed.
+# timing summary.
+# Each build has one "Failed to route ... using dedicated routing"
+# warning: the LUT that inverts the Z80 clock for the falling-edge flops
+# takes it on a logic input. It is left off the console; more than one
+# means CLK is off the global clock network (README, Clocking).
 NEXTPNR_PROGRESS := grep --line-buffered -E '^(Info: (Pack|Running|Placed|Creating|HeAP|SA |Routing|Router|Max frequency|Program finished|Device util)|Info: +[0-9]*[05]000 \||ERROR|Warning)' \
   | grep --line-buffered -v 'Failed to route net'
 
@@ -139,7 +141,7 @@ $(BUILD)/top_%.pnr.json: $(BUILD)/top_%.synth.json $(BUILD)/tang_primer_25k.cst
 	  --device $(DEVICE) --vopt cst=tang_primer_25k.cst --vopt sspi_as_gpio \
 	  2>&1 | tee nextpnr_$(STEM).log | $(NEXTPNR_PROGRESS) || true
 	@n=$$(grep -c 'Failed to route net' $(BUILD)/nextpnr_$(STEM).log); \
-	  [ "$$n" = 0 ] || echo "nextpnr: $$n clock sinks not on dedicated routing (see README, clock routing caveat)"
+	  [ "$$n" -le 1 ] || echo "nextpnr: $$n clock sinks on general routing, expected 1 (see README, Clocking)"
 	@test -f $(BUILD)/top_$(STEM).pnr.json
 
 $(BUILD)/top_%.fs: $(BUILD)/top_%.pnr.json

@@ -133,6 +133,14 @@ IO_PORT "z80_wr_n"     IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
 IO_PORT "z80_rfsh_n"   IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
 IO_PORT "z80_halt_n"   IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
 
+// Chip build: J1 is a Gowin clock pin (GCLKT_5), but the open flow has no
+// dedicated path from it to the GW5A-25 clock network (apicula describes
+// only E2's), so nextpnr would route CLK to every flop through general
+// fabric, with skew and hold violations. CLOCK_LOC BUFG: one short fabric
+// hop to a BUFG beside J1, then the global clock network. In the sbc
+// build z80_clk is an output and this line changes nothing.
+CLOCK_LOC "z80_clk" BUFG;
+
 // Active-low control inputs (chip build; WAIT/INT/BUSREQ are outputs in the
 // sbc build). Weak pull-ups leave them inactive when the header is unplugged;
 // external drivers must pull low.
