@@ -107,22 +107,22 @@ int main(int argc, char** argv) {
     // rtl/z80_defs.vh: BC=0, DE=1, HL=2, AF=3, BC2=4, DE2=5, HL2=6,
     // AF2=7, IX=8, IY=9, SP=10, PC=11, WZ=12. Set the bank Rak's
     // outer harness expects (regs to 0xFFFF, SP to 0xFFEE).
-    R->z80_top__DOT__u_core__DOT__rf[11]   = load_addr;       // PC
-    R->z80_top__DOT__u_core__DOT__rf_n[11] = load_addr;
-    R->z80_top__DOT__u_core__DOT__rf[10]   = 0xFFEE;          // SP
-    R->z80_top__DOT__u_core__DOT__rf_n[10] = 0xFFEE;
-    R->z80_top__DOT__u_core__DOT__rf[3]    = 0xFFFF;          // AF
-    R->z80_top__DOT__u_core__DOT__rf_n[3]  = 0xFFFF;
-    R->z80_top__DOT__u_core__DOT__rf[0]    = 0xFFFF;          // BC
-    R->z80_top__DOT__u_core__DOT__rf_n[0]  = 0xFFFF;
-    R->z80_top__DOT__u_core__DOT__rf[1]    = 0xFFFF;          // DE
-    R->z80_top__DOT__u_core__DOT__rf_n[1]  = 0xFFFF;
-    R->z80_top__DOT__u_core__DOT__rf[2]    = 0xFFFF;          // HL
-    R->z80_top__DOT__u_core__DOT__rf_n[2]  = 0xFFFF;
-    R->z80_top__DOT__u_core__DOT__rf[8]    = 0xFFFF;          // IX
-    R->z80_top__DOT__u_core__DOT__rf_n[8]  = 0xFFFF;
-    R->z80_top__DOT__u_core__DOT__rf[9]    = 0xFFFF;          // IY
-    R->z80_top__DOT__u_core__DOT__rf_n[9]  = 0xFFFF;
+    R->z80_top__DOT__u_core__DOT__u_regs__DOT__rf[11]   = load_addr;       // PC
+    R->z80_top__DOT__u_core__DOT__u_regs__DOT__rf_n[11] = load_addr;
+    R->z80_top__DOT__u_core__DOT__u_regs__DOT__rf[10]   = 0xFFEE;          // SP
+    R->z80_top__DOT__u_core__DOT__u_regs__DOT__rf_n[10] = 0xFFEE;
+    R->z80_top__DOT__u_core__DOT__u_regs__DOT__rf[3]    = 0xFFFF;          // AF
+    R->z80_top__DOT__u_core__DOT__u_regs__DOT__rf_n[3]  = 0xFFFF;
+    R->z80_top__DOT__u_core__DOT__u_regs__DOT__rf[0]    = 0xFFFF;          // BC
+    R->z80_top__DOT__u_core__DOT__u_regs__DOT__rf_n[0]  = 0xFFFF;
+    R->z80_top__DOT__u_core__DOT__u_regs__DOT__rf[1]    = 0xFFFF;          // DE
+    R->z80_top__DOT__u_core__DOT__u_regs__DOT__rf_n[1]  = 0xFFFF;
+    R->z80_top__DOT__u_core__DOT__u_regs__DOT__rf[2]    = 0xFFFF;          // HL
+    R->z80_top__DOT__u_core__DOT__u_regs__DOT__rf_n[2]  = 0xFFFF;
+    R->z80_top__DOT__u_core__DOT__u_regs__DOT__rf[8]    = 0xFFFF;          // IX
+    R->z80_top__DOT__u_core__DOT__u_regs__DOT__rf_n[8]  = 0xFFFF;
+    R->z80_top__DOT__u_core__DOT__u_regs__DOT__rf[9]    = 0xFFFF;          // IY
+    R->z80_top__DOT__u_core__DOT__u_regs__DOT__rf_n[9]  = 0xFFFF;
 
     long long phases = 0, instr = 0;
     bool prev_m1_n = true;
@@ -146,11 +146,12 @@ int main(int argc, char** argv) {
         phases++;
         if (prev_m1_n && !t->m1_n) {
             instr++;
-            uint16_t pc = R->z80_top__DOT__u_core__DOT__rf[11];
+            uint16_t pc = R->z80_top__DOT__u_core__DOT__rfl[11];
             if (pc == 0) break;     // outer RET to 0
             if (pc == 0x0010 && prev_pc_at_m1 != 0x0010) {
-                // print A. AF is rf[3]; A is the high byte.
-                unsigned char ch = (R->z80_top__DOT__u_core__DOT__rf[3] >> 8) & 0xFF;
+                // print A: logical AF is rfl[3] (rf[] holds physical pairs
+                // behind the EX/EXX exchange flip-flops); A is the high byte.
+                unsigned char ch = (R->z80_top__DOT__u_core__DOT__rfl[3] >> 8) & 0xFF;
                 std::putchar((int)ch);
                 if (cap_used < cap_sz - 1) captured[cap_used++] = (char)ch;
                 std::fflush(stdout);

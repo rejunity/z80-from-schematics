@@ -91,11 +91,10 @@ def main():
     print("regenerating testbench ...")
     subprocess.check_call(["python3", GEN])
     print("elaborating ...")
-    subprocess.check_call(["iverilog", "-g2001", "-Irtl",
-                           "-o", VVP,
-                           "rtl/z80_alu.v", "rtl/z80_core.v", "rtl/z80_top.v",
-                           "rtl/z80_pla.v", "rtl/z80_timing.v",
-                           "tests/iverilog/tb_fuse.v"], cwd=ROOT)
+    import glob
+    rtl = sorted(os.path.relpath(p, ROOT) for p in glob.glob(os.path.join(ROOT, "rtl", "*.v")))
+    subprocess.check_call(["iverilog", "-g2001", "-Irtl", "-o", VVP] + rtl +
+                          ["tests/iverilog/tb_fuse.v"], cwd=ROOT)
     print("running iverilog vvp ...")
     proc = subprocess.run(["vvp", VVP], cwd=ROOT, capture_output=True, text=True)
     text = proc.stdout

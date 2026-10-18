@@ -48,7 +48,7 @@ module tb_wait_edge;
         step;
         reset_n = 1;
         reach_t2_p;
-        pc_before = dut.u_core.rf[`RFP_PC];
+        pc_before = dut.u_core.rfl[`RFP_PC];
 
         wait_n = 0;
         step; // falling edge of T2: z80_top captures WAIT
@@ -59,7 +59,7 @@ module tb_wait_edge;
         if (dut.u_core.wait_sampled !== 1 || dut.u_core.stall !== 1)
             $fatal(1, "WAIT decision changed after falling edge");
         step; // next rising edge: insert Tw
-        if (dut.u_core.t_state !== 2 || phi !== 0 || dut.u_core.rf[`RFP_PC] !== pc_before)
+        if (dut.u_core.t_state !== 2 || phi !== 0 || dut.u_core.rfl[`RFP_PC] !== pc_before)
             $fatal(1, "falling-edge WAIT pulse did not insert Tw");
         step; // next falling edge samples released WAIT
         if (dut.u_core.wait_sampled !== 0) $fatal(1, "WAIT remained latched");

@@ -40,10 +40,13 @@ EOF
   exit 2
 fi
 
-# --to Yosys.Synthesis runs only up through the synthesis step; no
-# floorplan / place / route / CTS / STA — those add minutes per push
-# and produce no signals our gate-level sim needs.
-librelane --to Yosys.Synthesis ./config.json
+# --to Checker.YosysSynthChecks runs synthesis plus its two checkers
+# (unmapped cells; yosys `check` problems such as multiple drivers or
+# inferred latches -- the first stops on what a full RTL-to-GDS run would
+# reject) and nothing after: no floorplan / place / route / CTS / STA --
+# those add minutes per push and produce no signals our gate-level sim
+# needs. Full RTL-to-GDS lives on the asic-* branches.
+librelane --to Checker.YosysSynthChecks ./config.json
 
 # Locate the latest run's netlist + the PDK_ROOT it was synthesized
 # against. Both go into build/synth/ as a stable interface for the
