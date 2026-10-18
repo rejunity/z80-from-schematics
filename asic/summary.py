@@ -6,8 +6,10 @@ usage: summary.py <run dir>   (e.g. asic/sky130/runs/RUN_2026-10-17_...)
 Reads <run>/final/metrics.json and <run>/resolved.json and prints area,
 per-corner timing and the sign-off checks. Exit status 1 if a check
 fails, so CI can gate on it:
-  - route DRC, Magic / KLayout DRC, LVS, antenna, disconnected pins, the
-    Magic-vs-KLayout GDS XOR: must be 0;
+  - route DRC, Magic / KLayout DRC, LVS, antenna, critical disconnected
+    pins (LibreLane's own rule: an unconnected output, such as the chip's
+    unused debug pins of z80_top, is not one), the Magic-vs-KLayout GDS
+    XOR: must be 0;
   - setup: no violations at the corners LibreLane itself signs off
     (TIMING_VIOLATION_CORNERS, typical by default -- the same rule the
     flow's own checkers and the TinyTapeout / wafer.space flows apply);
@@ -62,6 +64,7 @@ for c in corners:
         hold_vio += hv
 print()
 
+print(f"disconnected pins, all: {get('design__disconnected_pin__count')}")
 checks = [
     ("route DRC",               get("route__drc_errors")),
     ("Magic DRC",               get("magic__drc_error__count")),
@@ -69,7 +72,7 @@ checks = [
     ("LVS",                     get("design__lvs_error__count")),
     ("antenna nets",            get("antenna__violating__nets")),
     ("antenna pins",            get("antenna__violating__pins")),
-    ("disconnected pins",       get("design__disconnected_pin__count")),
+    ("disconnected pins (crit.)", get("design__critical_disconnected_pin__count")),
     ("XOR (Magic/KLayout GDS)", get("design__xor_difference__count")),
     ("setup violations (*)",    setup_vio),
     ("hold violations (all)",   hold_vio),

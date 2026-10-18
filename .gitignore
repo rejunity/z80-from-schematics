@@ -44,6 +44,8 @@ spec48.rom
 48.rom
 # LibreLane runs and logs
 /asic/*/runs/
+/asic/*/chip/runs/
+/asic/*/chip/macro/
 /asic/*/harden.log
 /asic/*/harden-*.log
 # yowasp-yosys for `make luts`

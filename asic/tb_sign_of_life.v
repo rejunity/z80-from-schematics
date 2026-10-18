@@ -29,7 +29,10 @@ module tb_sign_of_life;
     reg  [7:0]  mem [0:65535];
     wire [7:0]  data_in = (!mreq_n && !rd_n) ? mem[addr] : 8'hFF;
 
-    z80_top dut (
+`ifndef DUT
+`define DUT z80_top   // the chip: z80_chip_shim (chip_shim.v)
+`endif
+    `DUT dut (
         .clk(clk), .reset_n(reset_n),
         .addr(addr), .data_in(data_in), .data_out(data_out), .data_drive(data_drive),
         .m1_n(m1_n), .mreq_n(mreq_n), .iorq_n(iorq_n), .rd_n(rd_n), .wr_n(wr_n),

@@ -10,7 +10,7 @@ core, independent of any particular shuttle wrapper.
 |---|---|
 | PDK | `gf180mcuD`, `54435919` (the pin of LibreLane 3.0.14, used by TinyTapeout's ttgf26d shuttle). wafer.space's project template pins `f6eeac7d` of the same gf180mcuD variant and the same 7-track 5 V cell library (`gf180mcu_fd_sc_mcu7t5v0`, with `gf180mcu_fd_io` pads). |
 | Cells | `gf180mcu_fd_sc_mcu7t5v0` |
-| Clock target | 50 ns (20 MHz), met at the typical corners LibreLane signs off (+5.1 ns); the 5 V cells at the slow corner (ss, 125 °C, 4.5 V) reach ~14 MHz |
+| Clock target | 50 ns (20 MHz), met at the typical corners LibreLane signs off (+3.8 ns); the 5 V cells at the slow corner (ss, 125 °C, 4.5 V) reach ~15 MHz |
 | Config | `config.yaml` (Classic flow, relative die sizing) |
 
 ## Run it
@@ -51,14 +51,18 @@ together. The cell models come from the run's `resolved.json`
 ## Results
 
 Restructured core (`optimise-luts`: control word + shared datapath, exchange
-flip-flops, one IDU, WZ operand latch), measured with a 20 MHz target:
+flip-flops, one IDU, WZ operand latch), synthesized per RTL block
+(`SYNTH_HIERARCHY_MODE: deferred_flatten`, which keeps the block names for
+the block map) and laid out as the chip's macro: pins on the sides of
+their pads (`pin_order.cfg`), power straps on Metal4 only, routing up to
+Metal4. Measured with a 20 MHz target:
 
 | | |
 |---|---|
-| Std cells | 8,391 |
-| Cell area | 155,892 µm² |
-| Die | 535 × 553 µm = 0.30 mm² (57 % utilised) |
-| Setup slack @ 20 MHz | +5.1 ns typical (signed off, ~22 MHz); -18.5 ns at ss 125 °C 4.5 V (worst path 70 ns, a full cycle: ~14 MHz) |
+| Std cells | 8,681 |
+| Cell area | 163,902 µm² |
+| Die | 545 × 563 µm = 0.31 mm² (58 % utilised) |
+| Setup slack @ 20 MHz | +3.8 ns typical (signed off, ~21.7 MHz); -15.1 ns at ss 125 °C 4.5 V (~15 MHz) |
 | Hold slack | +0.25 ns |
 | Route / Magic DRC, LVS, antenna, GDS XOR | all 0 (KLayout DRC is not part of LibreLane's GF180 Classic flow) |
 | Signs of life, routed netlist | PASS (HALT after 554 clocks) |
@@ -67,6 +71,43 @@ flip-flops, one IDU, WZ operand latch), measured with a 20 MHz target:
 Previous core (main before the restructure, same flow): Sign-off clean (DRC / LVS / antenna / XOR 0), 16,225 cells, 0.29 mm² of cells on a 0.50 mm² die, but at 20 MHz the slow corner missed by 26.7 ns (typical passed with +3.9 ns); 12,112 max-slew violations. ~1 h 50 min.
 
 TinyTapeout gf180 tiles are 347 × 161 µm (up to 4x4); at 60 % density the core needs ~0.26 mm², about a 3x2 tile area. wafer.space's smallest slot (0p5x0p5) has a 1.05 × 1.65 mm core area -- the Z80 takes under a fifth of it, pad ring included separately.
+
+## The chip: z80_top in a pad ring
+
+`chip/` builds `z80_chip`: the hardened `z80_top` as a hard macro in a ring
+of 40 `gf180mcu_fd_io` pads, one per pin of the 40-pin Z80, each on the
+side of the die where the original's bond pad is (Visual Z80 die scan), in
+the same order and with its spacing scaled (`chip/pads.tcl`):
+
+    south  A5 A6 A7 A8 A9 A10 A11 A12 A13 A14 A15 CLK   (left to right)
+    east   D4 D3 D5 D6 VCC D2 D7 D0 D1                  (bottom to top)
+    north  INT NMI HALT MREQ IORQ RD WR BUSAK WAIT       (right to left)
+    west   BUSRQ RESET M1 RFSH GND A0 A1 A2 A3 A4       (top to bottom)
+
+`z80_top`'s own pins sit on the same sides in the same order
+(`pin_order.cfg`), so the pad wires are short. The foundry pad ring shorts
+the core supply to the 5 V I/O supply, so VCC and GND are the only supply
+pads -- exactly the Z80's two. As on the Z80, the address bus floats during
+RESET and BUSAK, MREQ IORQ RD WR during BUSAK, the data bus whenever the
+CPU does not drive it (`chip/z80_chip.v`; `z80_top` itself is unchanged).
+
+    make -C asic/gf180mcu                     # z80_top first: the chip uses its latest run as its macro
+    make -C asic/gf180mcu chip                # the chip (LibreLane Chip flow, into chip/runs/)
+    make -C asic/gf180mcu chip_summary        # sign-off of the chip, as `summary`
+    make -C asic/gf180mcu chip_sign_of_life   # the signs-of-life program through the pads
+
+| | |
+|---|---|
+| Die | 1936 × 2060 µm, pad-limited (12 pads along the bottom, with the Z80's spacing) |
+| Pads | 40: `bi_24t` (address and control outputs with their enables, the data bus), `in_c` / `in_s` (inputs; Schmitt for CLK and RESET), `dvdd` / `dvss` (VCC, GND) |
+| Sign-off | DRC, LVS, antenna, XOR all 0; typical-corner setup met; 7 unconnected outputs (`z80_top`'s debug pins, no pads) |
+| Signs of life through the pads | PASS (HALT after 554 clocks) |
+| Runtime | 8 min after `make` (the core is not re-synthesized or re-routed) |
+
+The pad ring settings follow open-pdks' LibreLane config for
+`gf180mcu_fd_io` (the PDK version LibreLane 3.0.14 pins predates it) and
+the wafer.space gf180mcu project template; `chip/pads_bb.v` are blackbox
+views of the pad cells for synthesis, whose own models do not lint.
 
 ## Notes
 
