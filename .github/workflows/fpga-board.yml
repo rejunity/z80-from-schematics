@@ -1,6 +1,8 @@
 # One FPGA board: both bitstreams, the 1K Tiny BASIC bitstream and every
 # simulation the board has -- `make ci` in fpga/<board>/ -- with the
-# board's timing summary and the bitstreams as artifacts.
+# board's timing summary. Artifacts: fpga-<board>-bitstreams (named
+# downloads, .github/scripts/dist.py; targets.yml also publishes them on
+# GitHub Pages) and fpga-<board>-logs.
 #
 # Called by targets.yml (main: every push and nightly) and by each board
 # branch's own fpga-<board>.yml (every push to that branch). fpga/ lives
@@ -37,6 +39,7 @@ jobs:
         run: |
           if [ -f fpga/$BOARD/Makefile ]; then
             echo "fpga/$BOARD is in this tree ($GITHUB_REF_NAME @ ${GITHUB_SHA::7})" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "BUILT_FROM=$GITHUB_REF_NAME @ ${GITHUB_SHA::7}" >> "$GITHUB_ENV"
             exit 0
           fi
           git config user.name ci
@@ -48,6 +51,7 @@ jobs:
             exit 1
           fi
           echo "$GITHUB_REF_NAME @ ${GITHUB_SHA::7} + fpga-$BOARD-basic @ $branch" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "BUILT_FROM=$GITHUB_REF_NAME @ ${GITHUB_SHA::7} + fpga-$BOARD-basic @ $branch" >> "$GITHUB_ENV"
 
       - uses: actions/setup-python@v5
         with:
@@ -75,17 +79,36 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload bitstreams and logs
+      # rz80-<board>-basic / -tinybasic / -chip (.bit/.bin/.fs/.uf2) and a
+      # README, whatever `make ci` got to build
+      - name: Collect the bitstreams
+        if: always()
+        run: python3 .github/scripts/dist.py fpga $BOARD dist
+
+      - name: Upload the bitstreams
+        id: bitstreams
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: fpga-${{ inputs.board }}
+          name: fpga-${{ inputs.board }}-bitstreams
+          path: dist/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload logs and reports
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: fpga-${{ inputs.board }}-logs
           path: |
-            fpga/${{ inputs.board }}/build*/top_*.bit
-            fpga/${{ inputs.board }}/build*/top_*.bin
-            fpga/${{ inputs.board }}/build*/top_*.fs
-            fpga/${{ inputs.board }}/build*/top_*.uf2
             fpga/${{ inputs.board }}/build*/*.log
             fpga/${{ inputs.board }}/build*/report_*.json
           if-no-files-found: warn
           retention-days: 14
+
+      - name: Link the bitstreams in the summary
+        if: always() && steps.bitstreams.outputs.artifact-url
+        env:
+          URL: ${{ steps.bitstreams.outputs.artifact-url }}
+        run: |
+          echo "Bitstreams: [fpga-$BOARD-bitstreams]($URL) (basic, tinybasic, chip)" >> "$GITHUB_STEP_SUMMARY"
