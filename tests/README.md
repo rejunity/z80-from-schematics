@@ -381,6 +381,23 @@ dispatch include it. Both LibreLane jobs cache the synthesised netlist
 on `hashFiles('rtl/*.v', 'librelane/config.json', 'librelane/run_synth.sh')`,
 so most pushes skip the ~3 min synthesis step.
 
+### Targets: FPGA boards and ASIC PDKs
+
+`.github/workflows/targets.yml` builds main's core for every FPGA board
+and ASIC PDK: on every push to main (docs-only pushes excepted), nightly
+and on demand. Board and PDK sources live on their own branches, so each
+job first merges its branch into main's tree.
+
+| Job (matrix) | Branch merged | Runs |
+|--------------|---------------|------|
+| `fpga`: icepi-zero, tang-primer-25k, icebreaker, pico-ice | `fpga-<board>-basic` | `make ci` in `fpga/<board>/`: sbc + chip bitstreams, the Tiny BASIC bitstream, and every board simulation (Verilator boot and Tiny BASIC at fast and real serial pacing, iverilog, gate-level where the board has one); timing summary and bitstreams as artifacts (`fpga-board.yml`) |
+| `asic`: sky130, ihp-sg13g2, gf180mcu | `asic-<pdk>` | signs of life on the RTL, LibreLane RTL-to-GDS, sign-off summary (fails on DRC / LVS / antenna / XOR / timing), signs of life on the routed netlist (`asic-pdk.yml`) |
+
+The branches run the same jobs on their own pushes (`fpga-<board>.yml`,
+`asic-<pdk>.yml` there). A branch that no longer merges cleanly into main
+fails its job's first step: merge main into it. The FPGA tools are pip's
+latest YoWASP builds, so the nightly run also catches toolchain drift.
+
 
 ## Forward-looking — what's not yet here
 
