@@ -390,7 +390,7 @@ job first merges its branch into main's tree.
 
 | Job (matrix) | Branch merged | Runs |
 |--------------|---------------|------|
-| `fpga`: icepi-zero, tang-primer-25k, icebreaker, pico-ice | `fpga-<board>-basic` | `make ci` in `fpga/<board>/`: sbc + chip bitstreams, the Tiny BASIC bitstream, and every board simulation (Verilator boot and Tiny BASIC at fast and real serial pacing, iverilog, gate-level where the board has one); timing summary and bitstreams as artifacts (`fpga-board.yml`) |
+| `fpga`: icepi-zero, tang-primer-25k, icebreaker, pico-ice | `fpga-<board>-basic` | `make ci` in `fpga/<board>/`: sbc + chip bitstreams, the Tiny BASIC bitstream, and every board simulation (Verilator boot and Tiny BASIC at fast and real serial pacing, iverilog, gate-level where the board has one; on the iCE40 boards also both BASICs on nextpnr's routed netlist, `make sim_pnr`); timing summary and bitstreams as artifacts (`fpga-board.yml`) |
 | `asic`: sky130, ihp-sg13g2, gf180mcu | `asic-<pdk>` | signs of life on the RTL, LibreLane RTL-to-GDS, sign-off summary (fails on DRC / LVS / antenna / XOR / timing), signs of life on the routed netlist (`asic-pdk.yml`) |
 
 The branches run the same jobs on their own pushes (`fpga-<board>.yml`,
