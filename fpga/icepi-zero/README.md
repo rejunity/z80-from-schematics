@@ -110,6 +110,7 @@ negative-edge flops map onto ECP5's inverted-clock FF mode.
     make sim_real       # same at true 115200 pacing (exercises the TIE path)
     make sim_iverilog   # same script through iverilog, much slower
     make sim_tiny       # Verilator, 1K Tiny BASIC (SIM_BAUD=115200: real pacing)
+    make ci             # all of these, both bitstreams and the Tiny BASIC bitstream
 
 All three boot the *real* ROM through the *real* top-level — PLL stand-in
 divider (50 MHz / 12 = 4.17 MHz), POR, BRAM, UART bits on the pins,
@@ -140,6 +141,11 @@ Verilator result on this branch:
     Cold | Warm start (C|W) ? W
     Ok
     [sim_top] PASS: boot, arithmetic, button warm-restart all good
+
+`make ci` is what GitHub Actions runs: on every push to this branch
+(`.github/workflows/fpga-icepi-zero.yml`) and nightly with this branch
+merged into main (`targets.yml`), so a core change on main that
+breaks the board shows up within a day.
 
 ## Variants
 
