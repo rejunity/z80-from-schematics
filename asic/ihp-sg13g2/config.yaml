@@ -16,6 +16,13 @@ VERILOG_FILES:
 VERILOG_INCLUDE_DIRS:
   - dir::../../rtl
 
+# Synthesize each RTL module on its own and flatten only afterwards: the
+# cell names keep their block (u_core.u_alu._123_), which the block map
+# of the layout colours by (.github/scripts/dist.py), and the die keeps
+# the RTL's block structure. On gf180 this cost ~3 % cells against
+# flattening first (8,654 vs 8,391); timing was unchanged.
+SYNTH_HIERARCHY_MODE: deferred_flatten
+
 # One Z80-rate clock. 50 ns = 20 MHz, the fastest CMOS Z80 grade
 # (Z84C0020). The negedge input samplers and the falling-edge half of
 # the pin former make some paths half-cycle (25 ns).
