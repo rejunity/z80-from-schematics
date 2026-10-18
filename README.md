@@ -3,6 +3,9 @@
 [![CI](https://github.com/rejunity/z80-from-schematics/actions/workflows/ci.yml/badge.svg)](https://github.com/rejunity/z80-from-schematics/actions/workflows/ci.yml)
 [![Targets](https://github.com/rejunity/z80-from-schematics/actions/workflows/targets.yml/badge.svg)](https://github.com/rejunity/z80-from-schematics/actions/workflows/targets.yml)
 
+**Latest build:** [ASIC layouts, GDS and FPGA bitstreams](https://rejunity.github.io/z80-from-schematics/)
+(sky130, IHP SG13G2, GF180MCU; IcePi Zero, Tang Primer 25K, iCEBreaker, pico-ice).
+
 A reverse-engineered, schematic-faithful Z80-compatible CPU core, implemented in
 parallel as a **C99 hardware-like model** and a **Verilog-2001 RTL core**.
 
