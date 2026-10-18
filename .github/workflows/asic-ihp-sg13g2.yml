@@ -1,65 +1,17 @@
-# RTL-to-GDS of z80_top on ihp-sg13g2 (LibreLane 3.0.14 Classic flow, the bare
+# RTL-to-GDS of z80_top on ihp-sg13g2 (LibreLane Classic flow, the bare
 # core -- no pad ring), the sign-off checks, and the signs-of-life program
-# on the routed netlist. Runs on pushes to this branch and on demand.
+# on the routed netlist, on every push to this branch and on demand. The
+# job is asic-pdk.yml, which targets.yml also runs nightly on main's core.
 # See asic/ihp-sg13g2/README.md.
 name: asic-ihp-sg13g2
 
 on:
   push:
     branches: [asic-ihp-sg13g2]
-  workflow_dispatch:
+  workflow_dispatch: {}
 
 jobs:
   harden:
-    name: ihp-sg13g2 RTL-to-GDS + signs of life
-    runs-on: ubuntu-24.04
-    timeout-minutes: 360
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: DeterminateSystems/nix-installer-action@main
-        with:
-          # pre-built LibreLane closure; without it nix rebuilds LibreLane's
-          # pinned iverilog from source and one of its self-tests fails
-          extra-conf: |
-            extra-substituters = https://nix-cache.fossi-foundation.org
-            extra-trusted-public-keys = nix-cache.fossi-foundation.org:3+K59iFwXqKsL7BNu6Guy0v+uTlwsxYQxjspXzqLYQs=
-            extra-experimental-features = nix-command flakes
-      - uses: DeterminateSystems/magic-nix-cache-action@main
-
-      # iverilog >= 12 for the gate-level run (the IHP cell models need it)
-      - name: Install LibreLane 3.0.14 and iverilog
-        run: nix profile install github:librelane/librelane/3.0.14 nixpkgs#iverilog
-
-      - name: Cache the ihp-sg13g2 PDK (ciel)
-        uses: actions/cache@v4
-        with:
-          path: ~/.ciel
-          key: ciel-ihp-sg13g2-c4b8b4e5e7a05f375cca3815d51b3a37721fbf5c
-
-      - name: Signs of life (RTL)
-        run: make -C asic/ihp-sg13g2 sign_of_life_rtl
-
-      - name: RTL-to-GDS
-        run: make -C asic/ihp-sg13g2 harden LIBRELANE_ARGS=--hide-progress-bar
-
-      - name: Sign-off summary (fails on DRC / LVS / antenna / XOR / timing)
-        run: make -C asic/ihp-sg13g2 summary
-
-      - name: Signs of life (routed netlist, ihp-sg13g2 cell models)
-        run: make -C asic/ihp-sg13g2 sign_of_life
-
-      - name: Upload results
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: asic-ihp-sg13g2
-          path: |
-            asic/ihp-sg13g2/runs/*/final/metrics.*
-            asic/ihp-sg13g2/runs/*/final/gds/
-            asic/ihp-sg13g2/runs/*/final/nl/
-            asic/ihp-sg13g2/runs/*/*-openroad-stapostpnr/summary.rpt
-            asic/ihp-sg13g2/runs/*/flow.log
-            asic/ihp-sg13g2/runs/*/warning.log
-            asic/ihp-sg13g2/runs/*/error.log
-          retention-days: 14
+    uses: ./.github/workflows/asic-pdk.yml
+    with:
+      pdk: ihp-sg13g2
