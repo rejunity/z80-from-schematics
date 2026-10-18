@@ -13,6 +13,7 @@
    half-cycle (it spans no clock edge) is applied low then high within that
    half-cycle: the netlist settles after each write, so internal latches
    that are transparent during that half see it. */
+#define _POSIX_C_SOURCE 200809L   /* getopt/optarg under -std=c99 on glibc */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
