@@ -1,6 +1,9 @@
 # One ASIC PDK: RTL-to-GDS of z80_top with LibreLane (Classic flow, the
 # bare core -- no pad ring), the sign-off checks, and the signs-of-life
 # program on the RTL and on the routed netlist (asic/<pdk>/Makefile).
+# Artifacts: asic-<pdk>-gds (the GDS and LibreLane's KLayout render of
+# it, .github/scripts/dist.py; targets.yml also publishes them on GitHub
+# Pages) and asic-<pdk>-results (metrics, netlists, timing, logs).
 #
 # Called by targets.yml (main: every push and nightly) and by each PDK
 # branch's own asic-<pdk>.yml (every push to that branch). asic/ lives
@@ -40,6 +43,7 @@ jobs:
         run: |
           if [ -f asic/$PDK/Makefile ]; then
             echo "asic/$PDK is in this tree ($GITHUB_REF_NAME @ ${GITHUB_SHA::7})" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "BUILT_FROM=$GITHUB_REF_NAME @ ${GITHUB_SHA::7}" >> "$GITHUB_ENV"
             exit 0
           fi
           git config user.name ci
@@ -51,6 +55,7 @@ jobs:
             exit 1
           fi
           echo "$GITHUB_REF_NAME @ ${GITHUB_SHA::7} + asic-$PDK @ $branch" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "BUILT_FROM=$GITHUB_REF_NAME @ ${GITHUB_SHA::7} + asic-$PDK @ $branch" >> "$GITHUB_ENV"
 
       - uses: DeterminateSystems/nix-installer-action@main
         with:
@@ -90,17 +95,39 @@ jobs:
       - name: Signs of life (routed netlist, PDK cell models)
         run: make -C asic/$PDK sign_of_life
 
-      - name: Upload results
+      # rz80-<pdk>.gds, rz80-<pdk>.png (final/render: the Classic flow's
+      # KLayout.Render step) and the headline numbers, if the flow finished
+      - name: Collect the GDS and its render
+        if: always()
+        run: python3 .github/scripts/dist.py asic $PDK dist
+
+      - name: Upload the GDS and its render
+        id: gds
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: asic-${{ inputs.pdk }}
+          name: asic-${{ inputs.pdk }}-gds
+          path: dist/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload results and logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: asic-${{ inputs.pdk }}-results
           path: |
             asic/${{ inputs.pdk }}/runs/*/final/metrics.*
-            asic/${{ inputs.pdk }}/runs/*/final/gds/
             asic/${{ inputs.pdk }}/runs/*/final/nl/
             asic/${{ inputs.pdk }}/runs/*/*-openroad-stapostpnr/summary.rpt
             asic/${{ inputs.pdk }}/runs/*/flow.log
             asic/${{ inputs.pdk }}/runs/*/warning.log
             asic/${{ inputs.pdk }}/runs/*/error.log
           retention-days: 14
+
+      - name: Link the GDS in the summary
+        if: always() && steps.gds.outputs.artifact-url
+        env:
+          URL: ${{ steps.gds.outputs.artifact-url }}
+        run: |
+          echo "GDS and layout render: [asic-$PDK-gds]($URL)" >> "$GITHUB_STEP_SUMMARY"
