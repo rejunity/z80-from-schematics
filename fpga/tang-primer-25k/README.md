@@ -87,8 +87,10 @@ the internal BUSACK is asserted (DMA); /HALT stays driven.
 
 Same SoC as the IcePi Zero port (it shares `uart.v` and `hex2mem.py`
 with [`../icepi-zero`](../icepi-zero/README.md); see that README for the
-memory map, ACIA shim and 68B50 RIE/TIE interrupt semantics). Board
-deltas:
+memory map, ACIA shim and 68B50 RIE/TIE interrupt semantics). A TX write
+that finds the transmitter still busy holds the CPU with `/WAIT` until
+the previous byte is out (Tiny BASIC writes without polling TDRE); the
+sbc build shows that `/WAIT` on J3. Board deltas:
 
 | | IcePi Zero | Tang Primer 25K |
 |---|---|---|
@@ -122,11 +124,17 @@ defeating clock-enable inference) and sources are staged into
     make sim        # Verilator, sbc build, fast serial (~seconds)
     make sim_real   # true 115200 pacing — exercises the ROM's
                     # interrupt-driven TX (TIE) path
+    make sim_tiny   # 1K Tiny BASIC (SIM_BAUD=115200: real pacing)
 
 The PLL is a black box in simulation; a /12 toggle divider stands in
 (4.17 MHz) and the Makefile overrides `CORE_HZ` to match. Script: answer
 `Memory top?`, `PRINT 123+456` → `579`, press key[0] with a bouncy
 release, expect the warm-start `C|W` prompt, answer `W`, expect `Ok`.
+
+`make sim_tiny` runs the 1K Tiny BASIC ROM with RAM from `0x0400`: it
+types a short session one character per echo and compares the whole
+console transcript byte for byte with the C model's
+(`scripts/basicrunner`), so a TX byte the UART dropped fails it.
 
 The chip build is exercised by the repo-level `make bus_controls`
 (`tests/iverilog/tb_wait_top.v`, `tb_reset_top.v`), which instantiate
@@ -175,4 +183,12 @@ firmware, which openFPGALoader supports natively.)
 
 ## Variants
 
-    make ROM_HEX=../../tests/basic/tinybasic_1k.hex   # 1K Tiny BASIC
+    make sbc ROM_HEX=../../tests/basic/tinybasic_1k.hex   # 1K Tiny BASIC
+
+The Makefile write-protects the ROM image rounded up to 1 KiB
+(`ROM_PROTECT_TOP`, from `hex2mem.py --top`; override it on the command
+line), so Tiny BASIC's variables and stack at `0x0400`–`0x07FF` are RAM,
+and a different `ROM_HEX` rebuilds the image and the bitstreams. Pasting
+a long program can overrun the 32-byte RX FIFO (basic1K needs ~430 Z80
+clocks per input character, more than one takes at 115200 baud): give
+the terminal a per-character delay (1 ms is plenty).

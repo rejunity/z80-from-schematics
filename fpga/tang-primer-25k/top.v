@@ -53,8 +53,13 @@
 //
 // sbc memory map / I/O map / interrupt semantics are identical to the
 // IcePi port (fpga/icepi-zero/top.v): ROM write-protected below
-// ROM_PROTECT_TOP, ACIA at ports 0x80/0x81 (Tiny BASIC's 0x00/0x01 too),
-// /INT = (RIE & RDRF) | (TIE & TDRE).
+// ROM_PROTECT_TOP (the Makefile sets it to the end of the ROM image
+// rounded up to 1 KiB: 0x2000 for NASCOM BASIC, 0x0400 for the 1K Tiny
+// BASIC, whose variables and stack live at 0x0400-0x07FF), ACIA at ports
+// 0x80/0x81 (Tiny BASIC's 0x00/0x01 too), /INT = (RIE & RDRF) |
+// (TIE & TDRE). A TX write that finds the transmitter busy holds the CPU
+// with /WAIT until the previous byte is out (Tiny BASIC writes without
+// polling TDRE); the sbc build shows that /WAIT on J3.
 
 module top #(
     parameter CORE_HZ  = 4_000_000,             // sbc Z80 clock: 4_000_000 or 3_500_000; sim overrides to 4_166_667
@@ -280,13 +285,14 @@ module top #(
     wire        m1_n, mreq_n, iorq_n, rd_n, wr_n, rfsh_n, halt_n, busack_n;
     reg  [7:0]  data_in;
     wire        soc_int_n;
+    wire        soc_wait_n;     // the ACIA's TX flow control
 
     // Header inputs go to z80_top unsynchronized, as on a real Z80: WAIT
     // and the data bus are sampled by its falling-edge flops, INT/NMI by
     // the same, BUSREQ on the rising edge. The header contract is the
     // Z80's own setup/hold around those edges. /NMI is an input in both
     // builds.
-    wire core_wait_n   = EXTERNAL_BUS ? z80_wait_n   : 1'b1;
+    wire core_wait_n   = EXTERNAL_BUS ? z80_wait_n   : soc_wait_n;
     wire core_int_n    = EXTERNAL_BUS ? z80_int_n    : soc_int_n;
     wire core_nmi_n    = z80_nmi_n;
     wire core_busreq_n = EXTERNAL_BUS ? z80_busreq_n : 1'b1;
@@ -342,7 +348,7 @@ module top #(
         assign z80_rd_n     = rd_n;
         assign z80_wr_n     = wr_n;
         assign z80_rfsh_n   = rfsh_n;
-        assign z80_wait_n   = 1'b1;
+        assign z80_wait_n   = soc_wait_n;
         assign z80_int_n    = soc_int_n;
         assign z80_busreq_n = 1'b1;
     end endgenerate
@@ -397,6 +403,14 @@ module top #(
     wire fifo_pop  = iord_active && !prev_iord && (port == 8'h81 || port == 8'h01) && rx_avail;
     wire fifo_push = rx_valid && (f_cnt != 6'd32);
 
+    // TX flow control (see fpga/icepi-zero/top.v): an OUT to the data port
+    // hands its byte over on the first rising edge of the cycle that finds
+    // the transmitter idle, once per cycle; while the previous byte is
+    // still shifting out, /WAIT holds the cycle in Tw.
+    wire tx_wr = !EXTERNAL_BUS && iowr_active && (port == 8'h81 || port == 8'h01);
+    reg  tx_taken = 1'b0;
+    assign soc_wait_n = !(tx_wr && !tx_taken && tx_busy);
+
     // 68B50 control register: bit7 RIE, bits 6:5 = 01 -> TIE. The
     // NASCOM/z88dk ACIA driver's TX is interrupt-driven, so TIE must
     // really work (a status-only shim deadlocks TX at real baud).
@@ -408,7 +422,7 @@ module top #(
         if (!cpu_reset_n) begin
             f_rd <= 0; f_wr <= 0; f_cnt <= 0;
             prev_iord <= 0; prev_iowr <= 0;
-            tx_strobe <= 0;
+            tx_strobe <= 0; tx_taken <= 0;
             acia_ctrl <= 8'h00;
         end else begin
             prev_iord <= iord_active;
@@ -436,14 +450,15 @@ module top #(
                 endcase
             end
 
-            if (!EXTERNAL_BUS && iowr_active && !prev_iowr) begin
-                if (port == 8'h81 || port == 8'h01) begin
-                    tx_data   <= data_out;
-                    tx_strobe <= 1'b1;
-                end else if (port == 8'h80) begin
-                    acia_ctrl <= data_out;   // divisor/format bits ignored
-                end
+            if (!tx_wr)
+                tx_taken <= 1'b0;
+            else if (!tx_taken && !tx_busy) begin
+                tx_data   <= data_out;
+                tx_strobe <= 1'b1;
+                tx_taken  <= 1'b1;
             end
+            if (!EXTERNAL_BUS && iowr_active && !prev_iowr && port == 8'h80)
+                acia_ctrl <= data_out;       // divisor/format bits ignored
         end
     end
 

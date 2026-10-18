@@ -12,6 +12,8 @@
 //
 // Build with -GBAUD / -DSIM_BAUD (see Makefile); run from a directory
 // containing rom.mem, e.g. build/.
+//
+// `Vtop tiny` (make sim_tiny) runs the 1K Tiny BASIC script below.
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
@@ -28,8 +30,59 @@ static const int CORE_HZ   = 50000000 / CLK_DIV;   // 4.17 MHz Z80 clock
 static const int BIT_TICKS =           // in half-input-clk (eval) steps
     ((CORE_HZ + SIM_BAUD / 2) / SIM_BAUD) * CLK_DIV * 2;
 
+// `Vtop tiny` (make sim_tiny) runs the 1K Tiny BASIC ROM instead (model
+// built with RAM from 0x0400): one line typed per ">" prompt, and the
+// whole console transcript must equal the C model's byte for byte
+// (scripts/basicrunner, same ROM, same lines). Tiny BASIC writes without
+// polling TDRE, so a byte the UART dropped shows up as a mismatch.
+// Lines are typed one character per echo, as a person types: basic1K
+// takes ~430 Z80 clocks per input character (~2,000 when it tokenizes a
+// keyword), slower than back-to-back characters arrive at this baud, and
+// its only input buffer is the SoC's 32-byte RX FIFO.
+static const char* const TINY_LINES[] = {
+    "PRINT 1+2",
+    "10 FOR I=1 TO 12",
+    "20 PRINT I*1111",
+    "30 NEXT I",
+    "RUN",                     // basic1K reports the end of the run as E657
+    "PRINT \"THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG 0123456789\"",
+    "PRINT \"DONE-TINY\"",
+};
+static const int TINY_N = sizeof(TINY_LINES) / sizeof(TINY_LINES[0]);
+static const char TINY_EXPECT[] =
+    "\r\n"
+    ">PRINT 1+2\r\r\n"
+    "3\r\n"
+    "\r\n"
+    ">10 FOR I=1 TO 12\r\r\n"
+    ">20 PRINT I*1111\r\r\n"
+    ">30 NEXT I\r\r\n"
+    ">RUN\r\r\n"
+    "1111\r\n"
+    "2222\r\n"
+    "3333\r\n"
+    "4444\r\n"
+    "5555\r\n"
+    "6666\r\n"
+    "7777\r\n"
+    "8888\r\n"
+    "9999\r\n"
+    "11110\r\n"
+    "12221\r\n"
+    "13332\r\n"
+    "\r\n"
+    "E657\r\n"
+    ">PRINT \"THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG 0123456789\"\r\r\n"
+    "THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG 0123456789\r\n"
+    "\r\n"
+    ">PRINT \"DONE-TINY\"\r\r\n"
+    "DONE-TINY\r\n"
+    "\r\n"
+    ">";
+
 int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);
+    const bool tiny = argc > 1 && strcmp(argv[argc - 1], "tiny") == 0;
     Vtop* t = new Vtop;
     t->key = 0;         // buttons idle low (active high on this board)
     t->uart_rx = 1;
@@ -52,13 +105,16 @@ int main(int argc, char** argv) {
     uint8_t rx_sh = 0;
     std::string tail;
     int stage = 0;
+    std::string all;          // tiny: the whole transcript
+    int tiny_next = 0;        // tiny: next line to type
+    const char* typing = nullptr;   // tiny: rest of the line being typed
 
     long long tx_wait = 0, tx_cnt = 0;
     long long steps = 0;
     long long btn_timer = 0;
     const long long BTN_PRESS  = 200000;   // ~2 ms in half-clk steps
     const long long BTN_BOUNCE = 20000;
-    const long long MAX_STEPS = 4000000000LL;
+    const long long MAX_STEPS = tiny ? 400000000LL : 4000000000LL;
 
     while (steps < MAX_STEPS) {
         // key[0] press with a bouncing release (active HIGH here)
@@ -107,7 +163,27 @@ int main(int argc, char** argv) {
                     if (tail.size() > 256) tail.erase(0, tail.size() - 256);
                     rx_state = 0;
 
-                    if (stage == 0 && tail.find("Memory top?") != std::string::npos) {
+                    if (tiny) {
+                        all.push_back((char)rx_sh);
+                        if (typing && rx_sh == (uint8_t)*typing) {      // its echo: type the next one
+                            if (*++typing) send_byte((uint8_t)*typing);
+                            else { send_byte('\r'); typing = nullptr; }
+                        } else if (!typing && all.size() >= 3 && all.compare(all.size() - 3, 3, "\r\n>") == 0) {
+                            if (tiny_next < TINY_N) {
+                                typing = TINY_LINES[tiny_next++];
+                                tx_wait = 20LL * BIT_TICKS;
+                                send_byte((uint8_t)*typing);
+                            } else {
+                                size_t n = 0;
+                                while (n < all.size() && TINY_EXPECT[n] && all[n] == TINY_EXPECT[n]) n++;
+                                bool ok = all == TINY_EXPECT;
+                                if (ok) printf("\n[sim_top] PASS: Tiny BASIC transcript matches the C model (%zu bytes, %lld half-clks)\n", all.size(), steps);
+                                else    printf("\n[sim_top] FAIL: Tiny BASIC transcript differs from the C model at byte %zu of %zu\n", n, sizeof(TINY_EXPECT) - 1);
+                                delete t;
+                                return ok ? 0 : 1;
+                            }
+                        }
+                    } else if (stage == 0 && tail.find("Memory top?") != std::string::npos) {
                         stage = 1; tail.clear();
                         tx_wait = 20LL * BIT_TICKS;
                         send_byte('\r');
@@ -133,7 +209,8 @@ int main(int argc, char** argv) {
                 break;
         }
     }
-    printf("\n[sim_top] FAIL: timeout at stage %d\n", stage);
+    if (tiny) printf("\n[sim_top] FAIL: timeout, Tiny BASIC: %d of %d lines typed, %zu bytes received\n", tiny_next, TINY_N, all.size());
+    else      printf("\n[sim_top] FAIL: timeout at stage %d\n", stage);
     delete t;
     return 1;
 }
