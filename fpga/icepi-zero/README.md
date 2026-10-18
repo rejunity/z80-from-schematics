@@ -25,7 +25,7 @@ Press Enter at the `Memory top?` cold-start prompt and you're at
 so you get the ROM's warm-start `C|W` prompt).
 
 Terminal notes: BASIC wants CR line endings (screen sends CR — good),
-and Ctrl-C is BREAK just like `make basic`.
+and Ctrl-C is BREAK just like `make basic`. And the backspace key works as in `make basic`: the ACIA hands BASIC a DEL (7Fh, what macOS terminals send for ⌫) as BS (08h). Tiny BASIC has no line editing.
 
 
 ## What's in the SBC (`top.v`)
