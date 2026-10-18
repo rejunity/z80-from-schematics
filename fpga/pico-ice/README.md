@@ -268,6 +268,7 @@ not fit the UP5K).
     make sim_iverilog   # the boot script through iverilog (~6 min)
     make sim_chip       # iverilog, chip build: external bus on the pins (~2 s)
     make sim_tiny       # Verilator, 1K Tiny BASIC (SIM_BAUD=57143: hardware pacing)
+    make ci             # all of these, both bitstreams (+ UF2) and the Tiny BASIC bitstream
 
 The sbc sims boot the *real* ROM through the *real* top-level — clock
 divider, POR, EBR ROM, behavioural SPRAM, UART bits on the pins,
@@ -308,6 +309,11 @@ external 4 MHz CLK, an 8 KiB SRAM on A0–A12 / /MREQ / /RD / /WR and an
 output port decoded from /WR with /MREQ high run a small program (LDIR a
 string into RAM, CALL a print routine, `OUT (81h),A`) and must print
 `Z80 chip OK` without bus contention.
+
+`make ci` is what GitHub Actions runs: on every push to this branch
+(`.github/workflows/fpga-pico-ice.yml`) and nightly with this branch
+merged into main (`targets.yml`), so a core change on main that
+breaks the board shows up within a day.
 
 ## Variants
 

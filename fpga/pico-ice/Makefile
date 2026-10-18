@@ -22,7 +22,9 @@
 #   make uf2 MODE=sbc|chip [UF2_DRIVE=/media/$USER/pico-ice]
 #                build/top_<mode>.uf2 for the `pico-ice` USB drive (and copy it)
 #   make timing  post-route Fmax per clock and I/O delays, both builds
-#   make clean   remove build/;  make distclean also removes .venv
+#   make ci      everything CI runs (fpga-board.yml): both bitstreams, the
+#                Tiny BASIC bitstream in build_tiny/ and every simulation
+#   make clean   remove build/ and build_tiny/;  make distclean also .venv
 #
 #   make sbc ROM_HEX=../../tests/basic/tinybasic_1k.hex   Tiny BASIC instead
 #
@@ -79,7 +81,7 @@ MODE ?= sbc
 # stem of the pattern rules below without any directory part
 STEM = $(notdir $*)
 
-.PHONY: all venv bin sbc chip sim sim_real sim_tiny sim_iverilog sim_chip prog flash uf2 timing clean distclean FORCE
+.PHONY: all venv bin sbc chip sim sim_real sim_tiny sim_iverilog sim_chip prog flash uf2 timing ci clean distclean FORCE
 all: bin
 
 # ---- toolchain venv (created before any tools are installed/used) ----
@@ -255,8 +257,15 @@ uf2: $(BUILD)/top_$(MODE).uf2
 	@if [ -n "$(UF2_DRIVE)" ]; then cp $< "$(UF2_DRIVE)"/ && sync && echo "copied $< to $(UF2_DRIVE)"; \
 	else echo "copy $< onto the pico-ice USB drive, or: make uf2 MODE=$(MODE) UF2_DRIVE=/media/\$$USER/pico-ice"; fi
 
+# ---- CI (.github/workflows/fpga-board.yml) ----
+# Both bitstreams and their UF2 images, the Tiny BASIC bitstream
+# (build_tiny/) and every simulation, Tiny BASIC at both serial pacings.
+ci: sbc chip $(BUILD)/top_sbc.uf2 $(BUILD)/top_chip.uf2 sim sim_real sim_tiny sim_iverilog sim_chip
+	$(MAKE) sim_tiny SIM_BAUD=$(SIM_BAUD_REAL)
+	$(MAKE) sbc BUILD=build_tiny ROM_HEX=$(TINY_HEX)
+
 clean:
-	rm -rf $(BUILD)
+	rm -rf $(BUILD) build_tiny
 
 distclean: clean
 	rm -rf $(VENV)

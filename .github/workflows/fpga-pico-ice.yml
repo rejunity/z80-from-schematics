@@ -1,0 +1,15 @@
+# This board's bitstreams and simulations (`make ci` in fpga/pico-ice/)
+# on every push to this branch and on demand. The job is fpga-board.yml,
+# which targets.yml also runs nightly on main's core.
+name: fpga-pico-ice
+
+on:
+  push:
+    branches: [fpga-pico-ice-basic]
+  workflow_dispatch: {}
+
+jobs:
+  board:
+    uses: ./.github/workflows/fpga-board.yml
+    with:
+      board: pico-ice
