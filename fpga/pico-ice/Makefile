@@ -17,6 +17,8 @@
 #   make sim_iverilog  the boot script through iverilog (slow cross-check)
 #   make sim_chip  iverilog smoke test of the chip build: an external clock,
 #                memory and output port on the header pins run a program
+#   make sim_pnr the boot script on the routed sbc netlist, as packed into
+#                the bitstream (sim_pnr_tiny: Tiny BASIC on build_tiny/'s)
 #   make prog MODE=sbc|chip    load into FPGA CRAM over USB DFU (volatile)
 #   make flash MODE=sbc|chip   write the FPGA's config flash over USB DFU
 #   make uf2 MODE=sbc|chip [UF2_DRIVE=/media/$USER/pico-ice]
@@ -81,7 +83,7 @@ MODE ?= sbc
 # stem of the pattern rules below without any directory part
 STEM = $(notdir $*)
 
-.PHONY: all venv bin sbc chip sim sim_real sim_tiny sim_iverilog sim_chip prog flash uf2 timing ci clean distclean FORCE
+.PHONY: all venv bin sbc chip sim sim_real sim_tiny sim_iverilog sim_chip sim_pnr sim_pnr_tiny prog flash uf2 timing ci clean distclean FORCE
 all: bin
 
 # ---- toolchain venv (created before any tools are installed/used) ----
@@ -140,18 +142,20 @@ $(BUILD)/top_%.json: $(BUILD)/src $(BUILD)/rom.mem $(VENV)/.ok
 # nextpnr: full log in build/nextpnr_<build>.log, console shows the clock
 # constraints (set and PLL-derived), the main utilisation rows, placer and
 # router progress (one router row per 5000 arcs) and the timing summary --
-# about 30 lines. nextpnr fails the build if a clock misses its constraint;
-# its own exit status is saved ahead of the console filter, which would
-# otherwise replace it, so any nextpnr ERROR fails the build and removes
-# the .asc.
+# about 30 lines. --write saves the routed netlist (`make sim_pnr`).
+# nextpnr fails the build if a clock misses its constraint; its own exit
+# status is saved ahead of the console filter, which would otherwise
+# replace it, so any nextpnr ERROR fails the build and removes the .asc
+# and the routed netlist.
 NEXTPNR_PROGRESS := grep --line-buffered -E '^(Info: (constraining clock|HeAP Placer Time|SA placement time|Routing [0-9]|Routing complete|Router1 time|Max frequency|Program finished)|Info: +Derived frequency|Info:[[:space:]]+(ICESTORM_(LC|RAM|SPRAM|PLL)|SB_IO|SB_GB):|Info: +[0-9]*[05]000 \||ERROR|Warning)'
 
-$(BUILD)/top_%.asc: $(BUILD)/top_%.json $(BUILD)/pico-ice_%.pcf
-	@rm -f $@
+$(BUILD)/top_%.asc $(BUILD)/top_%.pnr.json: $(BUILD)/top_%.json $(BUILD)/pico-ice_%.pcf
+	@rm -f $(BUILD)/top_$(STEM).asc $(BUILD)/top_$(STEM).pnr.json
 	cd $(BUILD) && { $(NEXTPNR) --up5k --package sg48 --pcf pico-ice_$(STEM).pcf \
-	  --json top_$(STEM).json --asc top_$(STEM).asc --report report_$(STEM).json 2>&1; \
+	  --json top_$(STEM).json --asc top_$(STEM).asc --report report_$(STEM).json \
+	  --write top_$(STEM).pnr.json 2>&1; \
 	  echo $$? > nextpnr_$(STEM).rc; } | tee nextpnr_$(STEM).log | $(NEXTPNR_PROGRESS); \
-	  rc=$$(cat nextpnr_$(STEM).rc); [ "$$rc" = 0 ] || { rm -f top_$(STEM).asc; \
+	  rc=$$(cat nextpnr_$(STEM).rc); [ "$$rc" = 0 ] || { rm -f top_$(STEM).asc top_$(STEM).pnr.json; \
 	  echo "nextpnr failed (exit $$rc), see $(BUILD)/nextpnr_$(STEM).log"; exit 1; }
 	@test -f $@
 
@@ -240,6 +244,52 @@ $(BUILD)/tb_chip.vvp: $(BUILD)/src tb_chip.v
 sim_chip: $(BUILD)/tb_chip.vvp
 	cd $(BUILD) && $(VVP) tb_chip.vvp
 
+# ---- post-place-and-route simulation: the routed sbc netlist ----
+# nextpnr's routed netlist (top_sbc.pnr.json) is the design as icepack
+# packs it into the bitstream: every ICESTORM_LC with its LUT and flop as
+# placed, the EBR ROM image, the SPRAM, global buffers, pads. Here it runs
+# on yosys' iCE40 cell models (cells_sim.v from the venv), zero delay.
+# sim_pnr.py ties the inputs nextpnr left unrouted to the level the
+# hardware reads there and feeds the PLL's dedicated clock paths from the
+# testbench clock -- the same x1 stand-in as the RTL sims, so the Z80 runs
+# at 2 MHz; sim_pnr_io.v turns the pads into wires, sim_pnr_cells.v models
+# the PLL and SPRAM cells. The netlist has CORE_HZ = 4 MHz and BAUD =
+# 115200 baked in, 35 Z80 clocks per bit, which the testbench sees as
+# SIM_BAUD_REAL at 2 MHz: `make sim_real`'s pacing, and each script ends
+# on the same clock as the RTL at that pacing.
+#   make sim_pnr        the boot script on build/'s routed netlist
+#   make sim_pnr_tiny   Tiny BASIC on build_tiny/'s (built if needed)
+YOSYS_SHARE = $(shell $(VENV)/bin/python -c 'import os, yowasp_yosys; print(os.path.dirname(yowasp_yosys.__file__))')/share
+PNR_DIR := $(BUILD)/pnr
+SIM_PNR_ARGS ?=
+# A broken netlist mostly hangs the CPU instead of failing a check, and
+# at this speed the testbench's own step limit is over an hour away: give
+# up after SIM_PNR_SECONDS (a healthy run takes 1-2 minutes).
+SIM_PNR_SECONDS ?= 900
+
+$(PNR_DIR)/top_sbc_pnr.v: $(BUILD)/top_sbc.pnr.json sim_pnr.py sim_pnr_io.v $(VENV)/.ok
+	@mkdir -p $(PNR_DIR)
+	$(PYTHON) sim_pnr.py $(YOSYS_SHARE)/ice40/cells_sim.v $< \
+	  $(PNR_DIR)/top_sbc_sim.json $(PNR_DIR)/cells_sim.v
+	cp sim_pnr_io.v $(PNR_DIR)/
+	cd $(PNR_DIR) && $(YOSYS) -q -p \
+	  'read_json top_sbc_sim.json; techmap -map sim_pnr_io.v t:SB_IO; select -assert-none t:SB_IO; opt_clean; write_verilog -noattr top_sbc_pnr.v'
+
+$(PNR_DIR)/obj/Vtop: $(PNR_DIR)/top_sbc_pnr.v sim_pnr_cells.v sim_top.cpp
+	rm -rf $(PNR_DIR)/obj
+	cd $(PNR_DIR) && $(VERILATOR) --cc --exe --build -j 4 -O1 \
+	  -Wno-fatal -Wno-lint -Wno-style --no-timing -DNO_ICE40_DEFAULT_ASSIGNMENTS \
+	  --top-module top --Mdir obj -CFLAGS -DSIM_BAUD=$(SIM_BAUD_REAL) \
+	  cells_sim.v ../../sim_pnr_cells.v top_sbc_pnr.v ../../sim_top.cpp \
+	  > verilator.log 2>&1 || (tail -20 verilator.log; exit 1)
+
+sim_pnr: $(PNR_DIR)/obj/Vtop
+	cd $(PNR_DIR) && timeout $(SIM_PNR_SECONDS) stdbuf -oL ./obj/Vtop $(SIM_PNR_ARGS) || { rc=$$?; \
+	  [ $$rc != 124 ] || echo "sim_pnr: no result after $(SIM_PNR_SECONDS) s (a healthy run takes 1-2 min)"; exit $$rc; }
+
+sim_pnr_tiny:
+	$(MAKE) sim_pnr BUILD=build_tiny ROM_HEX=$(TINY_HEX) SIM_PNR_ARGS=tiny
+
 # ---- board (stock pico-ice firmware on the RP2040) ----
 # prog:  bitstream into the iCE40's configuration RAM -- lost on power-cycle.
 # flash: bitstream into the iCE40's SPI flash, then the RP2040 reboots and
@@ -259,10 +309,12 @@ uf2: $(BUILD)/top_$(MODE).uf2
 
 # ---- CI (.github/workflows/fpga-board.yml) ----
 # Both bitstreams and their UF2 images, the Tiny BASIC bitstream
-# (build_tiny/) and every simulation, Tiny BASIC at both serial pacings.
-ci: sbc chip $(BUILD)/top_sbc.uf2 $(BUILD)/top_chip.uf2 sim sim_real sim_tiny sim_iverilog sim_chip
+# (build_tiny/) and every simulation, Tiny BASIC at both serial pacings
+# and on its routed netlist.
+ci: sbc chip $(BUILD)/top_sbc.uf2 $(BUILD)/top_chip.uf2 sim sim_real sim_tiny sim_iverilog sim_chip sim_pnr
 	$(MAKE) sim_tiny SIM_BAUD=$(SIM_BAUD_REAL)
 	$(MAKE) sbc BUILD=build_tiny ROM_HEX=$(TINY_HEX)
+	$(MAKE) sim_pnr_tiny
 
 clean:
 	rm -rf $(BUILD) build_tiny

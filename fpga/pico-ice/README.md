@@ -268,6 +268,8 @@ not fit the UP5K).
     make sim_iverilog   # the boot script through iverilog (~6 min)
     make sim_chip       # iverilog, chip build: external bus on the pins (~2 s)
     make sim_tiny       # Verilator, 1K Tiny BASIC (SIM_BAUD=57143: hardware pacing)
+    make sim_pnr        # the boot script on the *routed* sbc netlist, as in the bitstream (~1.5 min)
+    make sim_pnr_tiny   # Tiny BASIC on its own bitstream's routed netlist (build_tiny/)
     make ci             # all of these, both bitstreams (+ UF2) and the Tiny BASIC bitstream
 
 The sbc sims boot the *real* ROM through the *real* top-level — clock
@@ -303,6 +305,18 @@ Verilator result on this branch:
 a short session one character per echo and compares the whole console
 transcript byte for byte with the C model's (`scripts/basicrunner`), so a
 TX byte the UART dropped fails it.
+
+`make sim_pnr` runs the boot script on nextpnr's routed netlist
+(`build/top_sbc.pnr.json`): the design as icepack packs it into the
+bitstream, every logic cell's LUT and flop as placed, the EBR ROM image,
+SPRAM, global buffers and pads, on yosys' iCE40 cell models. `sim_pnr.py`
+ties the inputs nextpnr left unrouted to the level the hardware reads
+there and drives the PLL's dedicated clock paths from the testbench clock
+(the same ×1 stand-in, so 2 MHz); the netlist's UART divisor is the
+hardware's, 35 Z80 clocks per bit, so this is `make sim_real`'s pacing,
+and both BASICs finish on exactly the RTL's clock at that pacing. It is a
+zero-delay check of function: timing is nextpnr's job, and icepack's bit
+encoding of the `.asc` is not covered.
 
 `make sim_chip` (`tb_chip.v`) is the chip build seen from the outside: an
 external 4 MHz CLK, an 8 KiB SRAM on A0–A12 / /MREQ / /RD / /WR and an
