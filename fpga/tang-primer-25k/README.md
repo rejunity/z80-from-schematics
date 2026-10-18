@@ -24,7 +24,8 @@ For the sbc build, connect a terminal to the dock's USB serial port:
 Press Enter at the `Memory top?` cold-start prompt and you're at
 `Z80 BASIC Ver 4.7c` / `Ok`. The **H10 push-button** (key[0]) or a low
 on header /RESET resets the Z80 — RAM survives, so you get the ROM's
-warm-start `C|W` prompt.
+warm-start `C|W` prompt. BASIC wants CR line endings (screen sends CR),
+Ctrl-C is BREAK, and the backspace key works as in `make basic`: the ACIA hands BASIC a DEL (7Fh, what macOS terminals send for ⌫) as BS (08h). Tiny BASIC has no line editing.
 
 ## Clocking
 

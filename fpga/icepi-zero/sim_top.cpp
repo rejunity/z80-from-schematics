@@ -5,7 +5,8 @@
 // UART, ACIA shim, /INT RX path), talking over the serial *pins*:
 //
 //   1. wait for cold-start "Memory top?"  -> answer CR
-//   2. wait for the banner "Ok"           -> type "PRINT 123+456" CR
+//   2. wait for the banner "Ok"           -> type "PRINT 123+457", DEL, "6", CR
+//                                         (BS echoed: top.v maps DEL to BS)
 //   3. wait for "579"                     -> press button 0 (~2 ms, with
 //      a bouncy release, like the real switch)
 //   4. wait for warm-start "C|W"          -> answer "W"
@@ -199,9 +200,16 @@ int main(int argc, char** argv) {
                     } else if (stage == 1 && tail.find("Ok") != std::string::npos) {
                         stage = 2; tail.clear();
                         tx_wait = 20LL * BIT_TICKS;
-                        send_line("PRINT 123+456");
+                        send_line("PRINT 123+457\x7f" "6");     // DEL: macOS backspace key
                     } else if (stage == 2 && tail.find("579") != std::string::npos) {
-                        printf("\n[sim_top] 123+456=579 OK -- pressing button 0 (reset)\n");
+                        // BASIC echoes the DEL it received as BS; a raw DEL would be a
+                        // rubout, echoing the deleted "7" instead
+                        if (tail.find("457\b6") == std::string::npos) {
+                            printf("\n[sim_top] FAIL: DEL was not edited as backspace (no 457<BS>6 echo)\n");
+                            delete t;
+                            return 1;
+                        }
+                        printf("\n[sim_top] 123+457<DEL>6 = 579 OK -- pressing button 0 (reset)\n");
                         tail.clear();
                         btn_timer = BTN_PRESS;
                         stage = 4;
