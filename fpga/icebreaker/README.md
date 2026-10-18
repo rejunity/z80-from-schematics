@@ -141,7 +141,7 @@ from 0x8000):
 
 | range | what | iCE40 resource |
 |---|---|---|
-| 0x0000–0x1FFF | ROM (image from `ROM_HEX`, loaded with the bitstream) | 16 × `SB_RAM40_4K` (EBR) |
+| 0x0000–0x1FFF | ROM (image from `ROM_HEX`, loaded with the bitstream); writable from `ROM_PROTECT_TOP` up — the image rounded up to 1 KiB, so none for NASCOM BASIC | 16 × `SB_RAM40_4K` (EBR) |
 | 0x2000–0x7FFF | unmapped: reads 0xFF, writes ignored | — |
 | 0x8000–0xFFFF | RAM, 32 KiB | 1 × `SB_SPRAM256KA` (16K × 16, byte lanes via MASKWREN) |
 
@@ -158,7 +158,10 @@ I/O map and interrupts are the same SoC as the IcePi Zero and Tang Primer
 bit 1 TDRE), `OUT (0x80)` control (RIE bit 7, TIE = bits 6:5 = 01),
 `IN/OUT (0x81)` data, 32-byte RX FIFO; `/INT` = (RIE & RX byte pending) |
 (TIE & TX idle), IM 1 (INTA reads 0xFF = RST 38h). TIE matters: the
-ROM's ACIA driver has an interrupt-driven TX ring buffer.
+ROM's ACIA driver has an interrupt-driven TX ring buffer. A TX write that
+finds the transmitter still busy holds the CPU with `/WAIT` until the
+previous byte is out, so a program that writes without polling TDRE
+(Tiny BASIC) loses nothing.
 
 ## Resources and timing
 
@@ -218,6 +221,7 @@ openFPGALoader can be used instead:
     make sim_iverilog   # same script through iverilog (~11 min)
     make sim_gl         # the script on the *synthesized* sbc netlist (~1.5 min)
     make sim_chip       # chip build with an external RAM, RTL + netlist
+    make sim_tiny       # 1K Tiny BASIC (SIM_BAUD=115200: real pacing)
 
 The PLL is a black box in simulation: the testbench clock stands in for its
 48 MHz output, so the real /12 divider makes the 4 MHz Z80 clock and
@@ -228,6 +232,10 @@ real top level over the UART pins: answer `Memory top?`, `PRINT 123+456` →
 `C|W` prompt, answer `W`, expect `Ok`. `make sim_gl` runs the same script
 on yosys' iCE40 cell models (EBR ROM image, SPRAM byte lanes, negedge
 flops) and finishes on exactly the same clock as the RTL at 115200.
+`make sim_tiny` runs the 1K Tiny BASIC ROM with RAM from 0x0400: it types
+a short session one character per echo and compares the whole console
+transcript byte for byte with the C model's (`scripts/basicrunner`), so a
+TX byte the UART dropped fails it.
 
     Memory top?
     Z80 BASIC Ver 4.7c
@@ -255,12 +263,16 @@ flops) and finishes on exactly the same clock as the RTL at 115200.
 ## Variants
 
 1K Tiny BASIC keeps its variables and stack at 0x0400–0x07FF, inside the
-ROM window, so that part of the EBR has to be writable:
+ROM window, so that part of the EBR has to be writable. The Makefile
+does that by itself: `ROM_PROTECT_TOP` defaults to the ROM image rounded
+up to 1 KiB (`hex2mem.py --top`, 1024 here; override it on the command
+line), and a different `ROM_HEX` rebuilds the image and the bitstreams:
 
-    make sbc ROM_HEX=../../tests/basic/tinybasic_1k.hex ROM_PROTECT_TOP=1024
+    make sbc ROM_HEX=../../tests/basic/tinybasic_1k.hex
 
-It boots and runs programs in simulation, but its console drops output
-characters: Tiny BASIC's port protocol (status 0x00, data 0x01) has no
-transmitter-ready bit, so it writes faster than the 115200 baud UART can
-send, and the ACIA shim (shared with the other ports) has no TX buffer.
-NASCOM BASIC checks TDRE and is not affected.
+Tiny BASIC's port protocol (status 0x00, data 0x01) has no
+transmitter-ready bit, so it writes faster than 115200 baud drains; the
+`/WAIT` flow control above holds each such write until the line is free.
+Pasting a long program can still overrun the 32-byte RX FIFO (basic1K
+needs ~430 Z80 clocks per input character, more than one takes at
+115200 baud): give the terminal a per-character delay (1 ms is plenty).

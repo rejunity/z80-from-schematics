@@ -11,6 +11,9 @@
 #   make         both bitstreams;  make sbc / make chip for one
 #   make sim     Verilator smoke test of the sbc build (fast serial)
 #   make sim_real  same at true 115200 pacing (exercises the TIE path)
+#   make sim_tiny  Verilator: the 1K Tiny BASIC ROM, console transcript
+#                compared byte for byte with the C model's (add
+#                SIM_BAUD=115200 for real pacing)
 #   make sim_iverilog  the boot script through iverilog (slow cross-check)
 #   make sim_gl  the boot script on the synthesized sbc netlist (iCE40 cell models)
 #   make sim_chip  chip build on an external RAM: RTL and synthesized netlist
@@ -18,6 +21,8 @@
 #   make timing  nextpnr's Fmax and utilisation summary for both builds
 #   make pins    PMOD pin directions as placed (reads the routed netlists)
 #   make clean   remove build/;  make distclean also removes .venv
+#
+#   make sbc ROM_HEX=../../tests/basic/tinybasic_1k.hex   Tiny BASIC instead
 #
 # Synthesis and place & route are pip-installed into .venv: yowasp-yosys
 # (synth_ice40) and yowasp-nextpnr-ice40, which also ships yowasp-icepack
@@ -34,9 +39,13 @@ VENV     := .venv
 PYTHON   ?= python3
 
 ROM_HEX  ?= $(ROOT)/tests/basic/nascom_basic_4_7_rc2014.hex
-# First writable address in the 8 KiB ROM window (sbc). 8192 = none
-# (NASCOM BASIC); e.g. 1024 makes 0x0400-0x1FFF RAM for Tiny BASIC.
-ROM_PROTECT_TOP ?= 8192
+# First writable address in the 8 KiB ROM window (sbc). Default: the end
+# of the ROM image rounded up to 1 KiB (hex2mem.py --top) -- 8192 = none
+# for NASCOM BASIC; 1024 for the 1K Tiny BASIC makes 0x0400-0x1FFF RAM
+# (its variables and stack live at 0x0400-0x07FF).
+ifeq ($(origin ROM_PROTECT_TOP),undefined)
+ROM_PROTECT_TOP := $(shell $(PYTHON) hex2mem.py --top $(ROM_HEX))
+endif
 
 # The core is several files: take whatever rtl/ has.
 CORE_SRCS := $(wildcard $(ROOT)/rtl/*.v)
@@ -63,7 +72,7 @@ MODE ?= sbc
 # stem of the pattern rules below without any directory part
 STEM = $(notdir $*)
 
-.PHONY: all venv bin sbc chip sim sim_real sim_iverilog sim_gl sim_chip prog timing pins clean distclean FORCE
+.PHONY: all venv bin sbc chip sim sim_real sim_tiny sim_iverilog sim_gl sim_chip prog timing pins clean distclean FORCE
 all: bin
 
 # ---- toolchain venv (created before any tools are installed/used) ----
@@ -180,6 +189,27 @@ sim: $(OBJ_DIR)/Vtop $(BUILD)/rom.mem
 
 sim_real:
 	$(MAKE) sim SIM_BAUD=115200
+
+# Tiny BASIC: its own ROM image and model (RAM from 0x0400), whatever
+# ROM_HEX says; sim_top.cpp's `tiny` script.
+TINY_HEX := $(ROOT)/tests/basic/tinybasic_1k.hex
+TINY_DIR := obj_dir_tiny_$(SIM_BAUD)
+
+$(BUILD)/rom_tiny.mem: $(TINY_HEX) hex2mem.py
+	@mkdir -p $(BUILD)
+	$(PYTHON) hex2mem.py $< $@ 8192
+
+$(BUILD)/$(TINY_DIR)/Vtop: $(BUILD)/src sim_top.cpp hex2mem.py
+	rm -rf $(BUILD)/$(TINY_DIR)
+	cd $(BUILD) && $(VERILATOR) --cc --exe --build -j 4 -O2 \
+	  -Wno-fatal -Isrc --Mdir $(TINY_DIR) --top-module top \
+	  -GBAUD=$(SIM_BAUD) -GEXTERNAL_BUS=0 -GROM_FILE='"rom_tiny.mem"' \
+	  -GROM_PROTECT_TOP=$$($(PYTHON) ../hex2mem.py --top ../$(TINY_HEX)) \
+	  -CFLAGS -DSIM_BAUD=$(SIM_BAUD) \
+	  src/*.v ../sim_top.cpp > verilator_tiny.log 2>&1 || (tail -20 verilator_tiny.log; exit 1)
+
+sim_tiny: $(BUILD)/$(TINY_DIR)/Vtop $(BUILD)/rom_tiny.mem
+	cd $(BUILD) && ./$(TINY_DIR)/Vtop tiny
 
 $(BUILD)/tb_top.vvp: $(BUILD)/src $(BUILD)/rom.mem tb_top.v
 	$(IVERILOG) -g2012 -I$(BUILD)/src -s tb_top -o $@ $(BUILD)/src/*.v tb_top.v

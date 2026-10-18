@@ -64,8 +64,11 @@
 // sbc memory map (NASCOM BASIC 4.7 for the RC2014: 8 KiB ROM at 0x0000,
 // RAM at 0x8000-0xFFFF):
 //   0x0000-0x1FFF  ROM: 16 EBR (SB_RAM40_4K), preloaded from ROM_FILE at
-//                  configuration. Writes at or above ROM_PROTECT_TOP land
-//                  (default 0x2000: none, a true ROM).
+//                  configuration. Writes at or above ROM_PROTECT_TOP land.
+//                  The Makefile sets it to the end of the ROM image rounded
+//                  up to 1 KiB: 0x2000 for NASCOM BASIC (none, a true ROM),
+//                  0x0400 for the 1K Tiny BASIC (its variables and stack
+//                  live at 0x0400-0x07FF).
 //   0x2000-0x7FFF  unmapped: reads 0xFF (open bus), writes ignored
 //   0x8000-0xFFFF  RAM: one SB_SPRAM256KA (16K x 16), byte writes through
 //                  MASKWREN. SPRAM cannot be preloaded and powers up with
@@ -76,7 +79,9 @@
 // sbc I/O map and interrupt semantics are identical to the IcePi port
 // (branch fpga-icepi-zero-basic): ACIA status/control at 0x80, data at 0x81
 // (Tiny BASIC's 0x00/0x01 decoded too), /INT = (RIE & RDRF) | (TIE & TDRE),
-// IM 1 (INTA reads 0xFF = RST 38h).
+// IM 1 (INTA reads 0xFF = RST 38h). A TX write that finds the transmitter
+// busy holds the CPU with /WAIT until the previous byte is out (Tiny BASIC
+// writes without polling TDRE), so no byte is dropped.
 //
 // Board: 12 MHz oscillator on pin 35; FT2232H channel B UART: FPGA RX
 // pin 6, TX pin 9; user button pin 10 (active low); red LED pin 11 and
@@ -227,6 +232,7 @@ module top #(
     wire [7:0]  pad_d;          // chip: the D pins as read
     wire [7:0]  soc_dout;       // sbc: memory / ACIA / INTA byte for the CPU
     wire        soc_int_n;      // sbc: the ACIA's /INT
+    wire        soc_wait_n;     // sbc: the ACIA's TX flow control
     wire        uart_rx_s;      // sbc: synchronized RX, for the activity LED
 
     // Inputs not brought out are tied inactive; in the chip build the D
@@ -249,7 +255,7 @@ module top #(
         .rfsh_n     (rfsh_n),
         .halt_n     (halt_n),
         .busack_n   (busack_n),
-        .wait_n     (1'b1),
+        .wait_n     (EXTERNAL_BUS ? 1'b1 : soc_wait_n),
         .int_n      (EXTERNAL_BUS ? 1'b1 : soc_int_n),
         .nmi_n      (1'b1),
         .busreq_n   (1'b1),
@@ -399,6 +405,17 @@ module top #(
         wire fifo_pop  = iord_active && !prev_iord && (port == 8'h81 || port == 8'h01) && rx_avail;
         wire fifo_push = rx_valid && (f_cnt != 6'd32);
 
+        // TX: an OUT to the data port hands its byte to the transmitter on
+        // the first rising edge of the cycle that finds it idle (tx_taken:
+        // once per cycle). NASCOM BASIC checks TDRE first, so that is the
+        // cycle's first edge. Tiny BASIC writes without looking, faster
+        // than the line drains: while the previous byte is still shifting
+        // out, /WAIT holds the cycle in Tw (sampled at the falling edge of
+        // Tw; IORQ and WR are low from T2, 1.5 clocks earlier).
+        wire tx_wr = iowr_active && (port == 8'h81 || port == 8'h01);
+        reg  tx_taken = 1'b0;
+        assign soc_wait_n = !(tx_wr && !tx_taken && tx_busy);
+
         // 68B50 control register: bit7 RIE (RX-interrupt enable), bits 6:5
         // = 01 -> TIE (TX interrupt on TDRE). The NASCOM/z88dk ACIA driver
         // uses interrupt-driven TX: when it sees TDRE=0 it queues the byte
@@ -412,7 +429,7 @@ module top #(
             if (!cpu_reset_n) begin
                 f_rd <= 0; f_wr <= 0; f_cnt <= 0;
                 prev_iord <= 0; prev_iowr <= 0;
-                tx_strobe <= 0;
+                tx_strobe <= 0; tx_taken <= 0;
                 acia_ctrl <= 8'h00;
             end else begin
                 prev_iord <= iord_active;
@@ -440,14 +457,15 @@ module top #(
                     endcase
                 end
 
-                if (iowr_active && !prev_iowr) begin
-                    if (port == 8'h81 || port == 8'h01) begin
-                        tx_data   <= data_out;
-                        tx_strobe <= 1'b1;
-                    end else if (port == 8'h80) begin
-                        acia_ctrl <= data_out;   // divisor/format bits ignored
-                    end
+                if (!tx_wr)
+                    tx_taken <= 1'b0;
+                else if (!tx_taken && !tx_busy) begin
+                    tx_data   <= data_out;
+                    tx_strobe <= 1'b1;
+                    tx_taken  <= 1'b1;
                 end
+                if (iowr_active && !prev_iowr && port == 8'h80)
+                    acia_ctrl <= data_out;       // divisor/format bits ignored
             end
         end
 
@@ -462,6 +480,7 @@ module top #(
     end else begin : g_nosoc
         assign soc_dout  = 8'hFF;
         assign soc_int_n = 1'b1;
+        assign soc_wait_n = 1'b1;
         assign uart_rx_s = 1'b1;
         assign uart_tx   = 1'b1;    // idle
     end endgenerate
