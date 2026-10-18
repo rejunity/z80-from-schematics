@@ -1,0 +1,91 @@
+# One FPGA board: both bitstreams, the 1K Tiny BASIC bitstream and every
+# simulation the board has -- `make ci` in fpga/<board>/ -- with the
+# board's timing summary and the bitstreams as artifacts.
+#
+# Called by targets.yml (main: every push and nightly) and by each board
+# branch's own fpga-<board>.yml (every push to that branch). fpga/ lives
+# only on the board branches: run from a tree without fpga/<board>, the
+# job first merges fpga-<board>-basic into it, so the board is built
+# around this tree's core. A branch that no longer merges cleanly fails
+# that step; merge main into the branch.
+name: fpga-board
+
+on:
+  workflow_call:
+    inputs:
+      board:
+        description: Directory under fpga/; the branch is fpga-<board>-basic
+        required: true
+        type: string
+
+jobs:
+  board:
+    name: ${{ inputs.board }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      BOARD: ${{ inputs.board }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Merge fpga-${{ inputs.board }}-basic if fpga/${{ inputs.board }} is not in this tree
+        run: |
+          if [ -f fpga/$BOARD/Makefile ]; then
+            echo "fpga/$BOARD is in this tree ($GITHUB_REF_NAME @ ${GITHUB_SHA::7})" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git config user.name ci
+          git config user.email ci@localhost
+          git fetch --no-tags origin fpga-$BOARD-basic
+          branch=$(git rev-parse --short FETCH_HEAD)
+          if ! git merge --no-ff --no-edit FETCH_HEAD; then
+            echo "::error::fpga-$BOARD-basic does not merge cleanly into $GITHUB_REF_NAME; merge $GITHUB_REF_NAME into the branch"
+            exit 1
+          fi
+          echo "$GITHUB_REF_NAME @ ${GITHUB_SHA::7} + fpga-$BOARD-basic @ $branch" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: fpga/${{ inputs.board }}/Makefile
+
+      - name: Install Verilator and Icarus Verilog
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends verilator iverilog
+
+      - name: Toolchain (YoWASP, pip into fpga/${{ inputs.board }}/.venv)
+        run: make -C fpga/$BOARD venv
+
+      - name: Bitstreams and simulations (make ci)
+        run: make -C fpga/$BOARD ci
+
+      - name: Timing summary
+        run: |
+          {
+            echo "### fpga/$BOARD"
+            echo '```'
+            make -s -C fpga/$BOARD timing
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload bitstreams and logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: fpga-${{ inputs.board }}
+          path: |
+            fpga/${{ inputs.board }}/build*/top_*.bit
+            fpga/${{ inputs.board }}/build*/top_*.bin
+            fpga/${{ inputs.board }}/build*/top_*.fs
+            fpga/${{ inputs.board }}/build*/top_*.uf2
+            fpga/${{ inputs.board }}/build*/*.log
+            fpga/${{ inputs.board }}/build*/report_*.json
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,0 +1,106 @@
+# One ASIC PDK: RTL-to-GDS of z80_top with LibreLane (Classic flow, the
+# bare core -- no pad ring), the sign-off checks, and the signs-of-life
+# program on the RTL and on the routed netlist (asic/<pdk>/Makefile).
+#
+# Called by targets.yml (main: every push and nightly) and by each PDK
+# branch's own asic-<pdk>.yml (every push to that branch). asic/ lives
+# only on the PDK branches: run from a tree without asic/<pdk>, the job
+# first merges asic-<pdk> into it, so the core of this tree is what gets
+# hardened. A branch that no longer merges cleanly fails that step;
+# merge main into the branch.
+name: asic-pdk
+
+on:
+  workflow_call:
+    inputs:
+      pdk:
+        description: Directory under asic/ and branch asic-<pdk> (sky130, ihp-sg13g2, gf180mcu)
+        required: true
+        type: string
+
+env:
+  LIBRELANE_VERSION: 3.0.14
+
+jobs:
+  harden:
+    name: ${{ inputs.pdk }} RTL-to-GDS + signs of life
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: bash
+    env:
+      PDK: ${{ inputs.pdk }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Merge asic-${{ inputs.pdk }} if asic/${{ inputs.pdk }} is not in this tree
+        run: |
+          if [ -f asic/$PDK/Makefile ]; then
+            echo "asic/$PDK is in this tree ($GITHUB_REF_NAME @ ${GITHUB_SHA::7})" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git config user.name ci
+          git config user.email ci@localhost
+          git fetch --no-tags origin asic-$PDK
+          branch=$(git rev-parse --short FETCH_HEAD)
+          if ! git merge --no-ff --no-edit FETCH_HEAD; then
+            echo "::error::asic-$PDK does not merge cleanly into $GITHUB_REF_NAME; merge $GITHUB_REF_NAME into the branch"
+            exit 1
+          fi
+          echo "$GITHUB_REF_NAME @ ${GITHUB_SHA::7} + asic-$PDK @ $branch" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: DeterminateSystems/nix-installer-action@main
+        with:
+          # pre-built LibreLane closure; without it nix rebuilds LibreLane's
+          # pinned iverilog from source and one of its self-tests fails
+          extra-conf: |
+            extra-substituters = https://nix-cache.fossi-foundation.org
+            extra-trusted-public-keys = nix-cache.fossi-foundation.org:3+K59iFwXqKsL7BNu6Guy0v+uTlwsxYQxjspXzqLYQs=
+            extra-experimental-features = nix-command flakes
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+
+      # iverilog >= 12 for the gate-level run (the IHP cell models need it)
+      - name: Install LibreLane ${{ env.LIBRELANE_VERSION }} and iverilog
+        run: nix profile install github:librelane/librelane/$LIBRELANE_VERSION nixpkgs#iverilog
+
+      # LibreLane pins the PDK version, so its version keys the cache
+      - name: Cache the PDK (ciel)
+        uses: actions/cache@v4
+        with:
+          path: ~/.ciel
+          key: ciel-${{ inputs.pdk }}-librelane-${{ env.LIBRELANE_VERSION }}
+
+      - name: Signs of life (RTL)
+        run: make -C asic/$PDK sign_of_life_rtl
+
+      - name: RTL-to-GDS
+        run: make -C asic/$PDK harden LIBRELANE_ARGS=--hide-progress-bar
+
+      - name: Sign-off summary (fails on DRC / LVS / antenna / XOR / timing)
+        run: |
+          rc=0
+          make -s -C asic/$PDK summary > summary.txt || rc=$?
+          cat summary.txt
+          { echo "### asic/$PDK"; echo '```'; cat summary.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
+
+      - name: Signs of life (routed netlist, PDK cell models)
+        run: make -C asic/$PDK sign_of_life
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: asic-${{ inputs.pdk }}
+          path: |
+            asic/${{ inputs.pdk }}/runs/*/final/metrics.*
+            asic/${{ inputs.pdk }}/runs/*/final/gds/
+            asic/${{ inputs.pdk }}/runs/*/final/nl/
+            asic/${{ inputs.pdk }}/runs/*/*-openroad-stapostpnr/summary.rpt
+            asic/${{ inputs.pdk }}/runs/*/flow.log
+            asic/${{ inputs.pdk }}/runs/*/warning.log
+            asic/${{ inputs.pdk }}/runs/*/error.log
+          retention-days: 14
