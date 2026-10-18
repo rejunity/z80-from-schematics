@@ -185,7 +185,7 @@ UP5K wants:
 
 | range | what | implementation |
 |---|---|---|
-| 0x0000–0x1FFF | ROM, NASCOM BASIC 4.7 (RC2014 build, 0x0000–0x1FD9) | 16 EBR, preloaded at configuration from `ROM_HEX` (`hex2mem.py … 8192`) |
+| 0x0000–0x1FFF | ROM, NASCOM BASIC 4.7 (RC2014 build, 0x0000–0x1FD9); writable from `ROM_PROTECT_TOP` up — the image rounded up to 1 KiB, so none for NASCOM BASIC | 16 EBR, preloaded at configuration from `ROM_HEX` (`hex2mem.py … 8192`) |
 | 0x2000–0x7FFF | unmapped | reads 0xFF, writes ignored |
 | 0x8000–0xFFFF | RAM, 32 KiB | one `SB_SPRAM256KA` (16K × 16; A0 picks the byte via `MASKWREN`) |
 
@@ -201,8 +201,10 @@ I/O: the 68B50-style ACIA at **0x80** (status: bit 0 RDRF, bit 1 TDRE /
 control) and **0x81** (data), a 32-byte RX FIFO, `/INT` = (RIE & RDRF) |
 (TIE & TDRE) in IM 1 (INTA reads 0xFF = RST 38h). TIE matters: the ROM's
 z88dk ACIA driver has an interrupt-driven TX ring buffer. Tiny BASIC's
-ports 0x00/0x01 are decoded too, but the 1 KiB Tiny BASIC ROM in
-`tests/basic` wants RAM at 0x0400–0x07FF, which this map does not have.
+ports 0x00/0x01 are decoded too (see Variants). A TX write that finds the
+transmitter still busy holds the CPU with `/WAIT` until the previous byte
+is out, so a program that writes without polling TDRE (Tiny BASIC) loses
+nothing.
 
 RGB LED: green = heartbeat (board clock alive), blue = serial activity
 (chip build: /MREQ activity), red = Z80 in reset or halted.
@@ -265,6 +267,7 @@ not fit the UP5K).
     make sim_real       # same at the hardware's serial pacing (TIE path)
     make sim_iverilog   # the boot script through iverilog (~6 min)
     make sim_chip       # iverilog, chip build: external bus on the pins (~2 s)
+    make sim_tiny       # Verilator, 1K Tiny BASIC (SIM_BAUD=57143: hardware pacing)
 
 The sbc sims boot the *real* ROM through the *real* top-level — clock
 divider, POR, EBR ROM, behavioural SPRAM, UART bits on the pins,
@@ -295,11 +298,34 @@ Verilator result on this branch:
     Ok
     [sim_top] PASS: boot, arithmetic, SW2 warm-restart all good
 
+`make sim_tiny` runs the 1K Tiny BASIC ROM with RAM from 0x0400: it types
+a short session one character per echo and compares the whole console
+transcript byte for byte with the C model's (`scripts/basicrunner`), so a
+TX byte the UART dropped fails it.
+
 `make sim_chip` (`tb_chip.v`) is the chip build seen from the outside: an
 external 4 MHz CLK, an 8 KiB SRAM on A0–A12 / /MREQ / /RD / /WR and an
 output port decoded from /WR with /MREQ high run a small program (LDIR a
 string into RAM, CALL a print routine, `OUT (81h),A`) and must print
 `Z80 chip OK` without bus contention.
+
+## Variants
+
+1K Tiny BASIC instead of NASCOM:
+
+    make sbc ROM_HEX=../../tests/basic/tinybasic_1k.hex
+
+It keeps its variables and stack at 0x0400–0x07FF, inside the ROM window.
+The Makefile makes that part of the block RAM writable by itself:
+`ROM_PROTECT_TOP` defaults to the ROM image rounded up to 1 KiB
+(`hex2mem.py --top`, 1024 here; override it on the command line), and a
+different `ROM_HEX` rebuilds the image and the bitstreams. Tiny BASIC
+writes its output without polling TDRE; the `/WAIT` flow control holds
+each such write until the line is free. Pasting a long program can still
+overrun the 32-byte RX FIFO (basic1K needs ~430 Z80 clocks per input
+character, more than one takes at 115200 baud), and the RP2040's
+USB-UART bridge drops bytes beyond its own 32-byte FIFO too: give the
+terminal a per-character delay (1 ms is plenty).
 
 ## Limitations
 

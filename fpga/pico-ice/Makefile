@@ -11,6 +11,9 @@
 #   make         both bitstreams;  make sbc / make chip for one
 #   make sim     Verilator smoke test of the sbc build (fast serial)
 #   make sim_real  same at the hardware's serial pacing (exercises the TIE path)
+#   make sim_tiny  Verilator: the 1K Tiny BASIC ROM, console transcript
+#                compared byte for byte with the C model's (add
+#                SIM_BAUD=57143 for the hardware's pacing)
 #   make sim_iverilog  the boot script through iverilog (slow cross-check)
 #   make sim_chip  iverilog smoke test of the chip build: an external clock,
 #                memory and output port on the header pins run a program
@@ -20,6 +23,8 @@
 #                build/top_<mode>.uf2 for the `pico-ice` USB drive (and copy it)
 #   make timing  post-route Fmax per clock and I/O delays, both builds
 #   make clean   remove build/;  make distclean also removes .venv
+#
+#   make sbc ROM_HEX=../../tests/basic/tinybasic_1k.hex   Tiny BASIC instead
 #
 # Synthesis and P&R are pip-installed into .venv: yowasp-yosys
 # (synth_ice40) and yowasp-nextpnr-ice40, which also ships the IceStorm
@@ -37,6 +42,13 @@ VENV     := .venv
 PYTHON   ?= python3
 
 ROM_HEX  ?= $(ROOT)/tests/basic/nascom_basic_4_7_rc2014.hex
+# First writable address in the 8 KiB ROM window (sbc). Default: the end
+# of the ROM image rounded up to 1 KiB (hex2mem.py --top) -- 8192 = none
+# for NASCOM BASIC; 1024 for the 1K Tiny BASIC makes 0x0400-0x1FFF RAM
+# (its variables and stack live at 0x0400-0x07FF).
+ifeq ($(origin ROM_PROTECT_TOP),undefined)
+ROM_PROTECT_TOP := $(shell $(PYTHON) hex2mem.py --top $(ROM_HEX))
+endif
 
 # The core is several files (z80_top + the die's blocks + headers): take them all.
 CORE_SRCS := $(wildcard $(ROOT)/rtl/*.v)
@@ -67,7 +79,7 @@ MODE ?= sbc
 # stem of the pattern rules below without any directory part
 STEM = $(notdir $*)
 
-.PHONY: all venv bin sbc chip sim sim_real sim_iverilog sim_chip prog flash uf2 timing clean distclean
+.PHONY: all venv bin sbc chip sim sim_real sim_tiny sim_iverilog sim_chip prog flash uf2 timing clean distclean FORCE
 all: bin
 
 # ---- toolchain venv (created before any tools are installed/used) ----
@@ -80,8 +92,16 @@ $(VENV)/.ok:
 venv: $(VENV)/.ok
 
 # ---- staging ----
+# build/rom.cfg changes only when ROM_HEX or ROM_PROTECT_TOP does, so a
+# different ROM on the command line rebuilds the image and the bitstreams.
+ROM_CFG := $(abspath $(ROM_HEX)) $(ROM_PROTECT_TOP)
+$(BUILD)/rom.cfg: FORCE
+	@mkdir -p $(BUILD)
+	@echo '$(ROM_CFG)' | cmp -s - $@ || echo '$(ROM_CFG)' > $@
+FORCE:
+
 # ROM: 8 KiB block RAM at 0x0000-0x1FFF, so an 8192-line image.
-$(BUILD)/rom.mem: $(ROM_HEX) hex2mem.py
+$(BUILD)/rom.mem: $(ROM_HEX) hex2mem.py $(BUILD)/rom.cfg
 	@mkdir -p $(BUILD)
 	$(PYTHON) hex2mem.py $< $@ 8192
 
@@ -111,7 +131,7 @@ YOSYS_FILTER := grep --line-buffered -vE 'port Q\[|Drivers conflicting|Replacing
 $(BUILD)/top_%.json: $(BUILD)/src $(BUILD)/rom.mem $(VENV)/.ok
 	@rm -f $@
 	cd $(BUILD) && $(YOSYS) $(YOSYS_QUIET) -l yosys_$(STEM).log -p \
-	  'read_verilog -Isrc src/*.v; hierarchy -top top -chparam EXTERNAL_BUS $(EXTBUS_$(STEM)); synth_ice40 -top top -abc9 -dsp -json top_$(STEM).json' \
+	  'read_verilog -Isrc src/*.v; hierarchy -top top -chparam EXTERNAL_BUS $(EXTBUS_$(STEM)) -chparam ROM_PROTECT_TOP $(ROM_PROTECT_TOP); synth_ice40 -top top -abc9 -dsp -json top_$(STEM).json' \
 	  2>&1 | $(YOSYS_FILTER)
 	@test -f $@ || { echo "yosys failed, see $(BUILD)/yosys_$(STEM).log"; exit 1; }
 
@@ -175,6 +195,28 @@ sim: $(OBJ_DIR)/Vtop $(BUILD)/rom.mem
 
 sim_real:
 	$(MAKE) sim SIM_BAUD=$(SIM_BAUD_REAL)
+
+# Tiny BASIC: its own ROM image and model (RAM from 0x0400), whatever
+# ROM_HEX says; sim_top.cpp's `tiny` script.
+TINY_HEX := $(ROOT)/tests/basic/tinybasic_1k.hex
+TINY_DIR := obj_dir_tiny_$(SIM_BAUD)
+
+$(BUILD)/rom_tiny.mem: $(TINY_HEX) hex2mem.py
+	@mkdir -p $(BUILD)
+	$(PYTHON) hex2mem.py $< $@ 8192
+
+$(BUILD)/$(TINY_DIR)/Vtop: $(BUILD)/src sim_top.cpp hex2mem.py
+	rm -rf $(BUILD)/$(TINY_DIR)
+	cd $(BUILD) && $(VERILATOR) --cc --exe --build -j 4 -O2 \
+	  -Wno-fatal -Isrc --Mdir $(TINY_DIR) --top-module top \
+	  -GCORE_HZ=$(SIM_CORE_HZ) -GBAUD=$(SIM_BAUD) -GEXTERNAL_BUS=0 \
+	  -GROM_FILE='"rom_tiny.mem"' \
+	  -GROM_PROTECT_TOP=$$($(PYTHON) ../hex2mem.py --top ../$(TINY_HEX)) \
+	  -CFLAGS -DSIM_BAUD=$(SIM_BAUD) \
+	  $(SIM_SRCS) ../sim_top.cpp > verilator_tiny.log 2>&1 || (tail -20 verilator_tiny.log; exit 1)
+
+sim_tiny: $(BUILD)/$(TINY_DIR)/Vtop $(BUILD)/rom_tiny.mem
+	cd $(BUILD) && ./$(TINY_DIR)/Vtop tiny
 
 $(BUILD)/tb_top.vvp: $(BUILD)/src $(BUILD)/rom.mem tb_top.v
 	cd $(BUILD) && $(IVERILOG) -g2012 -Isrc -o tb_top.vvp $(SIM_SRCS) ../tb_top.v
