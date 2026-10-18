@@ -28,7 +28,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        board: [icepi-zero, tang-primer-25k, icebreaker, pico-ice]
+        board: [icepi-zero, tang-primer-25k, icebreaker, pico-ice, icesugar]
     uses: ./.github/workflows/fpga-board.yml
     with:
       board: ${{ matrix.board }}

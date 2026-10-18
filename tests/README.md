@@ -390,7 +390,7 @@ job first merges its branch into main's tree.
 
 | Job (matrix) | Branch merged | Runs |
 |--------------|---------------|------|
-| `fpga`: icepi-zero, tang-primer-25k, icebreaker, pico-ice | `fpga-<board>-basic` | `make ci` in `fpga/<board>/`: sbc + chip bitstreams, the Tiny BASIC bitstream, and every board simulation (Verilator boot and Tiny BASIC at fast and real serial pacing, iverilog, gate-level where the board has one; on the iCE40 boards also both BASICs on nextpnr's routed netlist, `make sim_pnr`); timing summary; artifacts `fpga-<board>-bitstreams` (named downloads) and `fpga-<board>-logs` (`fpga-board.yml`) |
+| `fpga`: icepi-zero, tang-primer-25k, icebreaker, pico-ice, icesugar | `fpga-<board>-basic` | `make ci` in `fpga/<board>/`: sbc + chip bitstreams, the Tiny BASIC bitstream, and every board simulation (Verilator boot and Tiny BASIC at fast and real serial pacing, iverilog, gate-level where the board has one; on the iCE40 boards also both BASICs on nextpnr's routed netlist, `make sim_pnr`); timing summary; artifacts `fpga-<board>-bitstreams` (named downloads) and `fpga-<board>-logs` (`fpga-board.yml`) |
 | `asic`: sky130, ihp-sg13g2, gf180mcu | `asic-<pdk>` | signs of life on the RTL, LibreLane RTL-to-GDS, sign-off summary (fails on DRC / LVS / antenna / XOR / timing), signs of life on the routed netlist; where the branch has one (IHP, GF180), the chip: `z80_top` as a hard macro in a ring of pads placed like the Z80's (`make chip`, LibreLane Chip flow), its sign-off and the signs of life through the pads; artifacts `asic-<pdk>-gds` (the GDS files, pictures and cell and block maps) and `asic-<pdk>-results` (`asic-pdk.yml`) |
 
 The branches run the same jobs on their own pushes (`fpga-<board>.yml`,

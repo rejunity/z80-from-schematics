@@ -36,6 +36,7 @@ BOARDS = {
     'tang-primer-25k': ('Sipeed Tang Primer 25K', 'Gowin GW5A-LV25MG121NES'),
     'icebreaker':      ('iCEBreaker', 'Lattice iCE40UP5K'),
     'pico-ice':        ('pico-ice', 'Lattice iCE40UP5K + RP2040'),
+    'icesugar':        ('iCESugar', 'Lattice iCE40UP5K'),
 }
 PDKS = {
     'sky130':     'SkyWater SKY130',
