@@ -24,6 +24,9 @@
 // Memory map: one 64 KiB block RAM, preloaded with the BASIC ROM image
 // at bitstream load. Writes below ROM_PROTECT_TOP are dropped so the
 // ROM region behaves like ROM and a button reset warm-restarts cleanly.
+// The Makefile sets ROM_PROTECT_TOP to the end of the ROM image rounded
+// up to 1 KiB: 0x2000 for NASCOM BASIC, 0x0400 for the 1K Tiny BASIC
+// (its variables and stack live at 0x0400-0x07FF).
 //
 // I/O map (matches scripts/basicrunner.c and tests/verilator/sim_basic.cpp):
 //   IN  (0x80) -> ACIA status: bit0 RDRF (RX byte ready), bit1 TDRE (TX idle)
@@ -33,6 +36,9 @@
 //   IN  (0x00) -> Tiny BASIC status: 0xFF if RX byte ready else 0x00
 //   IN/OUT (0x01) -> Tiny BASIC data (same UART)
 //   /INT asserted per 68B50 rules: (RIE & RDRF) | (TIE & TDRE).
+//   A TX write that finds the transmitter still busy holds the CPU with
+//   /WAIT until the previous byte is out (Tiny BASIC writes without
+//   polling TDRE), so no byte is ever dropped.
 //
 // button[0] = Z80 reset (active low, board pull-up), in both builds.
 //
@@ -152,6 +158,7 @@ module top #(
     wire        m1_n, mreq_n, iorq_n, rd_n, wr_n, rfsh_n, halt_n, busack_n;
     wire [7:0]  data_in;
     wire        int_n;
+    wire        wait_n;
 
     z80_top cpu (
         .clk        (clk_z80),
@@ -168,7 +175,7 @@ module top #(
         .rfsh_n     (rfsh_n),
         .halt_n     (halt_n),
         .busack_n   (busack_n),
-        .wait_n     (1'b1),
+        .wait_n     (wait_n),
         .int_n      (int_n),
         .nmi_n      (1'b1),
         .busreq_n   (1'b1),
@@ -240,6 +247,17 @@ module top #(
     wire fifo_pop  = iord_active && !prev_iord && (port == 8'h81 || port == 8'h01) && rx_avail;
     wire fifo_push = rx_valid && (f_cnt != 6'd32);
 
+    // TX: an OUT to the data port hands its byte to the transmitter on
+    // the first rising edge of the cycle that finds it idle (tx_taken:
+    // once per cycle). NASCOM BASIC checks TDRE first, so that is the
+    // cycle's first edge, as before. Tiny BASIC writes without looking,
+    // faster than the line drains: while the previous byte is still
+    // shifting out, /WAIT holds the cycle in Tw (sampled at the falling
+    // edge of Tw; IORQ and WR are low from T2, 1.5 clocks earlier).
+    wire tx_wr = iowr_active && (port == 8'h81 || port == 8'h01);
+    reg  tx_taken = 1'b0;
+    assign wait_n = !(tx_wr && !tx_taken && tx_busy);
+
     // 68B50 control register: bit7 RIE (RX-interrupt enable), bits 6:5
     // = 01 -> TIE (TX interrupt on TDRE). The NASCOM/z88dk ACIA driver
     // uses interrupt-driven TX: when it sees TDRE=0 it queues the byte
@@ -253,7 +271,7 @@ module top #(
         if (!reset_n) begin
             f_rd <= 0; f_wr <= 0; f_cnt <= 0;
             prev_iord <= 0; prev_iowr <= 0;
-            tx_strobe <= 0;
+            tx_strobe <= 0; tx_taken <= 0;
             acia_ctrl <= 8'h00;
         end else begin
             prev_iord <= iord_active;
@@ -281,14 +299,15 @@ module top #(
                 endcase
             end
 
-            if (iowr_active && !prev_iowr) begin
-                if (port == 8'h81 || port == 8'h01) begin
-                    tx_data   <= data_out;
-                    tx_strobe <= 1'b1;
-                end else if (port == 8'h80) begin
-                    acia_ctrl <= data_out;   // divisor/format bits ignored
-                end
+            if (!tx_wr)
+                tx_taken <= 1'b0;
+            else if (!tx_taken && !tx_busy) begin
+                tx_data   <= data_out;
+                tx_strobe <= 1'b1;
+                tx_taken  <= 1'b1;
             end
+            if (iowr_active && !prev_iowr && port == 8'h80)
+                acia_ctrl <= data_out;       // divisor/format bits ignored
         end
     end
 
@@ -328,6 +347,7 @@ module top #(
     assign data_in = gpio[23:16];
 `endif
     assign int_n   = 1'b1;
+    assign wait_n  = 1'b1;
     assign usb_tx  = 1'b1;                                  // serial idle
     reg [24:0] beat = 0;
     always @(posedge clk) beat <= beat + 1'b1;
