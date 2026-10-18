@@ -77,7 +77,10 @@ void z80_timing(uint8_t   bus_op,     /* z80_busop_t                          */
         bool active = !(t_state == 1 && phi == 0) &&
                       !(t_state == 3 && phi == 1) && t_state <= 3;
         *mreq_n = active ? 0 : 1;
-        *data_drive = active;
+        /* Data from T1.N through T3.N: it stays driven past WR's rise at
+           T3.N and floats at the next rising edge (Zilog PS0178 Figure 6,
+           TdWRr(D) / TdCr(Dz); perfectz80's data bus floats at T1.P). */
+        *data_drive = !(t_state == 1 && phi == 0) && t_state <= 3;
         *data_out = m_wdata;
         *wr_n = ((t_state == 2 && phi == 1) || (t_state == 3 && phi == 0)) ? 0 : 1;
         break;
@@ -93,7 +96,9 @@ void z80_timing(uint8_t   bus_op,     /* z80_busop_t                          */
         *iorq_n = active ? 0 : 1;
         *data_drive = !(t_state == 1 && phi == 0) && t_state <= 4;
         *data_out = m_wdata;
-        *wr_n = ((t_state == 2 && phi == 1) || (t_state == 3) || (t_state == 4 && phi == 0)) ? 0 : 1;
+        /* WR falls with IORQ at T2.P, unlike a memory write's T2.N
+           (PS0178 Figure 7, TdCr(WRf); perfectz80) */
+        *wr_n = active ? 0 : 1;
         break;
     }
     case BUSOP_INTA: {
