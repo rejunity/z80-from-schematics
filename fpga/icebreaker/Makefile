@@ -20,7 +20,9 @@
 #   make prog MODE=sbc|chip    write the bitstream to the SPI flash (iceprog)
 #   make timing  nextpnr's Fmax and utilisation summary for both builds
 #   make pins    PMOD pin directions as placed (reads the routed netlists)
-#   make clean   remove build/;  make distclean also removes .venv
+#   make ci      everything CI runs (fpga-board.yml): both bitstreams, the
+#                Tiny BASIC bitstream in build_tiny/ and every simulation
+#   make clean   remove build/ and build_tiny/;  make distclean also .venv
 #
 #   make sbc ROM_HEX=../../tests/basic/tinybasic_1k.hex   Tiny BASIC instead
 #
@@ -72,7 +74,7 @@ MODE ?= sbc
 # stem of the pattern rules below without any directory part
 STEM = $(notdir $*)
 
-.PHONY: all venv bin sbc chip sim sim_real sim_tiny sim_iverilog sim_gl sim_chip prog timing pins clean distclean FORCE
+.PHONY: all venv bin sbc chip sim sim_real sim_tiny sim_iverilog sim_gl sim_chip prog timing pins ci clean distclean FORCE
 all: bin
 
 # ---- toolchain venv (created before any tools are installed/used) ----
@@ -275,8 +277,15 @@ sim_chip: $(BUILD)/tb_chip_rtl.vvp $(BUILD)/gl/tb_chip_gl.vvp
 prog: $(BUILD)/top_$(MODE).bin
 	$(ICEPROG) $(BUILD)/top_$(MODE).bin
 
+# ---- CI (.github/workflows/fpga-board.yml) ----
+# Both bitstreams, the Tiny BASIC bitstream (build_tiny/) and every
+# simulation, Tiny BASIC at both serial pacings.
+ci: sbc chip sim sim_real sim_tiny sim_iverilog sim_gl sim_chip
+	$(MAKE) sim_tiny SIM_BAUD=115200
+	$(MAKE) sbc BUILD=build_tiny ROM_HEX=$(TINY_HEX)
+
 clean:
-	rm -rf $(BUILD)
+	rm -rf $(BUILD) build_tiny
 
 distclean: clean
 	rm -rf $(VENV)

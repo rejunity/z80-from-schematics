@@ -222,6 +222,7 @@ openFPGALoader can be used instead:
     make sim_gl         # the script on the *synthesized* sbc netlist (~1.5 min)
     make sim_chip       # chip build with an external RAM, RTL + netlist
     make sim_tiny       # 1K Tiny BASIC (SIM_BAUD=115200: real pacing)
+    make ci             # all of these, both bitstreams and the Tiny BASIC bitstream
 
 The PLL is a black box in simulation: the testbench clock stands in for its
 48 MHz output, so the real /12 divider makes the 4 MHz Z80 clock and
@@ -249,6 +250,11 @@ TX byte the UART dropped fails it.
     Cold | Warm start (C|W) ? W
     Ok
     [sim_top] PASS: boot, arithmetic, button warm-restart all good
+
+`make ci` is what GitHub Actions runs: on every push to this branch
+(`.github/workflows/fpga-icebreaker.yml`) and nightly with this branch
+merged into main (`targets.yml`), so a core change on main that
+breaks the board shows up within a day.
 
 ## Limitations
 
