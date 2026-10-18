@@ -97,6 +97,27 @@ jobs:
       - name: Signs of life (routed netlist, PDK cell models)
         run: make -C asic/$PDK sign_of_life
 
+      # The chip, where the PDK branch has one (asic/<pdk>/chip/): z80_top
+      # in a ring of I/O pads placed like the Z80's, LibreLane's Chip flow
+      # (seal ring, fill, density), its sign-off, and the signs-of-life
+      # program through the pads.
+      - name: Chip with pad ring (RTL-to-GDS)
+        if: hashFiles(format('asic/{0}/chip/config.yaml', inputs.pdk)) != ''
+        run: make -C asic/$PDK chip LIBRELANE_ARGS=--hide-progress-bar
+
+      - name: Chip sign-off summary
+        if: hashFiles(format('asic/{0}/chip/config.yaml', inputs.pdk)) != ''
+        run: |
+          rc=0
+          make -s -C asic/$PDK chip_summary > chip_summary.txt || rc=$?
+          cat chip_summary.txt
+          { echo "### asic/$PDK chip"; echo '```'; cat chip_summary.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
+
+      - name: Chip signs of life (through the pads)
+        if: hashFiles(format('asic/{0}/chip/config.yaml', inputs.pdk)) != ''
+        run: make -C asic/$PDK chip_sign_of_life
+
       - uses: actions/setup-python@v5
         if: always()
         with:
@@ -132,6 +153,11 @@ jobs:
             asic/${{ inputs.pdk }}/runs/*/final/metrics.*
             asic/${{ inputs.pdk }}/runs/*/final/nl/
             asic/${{ inputs.pdk }}/runs/*/final/render/
+            asic/${{ inputs.pdk }}/chip/runs/*/final/metrics.*
+            asic/${{ inputs.pdk }}/chip/runs/*/*-openroad-stapostpnr/summary.rpt
+            asic/${{ inputs.pdk }}/chip/runs/*/flow.log
+            asic/${{ inputs.pdk }}/chip/runs/*/warning.log
+            asic/${{ inputs.pdk }}/chip/runs/*/error.log
             asic/${{ inputs.pdk }}/runs/*/*-openroad-stapostpnr/summary.rpt
             asic/${{ inputs.pdk }}/runs/*/flow.log
             asic/${{ inputs.pdk }}/runs/*/warning.log
