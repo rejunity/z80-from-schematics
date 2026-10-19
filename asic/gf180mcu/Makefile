@@ -6,7 +6,7 @@
 # `make sign_of_life_rtl`).
 #
 # The chip: `make chip` builds z80_chip -- z80_top in a ring of I/O pads
-# placed like the Z80's (chip/z80_chip.v, chip/config.yaml, LibreLane Chip
+# on the Z80's sides (chip/z80_chip.v, chip/config.yaml, LibreLane Chip
 # flow) -- into chip/runs/, apart from z80_top's runs. z80_top goes in as
 # the hard macro of the latest `make` run (its views copied to
 # chip/macro/), so run `make` first. `make chip_summary` and
