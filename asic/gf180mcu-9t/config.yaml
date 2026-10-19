@@ -1,12 +1,14 @@
 # LibreLane 3 Classic flow: harden z80_top as a stand-alone macro on
-# gf180mcuD / gf180mcu_fd_sc_mcu7t5v0 -- the PDK and cell library used
-# by both the TinyTapeout GF180 shuttles (ttgf26d: LibreLane 3.0.14,
-# gf180mcu 54435919) and the wafer.space template default (gf180mcuD
-# f6eeac7d, 7-track 5V0 cells, gf180mcu_fd_io pads).
+# gf180mcuD with the 9-track 5 V cells, gf180mcu_fd_sc_mcu9t5v0: taller
+# (5.04 um rows against the 7-track's 3.92 um) and stronger than the
+# 7-track library asic-gf180mcu uses, for the slow corner (ss, 125 C,
+# 4.5 V), where the 7-track core reaches ~15 MHz. Otherwise the same
+# setup as asic-gf180mcu: same PDK version (54435919, LibreLane 3.0.14's),
+# same pads, same chip.
 #
 # This is a tapeout-readiness probe of the core itself (synthesis ->
-# floorplan -> place -> CTS -> route -> STA -> DRC/LVS/antenna), not a
-# shuttle submission: no TinyTapeout tile wrapper and no pads yet.
+# floorplan -> place -> CTS -> route -> STA -> DRC/LVS/antenna); chip/
+# puts it in a pad ring.
 meta:
   version: 3
   flow: Classic
@@ -37,9 +39,23 @@ IO_PIN_ORDER_CFG: dir::pin_order.cfg
 PDN_MULTILAYER: false
 RT_MAX_LAYER: Metal4
 
+# Plain buffers on z80_top's ports: the port buffers LibreLane inserts
+# (buffer_ports) otherwise come out as this library's delay cells
+# (dlyd_1, ~5 ns at the slow corner) on every input and output -- on the
+# data inputs that much came off the chip's tightest NMOS margin, the
+# opcode's setup TsD(Cr). The core's hold repair needs none of them.
+EXTRA_EXCLUDED_CELLS: ["gf180mcu_fd_sc_mcu9t5v0__dly*"]
+
+# Repair timing once more after global routing, on the routed wires'
+# parasitics instead of placement estimates (LibreLane leaves this off).
+# At the slow corner the resizer had judged its work done, and routing
+# then cost 10-20 ns; this pass wins back about a third of it.
+RUN_POST_GRT_RESIZER_TIMING: true
+RUN_POST_GRT_DESIGN_REPAIR: true
+
 # One Z80-rate clock. 50 ns = 20 MHz, the fastest CMOS Z80 grade
 # (Z84C0020). Met at the typical corners LibreLane signs off; the 5 V
-# cells at the slow corner (ss, 125 C, 4.5 V) reach ~14 MHz (reported,
+# cells at the slow corner (ss, 125 C, 4.5 V) reach ~15.6 MHz (reported,
 # not gated -- a looser target only makes the resizer stop earlier). The
 # negedge input samplers and the falling-edge half of the pin former make
 # some paths half-cycle.
@@ -50,4 +66,8 @@ CLOCK_PERIOD: 50
 # compared with TinyTapeout tile and wafer.space slot sizes.
 FP_SIZING: relative
 FP_CORE_UTIL: 45
+# Wider than tall, the shape of the room inside the chip's pad ring
+# (chip/config.yaml: CORE_AREA 778 x 628 um): square, the 9-track core
+# (610 x 637 um) would not fit in it.
+FP_ASPECT_RATIO: 0.75
 PL_TARGET_DENSITY_PCT: 55

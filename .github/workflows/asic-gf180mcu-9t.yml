@@ -1,0 +1,17 @@
+# RTL-to-GDS of z80_top on gf180mcuD with the 9-track cells (LibreLane
+# Classic flow, the bare core -- no pad ring), the sign-off checks, and the
+# signs-of-life program on the routed netlist, on every push to this branch
+# and on demand. The job is asic-pdk.yml, which targets.yml also runs
+# nightly on main's core. See asic/gf180mcu-9t/README.md.
+name: asic-gf180mcu-9t
+
+on:
+  push:
+    branches: [asic-gf180mcu-9t]
+  workflow_dispatch: {}
+
+jobs:
+  harden:
+    uses: ./.github/workflows/asic-pdk.yml
+    with:
+      pdk: gf180mcu-9t

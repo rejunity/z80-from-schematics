@@ -1,7 +1,8 @@
-# LibreLane Chip flow: z80_chip, the Z80 as a chip on gf180mcuD --
-# z80_top, hardened as a macro, in a ring of 40 I/O pads, each on the side
-# of the die where the original Z80 has its bond pad and in the same order
-# (z80_chip.v), with the seal ring, metal fill and the chip-level checks. `make chip` runs it; ../config.yaml still hardens
+# LibreLane Chip flow: z80_chip, the Z80 as a chip on gf180mcuD with the
+# 9-track cells -- z80_top, hardened as a macro, in a ring of 40 I/O pads,
+# each on the side of the die where the original Z80 has its bond pad and
+# in the same order (z80_chip.v), with the seal ring, metal fill and the
+# chip-level checks. `make chip` runs it; ../config.yaml still hardens
 # z80_top alone (`make`), and the two never share a run directory.
 #
 # The pad ring follows open-pdks' LibreLane config for gf180mcu_fd_io
@@ -56,9 +57,10 @@ MACROS:
       "*_tt_025C_5v00": [dir::macro/lib/tt.lib]
       "*_ss_125C_4v50": [dir::macro/lib/ss.lib]
       "*_ff_n40C_5v50": [dir::macro/lib/ff.lib]
+    # centred in CORE_AREA; ../config.yaml shapes the core to fit it
     instances:
       u_top:
-        location: [559, 475]
+        location: [480, 477]
         orientation: N
 PDN_MACRO_CONNECTIONS:
   - "u_top VDD VSS VDD VSS"

@@ -44,6 +44,7 @@ PDKS = {
     'sky130':     'SkyWater SKY130',
     'ihp-sg13g2': 'IHP SG13G2',
     'gf180mcu':   'GlobalFoundries GF180MCU',
+    'gf180mcu-9t': 'GlobalFoundries GF180MCU, 9-track cells',
 }
 # site and summary order: each PDK's core, then the chips with pad rings
 ENTRIES = list(PDKS) + [f'{p}-chip' for p in PDKS]
@@ -65,6 +66,7 @@ STACKS = {  # (GDS layer, datatype, style) of the drawing layers, bottom to top
     'gf180mcu':   [(22, 0, 'diff'), (30, 0, 'poly'), (34, 0, 'm1'), (36, 0, 'm2'), (42, 0, 'm3'),
                    (46, 0, 'm4'), (81, 0, 'm5'), (53, 0, 'top1')],
 }
+STACKS['gf180mcu-9t'] = STACKS['gf180mcu']
 BACKGROUND = (13, 17, 23)
 # Cell map: every standard-cell instance (a reference in the GDS) as its
 # outline, coloured by the kind of library cell. First match wins, on the
