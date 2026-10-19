@@ -23,6 +23,19 @@ VERILOG_INCLUDE_DIRS:
 # flattening first (8,654 vs 8,391); timing was unchanged.
 SYNTH_HIERARCHY_MODE: deferred_flatten
 
+# ---- z80_top is the hard macro of the chip (chip/) ----
+# Pins on the sides of their pads, in pad order -- the original Z80's
+# bond pad order -- so the chip's pad wires are short. pin_order.cfg:
+#   S  A5 ... A15 CLK                      (left to right)
+#   E  D4 D3 D5 D6 (VCC: data_drive) D2 D7 D0 D1, in and out per bit
+#   N  WAIT BUSAK WR RD IORQ MREQ HALT NMI INT, then the debug outputs
+#   W  A4 A3 A2 A1 A0 (GND) RFSH M1 RESET BUSRQ   (bottom to top)
+IO_PIN_ORDER_CFG: dir::pin_order.cfg
+# Power straps on one layer only, and routing below the top layer, so the
+# chip's power grid crosses over the macro and connects to its straps.
+PDN_MULTILAYER: false
+RT_MAX_LAYER: Metal5
+
 # One Z80-rate clock. 50 ns = 20 MHz, the fastest CMOS Z80 grade
 # (Z84C0020). The negedge input samplers and the falling-edge half of
 # the pin former make some paths half-cycle (25 ns).

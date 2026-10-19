@@ -1,0 +1,103 @@
+# LibreLane Chip flow: z80_chip, the Z80 as a chip on IHP SG13G2 --
+# z80_top, hardened as a macro, in a ring of 48 I/O pads, 12 a side, each
+# Z80 pin's on the side of the die where the original has its bond pad and
+# in the same order (z80_chip.v), with the seal ring, metal fill and the
+# chip-level checks. `make chip` runs it; ../config.yaml still hardens
+# z80_top alone (`make`), and the two never share a run directory.
+#
+# The PDK brings the sg13g2_io pad settings; the rest follows IHP's
+# LibreLane chip template (ihp-sg13-librelane-template, Apache-2.0),
+# whose bond pad cell this directory carries in ip/.
+meta:
+  version: 3
+  flow: Chip
+  substituting_steps:
+    # Magic reports overlaps inside the I/O cells that can be ignored
+    # (as in IHP's template)
+    Checker.IllegalOverlap: null
+    # DRC by KLayout, IHP's reference deck -- the template's `make
+    # librelane-klayoutdrc`. Magic's IHP deck reports the seal ring (Seal.a,
+    # Seal.b) and the abutted I/O cells (subcell overlaps), which KLayout
+    # passes, and takes 35 min on this die.
+    Magic.DRC: null
+    Checker.MagicDRC: null
+
+DESIGN_NAME: z80_chip
+VERILOG_FILES:
+  - dir::z80_chip.v
+VERILOG_DEFINES: [FUNCTIONAL]
+
+# the clock enters through the CLK pad
+CLOCK_PORT: CLK
+CLOCK_NET: pad_CLK/p2c
+CLOCK_PERIOD: 50
+PNR_SDC_FILE: dir::chip.sdc
+SIGNOFF_SDC_FILE: dir::chip.sdc
+
+VDD_NETS: [VDD]
+GND_NETS: [VSS]
+
+# Pad-limited die, IHP's template's: 12 pads a side abut at their 80 um
+# pitch between the 180 um corners, 140 um (the seal ring's spacing) from
+# the die edge -- 1600 um, a multiple of the 400 um step of the density
+# rules' 800 um windows. The core sits inside the pad ring and its supply
+# ring.
+FP_SIZING: absolute
+DIE_AREA: [0, 0, 1600, 1600]
+CORE_AREA: [365, 365, 1235, 1235]
+GRT_ALLOW_CONGESTION: true
+
+# ---- the core: z80_top as a hard macro ----
+# Hardened by ../config.yaml (`make`), with its pins on the sides of their
+# pads (../pin_order.cfg) and power straps the chip's grid connects to;
+# `make chip` copies its latest run's views into macro/. The chip run then
+# only places it, routes the pad wires and the power, and checks the die.
+MACROS:
+  z80_top:
+    gds: [dir::macro/z80_top.gds]
+    lef: [dir::macro/z80_top.lef]
+    vh: [dir::macro/z80_top.vh]
+    nl: [dir::macro/z80_top.nl.v]
+    pnl: [dir::macro/z80_top.pnl.v]
+    lib:
+      "*_typ_1p20V_25C": [dir::macro/lib/typ.lib]
+      "*_slow_1p08V_125C": [dir::macro/lib/slow.lib]
+      "*_fast_1p32V_m40C": [dir::macro/lib/fast.lib]
+    instances:
+      u_top:
+        location: [589, 580]
+        orientation: N
+# the core macro's supply pins are VPWR / VGND (LibreLane's default names)
+PDN_MACRO_CONNECTIONS:
+  - "u_top VDD VSS VPWR VGND"
+
+# ---- pad ring (sg13g2_io, from the PDK) ----
+# bottom and top left to right, sides bottom to top (LibreLane's pad ring)
+PAD_SOUTH: [pad_A5, pad_A6, pad_A7, pad_A8, pad_A9, pad_A10, pad_A11, pad_A12, pad_A13, pad_A14, pad_A15, pad_CLK]
+PAD_EAST: [pad_D4, pad_D3, pad_D5, pad_D6, pad_VCC, pad_VDD_CORE, pad_VSS_CORE_E, pad_GND_E, pad_D2, pad_D7, pad_D0, pad_D1]
+PAD_NORTH: [pad_WAIT_n, pad_BUSAK_n, pad_WR_n, pad_RD_n, pad_GND_N, pad_VDD_CORE_N, pad_VCC_N, pad_IORQ_n, pad_MREQ_n, pad_HALT_n, pad_NMI_n, pad_INT_n]
+PAD_WEST: [pad_A4, pad_A3, pad_A2, pad_A1, pad_A0, pad_VSS_CORE, pad_GND, pad_VCC_W, pad_RFSH_n, pad_M1_n, pad_RESET_n, pad_BUSRQ_n]
+# blackbox views of the pad cells (pads_bb.v)
+PAD_VERILOG_MODELS:
+  - dir::pads_bb.v
+# the bond pad is not in the PDK yet: IHP's template's, see ip/
+PAD_BONDPAD_NAME: bondpad_70x70_novias
+EXTRA_GDS:
+  - dir::ip/bondpad_70x70_novias/gds/bondpad_70x70_novias.gds
+EXTRA_LEFS:
+  - dir::ip/bondpad_70x70_novias/lef/bondpad_70x70_novias.lef
+IGNORE_DISCONNECTED_MODULES: [bondpad_70x70_novias]
+# its (empty) Verilog view, for synthesis, lint and the gate-level run
+EXTRA_VERILOG_MODELS:
+  - dir::ip/bondpad_70x70_novias/vh/bondpad_70x70_novias.v
+
+# ---- power: stdcell grid, core ring, ring to pad ring ----
+PDN_CORE_RING: true
+PDN_CORE_RING_VWIDTH: 15
+PDN_CORE_RING_HWIDTH: 15
+PDN_CORE_RING_VSPACING: 5
+PDN_CORE_RING_HSPACING: 5
+PDN_CORE_RING_CONNECT_TO_PADS: true
+PDN_ENABLE_PINS: false
+# several supply pads per domain on the ring
+MAGIC_EXT_UNIQUE: notopports
