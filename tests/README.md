@@ -27,8 +27,8 @@ stack.
 | Bus-contract regressions                         | `tests/iverilog/tb_bus_controls.v`, `tb_wait_edge.v`, `tb_wait_write.v`, `tb_int_ack.v` | `make bus_controls`                   | ~1 s            | Every half-cycle vs the timing contract through WAIT, DMA, interrupts, HALT and reset; decoder skew must not reach pins; falling-edge WAIT sample; continuous WR through Tw; INTA M1/IORQ/WAIT/IM0 contract |
 | Gate-level vs perfectz80 (C model path)           | `tests/traces/`                | `make perfectz80`                        | ~10 s           | Per-half-cycle 7-pin parity + bus addr/data informational findings |
 | Gate-level vs perfectz80 (iverilog RTL path)      | `tests/traces/`                | `make perfectz80_rtl`                    | ~15 s           | Same diff but driving the iverilog RTL testbench (silicon-faithful leg) |
-| Gate-level vs perfectz80 (LibreLane synth path)   | `librelane/` + `tests/iverilog/tb_z80_netlist.v` | `make perfectz80_netlist` | ~5 min cold / ~1 min warm | yosys-synthesised sky130 gate-level netlist diffed against the Visual-Z80 gate-level netlist over all 12 trace programs (8 hand + 4 random) — the "ultimate test" |
-| Gate-level BASIC ROM (LibreLane synth path)       | `librelane/` + `tests/verilator/sim_basic.cpp`   | `make basic_netlist_tests` | ~9 min (CI)         | "Real software" — NASCOM BASIC 4.7c + Tiny BASIC running on the synthesised gates (Verilator + sky130 cells). CI runs on every push. |
+| Gate-level vs perfectz80 (LibreLane synth path)   | `asic/librelane/` + `tests/iverilog/tb_z80_netlist.v` | `make perfectz80_netlist` | ~5 min cold / ~1 min warm | yosys-synthesised sky130 gate-level netlist diffed against the Visual-Z80 gate-level netlist over all 12 trace programs (8 hand + 4 random) — the "ultimate test" |
+| Gate-level BASIC ROM (LibreLane synth path)       | `asic/librelane/` + `tests/verilator/sim_basic.cpp` | `make basic_netlist_tests` | ~9 min (CI)         | "Real software" — NASCOM BASIC 4.7c + Tiny BASIC running on the synthesised gates (Verilator + sky130 cells). CI runs on every push. |
 | Pin-scenario programs vs perfectz80 — C path      | `tests/traces/pin_scenarios/`  | `make pin_scenarios`                     | ~15 s           | INT / NMI / WAIT / BUSREQ / RESET event-driven scenarios (informational) |
 | Pin-scenario programs vs perfectz80 — iverilog RTL| `tests/traces/pin_scenarios/`  | `make pin_scenarios_rtl`                 | ~15 s           | Same 14 scenarios through tb_z80.v's `.events` plusarg support (informational) |
 | Pin-scenario programs vs perfectz80 — sky130 netlist | `tests/traces/pin_scenarios/` | `make pin_scenarios_netlist`           | ~30 s           | Same 14 scenarios through the LibreLane gate-level netlist (informational) |
@@ -227,7 +227,7 @@ scope) and perfectz80's pins (under `perfectz80` scope). Open with
 a single file. Set `EMIT_VCD=0` to disable.
 
 
-### 7. LibreLane gate-level — `librelane/` + `tests/iverilog/tb_z80_netlist.v`
+### 7. LibreLane gate-level — `asic/librelane/` + `tests/iverilog/tb_z80_netlist.v`
 
 The **ultimate test**. Pushes our Verilog RTL through LibreLane (Yosys
 synthesis only — no floorplan/PnR/STA) into a sky130 gate-level netlist,
@@ -378,7 +378,7 @@ together exercise everything above:
 
 Branch-push builds skip the RTL ZEXALL leg; PR-to-main + cron + manual
 dispatch include it. Both LibreLane jobs cache the synthesised netlist
-on `hashFiles('rtl/*.v', 'librelane/config.json', 'librelane/run_synth.sh')`,
+on `hashFiles('rtl/*.v', 'asic/librelane/config.json', 'asic/librelane/run_synth.sh')`,
 so most pushes skip the ~3 min synthesis step.
 
 ### Targets: FPGA boards and ASIC PDKs

@@ -195,7 +195,7 @@ equiv:
 # bugs (latches inferred where DFFs were intended, reset domain
 # crossings folded by the synthesizer, etc.) — see docs/librelane-flow.md.
 #
-# `make synth` runs LibreLane via the librelane/run_synth.sh wrapper,
+# `make synth` runs LibreLane via the asic/librelane/run_synth.sh wrapper,
 # which expects `librelane` on PATH (nix profile install). It writes:
 #   build/synth/z80_top.nl.v   — synthesized netlist (symlink)
 #   build/synth/pdk_root.path   — resolved PDK_ROOT for downstream rules
@@ -206,9 +206,9 @@ synth: $(BUILD)/synth/z80_top.nl.v
 # Only the netlist is declared here; pdk_root.path is a side effect.
 # (Grouped-target syntax `&:` would be cleaner but is GNU Make 4.3+
 # only; macOS ships 3.81.)
-$(BUILD)/synth/z80_top.nl.v: $(RTL_SRCS) librelane/config.json librelane/run_synth.sh
+$(BUILD)/synth/z80_top.nl.v: $(RTL_SRCS) asic/librelane/config.json asic/librelane/run_synth.sh
 	@mkdir -p $(BUILD)/synth
-	librelane/run_synth.sh
+	asic/librelane/run_synth.sh
 
 # Build the gate-level iverilog testbench. The sky130_fd_sc_hd Verilog
 # cell models live under $(PDK_ROOT)/sky130A/libs.ref/sky130_fd_sc_hd/verilog/
