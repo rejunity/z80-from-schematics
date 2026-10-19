@@ -23,6 +23,17 @@ IVERILOG = os.environ.get("IVERILOG", "iverilog")
 VVP = os.environ.get("VVP", "vvp")
 TB = os.path.join(HERE, "tb_sign_of_life.v")
 
+def cell_models(cfg):
+    """CELL_VERILOG_MODELS, plus the primitives (UDP) file a PDK keeps beside
+    them and leaves out of that list (IHP's sg13g2_udp.v, as IHP's chip
+    template's own gate-level testbench adds it)."""
+    models = list(cfg["CELL_VERILOG_MODELS"])
+    for m in list(models):
+        for udp in sorted(glob.glob(os.path.join(os.path.dirname(m), "*_udp.v"))):
+            if udp not in models:
+                models.append(udp)
+    return models
+
 def pad_models(cfg):
     """Simulation models of the run's pad cells: PAD_VERILOG_MODELS, with
     each blackbox view swapped for the PDK model defining the same cells."""
@@ -56,7 +67,7 @@ def main():
         netlist = os.path.join(run, "final", "nl", cfg["DESIGN_NAME"] + ".nl.v")
         if not os.path.isfile(netlist):
             sys.exit(f"sign_of_life: {netlist} missing -- did the flow finish?")
-        args = ["-DFUNCTIONAL", "-DUNIT_DELAY=#1", netlist] + list(cfg["CELL_VERILOG_MODELS"])
+        args = ["-DFUNCTIONAL", "-DUNIT_DELAY=#1", netlist] + cell_models(cfg)
         if cfg["DESIGN_NAME"] == "z80_chip":
             macros = [nl for m in (cfg.get("MACROS") or {}).values() for nl in m.get("nl") or []]
             extra = list(cfg.get("EXTRA_VERILOG_MODELS") or [])   # e.g. IHP's bond pad cell

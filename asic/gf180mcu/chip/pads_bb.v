@@ -5,7 +5,7 @@
 // Simulations use the PDK model itself.
 
 (* blackbox *)
-module gf180mcu_fd_io__bi_24t (CS, SL, IE, OE, PU, PD, A, PAD, Y, DVDD, DVSS, VDD, VSS);
+module gf180mcu_fd_io__bi_t (CS, SL, IE, OE, PU, PD, A, PDRV0, PDRV1, PAD, Y, DVDD, DVSS, VDD, VSS);
     input CS;
     input SL;
     input IE;
@@ -13,6 +13,8 @@ module gf180mcu_fd_io__bi_24t (CS, SL, IE, OE, PU, PD, A, PAD, Y, DVDD, DVSS, VD
     input PU;
     input PD;
     input A;
+    input PDRV0;
+    input PDRV1;
     inout PAD;
     output Y;
     inout DVDD;

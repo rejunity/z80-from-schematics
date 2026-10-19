@@ -6,7 +6,7 @@
 # `make sign_of_life_rtl`).
 #
 # The chip: `make chip` builds z80_chip -- z80_top in a ring of I/O pads
-# placed like the Z80's (chip/z80_chip.v, chip/config.yaml, LibreLane Chip
+# on the Z80's sides (chip/z80_chip.v, chip/config.yaml, LibreLane Chip
 # flow) -- into chip/runs/, apart from z80_top's runs. z80_top goes in as
 # the hard macro of the latest `make` run (its views copied to
 # chip/macro/), so run `make` first. `make chip_summary` and
@@ -24,7 +24,7 @@ CHIP_LATEST = $(shell ls -dt chip/runs/*/ 2>/dev/null | head -1)
 # each process corner
 MACRO_CORNERS := tt ss ff
 
-.PHONY: harden synth summary sign_of_life sign_of_life_rtl chip chip_summary chip_sign_of_life clean
+.PHONY: harden synth summary sign_of_life sign_of_life_rtl chip chip_summary chip_sign_of_life pin_timing clean
 harden:
 	$(LIBRELANE) --pdk $(PDK) --scl $(SCL) $(LIBRELANE_ARGS) $(CONFIG)
 
@@ -52,6 +52,14 @@ chip_summary:
 
 chip_sign_of_life:
 	@../sign_of_life.py $(CHIP_LATEST)
+
+# the chip's pins against the NMOS Z80's AC characteristics (Zilog PS0178,
+# Z8400), measured by OpenSTA on the chip's latest run: GRADE=4 (Z80A,
+# the default), 6 or 8 MHz
+GRADE ?= 4
+STA   ?= $(shell command -v sta || echo "nix run github:librelane/librelane/3.0.14\#opensta --")
+pin_timing:
+	@STA="$(STA)" ../timing/pin_timing.py $(CHIP_LATEST) --grade $(GRADE)
 
 clean:
 	rm -rf runs chip/runs chip/macro
