@@ -196,6 +196,36 @@ Notes for each row:
      Watching: fold the reset / BUSREQ settle into the RTL once the
      pin-scenario gates become hard.
 
+ 16. **BUSREQ / BUSACK vs the NMOS Z80 (silicon and datasheet)** —
+     found by sweeping BUSREQ through perfectz80, the C model and the RTL
+     (the pin_scenarios harness never compares BUSACK, and its BUSREQ
+     events are long steps):
+     - **Grant point**: the NMOS Z80 grants the bus at the end of *any*
+       machine cycle (PS0178 Figure 10; perfectz80 grants after the M1 of
+       `LD SP,nn` and again after each of its operand reads) and then
+       resumes the same instruction. Both models grant only at instruction
+       boundaries, so DMA can wait up to a whole instruction longer.
+     - **Sample edge**: BUSREQ is sampled on the rising edge that starts
+       the M-cycle's last T-state, like INT (TsBUSREQ / ThBUSREQ); both
+       models sample the edge that ends it, a T-state later.
+     - **BUSACK edges**: BUSACK falls on the rising edge after the sample
+       (TdCr(BUSACKf)); the C model drops it half a clock late. On release
+       the sample is on a rising edge, BUSACK rises on the next falling
+       edge (TdCf(BUSACKr)) and M1 starts on the rising edge after that.
+       The C model raises BUSACK with M1, half a clock late; the RTL
+       starts M1 on the sampling edge itself, a T-state early. The C model
+       freezes its half-cycle counter during the grant, so a release that
+       arrives before a falling edge restarts it out of step with the
+       clock.
+     - **M-cycle boundaries**: silicon's grant points follow the
+       datasheet's M-cycle split, internal cycles included (`ADD HL,BC`:
+       4 + 4 + 3 T-states, grants at each boundary). The models merge some
+       internal cycles (`ADD HL,BC`: M1 + one 7-T-state cycle).
+     Watching: a separate branch reworks both sequencers (grant at every
+     M-cycle end, the datasheet's M-cycle splits, the BUSACK edges) and
+     gates it on BUSREQ sweeps against perfectz80 for every instruction
+     class.
+
 Add rows as new differences are discovered. Each "watching" row should gain a
 test that pins the chosen behaviour or escalates it.
 
