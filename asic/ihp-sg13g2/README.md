@@ -99,14 +99,29 @@ drive it (`chip/z80_chip.v`; `z80_top` itself is unchanged).
     make -C asic/ihp-sg13g2 chip                # the chip (LibreLane Chip flow, into chip/runs/)
     make -C asic/ihp-sg13g2 chip_summary        # sign-off of the chip, as `summary`
     make -C asic/ihp-sg13g2 chip_sign_of_life   # the signs-of-life program through the pads
+    make -C asic/ihp-sg13g2 pin_timing          # the pins against the NMOS Z80's datasheet (GRADE=4/6/8)
 
 | | |
 |---|---|
 | Die | 1600 × 1600 µm = 2.56 mm², pad-limited (12 pads a side abut; a multiple of the 400 µm step of the density rules' 800 µm windows) |
-| Pads | 48: `IOPadTriOut4mA` (address bus, MREQ IORQ RD WR), `IOPadOut4mA` (M1 RFSH HALT BUSAK), `IOPadInOut4mA` (data bus), `IOPadIn` (inputs), `IOPadIOVdd` / `IOPadIOVss` (VCC, GND and two more pairs), `IOPadVdd` / `IOPadVss` (core supply, two pairs) |
-| Sign-off | KLayout DRC (IHP's reference deck), LVS, antenna, XOR all 0; setup and hold met at every corner; 7 unconnected outputs (`z80_top`'s debug pins, no pads) |
+| Pads | 48: `IOPadTriOut16mA` (address bus, MREQ IORQ RD WR), `IOPadOut16mA` (M1 RFSH HALT BUSAK), `IOPadInOut16mA` (data bus), `IOPadIn` (inputs), `IOPadIOVdd` / `IOPadIOVss` (VCC, GND and two more pairs), `IOPadVdd` / `IOPadVss` (core supply, two pairs) |
+| Sign-off | KLayout DRC (IHP's reference deck), LVS, antenna, XOR all 0; the NMOS Z80's 4 MHz pin timing met at every corner (below); 7 unconnected outputs (`z80_top`'s debug pins, no pads) |
 | Signs of life through the pads | PASS (HALT after 554 clocks) |
-| Runtime | ~20 min after `make` (the core is not re-synthesized or re-routed) |
+| Runtime | ~25 min after `make` (the core is not re-synthesized or re-routed; KLayout DRC takes most of it) |
+
+The pins are constrained to, and checked against, the NMOS Z80's AC
+characteristics at 4 MHz (Zilog PS0178, Z8400; `../timing/`): the chip
+flow runs on `z80_chip_nmos4.sdc`, generated from the datasheet table, and
+`make -C asic/ihp-sg13g2 pin_timing` measures the routed chip with OpenSTA
+at 100 pF and checks every parameter the replica has to meet -- PASS at
+the typ, slow and fast corners, and at 6 and 8 MHz (Z80B, Z80H) too.
+Output delays take 10-25 ns against 65-150 ns limits; the tightest margins
+are the input holds at the fast corner (+0.5 ns, after the flow's hold
+repair). The outputs are the pads' 16 mA cells: the 4 mA ones are
+characterised to 12 pF, and into the datasheet's 100 pF they take ~70 ns
+at the slow corner -- WR's fall from the rising clock edge missed
+TdCr(WRf), 65 ns, by 6.9 ns. The pads run at 3.3 V, so this is the NMOS
+part's timing, not its 5 V levels.
 
 DRC follows IHP's chip template (ihp-sg13-librelane-template, Apache-2.0):
 its PDK version, whose I/O cells abut cleanly -- on LibreLane 3.0.14's pin
