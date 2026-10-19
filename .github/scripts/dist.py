@@ -7,8 +7,10 @@
                                and the chip: the GDS, a picture of it, a map
                                of the cells by Z80 block, and a map of the
                                core's cells by kind or of the chip's clock
-                               and power (needs gdstk, numpy and Pillow)
-                               + rz80-<pdk>.json
+                               and power (needs gdstk, numpy and Pillow);
+                               for a chip simulated at transistor level
+                               (asic/spice/chip/<pdk>/), its pins as a logic
+                               analyser shows them + rz80-<pdk>.json
   dist.py site <in> <out>      index.html over everything fpga/asic made
   dist.py summary <in> <url>   job-summary markdown: the layout renders as
                                served by the site deployed at <url>
@@ -562,6 +564,13 @@ def asic(pdk, out):
         pads = sum(len(cfg.get(side) or []) for side in ('PAD_SOUTH', 'PAD_EAST', 'PAD_NORTH', 'PAD_WEST'))
         collect(run, f'{pdk}-chip', f'{PDKS.get(pdk, pdk)} chip, {pads} pads', STACKS[pdk], out,
                 {'readme': readme, 'pads': pads}, macro_runs={'z80_top': core} if core else None)
+        # its pins, as asic/spice/chip.py simulated them at transistor level (committed: hours of ngspice)
+        pins = os.path.join('asic', 'spice', 'chip', pdk, 'program-dark.svg')
+        if os.path.isfile(pins):
+            shutil.copy(pins, os.path.join(out, f'rz80-{pdk}-chip-pins.svg'))
+            info = json.load(open(os.path.join(out, f'rz80-{pdk}-chip.json')))
+            info['files'].append(f'rz80-{pdk}-chip-pins.svg')
+            json.dump(info, open(os.path.join(out, f'rz80-{pdk}-chip.json'), 'w'), indent=1)
 
 
 def load(src):
@@ -615,6 +624,12 @@ def site(src, out):
             return f'<figure>{img}<figcaption>{caption}</figcaption></figure>'
         facts = ''.join(f'<dt>{k}</dt><dd>{e(v)}</dd>' for k, v in asic_facts(p))
 
+        def wide(f, caption):   # a logic analyser's view, under the three pictures
+            if f not in p['files']:
+                return ''
+            return (f'<figure class="wide"><a href="{f}"><img src="{f}" alt="{e(p["name"])}: {caption}" '
+                    f'loading="lazy"></a><figcaption>{caption}</figcaption></figure>')
+
         def legend(title, table, counts):
             items = ''.join(f'<li><span class="swatch" style="background: rgb{colour}"></span>{e(name)}'
                             f' <span class="muted">{counts[name]:,}</span></li>'
@@ -624,7 +639,8 @@ def site(src, out):
         links = [f'<a href="{f}"{" download" if f.endswith(".gds") else ""}>{label}</a>'
                  f' <span class="size">{size(os.path.join(out, f))}</span>'
                  for f, label in ((f"rz80-{p['pdk']}.gds", 'GDS'), (f"rz80-{p['pdk']}.png", 'layout'),
-                                  (second[0], second[1].split()[0]), (f"rz80-{p['pdk']}-blocks.png", 'blocks'))
+                                  (second[0], second[1].split()[0]), (f"rz80-{p['pdk']}-blocks.png", 'blocks'),
+                                  (f"rz80-{p['pdk']}-pins.svg", 'pins'))
                  if f in p['files']]
         links.append(f'<a href="{p.get("readme") or readme_url("asic", p["pdk"])}">README</a>')
         if chip:   # the clock and power picture's legend: (colour, count) per entry
@@ -637,6 +653,7 @@ def site(src, out):
 {picture(f"rz80-{p['pdk']}.png", 'layout')}
 {picture(*second)}
 {picture(f"rz80-{p['pdk']}-blocks.png", 'cells by Z80 block')}
+{wide(f"rz80-{p['pdk']}-pins.svg", 'its pins at transistor level (ngspice): power-up, RESET, a short program at 4 MHz')}
 </div>
 <div class="body">
 <div><h3>{e(p['name'])}</h3><p class="muted">{e(p.get('pdk_variant') or '')} · {e(p.get('library') or '')}</p>
@@ -684,6 +701,8 @@ a {{ color: var(--link); }}
 figure {{ margin: 0; position: relative; background: #0d1117; }}
 figure img, .noimg {{ display: block; width: 100%; aspect-ratio: 1; object-fit: contain; }}
 .noimg {{ display: grid; place-items: center; color: #888; }}
+.pics .wide {{ grid-column: 1 / -1; }}
+.pics .wide img {{ aspect-ratio: auto; }}
 figcaption {{ position: absolute; left: 8px; top: 8px; padding: 1px 7px; border-radius: 4px; font-size: 12px;
   color: #d6dbe1; background: rgba(13, 17, 23, .75); }}
 .body {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 4px 28px;
@@ -719,7 +738,9 @@ each pin's pad on the side of the die where the Z80 has its own. The layout show
 metal blue to top metal yellow; the clock and power picture the clock in green -- the CLK pad, every clock
 wire and buffer -- over the power rings, stripes and rails (core supply red, ground blue; a split I/O
 supply amber and teal) and the supply pads in their net's colour; the block map every cell by the Z80
-block it was synthesized in.</p>
+block it was synthesized in. Where a chip has been simulated at transistor level -- its layout extracted
+to transistors and wires and run in ngspice (<a href="{SERVER}/{REPO}/tree/main/asic/spice">asic/spice</a>)
+-- its pins are shown under it as a logic analyser shows them.</p>
 {chr(10).join(chip_cards) or '<p>none in this build</p>'}
 
 <h2>ASIC core layouts</h2>
