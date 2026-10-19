@@ -81,6 +81,10 @@ jobs:
         run: make bus_controls
       - name: FUSE / Cringle 1356 cases through iverilog RTL
         run: make fuse_rtl
+      # the chip flows' pin-timing SDC is generated from the NMOS Z80
+      # datasheet table (asic/timing/); the committed one must match
+      - name: NMOS pin-timing SDC up to date
+        run: make timing_sdc_check
 
   basic-c-tests:
     name: BASIC ROM via C model (NASCOM 4.7c + Tiny BASIC)
