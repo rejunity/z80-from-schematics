@@ -24,8 +24,9 @@ output (the datasheet's AC test load) and the clock at the CLK pin: 250 ns,
 110 ns high and low, 15 ns edges -- what the 4 MHz minimum period leaves
 for TwCh = TwCl = 110 ns. From the CLK pin's rising and falling edge it
 takes every output pin's delay, each transition, max and min, once through
-the pads' data inputs and once through their output enables (float and
-turn-on); and for every input the setup and hold the replica needs around
+the pads' data inputs and once through their output enables -- the pad
+floating (enable falling) and turning on (rising) apart; and for every
+input the setup and hold the replica needs around
 the edge that samples it. The CLK pad and the clock tree are part of every
 path, as in the datasheet's measurements.
 
@@ -56,11 +57,13 @@ valid the setup time before the sampling edge and held after it. An output
 launched on one CLK edge is checked only against the limits from that edge,
 an input only against the window around the edge that samples it: every
 pin of `z80_top` is a rising-edge flop XOR a falling-edge flop, so its
-launch edge is structural, and one SDC covers every bus cycle. Three
+launch edge is structural, and one SDC covers every bus cycle. Four
 exceptions, each in the file: NMI (asynchronous), RESET floating the
-address bus (combinational), and the read-data hold, which the datasheet
-measures from RD's rise rather than the clock -- `pin_timing.py` checks it
-that way. The resizer repairs the inputs' hold against it: the falling
+address bus (combinational), MREQ IORQ RD WR turning on low (they float
+while BUSACK is low and always come back high; STA would hold that
+turn-on to the limit of the pin's falling edge), and the read-data hold,
+which the datasheet measures from RD's rise rather than the clock --
+`pin_timing.py` checks it that way. The resizer repairs the inputs' hold against it: the falling
 clock edge reaches the core late through the Schmitt CLK pad, and WAIT
 needed ~9 ns of hold before it did.
 
