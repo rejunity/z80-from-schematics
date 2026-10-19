@@ -81,6 +81,10 @@ jobs:
         run: make bus_controls
       - name: FUSE / Cringle 1356 cases through iverilog RTL
         run: make fuse_rtl
+      # the chip flows' pin-timing SDC is generated from the NMOS Z80
+      # datasheet table (asic/timing/); the committed one must match
+      - name: NMOS pin-timing SDC up to date
+        run: make timing_sdc_check
 
   basic-c-tests:
     name: BASIC ROM via C model (NASCOM 4.7c + Tiny BASIC)
@@ -260,7 +264,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: build/synth
-          key: synth-${{ hashFiles('rtl/*.v', 'librelane/config.json', 'librelane/run_synth.sh') }}
+          key: synth-${{ hashFiles('rtl/*.v', 'asic/librelane/config.json', 'asic/librelane/run_synth.sh') }}
 
       - name: Install C toolchain + iverilog
         run: |
@@ -324,7 +328,7 @@ jobs:
     # Runs on every push. Measured wall clock on a warm-cache runner is
     # ~9 min: nix install (~1 min) + Verilator gate-level build (~4 min)
     # + 4 canned BASIC subtests on the synthesised netlist (~3 min). The
-    # synth output is cached on hash(rtl/*.v + librelane/config.json +
+    # synth output is cached on hash(rtl/*.v + asic/librelane/config.json +
     # run_synth.sh) so most pushes skip the ~3 min synthesis step.
     # The 60 min is a safety net, not a budget: each BASIC subtest also
     # carries its own --max-seconds wall-clock budget (see
@@ -353,7 +357,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: build/synth
-          key: synth-${{ hashFiles('rtl/*.v', 'librelane/config.json', 'librelane/run_synth.sh') }}
+          key: synth-${{ hashFiles('rtl/*.v', 'asic/librelane/config.json', 'asic/librelane/run_synth.sh') }}
 
       - name: Install C toolchain (no apt verilator — see below)
         # apt's Verilator on Ubuntu 24.04 is 5.020 which lacks Verilog-1995

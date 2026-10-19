@@ -127,7 +127,7 @@ step.
 
 ## Concrete steps
 
-### Step 1 — LibreLane config (`librelane/config.json`)
+### Step 1 — LibreLane config (`asic/librelane/config.json`)
 
 ```json
 {
@@ -152,7 +152,7 @@ step.
 a small design. We don't care about the actual target frequency for a
 sim-only flow; synthesis just needs a clock to constrain on.
 
-### Step 2 — Synthesis-only runner (`librelane/run_synth.py`)
+### Step 2 — Synthesis-only runner (`asic/librelane/run_synth.sh`)
 
 Invoke the LibreLane Classic flow stopping at `Yosys.Synthesis`:
 
@@ -166,7 +166,7 @@ flow.start(last_run="latest", to="Yosys.Synthesis")
 ```
 
 Output netlist path:
-`librelane/runs/<timestamp>/final/nl/z80_top.nl.v`. The Makefile
+`asic/librelane/runs/<timestamp>/final/nl/z80_top.nl.v`. The Makefile
 sym-links the latest run's netlist into `build/synth/z80_top.nl.v` for
 stable paths.
 
@@ -203,10 +203,9 @@ LIBRELANE = nix run github:librelane/librelane --
 # Synthesis: librelane → sky130 netlist
 synth: $(BUILD)/synth/z80_top.nl.v
 
-$(BUILD)/synth/z80_top.nl.v: rtl/*.v librelane/config.json librelane/run_synth.py
-	cd librelane && $(LIBRELANE) python3 run_synth.py
-	mkdir -p $(BUILD)/synth
-	ln -sf $$(ls -dt librelane/runs/*/final/nl/z80_top.nl.v | head -1) $@
+$(BUILD)/synth/z80_top.nl.v: rtl/*.v asic/librelane/config.json asic/librelane/run_synth.sh
+	@mkdir -p $(BUILD)/synth
+	asic/librelane/run_synth.sh    # links the latest run's netlist into $(BUILD)/synth/
 
 # Gate-level iverilog testbench
 iverilog_netlist: synth $(BUILD)/tb_z80_netlist.vvp
@@ -269,7 +268,7 @@ librelane-netlist:
       uses: actions/cache@v4
       with:
         path: build/synth/z80_top.nl.v
-        key: synth-${{ hashFiles('rtl/*.v', 'librelane/config.json', 'librelane/run_synth.py') }}
+        key: synth-${{ hashFiles('rtl/*.v', 'asic/librelane/config.json', 'asic/librelane/run_synth.sh') }}
     - name: Install C toolchain + iverilog
       run: |
         sudo apt-get update
@@ -297,7 +296,7 @@ do the ~30 s gate-level sim.
 
 Once green, add a row to the Quick Reference table:
 
-| LibreLane gate-level vs perfectz80 | `librelane/` + `tests/iverilog/tb_z80_netlist.v` | `make perfectz80_netlist` | ~5 min cold / ~30 s warm | yosys-synthesized sky130 netlist diffed against the Visual-Z80 gate-level netlist |
+| LibreLane gate-level vs perfectz80 | `asic/librelane/` + `tests/iverilog/tb_z80_netlist.v` | `make perfectz80_netlist` | ~5 min cold / ~30 s warm | yosys-synthesized sky130 netlist diffed against the Visual-Z80 gate-level netlist |
 
 Plus a new short category section in tests/README.md explaining the
 flow.
@@ -346,7 +345,7 @@ flow.
 ## What this branch ships when done
 
   - `docs/librelane-flow.md` — **this file**, kept up to date.
-  - `librelane/config.json` + `librelane/run_synth.py` — flow config.
+  - `asic/librelane/config.json` + `asic/librelane/run_synth.sh` — flow config.
   - `tests/iverilog/tb_z80_netlist.v` — gate-level testbench.
   - `Makefile` — new targets `synth`, `iverilog_netlist`,
     `perfectz80_netlist`, `verilator_basic_netlist`,
