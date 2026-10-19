@@ -8,10 +8,16 @@ with ngspice and each PDK's own netlists and SPICE models:
 - **The pads** (`pads.py`): every I/O pad cell the chips use, simulated
   at the process corners of the chip's STA and fed back into the pin-timing
   check as Liberty files, together with the measuring levels of the
-  NMOS Z80's datasheet.
-- **The whole chip** (next): the extracted layout of the GF180 chip
-  running reset and a few bus cycles, its pins plotted the way the Z80's
+  NMOS Z80's datasheet; `findings.py` plots what that changed.
+- **The NMI pulse catcher** (`nmi.py`): the one place in the chips where
+  a pin clocks a flip-flop, cut out of the GF180 chip from the NMI and CLK
+  pins to its flip-flops, and run at three corners.
+- **The whole chip** (`chip.py`): the extracted layout of the GF180 chip
+  running reset and a short program, its pins drawn the way the Z80's
   datasheet draws its timing diagrams.
+
+The pads and the NMI catcher run in CI, and their figures are on the
+project's GitHub Pages site, under "At transistor level" (see [CI](#ci)).
 
 ## The pads
 
@@ -48,14 +54,20 @@ and measures:
 - **DC drive**: the current the output sinks at 0.4 V and sources at
   2.4 V, against the NMOS Z80's 2.0 mA and 250 µA.
 
-Run it from the repository root (ngspice from `PATH` or nixpkgs; for IHP
-also `openvaf-r`, from nixpkgs' `openvaf`, which compiles the PDK's
-Verilog-A transistor models; the PDK as the `asic-<pdk>` branch fetches
-it, under `~/.ciel`):
+Run it from the repository root. The simulators are pinned, and built
+with nix on first use (`pads.TOOLS`; without nix, whatever is on `PATH`):
+ngspice 45, and for IHP OpenVAF's `openvaf-r`, which compiles the PDK's
+Verilog-A transistor models. The PDK is the one the `asic-<pdk>` branch
+fetches, under `~/.ciel`:
 
     asic/spice/pads.py gf180mcu      # ~624 simulations, 4 min on 8 cores
     asic/spice/pads.py ihp-sg13g2    # ~1700 simulations, 3 min
     asic/spice/pads.py gf180mcu --reuse   # the outputs again from pads.json
+    asic/spice/pads.py gf180mcu --out /tmp/pads --check asic/spice/pads/gf180mcu/pads.json
+
+`--check` fails when a result moved from the committed one by more than
+0.1 ns or 3 % (delays, slews), 0.03 V (switching levels) or 3 % (drive
+currents) -- what CI runs.
 
 Into `pads/<pdk>/` go:
 
@@ -64,7 +76,13 @@ Into `pads/<pdk>/` go:
   50 % and slews 10-90 %, as the PDK's), their `max_capacitance` and
   `max_transition` widened to the simulated range;
 - `pads.json`, every measurement, and `summary.txt`;
-- `waveforms.svg`, `delay_vs_load.svg`, `inputs.svg`.
+- `waveforms.svg`, `delay_vs_load.svg`, `inputs.svg`: the corners side by
+  side;
+- a figure per kind of pin, every corner in it: `out.svg` (the outputs'
+  edges into the test load), `tristate.svg` (the data bus turning on, and
+  letting go), `in.svg` (the inputs: pin and core side on 15 ns edges,
+  and where they switch on a slow ramp), `clk_reset.svg` (GF180's Schmitt
+  input, CLK and RESET; IHP's take the plain input pad).
 
 ### What the transistors say
 
@@ -80,7 +98,7 @@ Outputs into the 100 pF test load, data input to the pin (input slew
 | IHP, slow | 19.1 (19.5) | 19.1 | 18.7 (19.1) | 18.7 | 34.7 / 32.6 |
 | IHP, fast | 8.5 (8.8) | 7.2 | 8.3 (8.4) | 9.7 | 15.7 / 14.7 |
 
-![GF180 output waveforms](pads/gf180mcu/waveforms.svg)
+![GF180 output waveforms](pads/gf180mcu/out.svg)
 
 The libraries extrapolate the outputs well -- STA is 0.3-2.3 ns
 pessimistic at 100 pF, the transitions agree within 0.3 ns
@@ -91,6 +109,8 @@ pessimistic at 100 pF, the transitions agree within 0.3 ns
 let go 0.7-3.2 ns after the enable, and against 2 kΩ the pin has moved
 0.5 V after 21-41 ns, mostly the test load's own RC.
 
+![GF180 tri-state pads](pads/gf180mcu/tristate.svg)
+
 Inputs, pin 50 % to core 50 % on a 15 ns edge:
 
 | | rise | fall | switches (DC) |
@@ -99,7 +119,9 @@ Inputs, pin 50 % to core 50 % on a 15 ns edge:
 | GF180 `in_s` (CLK, RESET) | -0.6 / 0.9 / -1.7 (2.3 / 4.8 / 0.8) | 6.3 / 7.1 / 6.1 (8.0 / 6.6 / 8.1) | up 1.69-1.78 V, down 1.13-1.27 V |
 | IHP `IOPadIn`, typ / slow / fast | 0.7 / 1.1 / 0.5 (0.9 / 1.5 / 0.7) | 0.7 / 0.7 / 0.6 (1.1 / 1.2 / 0.9) | 1.54-1.80 V |
 
-![GF180 inputs](pads/gf180mcu/inputs.svg)
+![GF180 inputs](pads/gf180mcu/in.svg)
+
+![GF180 CLK and RESET](pads/gf180mcu/clk_reset.svg)
 
 The inputs are where the libraries were wrong: GF180's 5 V input switches
 near 1.4 V, far below the 2.5 V the libraries measure from, so on a 15 ns
@@ -137,6 +159,22 @@ pulses of the 5 V outputs come out shorter at 1.5 V (their falling edge
 crosses it late, the rising one early), and all of them stay well
 inside the datasheet.
 
+### In plots
+
+`findings.py` draws the above from `pads/<pdk>/pads.json` and from
+`pin_timing.py`'s output on each chip's run with the simulated pads and
+with `--pads none` (`findings/pin_timing/` holds a set; CI makes its own):
+
+    asic/spice/findings.py           # findings/*.svg
+
+![Outputs](findings/outputs.svg)
+
+![Inputs](findings/inputs.svg)
+
+![TTL levels](findings/ttl.svg)
+
+![Pin timing](findings/timing.svg)
+
 ### Notes
 
 - ngspice runs single-threaded (`.spiceinit`): its OpenMP device loading
@@ -153,3 +191,130 @@ inside the datasheet.
   stalls ngspice's timestep, and a pin always carries some.
 - The PDK versions are the chips': GF180 `54435919` (LibreLane 3.0.14's),
   IHP `7bbb4b5a` (IHP's chip template).
+
+## The NMI pulse catcher
+
+The NMOS Z80 takes an NMI pulse of any width -- TwNMI, 80 ns at 4 MHz, is
+less than half a clock -- because its NMI flip-flop is set by the pin's
+falling edge itself, not by a clock edge sampling the pin. `z80_top` does
+the same in front of the core's edge detect (`rtl/z80_top.v`): `nmi_hold`,
+a flip-flop clocked by the NMI pin with D tied high, holds NMI asserted for
+the core (`nmi_n_held`) until a rising CLK edge has seen it, and
+`nmi_hold_clr` then clears it. It is the one place in the chips where a
+pin clocks a flip-flop, and the clear races the clock edge that samples
+`nmi_n_held`, so `nmi.py` simulates it.
+
+The cut goes from the NMI and CLK pins to the first flip-flops: the two
+input pads, NMI's port buffer, the clock tree from the CLK pad to the leaf
+that clocks the catcher, the catcher's two flip-flops, its NOR and
+inverter, and the falling-edge sampler `nmi_n_neg`. `nmi.py` finds it in
+the chip's gate-level netlists by the RTL's net names and follows it back
+through buffers and inverters to the pins. The cells are extracted with
+Magic from the PDK's own layouts (the PDK's cell netlists carry no
+junction areas, and came out too fast), the wires come from the routed
+chip's SPEF,
+and every net also carries the input capacitance of the cells on it that
+the cut leaves out. A minute per corner, the three side by side; with
+`--magic WORK` the cut comes out of `chip.py`'s extraction of the whole
+chip instead, which agrees within 0.5 ns at tt (the clear within 0.1 ns).
+
+    asic/spice/nmi.py <asic-gf180mcu chip run>     # chip/gf180mcu/nmi_*.svg, nmi_<corner>.json
+
+Six cases at 4 MHz, 15 ns edges on both pins:
+
+| | the NMI pulse | |
+|---|---|---|
+| A | 80 ns (TwNMI), in the low half of the clock | |
+| B | 20 ns, a quarter of TwNMI | |
+| C | falling 5 ns before a rising CLK edge | held to the edge after it |
+| D | falling 5 ns after a rising CLK edge | |
+| E | two 25 ns pulses before one rising edge | one NMI |
+| F | a second 40 ns pulse in the high half after the edge that clears the first | lost |
+
+A, B, E and F sit in the middle of a clock phase, clear of CLK's edges;
+C and D are about the edge.
+
+![NMI, the six cases at tt](chip/gf180mcu/nmi_tt.svg)
+
+Every pulse is caught at every corner, B's 20 ns too. Case A, from the
+pin's 50 % to the node's:
+
+| | NMI pin falls -> `nmi_hold` set | CLK pin rises -> `nmi_hold_clr` | the core sees NMI for |
+|---|---|---|---|
+| tt, 5.0 V, 25 °C | 6.3 ns | 1.5 ns | 99.3 ns |
+| ss, 4.5 V, 125 °C | 8.1 ns | 4.6 ns | 102.0 ns |
+| ff, 5.5 V, -40 °C | 5.4 ns | -0.3 ns | 97.8 ns |
+
+At ff the clear comes before the CLK pin is half-way up: on the 15 ns
+edge the Schmitt pad switches near 1.8 V, its core side rising 1.7 ns
+before the pin's 50 %, and the clock tree and flip-flop behind it take
+less than that. Nothing depends on the pin's 50 % though -- the clear races the core's own
+flip-flops, clocked by the same early edge through the same tree, and
+must come after their hold time. OpenSTA times that race only through the
+flip-flop's asynchronous clear arc, which it skips by default (as in the
+flow's sign-off) until `set sta_preset_clear_arcs_enabled 1`: then it has
++2.0 and +2.2 ns of hold margin at tt and +1.2 and +1.3 ns at ff, for the
+two flip-flops that sample `nmi_n_held`.
+
+![NMI case A at tt](chip/gf180mcu/nmi_A_tt.svg)
+
+![NMI case C at tt](chip/gf180mcu/nmi_C_tt.svg)
+
+Case F: while `nmi_hold_clr` is high -- one clock -- the catcher cannot be
+set, and a pulse that starts and ends inside the clock's high half is
+gone before either sampler looks. On the NMOS Z80 a second falling edge
+sets the NMI flip-flop again; if the first NMI is still pending, the two
+are one NMI there too. Only when the core accepts the first NMI at exactly
+the edge between the two pulses would the NMOS Z80 take a second one and
+this chip not: two NMI pulses within a clock of each other.
+
+![NMI case F at tt](chip/gf180mcu/nmi_F_tt.svg)
+
+The ss and ff figures are beside them (`nmi_<case>_<corner>.svg`).
+Different Magic versions extract the cells' parasitics differently
+(8.3.681 moved tt's clear by 0.3 ns from 8.3.623, LibreLane 3.0.14's), so
+`nmi.py` uses LibreLane's.
+
+## The whole chip
+
+`chip.py` extracts the GF180 7-track chip's routed layout with Magic --
+66,652 transistors, leaving out the decoupling and fill cells, with every
+net's wiring capacitance lumped to ground -- and runs it in ngspice from
+power-up: four clocks of RESET, then a short program at 4 MHz with 15 ns
+clock edges and 100 pF on every pin:
+
+    0000  LD A,5Ah        opcode fetch, memory read
+    0002  LD (8000h),A    ... memory write
+    0005  OUT (42h),A     ... I/O write
+    0007  IN A,(43h)      ... I/O read (the port answers A5h)
+    0009  HALT
+
+The same program on the RTL (`tb_chip_ref.v`, iverilog) gives the pins at
+every clock edge, and when the memory has to drive the data bus: a source
+behind a 50 Ω switch drives the RTL's byte from 40 ns after RD falls to
+60 ns after the read ends. The transistors' pins are checked against the
+RTL's at every clock edge after RESET, and every output parameter of the
+datasheet is measured on every cycle that has it -- CLK at 50 %, outputs
+at 1.5 V -- against its limit and STA's number. The figures are the
+datasheet's: the opcode fetch (PS0178 Figure 5), memory read and write
+(Figure 6), I/O write and read (Figure 7), and the whole run as a logic
+analyser shows it.
+
+    asic/spice/chip.py <asic-gf180mcu chip run> --corner tt --sta <pin_timing.py output>
+
+KLU's sparse factorisation dominates: ngspice simulates about 40 ns a
+minute, some six hours for the program. The figures and `results.json`
+are committed in `chip/gf180mcu/`.
+
+## CI
+
+- `targets.yml`'s `spice` job (`.github/workflows/spice-pads.yml`, ~10 min a
+  PDK): `pads.py --check` for GF180 and IHP against the committed
+  `pads.json`, its figures as the artifact `spice-pads-<pdk>`.
+- `asic-pdk.yml`, GF180 7-track: after the chip's pin timing, the same
+  check with `--pads none`, both outputs into the GDS artifact for
+  `findings.py`; then `nmi.py` at three corners (~2 min), failing when a
+  case's pulse is not caught, held for the core and cleared.
+- The GitHub Pages job draws `findings.py`'s plots from the artifacts and
+  puts the pads, the plots, the NMI catcher and the committed whole-chip
+  run under "At transistor level".

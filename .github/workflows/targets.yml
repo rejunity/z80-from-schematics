@@ -42,13 +42,26 @@ jobs:
     with:
       pdk: ${{ matrix.pdk }}
 
+  # The I/O pads at transistor level, every pad cell the chips use, in
+  # ngspice against the committed results (spice-pads.yml; ~10 min)
+  spice:
+    strategy:
+      fail-fast: false
+      matrix:
+        pdk: [gf180mcu, ihp-sg13g2]
+    uses: ./.github/workflows/spice-pads.yml
+    with:
+      pdk: ${{ matrix.pdk }}
+
   # The latest run where every board and PDK passed: the bitstreams, GDS
-  # files and layout renders from the jobs' artifacts, and an index page
-  # (.github/scripts/dist.py site). The renders also go into this job's
-  # summary. Deploys only from main (the github-pages environment's rule).
+  # files and layout renders from the jobs' artifacts, the transistor-level
+  # simulations' figures (the pads, what they changed, the GF180 chip's NMI
+  # catcher and the whole chip), and an index page (.github/scripts/dist.py
+  # site). The renders also go into this job's summary. Deploys only from
+  # main (the github-pages environment's rule).
   pages:
     name: GitHub Pages
-    needs: [fpga, asic]
+    needs: [fpga, asic, spice]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     permissions:
@@ -77,6 +90,18 @@ jobs:
           pattern: asic-*-gds
           path: dist
           merge-multiple: true
+
+      - name: Download the pads at transistor level
+        uses: actions/download-artifact@v8
+        with:
+          pattern: spice-pads-*
+          path: dist/spice
+          merge-multiple: true
+
+      # from the pads' results and the chips' pin timing with and without
+      # them (asic-<pdk>-gds: rz80-<chip>-chip-pin_timing*.txt)
+      - name: Plot what the pad simulations changed
+        run: python3 asic/spice/findings.py --pads dist/spice/pads --timing dist --out dist/spice/findings
 
       - name: Build the site
         run: python3 .github/scripts/dist.py site dist site

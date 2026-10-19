@@ -10,8 +10,13 @@
                                and power (needs gdstk, numpy and Pillow);
                                for a chip simulated at transistor level
                                (asic/spice/chip/<pdk>/), its pins as a logic
-                               analyser shows them + rz80-<pdk>.json
-  dist.py site <in> <out>      index.html over everything fpga/asic made
+                               analyser shows them, and all of that
+                               simulation's figures in spice/chip/<pdk>/
+                               + rz80-<pdk>.json
+  dist.py site <in> <out>      index.html over everything fpga/asic made,
+                               and over <in>/spice/: the pads and the NMI
+                               catcher at transistor level (spice/pads/,
+                               spice/findings/, spice/nmi/; targets.yml)
   dist.py summary <in> <url>   job-summary markdown: the layout renders as
                                served by the site deployed at <url>
 
@@ -571,6 +576,13 @@ def asic(pdk, out):
             info = json.load(open(os.path.join(out, f'rz80-{pdk}-chip.json')))
             info['files'].append(f'rz80-{pdk}-chip-pins.svg')
             json.dump(info, open(os.path.join(out, f'rz80-{pdk}-chip.json'), 'w'), indent=1)
+            # and all of that run's figures, for the site's transistor-level section
+            res = os.path.join(os.path.dirname(pins), 'results.json')
+            if os.path.isfile(res):
+                dst = os.path.join(out, 'spice', 'chip', pdk)
+                os.makedirs(dst, exist_ok=True)
+                for f in json.load(open(res))['figures'] + ['results.json']:
+                    shutil.copy(os.path.join(os.path.dirname(pins), f), dst)
 
 
 def load(src):
@@ -601,6 +613,153 @@ def asic_facts(p):
             clk += f", setup slack {p['setup_ws_ns']:+.2f} ns (typical)"
         facts.append(('Clock', clk))
     return facts
+
+
+PAD_SETS = {  # spice/pads/<pdk>/ (spice-pads.yml): (name, its pads)
+    'gf180mcu': ('GF180', "gf180mcu_fd_io's 5 V pads"),
+    'ihp-sg13g2': ('IHP SG13G2', "sg13g2_io's 3.3 V pads"),
+}
+CHIP_FIGURES = (('fetch', 'opcode fetch (M1)'), ('mread', 'memory read'), ('mwrite', 'memory write'),
+                ('iowrite', 'I/O write'), ('ioread', 'I/O read'))
+
+
+def transistor(src, out):
+    """The site's transistor-level section, over <src>/spice/ (copied to <out>/spice/): the pads
+    (spice-pads.yml's asic/spice/pads.py), what they changed (asic/spice/findings.py), the GF180 chip's
+    NMI catcher (asic/spice/nmi.py, in its ASIC job) and the whole chip (asic/spice/chip.py's committed
+    run, as asic() copies it)."""
+    if not os.path.isdir(os.path.join(src, 'spice')):
+        return ''
+    base = os.path.join(out, 'spice')
+    shutil.copytree(os.path.join(src, 'spice'), base, dirs_exist_ok=True)
+    e = html.escape
+    there = lambda p: os.path.isfile(os.path.join(base, p))
+    code = f'{SERVER}/{REPO}/blob/main/asic/spice'
+
+    def fig(path, caption, wide=False):
+        if not there(path):
+            return ''
+        cls = ' class="wide"' if wide else ''
+        return (f'<figure{cls}><a href="spice/{path}"><img src="spice/{path}" alt="{e(caption)}" loading="lazy"></a>'
+                f'<figcaption>{caption}</figcaption></figure>')
+
+    def grid(*figs, two=False):   # one figure a row, at a readable size; two for thumbnails
+        figs = [f for f in figs if f]
+        return f'<div class="figs{" two" if two else ""}">{"".join(figs)}</div>' if figs else ''
+
+    def links(items):
+        return ' · '.join(f'<a href="spice/{p}">{label}</a>' for p, label in items if there(p))
+    ns = lambda x: '–' if x is None else f'{x:.1f} ns'
+    parts = []
+
+    g = grid(fig('findings/outputs.svg', "outputs into the datasheet's 100 pF: the libraries against the simulation"),
+             fig('findings/inputs.svg', "inputs on the datasheet's 15 ns edges: the libraries against the simulation"),
+             fig('findings/ttl.svg', 'where every input pad switches, against the TTL window'),
+             fig('findings/timing.svg', "the chips' tightest pin-timing margins at 4 MHz, either way"))
+    if g:
+        parts.append(f"""<h3 class="sec">What the pad simulations changed</h3>
+<p class="muted">The PDKs characterise their pads into small loads and on fast edges, and STA measures every pin
+at half the supply; the NMOS Z80's datasheet measures its outputs into 100 pF at 1.5 V and drives its inputs
+with 15 ns edges between TTL levels (0.8 and 2.0 V). The pads' Liberty files from these simulations replace
+the PDKs' own in the chips' pin-timing checks
+(<a href="{SERVER}/{REPO}/blob/main/asic/timing/pin_timing.py">pin_timing.py</a>), which then measure at the
+datasheet's levels (<a href="{code}/findings.py">findings.py</a>).</p>
+{g}""")
+
+    pads = []
+    for pdk, (name, what) in PAD_SETS.items():
+        d = f'pads/{pdk}'
+        g = grid(fig(f'{d}/out.svg', 'outputs: edges into 1–250 pF, and their drive'),
+                 fig(f'{d}/tristate.svg', 'the data bus: turning on, and floating'),
+                 fig(f'{d}/in.svg', 'inputs: pin to core on edges up to 30 ns, and where they switch'),
+                 fig(f'{d}/clk_reset.svg', 'CLK and RESET: the Schmitt-trigger input'), two=True)
+        if not g:
+            continue
+        libs = [(f'{d}/{os.path.basename(f)}', re.sub(r'^(gf180mcu_fd_io__|sg13g2_io_)', '', os.path.basename(f)[:-4]))
+                for f in sorted(glob.glob(os.path.join(base, d, '*.lib')))]
+        more = links([(f'{d}/summary.txt', 'summary'), (f'{d}/delay_vs_load.svg', 'delay vs load'),
+                      (f'{d}/inputs.svg', 'inputs vs edge'), (f'{d}/waveforms.svg', 'waveforms'), (f'{d}/pads.json', 'pads.json')])
+        liberty = ', '.join(f'<a href="spice/{p}">{e(label)}</a>' for p, label in libs)
+        pads.append(f"""<p class="figtitle"><strong>{e(name)}</strong> <span class="muted">{e(what)} · {more}
+{'· Liberty: ' + liberty if liberty else ''}</span></p>
+{g}""")
+    if pads:
+        parts.append(f"""<h3 class="sec">The pads</h3>
+<p class="muted">Every pad cell the chips use, from the PDK's own netlist with its transistor models, at the
+corners the chips are signed off at (<a href="{code}/pads.py">pads.py</a>): the outputs into 1–250 pF, the
+data bus's tri-state pads turning on and floating, the inputs on edges up to 30 ns, and the Schmitt-trigger
+input CLK and RESET take. Checked in every run against the committed results.</p>
+{chr(10).join(pads)}""")
+
+    corners = [c for c in ('tt', 'ss', 'ff') if there(f'nmi/nmi_{c}.json')]
+    if corners:
+        nmi = {c: json.load(open(os.path.join(base, 'nmi', f'nmi_{c}.json'))) for c in corners}
+        main_c = 'tt' if 'tt' in nmi else corners[0]
+        about = nmi[main_c].get('about', {})
+        rows = []
+        for c, m in nmi.items():
+            cases = m['cases']
+            a = cases.get('A', {})
+            caught = sum(v['set_ns'] is not None and v['clear_after_clk_ns'] is not None for v in cases.values())
+            figs = links([(f'nmi/nmi_{c}.svg', 'all')] + [(f'nmi/nmi_{k}_{c}.svg', k) for k in cases])
+            rows.append(f"<tr><td class=\"nw\"><strong>{c}</strong> <span class=\"muted\">{m.get('volts', '')} V, "
+                        f"{m.get('temp_c', '')} °C</span></td><td>{caught} of {len(cases)}</td>"
+                        f"<td>{ns(a.get('set_ns'))}</td><td>{ns(a.get('clear_after_clk_ns'))}</td>"
+                        f"<td>{ns(a.get('held_low_ns'))}</td><td>{figs}</td></tr>")
+        g = grid(fig(f'nmi/nmi_{main_c}.svg', f'the six cases, {main_c}', wide=True),
+                 *[fig(f'nmi/nmi_{k}_{main_c}.svg', f'{k}: {e(about.get(k, ""))}') for k in nmi[main_c]['cases']])
+        parts.append(f"""<h3 class="sec">The NMI pulse catcher</h3>
+<p class="muted">The NMOS Z80 takes an NMI pulse of any width -- TwNMI, 80 ns at 4 MHz, is under half a
+clock -- not only one a clock edge sees: a flip-flop clocked by the NMI pin itself catches it and holds it
+for the core until the next rising CLK edge, which clears it
+(<a href="{SERVER}/{REPO}/blob/main/rtl/z80_top.v">z80_top.v</a>). Here it is cut out of the GF180 7-track
+chip, from the NMI and CLK pins to the flip-flops -- the pads, the clock tree to its leaf, the cells as Magic
+extracts them from the PDK's layouts, on the routed chip's wiring -- and run at each corner with six pulses
+(<a href="{code}/nmi.py">nmi.py</a>).</p>
+<div class="scroll"><table>
+<thead><tr><th>Corner</th><th>Pulses caught and cleared</th><th>NMI pin falls → caught (A)</th>
+<th>CLK pin rises → cleared (A)</th><th>The core sees NMI for (A)</th><th>Figures</th></tr></thead>
+<tbody>
+{chr(10).join(rows)}
+</tbody>
+</table></div>
+{g}""")
+
+    for pdk in sorted(os.listdir(os.path.join(base, 'chip'))) if os.path.isdir(os.path.join(base, 'chip')) else []:
+        d = f'chip/{pdk}'
+        if not there(f'{d}/results.json'):
+            continue
+        res = json.load(open(os.path.join(base, d, 'results.json')))
+        bad = len(res.get('functional_mismatches') or [])
+        params = res.get('parameters') or []
+        trs = ''.join(f"<tr><td>{r['id']}</td><td>{e(r['symbol'])}</td><td>{'≤' if r['bound'] == 'max' else '≥'} "
+                      f"{r['limit']:g} ns</td><td>{r['spice_min']:.1f} – {r['spice_max']:.1f} ns "
+                      f"<span class=\"muted\">({r['n']})</span></td><td>{ns(r.get('sta'))}</td>"
+                      f"<td>{'ok' if r['pass'] else '<strong>fails</strong>'}</td></tr>" for r in params)
+        table = (f"""<details><summary>The datasheet's AC parameters: {sum(r['pass'] for r in params)} of {len(params)}
+met, over every cycle that has them</summary><div class="scroll"><table>
+<thead><tr><th>#</th><th>Parameter</th><th>Limit</th><th>SPICE (cycles)</th><th>STA</th><th></th></tr></thead>
+<tbody>{trs}</tbody></table></div></details>""" if params else '')
+        g = grid(fig(f'{d}/program.svg', 'power-up, RESET, and the program at 4 MHz', wide=True),
+                 *[fig(f'{d}/{k}.svg', label) for k, label in CHIP_FIGURES])
+        name = PDKS.get(pdk, pdk)
+        parts.append(f"""<h3 class="sec">The whole chip, {e(name)}</h3>
+<p class="muted">The chip's layout extracted with Magic to its transistors and their wiring, and run in
+ngspice at the {e(res.get('corner', ''))} corner: power-up, RESET, and a short program
+-- a memory read, a memory write, an I/O write and read -- at 4 MHz with 15 ns edges, its outputs into
+100 pF (<a href="{code}/chip.py">chip.py</a>; hours, so run now and then and committed). Its pins against
+the RTL at every clock edge after RESET: {bad} mismatches. The cycles are measured as the Z80 manual
+draws them.</p>
+{table}
+{g}""")
+
+    if not parts:
+        return ''
+    return f"""<h2 id="transistor">At transistor level</h2>
+<p class="muted">The timing above is OpenSTA's, from the PDKs' Liberty models. Here the chips run as
+transistors, in ngspice with the PDKs' own netlists and transistor models, against the NMOS Z80
+datasheet's test conditions (<a href="{SERVER}/{REPO}/tree/main/asic/spice">asic/spice</a>).</p>
+{chr(10).join(parts)}"""
 
 
 def site(src, out):
@@ -712,8 +871,19 @@ h4 {{ font-size: 13px; color: var(--muted); font-weight: 600; margin: 2px 0 6px;
 .legend {{ list-style: none; padding: 0; margin: 0 0 10px; font-size: 13px; }}
 .legend li {{ display: flex; align-items: center; gap: 7px; }}
 .swatch {{ width: 10px; height: 10px; border-radius: 2px; flex: none; }}
+.figs {{ display: grid; gap: 12px; margin: 8px 0 18px; align-items: start; }}
+.figs.two {{ grid-template-columns: repeat(2, 1fr); }}
+.figs figure {{ background: #fff; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }}
+.figs .wide {{ grid-column: 1 / -1; }}
+.figs figure img {{ aspect-ratio: auto; height: auto; }}
+.figs figcaption {{ position: static; display: block; border-radius: 0; padding: 5px 10px; font-size: 13px;
+  color: var(--muted); background: var(--card); border-top: 1px solid var(--line); }}
+h3.sec {{ margin: 26px 0 4px; }}
+.figtitle {{ margin: 14px 0 0; font-size: 14px; }}
+details {{ margin: 0 0 14px; }}
+summary {{ cursor: pointer; color: var(--link); font-size: 14px; margin: 0 0 6px; }}
 @media (max-width: 640px) {{
-  .pics {{ grid-template-columns: 1fr; }}
+  .pics, .figs.two {{ grid-template-columns: 1fr; }}
 }}
 dl {{ display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 0 0 10px; font-size: 14px; }}
 dt {{ color: var(--muted); }}
@@ -722,7 +892,7 @@ dd {{ margin: 0; font-variant-numeric: tabular-nums; }}
 table {{ width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); font-size: 14px; }}
 th, td {{ text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }}
 th {{ color: var(--muted); font-weight: 600; font-size: 13px; white-space: nowrap; }}
-td a {{ white-space: nowrap; }}
+td a, td.nw {{ white-space: nowrap; }}
 footer {{ color: var(--muted); font-size: 13px; margin-top: 36px; }}
 </style>
 </head>
@@ -742,6 +912,8 @@ block it was synthesized in. Where a chip has been simulated at transistor level
 to transistors and wires and run in ngspice (<a href="{SERVER}/{REPO}/tree/main/asic/spice">asic/spice</a>)
 -- its pins are shown under it as a logic analyser shows them.</p>
 {chr(10).join(chip_cards) or '<p>none in this build</p>'}
+
+{transistor(src, out)}
 
 <h2>ASIC core layouts</h2>
 <p class="muted">The bare core (no pad ring), RTL to GDS with LibreLane. The pictures are drawn from the GDS

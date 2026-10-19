@@ -28,6 +28,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 import svgplot  # noqa: E402
+import pads  # noqa: E402
 
 PDK_ROOT = os.path.join(os.environ.get("CIEL_HOME", os.path.expanduser("~/.ciel")), "ciel",
                         "gf180mcu/versions/54435919abffb937387ec956209f9cf5fd2dfbee/gf180mcuD")
@@ -48,15 +49,9 @@ def sh(cmd, **kw):
     return p
 
 
-def tool(name, attr):
-    if shutil.which(name):
-        return shutil.which(name)
-    nix = shutil.which("nix") or os.path.expanduser("~/.nix-profile/bin/nix")
-    p = subprocess.run([nix, "build", f"nixpkgs#{attr}", "--print-out-paths", "--no-link"], capture_output=True, text=True)
-    path = os.path.join(p.stdout.strip().splitlines()[-1], "bin", name) if p.stdout.strip() else ""
-    if not os.path.exists(path):
-        sys.exit(f"chip: no {name} (PATH or nixpkgs#{attr})")
-    return path
+def tool(name):
+    """ngspice or Magic, the pinned builds (pads.TOOLS)"""
+    return pads.tool(name, who="chip")
 
 
 # ------------------------------------------------------------- extract
@@ -88,7 +83,7 @@ def extract(run, work):
     tcl = os.path.join(work, "extract.tcl")
     open(tcl, "w").write(MAGIC_SCRIPT.format(gds=gds, ext=ext, out=out))
     env = dict(os.environ, PDK_ROOT=os.path.dirname(PDK_ROOT))
-    magic = tool("magic", "magic-vlsi")
+    magic = tool("magic")
     rc = os.path.join(PDK_ROOT, "libs.tech", "magic", "gf180mcuD.magicrc")
     print("chip: extracting the layout with Magic (~25 min)", flush=True)
     p = subprocess.run([magic, "-dnull", "-noconsole", "-rcfile", rc, tcl], capture_output=True, text=True, env=env)
@@ -235,7 +230,7 @@ def deck(work, corner, edges, threads, tstop):
 def simulate(work, corner, edges, threads):
     tstop = edges[-1][0] + 100
     sp = deck(work, corner, edges, threads, tstop)
-    ngspice = tool("ngspice", "ngspice")
+    ngspice = tool("ngspice")
     print(f"chip: ngspice, {tstop / 1000:.1f} us simulated (hours)", flush=True)
     d = os.path.dirname(sp)
     p = subprocess.run([ngspice, "-b", sp], cwd=d, capture_output=True, text=True)

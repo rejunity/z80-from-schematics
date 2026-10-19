@@ -1,0 +1,82 @@
+# The I/O pads at transistor level (asic/spice/pads.py): every pad cell the
+# chips use, simulated in ngspice with the PDK's own netlists and transistor
+# models at the chips' STA corners -- outputs into 1-250 pF, turn-on and
+# float, inputs with edges to 30 ns, where they switch, their DC drive.
+# Fails when the results drift from the committed ones beyond small
+# tolerances (asic/spice/pads/<pdk>/pads.json; ../timing/pin_timing.py
+# reads the Liberty files made from them). The figures go into the
+# artifact spice-pads-<pdk>, and from targets.yml onto GitHub Pages.
+#
+# Needs no LibreLane: the PDK (ciel), ngspice and, for IHP's Verilog-A
+# transistor models, OpenVAF -- pads.py builds the versions it pins with
+# nix. ~10 min.
+name: spice-pads
+
+on:
+  workflow_call:
+    inputs:
+      pdk:
+        description: gf180mcu or ihp-sg13g2 (asic/spice/pads.py's PDKs)
+        required: true
+        type: string
+
+env:
+  LIBRELANE_VERSION: 3.0.14      # as asic-pdk.yml: its PDK cache, and ciel
+
+jobs:
+  pads:
+    name: ${{ inputs.pdk }} pads at transistor level
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    env:
+      PDK: ${{ inputs.pdk }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: DeterminateSystems/nix-installer-action@main
+        with:
+          extra-conf: |
+            extra-substituters = https://nix-cache.fossi-foundation.org
+            extra-trusted-public-keys = nix-cache.fossi-foundation.org:3+K59iFwXqKsL7BNu6Guy0v+uTlwsxYQxjspXzqLYQs=
+            extra-experimental-features = nix-command flakes
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: The PDK version the pads are simulated with
+        id: pdk
+        run: |
+          root=$(python3 -c "import sys; sys.path.insert(0, 'asic/spice'); import pads; print(pads.PDKS['$PDK']['root'])")
+          echo "root=$root" >> "$GITHUB_OUTPUT"
+          echo "family=$(cut -d/ -f1 <<< "$root")" >> "$GITHUB_OUTPUT"
+          echo "version=$(cut -d/ -f3 <<< "$root")" >> "$GITHUB_OUTPUT"
+
+      # the PDK as asic-pdk.yml caches it for this PDK's chip (read only: the
+      # repository's cache is full enough)
+      - name: The PDK from the ASIC job's cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.ciel
+          key: ${{ inputs.pdk == 'ihp-sg13g2' && format('ciel-ihp-sg13g2-librelane-{0}-{1}', env.LIBRELANE_VERSION, steps.pdk.outputs.version) || format('ciel-{0}-librelane-{1}', inputs.pdk, env.LIBRELANE_VERSION) }}
+
+      - name: Fetch the PDK (LibreLane's ciel)
+        run: |
+          [ -d ~/.ciel/ciel/${{ steps.pdk.outputs.root }} ] ||
+            nix run github:librelane/librelane/$LIBRELANE_VERSION#python3.pkgs.ciel -- fetch --pdk-root ~/.ciel \
+              --pdk-family ${{ steps.pdk.outputs.family }} ${{ steps.pdk.outputs.version }}
+
+      - name: Simulate the pads, against the committed results
+        run: |
+          rc=0
+          python3 asic/spice/pads.py $PDK --out spice/pads/$PDK --check asic/spice/pads/$PDK/pads.json | tee pads.txt || rc=$?
+          { echo "### $PDK pads at transistor level"; echo '```'; cat pads.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: spice-pads-${{ inputs.pdk }}
+          path: spice/
+          if-no-files-found: ignore
+          retention-days: 14

@@ -147,20 +147,30 @@ def run(cmd, **kw):
     return p
 
 
-def tool(name, given, nix_attr):
-    """A program: --flag, PATH, or nixpkgs (built once)."""
+# The simulators, pinned: ngspice and OpenVAF from one nixpkgs, and Magic as
+# LibreLane runs it for the chips' sign-off (chip.py, nmi.py). Other versions
+# move results by tenths of a ns: Magic 8.3.681 extracts the cells'
+# parasitics differently from 8.3.623, which moved nmi.py's clear by 0.3 ns.
+NIXPKGS = "github:NixOS/nixpkgs/494ce7fd23ff6a5dff39e1fb11e9b6f2ac74bf25"   # ngspice 45, OpenVAF 24.0.1
+LIBRELANE = "github:librelane/librelane/3.0.14"                             # Magic 8.3.623
+TOOLS = {"ngspice": f"{NIXPKGS}#ngspice", "openvaf-r": f"{NIXPKGS}#openvaf", "magic": f"{LIBRELANE}#magic"}
+
+
+def tool(name, given=None, who="pads"):
+    """A program: given (its --flag), else the pinned build (nix, built
+    once), else whatever PATH has."""
     if given:
         return given
-    if shutil.which(name):
-        return shutil.which(name)
     nix = shutil.which("nix") or os.path.expanduser("~/.nix-profile/bin/nix")
     if os.path.exists(nix):
-        p = subprocess.run([nix, "build", f"nixpkgs#{nix_attr}", "--print-out-paths", "--no-link"],
+        p = subprocess.run([nix, "build", TOOLS[name], "--print-out-paths", "--no-link"],
                            capture_output=True, text=True)
         path = os.path.join(p.stdout.strip().splitlines()[-1], "bin", name) if p.returncode == 0 and p.stdout.strip() else ""
         if os.path.exists(path):
             return path
-    sys.exit(f"pads: {name} not found (--{name.split('-')[0]} PATH, or nix)")
+    if shutil.which(name):
+        return shutil.which(name)
+    sys.exit(f"{who}: {name} not found ({TOOLS[name]} with nix, or PATH)")
 
 
 # --------------------------------------------------------- the testbenches
@@ -304,6 +314,21 @@ def wave(t, v, starts, W, n=240):
     return out
 
 
+def sample(t, cols, start, span, n=320):
+    """cols ({name: values}) at n + 1 evenly spaced times from start, as
+    {"t": ns after start, name: values} for the plots"""
+    out = {"t": [round(span * k / n, 3) for k in range(n + 1)]}
+    for name, v in cols.items():
+        vals = []
+        for k in range(n + 1):
+            tk = start + span * k / n
+            i = min(max(bisect.bisect_left(t, tk), 1), len(t) - 1)
+            f = (tk - t[i - 1]) / (t[i] - t[i - 1]) if t[i] != t[i - 1] else 0
+            vals.append(round(v[i - 1] + f * (v[i] - v[i - 1]), 4))
+        out[name] = vals
+    return out
+
+
 def m_enable(ctx, corner, cell, slew, load, val):
     """Turn-on: the pin floats (held at the other level by 1 Mohm), the
     enable rises with the data at val."""
@@ -319,7 +344,10 @@ def m_enable(ctx, corner, cell, slew, load, val):
     w = simulate(ctx, b, [f"v({en})", f"v({pad})"], t1 + W, max(0.01, min(0.4, W / 600)))
     t = [x * 1e9 for x in w["time"]]
     t0 = cross(t, w[f"v({en})"], b.vdd / 2, True, t1 - 0.5)
-    return edge_out(t, w[f"v({pad})"], b.vio, bool(val), t0)
+    res = edge_out(t, w[f"v({pad})"], b.vio, bool(val), t0)
+    if load == TEST_LOAD and abs(slew - ctx["mid_slew"][cell]) < 1e-9 and t0 is not None:
+        res["wave"] = sample(t, {"en": w[f"v({en})"], "pad": w[f"v({pad})"]}, t0 - 5, W - 5)
+    return res
 
 
 def m_disable(ctx, corner, cell, slew, val):
@@ -345,7 +373,10 @@ def m_disable(ctx, corner, cell, slew, val):
     toff = cross(t, [abs(x) for x in i], 0.1 * abs(i0), False, t0)
     tfl = cross(t, w[f"v({pad})"], v0 + (FLOAT_DV if not val else -FLOAT_DV), not val, t0)
     sub = lambda x, y: None if x is None or y is None else x - y
-    return {"toff": sub(toff, t0), "tfloat": sub(tfl, t0), "i0_mA": abs(i0), "v0": v0}
+    res = {"toff": sub(toff, t0), "tfloat": sub(tfl, t0), "i0_mA": abs(i0), "v0": v0}
+    if abs(slew - ctx["mid_slew"][cell]) < 1e-9 and t0 is not None:
+        res["wave"] = sample(t, {"en": w[f"v({en})"], "pad": w[f"v({pad})"], "i_mA": i}, t0 - 5, 70)
+    return res
 
 
 def m_input(ctx, corner, cell, slew, load):
@@ -372,6 +403,8 @@ def m_input(ctx, corner, cell, slew, load):
             vsw = vp[k]
         res[edge] = {"d50": None if ty is None else ty - t0, "slew": None if a is None or z is None else z - a,
                      "vsw": vsw}
+        if slew == 15 and load == ctx["min_yload"][cell] and t0 is not None:
+            res[edge]["wave"] = sample(t, {"pad": vp, "y": vy}, t0 - 15, 35)
     return res
 
 
@@ -386,6 +419,10 @@ def m_dc_in(ctx, corner, cell):
     t = [x * 1e9 for x in w["time"]]
     vp, vy = w[f"v({pad})"], w[f"v({y})"]
     res = {}
+    k_up, k_top = bisect.bisect_left(t, 100), bisect.bisect_left(t, 2300)
+    step = max(1, (k_top - k_up) // 300)
+    res["curve"] = {"up": [[round(vp[k], 4), round(vy[k], 4)] for k in range(k_up, bisect.bisect_left(t, 2100), step)],
+                    "down": [[round(vp[k], 4), round(vy[k], 4)] for k in range(k_top, len(t), step)]}
     for name, rising, after in (("vt_rise", True, 100), ("vt_fall", False, 2300)):
         ty = cross(t, vy, b.vdd / 2, rising, after)
         k = min(max(bisect.bisect_left(t, ty), 1), len(t) - 1) if ty is not None else None
@@ -648,6 +685,7 @@ def characterise(ctx, corners, jobs):
                 edges = sorted(set(e1) | set(IN_EDGES))
                 C["input"] = {"edges": edges, "loads": loads,
                               "pdk": {n: table(lib[b2:e2]) for n, (b2, e2) in ia[2].items()}}
+                ctx["min_yload"][cell] = loads[0]
                 for a, s in enumerate(edges):
                     for c, L in enumerate(loads):
                         jobs_l.append(((k, cell, "input", a, c), m_input, (ctx, k, cell, s, L)))
@@ -684,6 +722,7 @@ def characterise(ctx, corners, jobs):
                 for edge in ("rise", "fall"):
                     C["input"][edge] = {q: [[done[(k, cell, "input", a, c)][edge][q] for c in range(nl)] for a in range(ne)]
                                         for q in ("d50", "slew", "vsw")}
+                    C["input"][edge]["wave"] = done[(k, cell, "input", C["input"]["edges"].index(15), 0)][edge].get("wave")
                 C.setdefault("dc", {}).update(done[(k, cell, "dc_in")])
     return res
 
@@ -798,6 +837,157 @@ def plots(pdk, res, corners, out):
                       title=f"{pdk}: input pads, pin to core against the input edge (ngspice)")
 
 
+def pin_plots(pdk, res, corners, out):
+    """The pads one by one, as their pins behave: out.svg (driving 100 pF),
+    tristate.svg (turning on, letting go), in.svg (a 15 ns edge to the
+    core, and where the input switches) and, where CLK and RESET have their
+    own (Schmitt) pad, clk_reset.svg."""
+    names = list(corners)
+    cells = res[names[0]]["cells"]
+    short = lambda c: c.split("__")[-1] if "__" in c else c.replace("sg13g2_IOPad", "")
+    colour = {k: svgplot.PALETTE[i] for i, k in enumerate(names)}
+    sup = lambda k: f"{k}: {res[k]['vio']:g} V, {res[k]['temp']} C"
+    # outputs
+    charts = []
+    for cell, C in cells.items():
+        if "data" not in C or (pdk == "ihp-sg13g2" and cell.endswith("TriOut16mA")):
+            continue
+        for i, edge in enumerate(("rising", "falling")):
+            ch = svgplot.Chart(f"{short(cell)}: data input {edge}, pin into 100 pF", "ns after the data input",
+                               "V at the pin")
+            for k in names:
+                w = res[k]["cells"][cell]["data"]["wave"][i]
+                if w:
+                    ch.line([p[0] for p in w], [p[1] for p in w], sup(k), colour[k])
+            ch.hline(OUT_LEVEL, "1.5 V: the datasheet's output level")
+            charts.append(ch)
+    if charts:
+        svgplot.write(os.path.join(out, "out.svg"), charts, cols=2,
+                      title=f"{pdk}: output pads into the NMOS Z80's 100 pF test load (ngspice)")
+    # tri-state: on, off, and the driver's current letting go
+    charts = []
+    for cell, C in cells.items():
+        if "enable" not in C or (pdk == "ihp-sg13g2" and cell.endswith("InOut16mA")):
+            continue
+        for val in ("1", "0"):
+            ch = svgplot.Chart(f"{short(cell)}: output enable rising, pin from float to {val}", "ns after the enable",
+                               "V at the pin")
+            for k in names:
+                a = len(C["enable"]["slews"]) // 2          # the slew whose waveform was kept
+                w = res[k]["cells"][cell]["enable"][val][a][LOADS.index(TEST_LOAD)].get("wave")
+                if w:                                   # sampled from 5 ns before the enable
+                    ch.line([x - 5 for x in w["t"]], w["pad"], sup(k), colour[k])
+            ch.hline(OUT_LEVEL)
+            charts.append(ch)
+        for val in ("1", "0"):
+            ch = svgplot.Chart(f"{short(cell)}: output enable falling, the pin at {val} lets go",
+                               "ns after the enable", "V at the pin (100 pF, 2 kohm to the other rail)")
+            for k in names:
+                a = len(C["disable"]["slews"]) // 2
+                w = res[k]["cells"][cell]["disable"][val][a].get("wave")
+                if w:
+                    ch.line([x - 5 for x in w["t"]], w["pad"], sup(k), colour[k])
+            charts.append(ch)
+        for val in ("1", "0"):
+            ch = svgplot.Chart(f"{short(cell)}: the driver's current as it lets go of {val}",
+                               "ns after the enable", "mA out of the pin", xlim=(-2, 10))
+            for k in names:
+                a = len(C["disable"]["slews"]) // 2
+                w = res[k]["cells"][cell]["disable"][val][a].get("wave")
+                if w:
+                    ch.line([x - 5 for x in w["t"]], w["i_mA"], sup(k), colour[k])
+            charts.append(ch)
+    if charts:
+        svgplot.write(os.path.join(out, "tristate.svg"), charts, cols=2,
+                      title=f"{pdk}: tri-state pads -- turning on into 100 pF, floating (ngspice)")
+    # inputs: same circuit, one figure; GF180's Schmitt pad (CLK, RESET) its own
+    groups = {}
+    for cell, C in cells.items():
+        if "input" in C:
+            key = json.dumps([[round(x, 2) for x in r] for r in C["input"]["rise"]["d50"]])
+            groups.setdefault(key, []).append(cell)
+    for cells_g in groups.values():
+        cell = cells_g[-1] if pdk == "gf180mcu" else cells_g[0]
+        schmitt = cell.endswith("in_s")
+        title = " / ".join(short(c) for c in cells_g)
+        charts = []
+        for edge in ("rise", "fall"):
+            ch = svgplot.Chart(f"{title}: pin {'rising' if edge == 'rise' else 'falling'} in 15 ns, core side",
+                               "ns after the pin's 50 %", "V (dashed: the pin)")
+            for k in names:
+                w = res[k]["cells"][cell]["input"][edge].get("wave")
+                if w:
+                    tt = [x - 15 for x in w["t"]]
+                    ch.line(tt, w["pad"], None, colour[k], dash="4 3", width=1.1)
+                    ch.line(tt, w["y"], sup(k), colour[k])
+            ch.hline(VIH, "2.0 V (VIH)")
+            ch.hline(VIL, "0.8 V (VIL)")
+            charts.append(ch)
+        vmax = max(res[k]["vio"] for k in names)
+        ch = svgplot.Chart(f"{title}: where it switches (2 us ramps)", "V at the pin", "V at the core side",
+                           xlim=(0, vmax + 0.2))
+        for k in names:
+            cv = res[k]["cells"][cell]["dc"].get("curve")
+            if cv:
+                ch.line([p[0] for p in cv["up"]], [p[1] for p in cv["up"]], sup(k), colour[k])
+                ch.line([p[0] for p in cv["down"]], [p[1] for p in cv["down"]], None, colour[k], dash="4 3")
+        ch.vline(VIL, "VIL 0.8 V")
+        ch.vline(VIH, "VIH 2.0 V")
+        ch.note("solid: the pin rising, dashed: falling")
+        charts.append(ch)
+        name = "clk_reset.svg" if schmitt else "in.svg"
+        what = ("the Schmitt input pad of CLK and RESET" if schmitt else
+                "the input pads (all inputs, CLK and RESET too)" if pdk == "ihp-sg13g2" else
+                "the input pads (WAIT INT NMI BUSRQ, and the data bus's input buffer)")
+        svgplot.write(os.path.join(out, name), charts, cols=2, title=f"{pdk}: {what} (ngspice)")
+
+
+def write_json(doc, path):
+    """indented JSON, every list of plain values on one line"""
+    text = json.dumps(doc, indent=1)
+    text = re.sub(r"\[([^\[\]{}\"]*)\]", lambda m: "[" + " ".join(m.group(1).split()) + "]", text)
+    open(path, "w").write(text + "\n")
+
+
+def compare(new, old, tol_ns=0.1, tol_rel=0.03, tol_v=0.03, tol_ma_rel=0.03):
+    """differences between two characterisations beyond the tolerances:
+    delays and slews within tol_ns or tol_rel, switching levels within
+    tol_v, drive currents within tol_ma_rel -- ngspice and the PDK may
+    drift a little between versions"""
+    bad = []
+
+    def num(a, b, where, tol_abs, rel):
+        if a is None or b is None:
+            if (a is None) != (b is None):
+                bad.append(f"{where}: {a} against {b}")
+            return
+        if abs(a - b) > max(tol_abs, rel * abs(b)):
+            bad.append(f"{where}: {a:.3f} against {b:.3f}")
+
+    def walk(a, b, where):
+        if isinstance(b, dict):
+            for k, v in b.items():
+                if k in ("wave", "curve", "pdk", "slews", "loads", "edges"):
+                    continue
+                if k in a:
+                    walk(a[k], v, f"{where}/{k}")
+        elif isinstance(b, list):
+            for i, (x, y) in enumerate(zip(a, b)):
+                walk(x, y, f"{where}[{i}]")
+        elif isinstance(b, (int, float)) and not isinstance(b, bool):
+            key = where.rsplit("/", 1)[-1]
+            if key.startswith("vt") or key in ("vsw", "v0"):
+                num(a, b, where, tol_v, 0)
+            elif key.endswith("mA"):
+                num(a, b, where, 0, tol_ma_rel)
+            elif key in ("temp", "vdd", "vio", "cpin"):
+                num(a, b, where, 1e-9, 0)
+            else:
+                num(a, b, where, tol_ns, tol_rel)
+    walk(new, old, "")
+    return bad
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("pdk", choices=sorted(PDKS))
@@ -807,6 +997,8 @@ def main():
     ap.add_argument("--keep", help="keep the decks, waveforms and logs here")
     ap.add_argument("--reuse", action="store_true", help="no simulations: the libraries, plots and summary "
                     "again from OUT/pads.json")
+    ap.add_argument("--check", metavar="JSON", help="fail if the results differ from this pads.json (the committed "
+                    "one) beyond small tolerances")
     ap.add_argument("--ngspice")
     ap.add_argument("--openvaf", help="openvaf-r, for IHP's Verilog-A transistor models")
     ap.add_argument("--pdk-root", default=os.path.join(os.environ.get("CIEL_HOME", os.path.expanduser("~/.ciel")), "ciel"))
@@ -818,14 +1010,14 @@ def main():
     corners = [k for k in P["corners"] if not a.corners or k in a.corners.split(",")]
     out = a.out or os.path.join(HERE, "pads", a.pdk)
     os.makedirs(out, exist_ok=True)
-    ctx = {"pdk": P, "pdk_name": a.pdk, "root": root, "mid_slew": {}}
+    ctx = {"pdk": P, "pdk_name": a.pdk, "root": root, "mid_slew": {}, "min_yload": {}}
     if a.reuse:
         old = json.load(open(os.path.join(out, "pads.json")))
         res, ver = old["corners"], old["simulator"]
         corners = [k for k in corners if k in res]
     else:
-        ngspice = tool("ngspice", a.ngspice, "ngspice")
-        openvaf = tool("openvaf-r", a.openvaf, "openvaf") if a.pdk == "ihp-sg13g2" else None
+        ngspice = tool("ngspice", a.ngspice)
+        openvaf = tool("openvaf-r", a.openvaf) if a.pdk == "ihp-sg13g2" else None
         with tempfile.TemporaryDirectory() as tmp:
             ctx.update(build=os.path.abspath(a.keep or tmp), ngspice=ngspice)
             setup(a.pdk, root, ctx["build"], openvaf)
@@ -839,11 +1031,18 @@ def main():
            "conditions": {"loads_pF": LOADS, "test_load_pF": TEST_LOAD, "out_level_V": OUT_LEVEL,
                           "vil_V": VIL, "vih_V": VIH, "float_dV": FLOAT_DV, "float_pull_ohm": FLOAT_R},
            "corners": res}
-    json.dump(doc, open(os.path.join(out, "pads.json"), "w"), indent=1)
+    write_json(doc, os.path.join(out, "pads.json"))
     plots(a.pdk, res, corners, out)
+    pin_plots(a.pdk, res, corners, out)
     text = summary(a.pdk, res, corners)
     open(os.path.join(out, "summary.txt"), "w").write(text.lstrip("\n") + "\n")
     print(text)
+    if a.check:
+        bad = compare(res, json.load(open(a.check))["corners"])
+        if bad:
+            print(f"\npads: {len(bad)} results differ from {a.check}:\n  " + "\n  ".join(bad[:40]))
+            return 1
+        print(f"\npads: every result matches {a.check}")
     return 0
 
 

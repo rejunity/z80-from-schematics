@@ -141,6 +141,35 @@ jobs:
           { echo "### asic/$PDK chip: pin timing vs the NMOS Z80 (4 MHz)"; echo '```'; cat pin_timing.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           exit $rc
 
+      # The same check on the PDK's own pad libraries, every pin at 50 %:
+      # GitHub Pages draws the two side by side (asic/spice/findings.py).
+      # Both outputs go into the GDS artifact.
+      - name: Chip pin timing on the PDK's own pad libraries (for comparison)
+        if: hashFiles(format('asic/{0}/chip/config.yaml', inputs.pdk)) != '' && hashFiles('asic/spice/pads.py') != ''
+        run: |
+          [ -f pin_timing.txt ] || exit 0
+          mkdir -p dist
+          cp pin_timing.txt dist/rz80-$PDK-chip-pin_timing.txt
+          run=$(ls -dt asic/$PDK/chip/runs/*/ | head -1)
+          sta=$(command -v sta || echo "nix run github:librelane/librelane/$LIBRELANE_VERSION#opensta --")
+          python3 asic/timing/pin_timing.py $run --pads none --sta "$sta" > dist/rz80-$PDK-chip-pin_timing-pdk.txt || true
+          tail -1 dist/rz80-$PDK-chip-pin_timing-pdk.txt
+
+      # The NMI pulse catcher at transistor level (asic/spice/nmi.py): cut
+      # out of this chip from the NMI and CLK pins to the catcher's
+      # flip-flops -- the standard cells as Magic extracts them from the
+      # PDK's layouts, the wires from the routed chip's SPEF -- and run in
+      # ngspice at each corner, a minute or two (ngspice and Magic: the
+      # versions nmi.py pins, built with nix). The GF180 7-track chip only.
+      - name: NMI pulse catcher at transistor level (ngspice)
+        if: inputs.pdk == 'gf180mcu' && hashFiles('asic/spice/nmi.py') != '' && hashFiles(format('asic/{0}/chip/config.yaml', inputs.pdk)) != ''
+        run: |
+          run=$(ls -dt asic/$PDK/chip/runs/*/ | head -1)
+          rc=0
+          python3 asic/spice/nmi.py $run --out dist/spice/nmi | tee nmi.txt || rc=$?
+          { echo "### asic/$PDK chip: the NMI pulse catcher at transistor level"; echo '```'; cat nmi.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
+
       - uses: actions/setup-python@v5
         if: always()
         with:
