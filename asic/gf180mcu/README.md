@@ -59,14 +59,14 @@ Metal4. Measured with a 20 MHz target:
 
 | | |
 |---|---|
-| Std cells | 8,681 |
-| Cell area | 163,902 µm² |
-| Die | 545 × 563 µm = 0.31 mm² (58 % utilised) |
-| Setup slack @ 20 MHz | +3.8 ns typical (signed off, ~21.7 MHz); -15.1 ns at ss 125 °C 4.5 V (~15 MHz) |
-| Hold slack | +0.25 ns |
+| Std cells | 8,572 |
+| Cell area | 164,664 µm² |
+| Die | 544 × 562 µm = 0.31 mm² (59 % utilised) |
+| Setup slack @ 20 MHz | +4.2 ns typical (signed off, ~21.8 MHz); -16.8 ns at ss 125 °C 4.5 V (~15 MHz) |
+| Hold slack | +0.26 ns |
 | Route / Magic DRC, LVS, antenna, GDS XOR | all 0 (KLayout DRC is not part of LibreLane's GF180 Classic flow) |
 | Signs of life, routed netlist | PASS (HALT after 554 clocks) |
-| Runtime | 26 min (8 cores, shared) |
+| Runtime | 17 min (8 cores, shared) |
 
 Previous core (main before the restructure, same flow): Sign-off clean (DRC / LVS / antenna / XOR 0), 16,225 cells, 0.29 mm² of cells on a 0.50 mm² die, but at 20 MHz the slow corner missed by 26.7 ns (typical passed with +3.9 ns); 12,112 max-slew violations. ~1 h 50 min.
 
@@ -102,10 +102,31 @@ CPU does not drive it (`chip/z80_chip.v`; `z80_top` itself is unchanged).
 | | |
 |---|---|
 | Die | 1662 × 1512 µm = 2.5 mm², pad-limited (the bottom and left pad rows abut) |
-| Pads | 40: `bi_24t` (address and control outputs with their enables, the data bus), `in_c` / `in_s` (inputs; Schmitt for CLK and RESET), `dvdd` / `dvss` (VCC, GND) |
-| Sign-off | DRC, LVS, antenna, XOR all 0; typical-corner setup met; 7 unconnected outputs (`z80_top`'s debug pins, no pads) |
+| Pads | 40: `bi_t` at its weakest drive, 4 mA, with slow slew (address and control outputs with their enables, the data bus), `in_c` / `in_s` (inputs; Schmitt for CLK and RESET), `dvdd` / `dvss` (VCC, GND) |
+| Sign-off | DRC, LVS, antenna, XOR all 0; the NMOS Z80's 4 MHz pin timing met at every corner (below); 7 unconnected outputs (`z80_top`'s debug pins, no pads) |
 | Signs of life through the pads | PASS (HALT after 554 clocks) |
-| Runtime | 8.5 min after `make` (the core is not re-synthesized or re-routed) |
+| Runtime | 6 min after `make` (the core is not re-synthesized or re-routed) |
+
+The outputs drive like the NMOS Z80's as far as `gf180mcu_fd_io` allows:
+the NMOS part sinks 2.0 mA at 0.4 V and sources 250 µA at 2.4 V (PS0178
+DC characteristics); `bi_t`'s weakest setting is 4 mA, here with slow
+slew (`Z80_PAD_DRIVE` in `chip/z80_chip.v`). Like the Z80 the chip runs
+from 5 V. The data pads' input buffers are on only while the CPU does not
+drive the bus, which is also the only case the pad's Liberty characterises
+the output for.
+
+The pins are constrained to, and checked against, the NMOS Z80's AC
+characteristics at 4 MHz (Zilog PS0178, Z8400; `../timing/`): the chip
+flow runs on `z80_chip_nmos4.sdc`, generated from the datasheet table, and
+`make -C asic/gf180mcu pin_timing` measures the routed chip with OpenSTA
+at 100 pF and checks every parameter the replica has to meet -- PASS at
+the tt, ss and ff corners. Output delays take 15-45 ns against 65-150 ns
+limits; the tightest margins are the opcode's setup TsD(Cr) at the slow
+corner (+3.9 ns of 35 ns) and the input holds at the fast corner (+1 to
++2 ns, after the flow's hold repair; the falling clock edge reaches the
+core late through the Schmitt CLK pad). The faster NMOS grades pass too
+except that setup at the slow corner (125 °C, 4.5 V, beyond the NMOS
+part's 70 °C, 4.75 V): -1.3 ns at 6 MHz, -0.0 ns at 8 MHz.
 
 The pad ring settings follow open-pdks' LibreLane config for
 `gf180mcu_fd_io` (the PDK version LibreLane 3.0.14 pins predates it) and

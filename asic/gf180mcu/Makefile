@@ -24,7 +24,7 @@ CHIP_LATEST = $(shell ls -dt chip/runs/*/ 2>/dev/null | head -1)
 # each process corner
 MACRO_CORNERS := tt ss ff
 
-.PHONY: harden synth summary sign_of_life sign_of_life_rtl chip chip_summary chip_sign_of_life clean
+.PHONY: harden synth summary sign_of_life sign_of_life_rtl chip chip_summary chip_sign_of_life pin_timing clean
 harden:
 	$(LIBRELANE) --pdk $(PDK) --scl $(SCL) $(LIBRELANE_ARGS) $(CONFIG)
 
@@ -52,6 +52,14 @@ chip_summary:
 
 chip_sign_of_life:
 	@../sign_of_life.py $(CHIP_LATEST)
+
+# the chip's pins against the NMOS Z80's AC characteristics (Zilog PS0178,
+# Z8400), measured by OpenSTA on the chip's latest run: GRADE=4 (Z80A,
+# the default), 6 or 8 MHz
+GRADE ?= 4
+STA   ?= $(shell command -v sta || echo "nix run github:librelane/librelane/3.0.14\#opensta --")
+pin_timing:
+	@STA="$(STA)" ../timing/pin_timing.py $(CHIP_LATEST) --grade $(GRADE)
 
 clean:
 	rm -rf runs chip/runs chip/macro

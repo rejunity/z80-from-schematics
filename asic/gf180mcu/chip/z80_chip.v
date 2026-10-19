@@ -18,6 +18,12 @@
 
 `default_nettype none
 
+// Output drive, as close to the NMOS Z80's as gf180mcu_fd_io comes: the
+// NMOS part sinks 2.0 mA at 0.4 V and sources 250 uA at 2.4 V (Zilog
+// PS0178, Z8400 DC characteristics). bi_t's weakest drive is 4 mA
+// (PDRV1:PDRV0 = 00; 01, 10, 11 are 8, 12, 16 mA), with slow slew (SL = 1).
+`define Z80_PAD_DRIVE .PDRV0(1'b0), .PDRV1(1'b0), .SL(1'b1)
+
 `ifdef USE_POWER_PINS
 `define Z80_PAD_POWER .DVDD(DVDD), .DVSS(DVSS), .VDD(VDD), .VSS(VSS),
 `else
@@ -50,6 +56,10 @@ module z80_chip (
     // the Z80's tri-state rules (datasheet: RESET floats the address bus,
     // BUSAK floats the address bus and MREQ IORQ RD WR)
     wire addr_oe = cpu_busack_n && cpu_reset_n;
+    // the data pads' input buffers are on only while the CPU does not drive
+    // the bus: the pad library characterises its output with IE low (and
+    // the CPU never reads its own write)
+    wire data_ie = ~data_drive;
     wire ctl_oe  = cpu_busack_n;
 
     z80_top u_top (
@@ -62,25 +72,25 @@ module z80_chip (
     );
 
     // pin 1: A11
-    gf180mcu_fd_io__bi_24t pad_A11 (`Z80_PAD_POWER .PAD(A[11]), .A(addr[11]), .OE(addr_oe), .Y(), .IE(1'b0), .CS(1'b0), .SL(1'b0), .PU(1'b0), .PD(1'b0));
+    gf180mcu_fd_io__bi_t pad_A11 (`Z80_PAD_POWER .PAD(A[11]), .A(addr[11]), .OE(addr_oe), .Y(), .IE(1'b0), .CS(1'b0), `Z80_PAD_DRIVE, .PU(1'b0), .PD(1'b0));
     // pin 2: A12
-    gf180mcu_fd_io__bi_24t pad_A12 (`Z80_PAD_POWER .PAD(A[12]), .A(addr[12]), .OE(addr_oe), .Y(), .IE(1'b0), .CS(1'b0), .SL(1'b0), .PU(1'b0), .PD(1'b0));
+    gf180mcu_fd_io__bi_t pad_A12 (`Z80_PAD_POWER .PAD(A[12]), .A(addr[12]), .OE(addr_oe), .Y(), .IE(1'b0), .CS(1'b0), `Z80_PAD_DRIVE, .PU(1'b0), .PD(1'b0));
     // pin 3: A13
-    gf180mcu_fd_io__bi_24t pad_A13 (`Z80_PAD_POWER .PAD(A[13]), .A(addr[13]), .OE(addr_oe), .Y(), .IE(1'b0), .CS(1'b0), .SL(1'b0), .PU(1'b0), .PD(1'b0));
+    gf180mcu_fd_io__bi_t pad_A13 (`Z80_PAD_POWER .PAD(A[13]), .A(addr[13]), .OE(addr_oe), .Y(), .IE(1'b0), .CS(1'b0), `Z80_PAD_DRIVE, .PU(1'b0), .PD(1'b0));
     // pin 4: A14
-    gf180mcu_fd_io__bi_24t pad_A14 (`Z80_PAD_POWER .PAD(A[14]), .A(addr[14]), .OE(addr_oe), .Y(), .IE(1'b0), .CS(1'b0), .SL(1'b0), .PU(1'b0), .PD(1'b0));
+    gf180mcu_fd_io__bi_t pad_A14 (`Z80_PAD_POWER .PAD(A[14]), .A(addr[14]), .OE(addr_oe), .Y(), .IE(1'b0), .CS(1'b0), `Z80_PAD_DRIVE, .PU(1'b0), .PD(1'b0));
     // pin 5: A15
-    gf180mcu_fd_io__bi_24t pad_A15 (`Z80_PAD_POWER .PAD(A[15]), .A(addr[15]), .OE(addr_oe), .Y(), .IE(1'b0), .CS(1'b0), .SL(1'b0), .PU(1'b0), .PD(1'b0));
+    gf180mcu_fd_io__bi_t pad_A15 (`Z80_PAD_POWER .PAD(A[15]), .A(addr[15]), .OE(addr_oe), .Y(), .IE(1'b0), .CS(1'b0), `Z80_PAD_DRIVE, .PU(1'b0), .PD(1'b0));
     // pin 6: CLK
     gf180mcu_fd_io__in_s pad_CLK (`Z80_PAD_POWER .PAD(CLK), .Y(cpu_clk), .PU(1'b0), .PD(1'b0));
     // pin 7: D4
-    gf180mcu_fd_io__bi_24t pad_D4 (`Z80_PAD_POWER .PAD(D[4]), .A(data_out[4]), .OE(data_drive), .Y(data_in[4]), .IE(1'b1), .CS(1'b0), .SL(1'b0), .PU(1'b0), .PD(1'b0));
+    gf180mcu_fd_io__bi_t pad_D4 (`Z80_PAD_POWER .PAD(D[4]), .A(data_out[4]), .OE(data_drive), .Y(data_in[4]), .IE(data_ie), .CS(1'b0), `Z80_PAD_DRIVE, .PU(1'b0), .PD(1'b0));
     // pin 8: D3
-    gf180mcu_fd_io__bi_24t pad_D3 (`Z80_PAD_POWER .PAD(D[3]), .A(data_out[3]), .OE(data_drive), .Y(data_in[3]), .IE(1'b1), .CS(1'b0), .SL(1'b0), .PU(1'b0), .PD(1'b0));
+    gf180mcu_fd_io__bi_t pad_D3 (`Z80_PAD_POWER .PAD(D[3]), .A(data_out[3]), .OE(data_drive), .Y(data_in[3]), .IE(data_ie), .CS(1'b0), `Z80_PAD_DRIVE, .PU(1'b0), .PD(1'b0));
     // pin 9: D5
-    gf180mcu_fd_io__bi_24t pad_D5 (`Z80_PAD_POWER .PAD(D[5]), .A(data_out[5]), .OE(data_drive), .Y(data_in[5]), .IE(1'b1), .CS(1'b0), .SL(1'b0), .PU(1'b0), .PD(1'b0));
+    gf180mcu_fd_io__bi_t pad_D5 (`Z80_PAD_POWER .PAD(D[5]), .A(data_out[5]), .OE(data_drive), .Y(data_in[5]), .IE(data_ie), .CS(1'b0), `Z80_PAD_DRIVE, .PU(1'b0), .PD(1'b0));
     // pin 10: D6
-    gf180mcu_fd_io__bi_24t pad_D6 (`Z80_PAD_POWER .PAD(D[6]), .A(data_out[6]), .OE(data_drive), .Y(data_in[6]), .IE(1'b1), .CS(1'b0), .SL(1'b0), .PU(1'b0), .PD(1'b0));
+    gf180mcu_fd_io__bi_t pad_D6 (`Z80_PAD_POWER .PAD(D[6]), .A(data_out[6]), .OE(data_drive), .Y(data_in[6]), .IE(data_ie), .CS(1'b0), `Z80_PAD_DRIVE, .PU(1'b0), .PD(1'b0));
     // pin 11: VCC
     (* keep *) gf180mcu_fd_io__dvdd pad_VCC (
 `ifdef USE_POWER_PINS
@@ -88,29 +98,29 @@ module z80_chip (
 `endif
     );
     // pin 12: D2
-    gf180mcu_fd_io__bi_24t pad_D2 (`Z80_PAD_POWER .PAD(D[2]), .A(data_out[2]), .OE(data_drive), .Y(data_in[2]), .IE(1'b1), .CS(1'b0), .SL(1'b0), .PU(1'b0), .PD(1'b0));
+    gf180mcu_fd_io__bi_t pad_D2 (`Z80_PAD_POWER .PAD(D[2]), .A(data_out[2]), .OE(data_drive), .Y(data_in[2]), .IE(data_ie), .CS(1'b0), `Z80_PAD_DRIVE, .PU(1'b0), .PD(1'b0));
     // pin 13: D7
-    gf180mcu_fd_io__bi_24t pad_D7 (`Z80_PAD_POWER .PAD(D[7]), .A(data_out[7]), .OE(data_drive), .Y(data_in[7]), .IE(1'b1), .CS(1'b0), .SL(1'b0), .PU(1'b0), .PD(1'b0));
+    gf180mcu_fd_io__bi_t pad_D7 (`Z80_PAD_POWER .PAD(D[7]), .A(data_out[7]), .OE(data_drive), .Y(data_in[7]), .IE(data_ie), .CS(1'b0), `Z80_PAD_DRIVE, .PU(1'b0), .PD(1'b0));
     // pin 14: D0
-    gf180mcu_fd_io__bi_24t pad_D0 (`Z80_PAD_POWER .PAD(D[0]), .A(data_out[0]), .OE(data_drive), .Y(data_in[0]), .IE(1'b1), .CS(1'b0), .SL(1'b0), .PU(1'b0), .PD(1'b0));
+    gf180mcu_fd_io__bi_t pad_D0 (`Z80_PAD_POWER .PAD(D[0]), .A(data_out[0]), .OE(data_drive), .Y(data_in[0]), .IE(data_ie), .CS(1'b0), `Z80_PAD_DRIVE, .PU(1'b0), .PD(1'b0));
     // pin 15: D1
-    gf180mcu_fd_io__bi_24t pad_D1 (`Z80_PAD_POWER .PAD(D[1]), .A(data_out[1]), .OE(data_drive), .Y(data_in[1]), .IE(1'b1), .CS(1'b0), .SL(1'b0), .PU(1'b0), .PD(1'b0));
+    gf180mcu_fd_io__bi_t pad_D1 (`Z80_PAD_POWER .PAD(D[1]), .A(data_out[1]), .OE(data_drive), .Y(data_in[1]), .IE(data_ie), .CS(1'b0), `Z80_PAD_DRIVE, .PU(1'b0), .PD(1'b0));
     // pin 16: INT_n
     gf180mcu_fd_io__in_c pad_INT_n (`Z80_PAD_POWER .PAD(INT_n), .Y(cpu_int_n), .PU(1'b0), .PD(1'b0));
     // pin 17: NMI_n
     gf180mcu_fd_io__in_c pad_NMI_n (`Z80_PAD_POWER .PAD(NMI_n), .Y(cpu_nmi_n), .PU(1'b0), .PD(1'b0));
     // pin 18: HALT_n
-    gf180mcu_fd_io__bi_24t pad_HALT_n (`Z80_PAD_POWER .PAD(HALT_n), .A(cpu_halt_n), .OE(1'b1), .Y(), .IE(1'b0), .CS(1'b0), .SL(1'b0), .PU(1'b0), .PD(1'b0));
+    gf180mcu_fd_io__bi_t pad_HALT_n (`Z80_PAD_POWER .PAD(HALT_n), .A(cpu_halt_n), .OE(1'b1), .Y(), .IE(1'b0), .CS(1'b0), `Z80_PAD_DRIVE, .PU(1'b0), .PD(1'b0));
     // pin 19: MREQ_n
-    gf180mcu_fd_io__bi_24t pad_MREQ_n (`Z80_PAD_POWER .PAD(MREQ_n), .A(cpu_mreq_n), .OE(ctl_oe), .Y(), .IE(1'b0), .CS(1'b0), .SL(1'b0), .PU(1'b0), .PD(1'b0));
+    gf180mcu_fd_io__bi_t pad_MREQ_n (`Z80_PAD_POWER .PAD(MREQ_n), .A(cpu_mreq_n), .OE(ctl_oe), .Y(), .IE(1'b0), .CS(1'b0), `Z80_PAD_DRIVE, .PU(1'b0), .PD(1'b0));
     // pin 20: IORQ_n
-    gf180mcu_fd_io__bi_24t pad_IORQ_n (`Z80_PAD_POWER .PAD(IORQ_n), .A(cpu_iorq_n), .OE(ctl_oe), .Y(), .IE(1'b0), .CS(1'b0), .SL(1'b0), .PU(1'b0), .PD(1'b0));
+    gf180mcu_fd_io__bi_t pad_IORQ_n (`Z80_PAD_POWER .PAD(IORQ_n), .A(cpu_iorq_n), .OE(ctl_oe), .Y(), .IE(1'b0), .CS(1'b0), `Z80_PAD_DRIVE, .PU(1'b0), .PD(1'b0));
     // pin 21: RD_n
-    gf180mcu_fd_io__bi_24t pad_RD_n (`Z80_PAD_POWER .PAD(RD_n), .A(cpu_rd_n), .OE(ctl_oe), .Y(), .IE(1'b0), .CS(1'b0), .SL(1'b0), .PU(1'b0), .PD(1'b0));
+    gf180mcu_fd_io__bi_t pad_RD_n (`Z80_PAD_POWER .PAD(RD_n), .A(cpu_rd_n), .OE(ctl_oe), .Y(), .IE(1'b0), .CS(1'b0), `Z80_PAD_DRIVE, .PU(1'b0), .PD(1'b0));
     // pin 22: WR_n
-    gf180mcu_fd_io__bi_24t pad_WR_n (`Z80_PAD_POWER .PAD(WR_n), .A(cpu_wr_n), .OE(ctl_oe), .Y(), .IE(1'b0), .CS(1'b0), .SL(1'b0), .PU(1'b0), .PD(1'b0));
+    gf180mcu_fd_io__bi_t pad_WR_n (`Z80_PAD_POWER .PAD(WR_n), .A(cpu_wr_n), .OE(ctl_oe), .Y(), .IE(1'b0), .CS(1'b0), `Z80_PAD_DRIVE, .PU(1'b0), .PD(1'b0));
     // pin 23: BUSAK_n
-    gf180mcu_fd_io__bi_24t pad_BUSAK_n (`Z80_PAD_POWER .PAD(BUSAK_n), .A(cpu_busack_n), .OE(1'b1), .Y(), .IE(1'b0), .CS(1'b0), .SL(1'b0), .PU(1'b0), .PD(1'b0));
+    gf180mcu_fd_io__bi_t pad_BUSAK_n (`Z80_PAD_POWER .PAD(BUSAK_n), .A(cpu_busack_n), .OE(1'b1), .Y(), .IE(1'b0), .CS(1'b0), `Z80_PAD_DRIVE, .PU(1'b0), .PD(1'b0));
     // pin 24: WAIT_n
     gf180mcu_fd_io__in_c pad_WAIT_n (`Z80_PAD_POWER .PAD(WAIT_n), .Y(cpu_wait_n), .PU(1'b0), .PD(1'b0));
     // pin 25: BUSRQ_n
@@ -118,9 +128,9 @@ module z80_chip (
     // pin 26: RESET_n
     gf180mcu_fd_io__in_s pad_RESET_n (`Z80_PAD_POWER .PAD(RESET_n), .Y(cpu_reset_n), .PU(1'b0), .PD(1'b0));
     // pin 27: M1_n
-    gf180mcu_fd_io__bi_24t pad_M1_n (`Z80_PAD_POWER .PAD(M1_n), .A(cpu_m1_n), .OE(1'b1), .Y(), .IE(1'b0), .CS(1'b0), .SL(1'b0), .PU(1'b0), .PD(1'b0));
+    gf180mcu_fd_io__bi_t pad_M1_n (`Z80_PAD_POWER .PAD(M1_n), .A(cpu_m1_n), .OE(1'b1), .Y(), .IE(1'b0), .CS(1'b0), `Z80_PAD_DRIVE, .PU(1'b0), .PD(1'b0));
     // pin 28: RFSH_n
-    gf180mcu_fd_io__bi_24t pad_RFSH_n (`Z80_PAD_POWER .PAD(RFSH_n), .A(cpu_rfsh_n), .OE(1'b1), .Y(), .IE(1'b0), .CS(1'b0), .SL(1'b0), .PU(1'b0), .PD(1'b0));
+    gf180mcu_fd_io__bi_t pad_RFSH_n (`Z80_PAD_POWER .PAD(RFSH_n), .A(cpu_rfsh_n), .OE(1'b1), .Y(), .IE(1'b0), .CS(1'b0), `Z80_PAD_DRIVE, .PU(1'b0), .PD(1'b0));
     // pin 29: GND
     (* keep *) gf180mcu_fd_io__dvss pad_GND (
 `ifdef USE_POWER_PINS
@@ -128,27 +138,27 @@ module z80_chip (
 `endif
     );
     // pin 30: A0
-    gf180mcu_fd_io__bi_24t pad_A0 (`Z80_PAD_POWER .PAD(A[0]), .A(addr[0]), .OE(addr_oe), .Y(), .IE(1'b0), .CS(1'b0), .SL(1'b0), .PU(1'b0), .PD(1'b0));
+    gf180mcu_fd_io__bi_t pad_A0 (`Z80_PAD_POWER .PAD(A[0]), .A(addr[0]), .OE(addr_oe), .Y(), .IE(1'b0), .CS(1'b0), `Z80_PAD_DRIVE, .PU(1'b0), .PD(1'b0));
     // pin 31: A1
-    gf180mcu_fd_io__bi_24t pad_A1 (`Z80_PAD_POWER .PAD(A[1]), .A(addr[1]), .OE(addr_oe), .Y(), .IE(1'b0), .CS(1'b0), .SL(1'b0), .PU(1'b0), .PD(1'b0));
+    gf180mcu_fd_io__bi_t pad_A1 (`Z80_PAD_POWER .PAD(A[1]), .A(addr[1]), .OE(addr_oe), .Y(), .IE(1'b0), .CS(1'b0), `Z80_PAD_DRIVE, .PU(1'b0), .PD(1'b0));
     // pin 32: A2
-    gf180mcu_fd_io__bi_24t pad_A2 (`Z80_PAD_POWER .PAD(A[2]), .A(addr[2]), .OE(addr_oe), .Y(), .IE(1'b0), .CS(1'b0), .SL(1'b0), .PU(1'b0), .PD(1'b0));
+    gf180mcu_fd_io__bi_t pad_A2 (`Z80_PAD_POWER .PAD(A[2]), .A(addr[2]), .OE(addr_oe), .Y(), .IE(1'b0), .CS(1'b0), `Z80_PAD_DRIVE, .PU(1'b0), .PD(1'b0));
     // pin 33: A3
-    gf180mcu_fd_io__bi_24t pad_A3 (`Z80_PAD_POWER .PAD(A[3]), .A(addr[3]), .OE(addr_oe), .Y(), .IE(1'b0), .CS(1'b0), .SL(1'b0), .PU(1'b0), .PD(1'b0));
+    gf180mcu_fd_io__bi_t pad_A3 (`Z80_PAD_POWER .PAD(A[3]), .A(addr[3]), .OE(addr_oe), .Y(), .IE(1'b0), .CS(1'b0), `Z80_PAD_DRIVE, .PU(1'b0), .PD(1'b0));
     // pin 34: A4
-    gf180mcu_fd_io__bi_24t pad_A4 (`Z80_PAD_POWER .PAD(A[4]), .A(addr[4]), .OE(addr_oe), .Y(), .IE(1'b0), .CS(1'b0), .SL(1'b0), .PU(1'b0), .PD(1'b0));
+    gf180mcu_fd_io__bi_t pad_A4 (`Z80_PAD_POWER .PAD(A[4]), .A(addr[4]), .OE(addr_oe), .Y(), .IE(1'b0), .CS(1'b0), `Z80_PAD_DRIVE, .PU(1'b0), .PD(1'b0));
     // pin 35: A5
-    gf180mcu_fd_io__bi_24t pad_A5 (`Z80_PAD_POWER .PAD(A[5]), .A(addr[5]), .OE(addr_oe), .Y(), .IE(1'b0), .CS(1'b0), .SL(1'b0), .PU(1'b0), .PD(1'b0));
+    gf180mcu_fd_io__bi_t pad_A5 (`Z80_PAD_POWER .PAD(A[5]), .A(addr[5]), .OE(addr_oe), .Y(), .IE(1'b0), .CS(1'b0), `Z80_PAD_DRIVE, .PU(1'b0), .PD(1'b0));
     // pin 36: A6
-    gf180mcu_fd_io__bi_24t pad_A6 (`Z80_PAD_POWER .PAD(A[6]), .A(addr[6]), .OE(addr_oe), .Y(), .IE(1'b0), .CS(1'b0), .SL(1'b0), .PU(1'b0), .PD(1'b0));
+    gf180mcu_fd_io__bi_t pad_A6 (`Z80_PAD_POWER .PAD(A[6]), .A(addr[6]), .OE(addr_oe), .Y(), .IE(1'b0), .CS(1'b0), `Z80_PAD_DRIVE, .PU(1'b0), .PD(1'b0));
     // pin 37: A7
-    gf180mcu_fd_io__bi_24t pad_A7 (`Z80_PAD_POWER .PAD(A[7]), .A(addr[7]), .OE(addr_oe), .Y(), .IE(1'b0), .CS(1'b0), .SL(1'b0), .PU(1'b0), .PD(1'b0));
+    gf180mcu_fd_io__bi_t pad_A7 (`Z80_PAD_POWER .PAD(A[7]), .A(addr[7]), .OE(addr_oe), .Y(), .IE(1'b0), .CS(1'b0), `Z80_PAD_DRIVE, .PU(1'b0), .PD(1'b0));
     // pin 38: A8
-    gf180mcu_fd_io__bi_24t pad_A8 (`Z80_PAD_POWER .PAD(A[8]), .A(addr[8]), .OE(addr_oe), .Y(), .IE(1'b0), .CS(1'b0), .SL(1'b0), .PU(1'b0), .PD(1'b0));
+    gf180mcu_fd_io__bi_t pad_A8 (`Z80_PAD_POWER .PAD(A[8]), .A(addr[8]), .OE(addr_oe), .Y(), .IE(1'b0), .CS(1'b0), `Z80_PAD_DRIVE, .PU(1'b0), .PD(1'b0));
     // pin 39: A9
-    gf180mcu_fd_io__bi_24t pad_A9 (`Z80_PAD_POWER .PAD(A[9]), .A(addr[9]), .OE(addr_oe), .Y(), .IE(1'b0), .CS(1'b0), .SL(1'b0), .PU(1'b0), .PD(1'b0));
+    gf180mcu_fd_io__bi_t pad_A9 (`Z80_PAD_POWER .PAD(A[9]), .A(addr[9]), .OE(addr_oe), .Y(), .IE(1'b0), .CS(1'b0), `Z80_PAD_DRIVE, .PU(1'b0), .PD(1'b0));
     // pin 40: A10
-    gf180mcu_fd_io__bi_24t pad_A10 (`Z80_PAD_POWER .PAD(A[10]), .A(addr[10]), .OE(addr_oe), .Y(), .IE(1'b0), .CS(1'b0), .SL(1'b0), .PU(1'b0), .PD(1'b0));
+    gf180mcu_fd_io__bi_t pad_A10 (`Z80_PAD_POWER .PAD(A[10]), .A(addr[10]), .OE(addr_oe), .Y(), .IE(1'b0), .CS(1'b0), `Z80_PAD_DRIVE, .PU(1'b0), .PD(1'b0));
 
 endmodule
 
