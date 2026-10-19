@@ -55,9 +55,8 @@ jobs:
 
   # The latest run where every board and PDK passed: the bitstreams, GDS
   # files and layout renders from the jobs' artifacts, the transistor-level
-  # simulations' figures (the pads, what they changed, the GF180 chip's NMI
-  # catcher and the whole chip), and an index page (.github/scripts/dist.py
-  # site). The renders also go into this job's summary. Deploys only from
+  # simulations' figures (the pads, the GF180 chip's NMI catcher and the
+  # whole chip), and an index page (.github/scripts/dist.py site). The renders also go into this job's summary. Deploys only from
   # main (the github-pages environment's rule).
   pages:
     name: GitHub Pages
@@ -97,11 +96,6 @@ jobs:
           pattern: spice-pads-*
           path: dist/spice
           merge-multiple: true
-
-      # from the pads' results and the chips' pin timing with and without
-      # them (asic-<pdk>-gds: rz80-<chip>-chip-pin_timing*.txt)
-      - name: Plot what the pad simulations changed
-        run: python3 asic/spice/findings.py --pads dist/spice/pads --timing dist --out dist/spice/findings
 
       - name: Build the site
         run: python3 .github/scripts/dist.py site dist site

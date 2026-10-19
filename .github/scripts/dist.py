@@ -16,7 +16,7 @@
   dist.py site <in> <out>      index.html over everything fpga/asic made,
                                and over <in>/spice/: the pads and the NMI
                                catcher at transistor level (spice/pads/,
-                               spice/findings/, spice/nmi/; targets.yml)
+                               spice/nmi/; targets.yml)
   dist.py summary <in> <url>   job-summary markdown: the layout renders as
                                served by the site deployed at <url>
 
@@ -625,9 +625,8 @@ CHIP_FIGURES = (('fetch', 'opcode fetch (M1)'), ('mread', 'memory read'), ('mwri
 
 def transistor(src, out):
     """The site's transistor-level section, over <src>/spice/ (copied to <out>/spice/): the pads
-    (spice-pads.yml's asic/spice/pads.py), what they changed (asic/spice/findings.py), the GF180 chip's
-    NMI catcher (asic/spice/nmi.py, in its ASIC job) and the whole chip (asic/spice/chip.py's committed
-    run, as asic() copies it)."""
+    (spice-pads.yml's asic/spice/pads.py), the GF180 chip's NMI catcher (asic/spice/nmi.py, in its ASIC
+    job) and the whole chip (asic/spice/chip.py's committed run, as asic() copies it)."""
     if not os.path.isdir(os.path.join(src, 'spice')):
         return ''
     base = os.path.join(out, 'spice')
@@ -652,20 +651,6 @@ def transistor(src, out):
     ns = lambda x: '–' if x is None else f'{x:.1f} ns'
     parts = []
 
-    g = grid(fig('findings/outputs.svg', "outputs into the datasheet's 100 pF: the libraries against the simulation"),
-             fig('findings/inputs.svg', "inputs on the datasheet's 15 ns edges: the libraries against the simulation"),
-             fig('findings/ttl.svg', 'where every input pad switches, against the TTL window'),
-             fig('findings/timing.svg', "the chips' tightest pin-timing margins at 4 MHz, either way"))
-    if g:
-        parts.append(f"""<h3 class="sec">What the pad simulations changed</h3>
-<p class="muted">The PDKs characterise their pads into small loads and on fast edges, and STA measures every pin
-at half the supply; the NMOS Z80's datasheet measures its outputs into 100 pF at 1.5 V and drives its inputs
-with 15 ns edges between TTL levels (0.8 and 2.0 V). The pads' Liberty files from these simulations replace
-the PDKs' own in the chips' pin-timing checks
-(<a href="{SERVER}/{REPO}/blob/main/asic/timing/pin_timing.py">pin_timing.py</a>), which then measure at the
-datasheet's levels (<a href="{code}/findings.py">findings.py</a>).</p>
-{g}""")
-
     pads = []
     for pdk, (name, what) in PAD_SETS.items():
         d = f'pads/{pdk}'
@@ -688,7 +673,9 @@ datasheet's levels (<a href="{code}/findings.py">findings.py</a>).</p>
 <p class="muted">Every pad cell the chips use, from the PDK's own netlist with its transistor models, at the
 corners the chips are signed off at (<a href="{code}/pads.py">pads.py</a>): the outputs into 1–250 pF, the
 data bus's tri-state pads turning on and floating, the inputs on edges up to 30 ns, and the Schmitt-trigger
-input CLK and RESET take. Checked in every run against the committed results.</p>
+input CLK and RESET take. Checked in every run against the committed results; their Liberty files
+replace the PDKs' own in the chips' pin-timing checks
+(<a href="{SERVER}/{REPO}/blob/main/asic/timing/pin_timing.py">pin_timing.py</a>).</p>
 {chr(10).join(pads)}""")
 
     corners = [c for c in ('tt', 'ss', 'ff') if there(f'nmi/nmi_{c}.json')]

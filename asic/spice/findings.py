@@ -15,8 +15,8 @@
 
 Reads pads/<pdk>/pads.json (pads.py) and, for the timing, ../timing/
 pin_timing.py's output on each chip's run with the simulated pads and with
---pads none, as rz80-<chip>-chip-pin_timing.txt / -pin_timing-pdk.txt (the
-names the CI jobs give them; findings/pin_timing/ holds a local set).
+--pads none, as rz80-<chip>-chip-pin_timing.txt / -pin_timing-pdk.txt
+(findings/pin_timing/ holds a set).
 
 usage: findings.py [--pads DIR] [--timing DIR] [--out DIR]
 """

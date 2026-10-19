@@ -163,7 +163,7 @@ inside the datasheet.
 
 `findings.py` draws the above from `pads/<pdk>/pads.json` and from
 `pin_timing.py`'s output on each chip's run with the simulated pads and
-with `--pads none` (`findings/pin_timing/` holds a set; CI makes its own):
+with `--pads none` (`findings/pin_timing/` holds a set):
 
     asic/spice/findings.py           # findings/*.svg
 
@@ -311,10 +311,8 @@ are committed in `chip/gf180mcu/`.
 - `targets.yml`'s `spice` job (`.github/workflows/spice-pads.yml`, ~10 min a
   PDK): `pads.py --check` for GF180 and IHP against the committed
   `pads.json`, its figures as the artifact `spice-pads-<pdk>`.
-- `asic-pdk.yml`, GF180 7-track: after the chip's pin timing, the same
-  check with `--pads none`, both outputs into the GDS artifact for
-  `findings.py`; then `nmi.py` at three corners (~2 min), failing when a
-  case's pulse is not caught, held for the core and cleared.
-- The GitHub Pages job draws `findings.py`'s plots from the artifacts and
-  puts the pads, the plots, the NMI catcher and the committed whole-chip
-  run under "At transistor level".
+- `asic-pdk.yml`, GF180 7-track: after the chip's pin timing, `nmi.py`
+  at three corners (~2 min), failing when a case's pulse is not caught,
+  held for the core and cleared.
+- The GitHub Pages job puts the pads, the NMI catcher and the committed
+  whole-chip run under "At transistor level".
