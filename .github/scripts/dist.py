@@ -4,9 +4,9 @@
   dist.py fpga <board> <out>   fpga/<board>'s bitstreams after `make ci`,
                                named for download, + rz80-<board>.json
   dist.py asic <pdk> <out>     asic/<pdk>'s latest LibreLane run: the GDS,
-                               a picture of it, a map of its standard
-                               cells by kind (needs gdstk, numpy and
-                               Pillow) + rz80-<pdk>.json
+                               a picture of it, maps of its standard cells
+                               by kind and by Z80 block (needs gdstk,
+                               numpy and Pillow) + rz80-<pdk>.json
   dist.py site <in> <out>      index.html over everything fpga/asic made
   dist.py summary <in> <url>   job-summary markdown: the layout renders as
                                served by the site deployed at <url>
@@ -36,12 +36,15 @@ BOARDS = {
     'tang-primer-25k': ('Sipeed Tang Primer 25K', 'Gowin GW5A-LV25MG121NES'),
     'icebreaker':      ('iCEBreaker', 'Lattice iCE40UP5K'),
     'pico-ice':        ('pico-ice', 'Lattice iCE40UP5K + RP2040'),
+    'icesugar':        ('iCESugar', 'Lattice iCE40UP5K'),
 }
 PDKS = {
     'sky130':     'SkyWater SKY130',
     'ihp-sg13g2': 'IHP SG13G2',
     'gf180mcu':   'GlobalFoundries GF180MCU',
 }
+# site and summary order: each PDK's core, then the chips with pad rings
+ENTRIES = list(PDKS) + [f'{p}-chip' for p in PDKS]
 # Layout pictures: each PDK's drawn device and metal layers, bottom to top,
 # blended as translucent colours over a dark background, so the cell rows,
 # the routing and the power straps all show at die scale. (LibreLane's own
@@ -67,6 +70,7 @@ BACKGROUND = (13, 17, 23)
 # IHP dfrbpq_1, gf180 dffrnq_1; dlygate / dlyb are delay buffers, not
 # latches).
 CELL_KINDS = {  # kind: (name pattern, colour), in legend order
+    'I/O pads': (r'(gf180mcu_fd_io__|sg13g2_IOPad|sg13g2_Corner|sg13g2_Filler|bondpad)', (148, 163, 184)),
     'flip-flops': (r'(s?df|edf)', (255, 90, 54)),
     'latches': (r'(dl[xrhl]|s?dlclkp|lat|icg|s?lgcp)', (236, 72, 153)),
     'buffers and delays': (r'(buf|inv|clkbuf|clkinv|clkdlybuf|dly)', (20, 184, 166)),
@@ -74,6 +78,25 @@ CELL_KINDS = {  # kind: (name pattern, colour), in legend order
     'fill/decap/tap': (r'(fill|decap|tap|endcap|diode|antenna|tie|conb)', (43, 49, 59)),
 }
 CELL_LIBRARY_PREFIX = r'^(sky130_fd_sc_\w+?__|sg13g2_|gf180mcu_fd_sc_mcu\w+?__)'
+# Block map: every placed instance (final DEF, sizes from the cell LEFs)
+# coloured by the RTL block it was synthesized in. Synthesis flattens only
+# after mapping (SYNTH_HIERARCHY_MODE deferred_flatten), so instance names
+# keep their path: u_core.u_alu._123_. Top-level _N_ cells are z80_top's
+# pin logic; other unprefixed names are what place-and-route added.
+BLOCKS = {  # block: (instance name pattern, colour), first match wins, in legend order
+    'ALU': (r'u_core\.u_alu\.', (239, 68, 68)),
+    'register file': (r'u_core\.u_regs\.', (250, 204, 21)),
+    'decoder PLA': (r'u_core\.u_pla\.', (168, 85, 247)),
+    'execute': (r'u_core\.u_exec\.', (59, 130, 246)),
+    'address': (r'u_core\.u_addr\.', (34, 197, 94)),
+    'timing': (r'u_core\.u_timing', (34, 211, 238)),
+    'core sequencer, state': (r'u_core\.', (244, 114, 182)),
+    'pin logic': (r'_\d+_$', (226, 232, 240)),
+    'P&R buffers, clock tree': (r'', (90, 110, 120)),
+}
+PAD_BLOCK = ('I/O pads', (148, 163, 184))
+# the pad ring's corners, fillers and bond pads, darker than the pads
+RING = (58, 66, 80)
 # (make ci's build, download name): the sbc build with NASCOM BASIC, the
 # same with Tiny BASIC (build_tiny/), the Z80 chip replacement
 VARIANTS = (('build/top_sbc', 'basic'), ('build_tiny/top_sbc', 'tinybasic'), ('build/top_chip', 'chip'))
@@ -139,9 +162,37 @@ def render(top, png, stack, width=1200, supersample=3):
     Image.fromarray(img.round().astype(np.uint8)).quantize(256).save(png, optimize=True)
 
 
+def is_pad(master):
+    """A signal or supply pad (not a pad-ring corner, filler or bond pad)."""
+    return master.startswith(('gf180mcu_fd_io__bi', 'gf180mcu_fd_io__in', 'gf180mcu_fd_io__dv', 'sg13g2_IOPad'))
+
+
 def cell_kind(name):
+    # a chip's GDS renames the cells inside a hard macro: UF_<library cell>
+    name = re.sub(r'^UF_', '', name)
+    if re.match(CELL_KINDS['I/O pads'][0], name):
+        return 'I/O pads'
     base = re.sub(r'_\d+$', '', re.sub(CELL_LIBRARY_PREFIX, '', name))
-    return next((kind for kind, (pattern, _) in CELL_KINDS.items() if pattern and re.match(pattern, base)), 'logic')
+    return next((kind for kind, (pattern, _) in CELL_KINDS.items()
+                 if pattern and kind != 'I/O pads' and re.match(pattern, base)), 'logic')
+
+
+def transform(ref, point):
+    """A point of a referenced cell in the referencing cell (gdstk order:
+    x reflection, magnification, rotation, then the origin)."""
+    import math
+    x, y = point
+    if ref.x_reflection:
+        y = -y
+    m = ref.magnification or 1
+    c, s = math.cos(ref.rotation or 0), math.sin(ref.rotation or 0)
+    return (ref.origin[0] + m * (x * c - y * s), ref.origin[1] + m * (x * s + y * c))
+
+
+def transform_box(ref):
+    """The corners of a reference's bounding box, in the referencing cell."""
+    (a, b), (c, d) = ref.bounding_box()
+    return [(a, b), (a, d), (c, b), (c, d)]
 
 
 def render_cells(top, png, width=1200, supersample=3):
@@ -154,59 +205,164 @@ def render_cells(top, png, width=1200, supersample=3):
     im = Image.new('RGB', (w * supersample, h * supersample), BACKGROUND)
     draw = ImageDraw.Draw(im)
     counts = dict.fromkeys(CELL_KINDS, 0)
-    cells = [(cell_kind(r.cell.name), r) for r in top.references if isinstance(r.cell, gdstk.Cell)]
+
+    def placed(cell, outer=lambda p: p):
+        """(library cell name, bounding box) of every standard or pad cell
+        instance, through hard macros (a chip's z80_top) -- not into the
+        library cells themselves, whose GDS has subcells of its own."""
+        for r in cell.references:
+            if not isinstance(r.cell, gdstk.Cell):
+                continue
+            if r.cell.references and not re.match(CELL_LIBRARY_PREFIX, r.cell.name) and cell_kind(r.cell.name) != 'I/O pads':
+                yield from placed(r.cell, lambda p, r=r, outer=outer: outer(transform(r, p)))
+            else:
+                corners = [outer(q) for q in transform_box(r)]
+                xs, ys = [q[0] for q in corners], [q[1] for q in corners]
+                yield r.cell.name, (min(xs), min(ys), max(xs), max(ys))
+    cells = [(cell_kind(name), name, box) for name, box in placed(top)]
     cells.sort(key=lambda c: c[0] != 'fill/decap/tap')   # fillers first: real cells draw over them
-    for kind, r in cells:
-        counts[kind] += 1
-        rgb = CELL_KINDS[kind][1]
-        (a, b), (c, d) = r.bounding_box()
+    for kind, name, (a, b, c, d) in cells:
+        counts[kind] += kind != 'I/O pads' or is_pad(name)
+        rgb = RING if kind == 'I/O pads' and not is_pad(name) else CELL_KINDS[kind][1]
         draw.rectangle(((a - x0) * k, (y1 - d) * k, (c - x0) * k, (y1 - b) * k),
                        fill=rgb, outline=tuple(int(v * .55) for v in rgb), width=max(1, supersample // 2))
     im.resize((w, h), Image.LANCZOS).quantize(256).save(png, optimize=True)
     return counts
 
 
-def asic(pdk, out):
-    runs = sorted(glob.glob(os.path.join('asic', pdk, 'runs', '*', '')), key=os.path.getmtime)
-    if not runs or not os.path.isfile(runs[-1] + 'final/metrics.json'):
-        return
-    run = runs[-1]
+def read_def(run):
+    """The die box and the placed components (name, master, x, y, orientation)
+    of a run's final DEF, in um; None without one."""
+    defs = glob.glob(run + 'final/def/*.def')
+    if not defs:
+        return None
+    text = open(defs[0]).read()
+    dbu = int(re.search(r'UNITS DISTANCE MICRONS (\d+)', text).group(1))
+    die = tuple(int(v) / dbu for v in re.search(
+        r'DIEAREA\s*\(\s*(-?\d+)\s+(-?\d+)\s*\)\s*\(\s*(-?\d+)\s+(-?\d+)\s*\)', text).groups())
+    components = text[text.index('COMPONENTS'):text.index('END COMPONENTS')]
+    placed = [(name.replace('\\', ''), master, int(x) / dbu, int(y) / dbu, orient) for name, master, x, y, orient in
+              re.findall(r'-\s+(\S+)\s+(\S+)[^;]*?\+\s*(?:PLACED|FIXED)\s*\(\s*(-?\d+)\s+(-?\d+)\s*\)\s*(\w+)', components)]
+    return die, placed
+
+
+def render_blocks(run, png, width=1200, supersample=3, macro_runs=None):
+    """The block map; returns the instance count per block, or None when
+    the run's instance names carry no hierarchy (flattened before synthesis).
+    macro_runs: {macro master: its run}, whose DEF supplies the macro's
+    cells (placed unrotated, as the chip's z80_top is)."""
+    from PIL import Image, ImageDraw
+    cfg = json.load(open(run + 'resolved.json'))
+    if not (got := read_def(run)):
+        return None
+    (x0, y0, x1, y1), placed = got
+    for comp in [c for c in placed if c[1] in (macro_runs or {})]:
+        name, master, mx, my, orient = comp
+        if (inner := read_def(macro_runs[master])) and orient == 'N':
+            placed.remove(comp)
+            placed += [(n, m, mx + x, my + y, o) for n, m, x, y, o in inner[1]]
+    if not any(re.match(r'(u_top\.)?u_core\.', name) for name, *_ in placed):
+        return None
+    sizes = {}
+    for lef in (cfg.get('CELL_LEFS') or []) + (cfg.get('PAD_LEFS') or []) + (cfg.get('EXTRA_LEFS') or []):
+        for macro, body in re.findall(r'MACRO\s+(\S+)(.*?)END\s+\1\b', open(lef).read(), re.S):
+            if size := re.search(r'SIZE\s+([\d.]+)\s+BY\s+([\d.]+)', body):
+                sizes[macro] = (float(size.group(1)), float(size.group(2)))
+    w, h = width, round(width * (y1 - y0) / (x1 - x0))
+    k = w * supersample / (x1 - x0)
+    im = Image.new('RGB', (w * supersample, h * supersample), BACKGROUND)
+    draw = ImageDraw.Draw(im)
+    counts = {block: 0 for block in BLOCKS}
+    if cfg.get('PAD_LEFS'):
+        counts = {PAD_BLOCK[0]: 0, **counts}
+    fill = CELL_KINDS['fill/decap/tap']
+    cells = []
+    for name, master, x, y, orient in placed:
+        if master not in sizes:
+            continue
+        if cell_kind(master) == 'I/O pads':
+            counts[PAD_BLOCK[0]] += is_pad(master)
+            cells.append((PAD_BLOCK[0], PAD_BLOCK[1] if is_pad(master) else RING, master, x, y, orient))
+            continue
+        if cell_kind(master) == 'fill/decap/tap' or name.startswith(('FILLER', 'TAP_', 'PHY_EDGE')):
+            cells.append((None, fill[1], master, x, y, orient))
+            continue
+        name = re.sub(r'^u_top\.', '', name)   # the chip's z80_top instance
+        block = next(b for b, (pattern, _) in BLOCKS.items() if re.match(pattern, name) or not pattern)
+        counts[block] += 1
+        cells.append((block, BLOCKS[block][1], master, x, y, orient))
+    cells.sort(key=lambda c: c[0] is not None)   # fillers first: real cells draw over them
+    for block, rgb, master, x, y, orient in cells:
+        cw, ch = sizes[master]
+        if orient in ('E', 'W', 'FE', 'FW'):
+            cw, ch = ch, cw
+        draw.rectangle(((x - x0) * k, (y1 - y - ch) * k, (x + cw - x0) * k, (y1 - y) * k),
+                       fill=rgb, outline=tuple(int(v * .55) for v in rgb), width=max(1, supersample // 2))
+    im.resize((w, h), Image.LANCZOS).quantize(256).save(png, optimize=True)
+    return counts
+
+
+def collect(run, key, name, stack, out, extra=None, macro_runs=None):
+    """One LibreLane run: rz80-<key>.gds, its pictures and rz80-<key>.json;
+    macro_runs as for render_blocks."""
     cfg = json.load(open(run + 'resolved.json'))
     m = json.load(open(run + 'final/metrics.json'))
     design = cfg['DESIGN_NAME']
     os.makedirs(out, exist_ok=True)
-    files, cells = [], None
+    files, cells, blocks = [], None, None
     gds = run + f'final/gds/{design}.gds'
     if os.path.isfile(gds):
-        shutil.copy(gds, os.path.join(out, f'rz80-{pdk}.gds'))
-        files.append(f'rz80-{pdk}.gds')
-        png = os.path.join(out, f'rz80-{pdk}.png')
+        shutil.copy(gds, os.path.join(out, f'rz80-{key}.gds'))
+        files.append(f'rz80-{key}.gds')
+        png = os.path.join(out, f'rz80-{key}.png')
         try:
             import gdstk
             top = gdstk.read_gds(gds).top_level()[0]
-            render(top, png, STACKS[pdk])
-            files.append(f'rz80-{pdk}.png')
-            cells = render_cells(top, os.path.join(out, f'rz80-{pdk}-cells.png'))
-            files.append(f'rz80-{pdk}-cells.png')
+            render(top, png, stack)
+            files.append(f'rz80-{key}.png')
+            cells = render_cells(top, os.path.join(out, f'rz80-{key}-cells.png'))
+            files.append(f'rz80-{key}-cells.png')
+            blocks = render_blocks(run, os.path.join(out, f'rz80-{key}-blocks.png'), macro_runs=macro_runs)
+            if blocks:
+                files.append(f'rz80-{key}-blocks.png')
         except Exception as e:
-            print(f"::warning::dist.py: no pictures of {pdk} ({e!r}), LibreLane's render instead")
+            print(f"::warning::dist.py: no pictures of {key} ({e!r}), LibreLane's render instead")
             if os.path.isfile(run + f'final/render/{design}.png') and not os.path.isfile(png):
                 shutil.copy(run + f'final/render/{design}.png', png)
-                files.append(f'rz80-{pdk}.png')
+                files.append(f'rz80-{key}.png')
     x0, y0, x1, y1 = (float(v) for v in m['design__die__bbox'].split())
     # worst setup slack over the corners the flow signs off (summary.py's rule)
     gate = cfg.get('TIMING_VIOLATION_CORNERS') or ['*tt*']
     ws = [v for k, v in m.items() if k.startswith('timing__setup__ws__corner:')
           and any(fnmatch.fnmatch(k.split('corner:')[1], g) for g in gate)]
-    info = {'pdk': pdk, 'name': PDKS.get(pdk, pdk), 'pdk_variant': cfg.get('PDK'),
+    info = {'pdk': key, 'name': name, 'pdk_variant': cfg.get('PDK'),
             'library': cfg.get('STD_CELL_LIBRARY'), 'design': design, 'files': files,
             'die_um': [round(x1 - x0, 1), round(y1 - y0, 1)],
             'std_cells': m.get('design__instance__count__stdcell'),
             'utilisation': m.get('design__instance__utilization'),
             'clock_period_ns': cfg.get('CLOCK_PERIOD'),
             'signoff_corners': gate, 'setup_ws_ns': min(ws) if ws else None,
-            'cells': cells, 'built_from': os.environ.get('BUILT_FROM', ''), 'run': RUN_URL}
-    json.dump(info, open(os.path.join(out, f'rz80-{pdk}.json'), 'w'), indent=1)
+            'cells': cells, 'blocks': blocks, 'built_from': os.environ.get('BUILT_FROM', ''), 'run': RUN_URL,
+            **(extra or {})}
+    json.dump(info, open(os.path.join(out, f'rz80-{key}.json'), 'w'), indent=1)
+
+
+def latest(pattern):
+    runs = sorted(glob.glob(pattern), key=os.path.getmtime)
+    return runs[-1] if runs and os.path.isfile(runs[-1] + 'final/metrics.json') else None
+
+
+def asic(pdk, out):
+    readme = readme_url('asic', pdk)
+    core = latest(os.path.join('asic', pdk, 'runs', '*', ''))
+    if core:
+        collect(core, pdk, PDKS.get(pdk, pdk), STACKS[pdk], out, {'readme': readme})
+    # the chip: z80_top, hardened by that run, in its pad ring (asic/<pdk>/chip/, `make chip`)
+    if run := latest(os.path.join('asic', pdk, 'chip', 'runs', '*', '')):
+        cfg = json.load(open(run + 'resolved.json'))
+        pads = sum(len(cfg.get(side) or []) for side in ('PAD_SOUTH', 'PAD_EAST', 'PAD_NORTH', 'PAD_WEST'))
+        collect(run, f'{pdk}-chip', f'{PDKS.get(pdk, pdk)} chip, {pads} pads', STACKS[pdk], out,
+                {'readme': readme, 'pads': pads}, macro_runs={'z80_top': core} if core else None)
 
 
 def load(src):
@@ -215,7 +371,7 @@ def load(src):
     def order(table, key):
         known = [i for i in infos if i.get(key) in table]
         return sorted(known, key=lambda i: list(table).index(i[key]))
-    return order(BOARDS, 'board'), order(PDKS, 'pdk')
+    return order(BOARDS, 'board'), order(dict.fromkeys(ENTRIES), 'pdk')
 
 
 def size(path):
@@ -226,6 +382,8 @@ def size(path):
 def asic_facts(p):
     w, h = p['die_um']
     facts = [('Die', f'{w:,.0f} × {h:,.0f} µm ({w * h / 1e6:.2f} mm²)')]
+    if p.get('pads'):
+        facts.append(('Pads', f"{p['pads']}, placed like the Z80's"))
     if p.get('std_cells') is not None:
         u = p.get('utilisation')
         facts.append(('Std cells', f"{p['std_cells']:,}" + (f' ({u * 100:.0f} % utilisation)' if u else '')))
@@ -255,19 +413,30 @@ def site(src, out):
                    if f in p['files'] else '<div class="noimg">no picture</div>')
             return f'<figure>{img}<figcaption>{caption}</figcaption></figure>'
         facts = ''.join(f'<dt>{k}</dt><dd>{e(v)}</dd>' for k, v in asic_facts(p))
-        legend = ''.join(f'<li><span class="swatch" style="background: rgb{rgb}"></span>{kind}'
-                         f' <span class="muted">{p["cells"][kind]:,}</span></li>'
-                         for kind, (_, rgb) in CELL_KINDS.items() if (p.get('cells') or {}).get(kind))
+
+        def legend(title, table, counts):
+            items = ''.join(f'<li><span class="swatch" style="background: rgb{colour}"></span>{e(name)}'
+                            f' <span class="muted">{counts[name]:,}</span></li>'
+                            for name, (_, colour) in table.items() if (counts or {}).get(name))
+            return f'<div><h4>{title}</h4><ul class="legend">{items}</ul></div>' if items else ''
         links = [f'<a href="{f}"{" download" if f.endswith(".gds") else ""}>{label}</a>'
                  f' <span class="size">{size(os.path.join(out, f))}</span>'
-                 for f, label in ((f"rz80-{p['pdk']}.gds", 'GDS'), (f"rz80-{p['pdk']}.png", 'layout PNG'),
-                                  (f"rz80-{p['pdk']}-cells.png", 'cells PNG')) if f in p['files']]
-        links.append(f'<a href="{readme_url("asic", p["pdk"])}">README</a>')
+                 for f, label in ((f"rz80-{p['pdk']}.gds", 'GDS'), (f"rz80-{p['pdk']}.png", 'layout'),
+                                  (f"rz80-{p['pdk']}-cells.png", 'cells'), (f"rz80-{p['pdk']}-blocks.png", 'blocks'))
+                 if f in p['files']]
+        links.append(f'<a href="{p.get("readme") or readme_url("asic", p["pdk"])}">README</a>')
         cards.append(f"""<article class="pdk">
+<div class="pics">
 {picture(f"rz80-{p['pdk']}.png", 'layout')}
-{picture(f"rz80-{p['pdk']}-cells.png", 'standard cells')}
-<div class="body"><h3>{e(p['name'])}</h3><p class="muted">{e(p.get('pdk_variant') or '')} · {e(p.get('library') or '')}</p>
-<dl>{facts}</dl>{f'<ul class="legend">{legend}</ul>' if legend else ''}<p class="links">{' · '.join(links)}</p></div>
+{picture(f"rz80-{p['pdk']}-cells.png", 'cells by kind')}
+{picture(f"rz80-{p['pdk']}-blocks.png", 'cells by Z80 block')}
+</div>
+<div class="body">
+<div><h3>{e(p['name'])}</h3><p class="muted">{e(p.get('pdk_variant') or '')} · {e(p.get('library') or '')}</p>
+<dl>{facts}</dl><p class="links">{' · '.join(links)}</p></div>
+{legend('Cells by kind', CELL_KINDS, p.get('cells'))}
+{legend('Cells by Z80 block', {PAD_BLOCK[0]: (None, PAD_BLOCK[1]), **BLOCKS}, p.get('blocks'))}
+</div>
 </article>""")
 
     rows = []
@@ -302,21 +471,23 @@ p {{ margin: 0 0 12px; }}
 a {{ color: var(--link); }}
 .muted, .size {{ color: var(--muted); }}
 .size {{ font-size: 12px; }}
-.pdk {{ display: grid; grid-template-columns: 1fr 1fr minmax(240px, .8fr); background: var(--card);
-  border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin: 0 0 16px; }}
+.pdk {{ background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+  margin: 0 0 16px; }}
+.pics {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--line); }}
 figure {{ margin: 0; position: relative; background: #0d1117; }}
 figure img, .noimg {{ display: block; width: 100%; aspect-ratio: 1; object-fit: contain; }}
 .noimg {{ display: grid; place-items: center; color: #888; }}
 figcaption {{ position: absolute; left: 8px; top: 8px; padding: 1px 7px; border-radius: 4px; font-size: 12px;
   color: #d6dbe1; background: rgba(13, 17, 23, .75); }}
-.body {{ padding: 14px 16px 6px; border-left: 1px solid var(--line); }}
+.body {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 4px 28px;
+  padding: 14px 16px 6px; border-top: 1px solid var(--line); }}
 .body .muted {{ font-size: 13px; margin: 0 0 8px; }}
+h4 {{ font-size: 13px; color: var(--muted); font-weight: 600; margin: 2px 0 6px; }}
 .legend {{ list-style: none; padding: 0; margin: 0 0 10px; font-size: 13px; }}
 .legend li {{ display: flex; align-items: center; gap: 7px; }}
 .swatch {{ width: 10px; height: 10px; border-radius: 2px; flex: none; }}
-@media (max-width: 820px) {{
-  .pdk {{ grid-template-columns: 1fr 1fr; }}
-  .body {{ grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--line); }}
+@media (max-width: 640px) {{
+  .pics {{ grid-template-columns: 1fr; }}
 }}
 dl {{ display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 0 0 10px; font-size: 14px; }}
 dt {{ color: var(--muted); }}
@@ -337,8 +508,8 @@ from the latest {run} on main where all of them passed: {commit}, published {whe
 
 <h2>ASIC layouts</h2>
 <p class="muted">The bare core (no pad ring), RTL to GDS with LibreLane. Both pictures are drawn from the GDS:
-the layout shows the cell rows and the metal stack, bottom metal blue to top metal yellow; the cell map
-shows every standard cell, coloured by kind.</p>
+the layout shows the cell rows and the metal stack, bottom metal blue to top metal yellow; the two cell maps
+show every standard cell, coloured by kind and by the Z80 block it was synthesized in.</p>
 {chr(10).join(cards) or '<p>none in this build</p>'}
 
 <h2>FPGA bitstreams</h2>
@@ -370,17 +541,23 @@ def summary(src, url):
         f = f"rz80-{p['pdk']}{suffix}.png"
         return f'[![{f}]({url}{f}?run={RUN_ID})]({url}{f})' if f in p['files'] else '–'
 
-    def kinds(p):
-        return ', '.join(f'{n:,} {kind}' for kind, n in (p.get('cells') or {}).items() if n)
+    def counts(p, key):
+        return ', '.join(f'{n:,} {name}' for name, n in (p.get(key) or {}).items() if n)
+
+    def facts(p):
+        lines = [f'{k}: {v}' for k, v in asic_facts(p)]
+        lines += [f'{label}: {counts(p, key)}' for key, label in (('cells', 'Cells'), ('blocks', 'Blocks')) if counts(p, key)]
+        return '<br>'.join(lines)
     print(f'## Layouts\n\nDrawn from each GDS, as on the [site]({url}) this run deployed: the cell rows and '
-          'metal stack, then every standard cell by kind (flip-flops orange, buffers and delays teal, '
-          'other logic blue, fill/decap/tap dark).\n')
+          'metal stack; every standard cell by kind (flip-flops orange, buffers and delays teal, other logic '
+          'blue, fill/decap/tap dark); every cell by the Z80 block it was synthesized in (ALU red, register '
+          'file yellow, decoder PLA purple, execute blue, address green, timing cyan, core sequencer pink, '
+          'pin logic white, I/O pads grey).\n')
     print('| ' + ' | '.join(p['name'] for p in pdks) + ' |')
     print('|' + '---|' * len(pdks))
-    print('| ' + ' | '.join(picture(p, '') for p in pdks) + ' |')
-    print('| ' + ' | '.join(picture(p, '-cells') for p in pdks) + ' |')
-    print('| ' + ' | '.join('<br>'.join([f'{k}: {v}' for k, v in asic_facts(p)] + ([f'Cells: {kinds(p)}'] if kinds(p) else []))
-                            for p in pdks) + ' |')
+    for suffix in ('', '-cells', '-blocks'):
+        print('| ' + ' | '.join(picture(p, suffix) for p in pdks) + ' |')
+    print('| ' + ' | '.join(facts(p) for p in pdks) + ' |')
 
 
 if __name__ == '__main__':
