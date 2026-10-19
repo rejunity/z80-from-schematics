@@ -69,12 +69,27 @@ needed ~9 ns of hold before it did.
 
 ## Results
 
-GF180 chip, `bi_t` pads at their NMOS-like 4 mA with slow slew, 4 MHz:
-PASS at every corner (tt 25 °C 5 V, ss 125 °C 4.5 V, ff -40 °C 5.5 V).
-Output delays take 15-45 ns against 65-150 ns limits; the separations
-keep 25 ns or more. The tightest margins: TsD(Cr), the opcode's setup, at
-the slow corner (+2.8 ns of 35 ns), and the input holds at the fast corner
-(+1 to +2 ns) after the flow's repair.
+The three chips at 4 MHz, PASS at every corner (GF180: tt 25 °C 5 V,
+ss 125 °C 4.5 V, ff -40 °C 5.5 V; IHP: typ, slow 125 °C, fast -40 °C):
+
+| | GF180, 7-track | GF180, 9-track | IHP SG13G2 |
+|---|---|---|---|
+| Output pads | `bi_t` 4 mA, slow slew, 5 V | the same | 16 mA, 3.3 V |
+| Output delays (limits 65-150 ns) | 13-43 ns | 12-43 ns | 10-25 ns |
+| Opcode setup TsD(Cr) at the slow corner (limit 35 ns) | 26.1 ns, +8.9 | 27.9 ns, +7.1 | 9.8 ns, +25.2 |
+| Tightest input hold, fast corner | +0.6 ns | +0.6 ns | +0.5 ns |
+| 6 / 8 MHz (Z80B / Z80H) | PASS / PASS | PASS / PASS | PASS / PASS |
+
+The separations keep 24 ns or more. The GF180 chips' opcode setup is
+what `z80_top`'s input paths and clock tree leave: until their cores kept
+the library's delay cells out (`EXTRA_EXCLUDED_CELLS`), every port of
+`z80_top` had one in front of it, 3-5 ns at the slow corner, and the
+6 and 8 MHz grades failed on it; LibreLane's timing repair after global
+routing, off by default, added 3-4 ns more. IHP's 4 mA pads, characterised to 12 pF,
+took ~70 ns into 100 pF at the slow corner and missed TdCr(WRf) by
+6.9 ns; that chip uses the 16 mA pads. Every output delay rests on the
+pads' Liberty extrapolated to 100 pF: `bi_t` is characterised to 33 pF,
+IHP's 16 mA pad to 20 pF.
 
 ## Sources
 

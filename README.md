@@ -4,7 +4,7 @@
 [![Targets](https://github.com/rejunity/z80-from-schematics/actions/workflows/targets.yml/badge.svg)](https://github.com/rejunity/z80-from-schematics/actions/workflows/targets.yml)
 
 **Latest build:** [ASIC layouts, GDS and FPGA bitstreams](https://rejunity.github.io/z80-from-schematics/)
-(sky130, IHP SG13G2, GF180MCU, and the IHP and GF180 chips with a Z80 pad ring;
+(sky130, IHP SG13G2, GF180MCU with 7- and 9-track cells, and the IHP and GF180 chips with a Z80 pad ring;
 IcePi Zero, Tang Primer 25K, iCEBreaker, pico-ice, iCESugar).
 
 A reverse-engineered, schematic-faithful Z80-compatible CPU core, implemented in

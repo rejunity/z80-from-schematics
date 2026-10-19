@@ -37,7 +37,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pdk: [sky130, ihp-sg13g2, gf180mcu]
+        pdk: [sky130, ihp-sg13g2, gf180mcu, gf180mcu-9t]
     uses: ./.github/workflows/asic-pdk.yml
     with:
       pdk: ${{ matrix.pdk }}

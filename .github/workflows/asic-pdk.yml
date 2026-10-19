@@ -19,7 +19,7 @@ on:
   workflow_call:
     inputs:
       pdk:
-        description: Directory under asic/ and branch asic-<pdk> (sky130, ihp-sg13g2, gf180mcu)
+        description: Directory under asic/ and branch asic-<pdk> (sky130, ihp-sg13g2, gf180mcu, gf180mcu-9t)
         required: true
         type: string
 
