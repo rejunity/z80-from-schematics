@@ -73,12 +73,17 @@ jobs:
       - name: Install LibreLane ${{ env.LIBRELANE_VERSION }} and iverilog
         run: nix profile install github:librelane/librelane/$LIBRELANE_VERSION nixpkgs#iverilog
 
-      # LibreLane pins the PDK version, so its version keys the cache
+      # LibreLane pins the PDK version, unless asic/<pdk>/Makefile pins its
+      # own (PDK_VERSION, fetched with LibreLane's ciel): both key the cache
+      - name: PDK version pinned by the Makefile
+        id: pdk
+        run: echo "version=$(sed -n 's/^PDK_VERSION *:= *//p' asic/$PDK/Makefile)" >> "$GITHUB_OUTPUT"
+
       - name: Cache the PDK (ciel)
         uses: actions/cache@v4
         with:
           path: ~/.ciel
-          key: ciel-${{ inputs.pdk }}-librelane-${{ env.LIBRELANE_VERSION }}
+          key: ciel-${{ inputs.pdk }}-librelane-${{ env.LIBRELANE_VERSION }}${{ steps.pdk.outputs.version && format('-{0}', steps.pdk.outputs.version) || '' }}
 
       - name: Signs of life (RTL)
         run: make -C asic/$PDK sign_of_life_rtl
@@ -117,6 +122,24 @@ jobs:
       - name: Chip signs of life (through the pads)
         if: hashFiles(format('asic/{0}/chip/config.yaml', inputs.pdk)) != ''
         run: make -C asic/$PDK chip_sign_of_life
+
+      # The chip's pins against the NMOS Z80's datasheet at 4 MHz (Zilog
+      # PS0178, Z8400): OpenSTA on the routed chip, 100 pF loads, every AC
+      # parameter the replica has to meet, at each process corner
+      # (asic/timing/pin_timing.py; fails on any). Branches whose chip has
+      # no `pin_timing` target skip it.
+      - name: Chip pin timing vs the NMOS Z80 datasheet (4 MHz)
+        if: hashFiles(format('asic/{0}/chip/config.yaml', inputs.pdk)) != ''
+        run: |
+          if ! grep -q '^pin_timing:' asic/$PDK/Makefile; then
+            echo "asic/$PDK has no pin_timing target" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          rc=0
+          make -s -C asic/$PDK pin_timing > pin_timing.txt || rc=$?
+          cat pin_timing.txt
+          { echo "### asic/$PDK chip: pin timing vs the NMOS Z80 (4 MHz)"; echo '```'; cat pin_timing.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
 
       - uses: actions/setup-python@v5
         if: always()

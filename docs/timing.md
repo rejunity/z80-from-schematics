@@ -72,7 +72,12 @@ not part of the read window.
 - **T1.P**: `pin_addr ← <effective address>`.
 - **T1.N**: `pin_mreq_n ← 0`; drive `pin_data_out`, `pin_data_drive ← 1`.
 - **T2.N**: sample `pin_wait_n`; insert `Tw` if asserted. `pin_wr_n ← 0`.
-- **T3.N**: `pin_wr_n ← 1`; `pin_mreq_n ← 1`; `pin_data_drive ← 0`.
+- **T3.N**: `pin_wr_n ← 1`; `pin_mreq_n ← 1`. The data stays driven.
+- **next T1.P**: `pin_data_drive ← 0` (the data bus floats).
+
+The data outlives `/WR` by the clock-low half of T3 (Zilog PS0178
+Figure 6: TdWRr(D) data stable from WR rise, TdCr(Dz) float from the next
+clock rise); perfectz80's data bus floats at the next T1.P too.
 
 Inserted Tw states hold `/WR` continuously low, together with `/MREQ` and
 stable address/data. Internally Tw reuses `t_state=2`; its rising half must
@@ -103,10 +108,12 @@ contract is the same.)
 ## I/O write (4 T-states: T1 T2 Tw T3)
 
 - **T1.P**: `pin_addr ← port`.
-- **T2.P**: `pin_iorq_n ← 0`; drive `pin_data_out`, `pin_data_drive ← 1`.
-- **T2.N**: `pin_wr_n ← 0`.
+- **T1.N**: drive `pin_data_out`, `pin_data_drive ← 1`.
+- **T2.P**: `pin_iorq_n ← 0`; `pin_wr_n ← 0` -- together, unlike a memory
+  write's T2.N (PS0178 Figure 7, TdCr(WRf); perfectz80).
 - **Tw.N**: sample `pin_wait_n`.
-- **T3.N**: `pin_iorq_n ← 1`; `pin_wr_n ← 1`; `pin_data_drive ← 0`.
+- **T3.N**: `pin_iorq_n ← 1`; `pin_wr_n ← 1`. The data stays driven.
+- **next T1.P**: `pin_data_drive ← 0`, as in a memory write.
 
 ## Interrupt acknowledge (INTA)
 

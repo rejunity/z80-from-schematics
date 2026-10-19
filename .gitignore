@@ -1,5 +1,7 @@
 # Build artifacts
 /build/
+# LibreLane's synthesis-only runs (`make synth`)
+/asic/librelane/runs/
 *.o
 *.a
 *.out

@@ -8,10 +8,12 @@
 //
 //   1. Falling-edge input samplers. The original NMOS Z80 looks at a few
 //      inputs on the falling edge of its clock (read data at the end of
-//      T3/T4, INT/NMI at the rising edge of T_last -- i.e. during the
-//      clock-high half). Each such input gets one native negative-edge
-//      DFF here; the core consumes the sampled copy on the following
-//      rising edge (a clean half-cycle path, same clock, no CDC).
+//      T3/T4, WAIT in T2 / Tw). Each such input gets one native
+//      negative-edge DFF here; the core consumes the sampled copy on the
+//      following rising edge (a clean half-cycle path, same clock, no
+//      CDC). INT is latched on the rising edge that starts the last
+//      T-state (Zilog PS0178 Figure 8, TsINT/ThINT; perfectz80), NMI by
+//      its own falling edge, of any width (TwNMI): see below.
 //
 //   2. Dual-edge output former. Bus pins change on BOTH edges of the Z80
 //      clock (MREQ asserts on a falling edge, deasserts on a rising edge,
@@ -66,24 +68,49 @@ module z80_top (
     output wire [3:0]  dbg_t,
     output wire [2:0]  dbg_m
 );
-    // ---- 1. falling-edge input samplers -------------------------------
-    // Active-low control inputs reset to their INACTIVE (high) level, so
-    // they map to a negedge DFF with async *set* (GF180 dffnsnq); data
-    // resets to 0 (dffnrnq).
+    // ---- 1. input samplers ----------------------------------------------
+    // NMI pulse catcher. The NMOS Z80 takes an NMI pulse of any width
+    // (TwNMI: 80 ns at 4 MHz, under half a clock), not only one that
+    // spans a clock edge: perfectz80's NMI flip-flop is set by the pin's
+    // falling edge itself. nmi_hold is that flip-flop, clocked by the pin,
+    // and holds NMI asserted for the samplers until the next rising edge
+    // has seen it, so the core's edge detect below sees every pulse --
+    // exactly as before for any pulse that spans a clock edge.
+    reg nmi_hold, nmi_hold_clr;
+    always @(negedge nmi_n or posedge nmi_hold_clr) begin
+        if (nmi_hold_clr) nmi_hold <= 1'b0;
+        else              nmi_hold <= 1'b1;
+    end
+    always @(posedge clk or negedge reset_n) begin
+        if (!reset_n) nmi_hold_clr <= 1'b1;
+        else          nmi_hold_clr <= nmi_hold;
+    end
+    wire nmi_n_held = nmi_n & ~nmi_hold;
+
+    // Falling-edge samplers. Active-low control inputs reset to their
+    // INACTIVE (high) level, so they map to a negedge DFF with async *set*
+    // (GF180 dffnsnq); data resets to 0 (dffnrnq).
     reg [7:0] data_in_neg;
-    reg       int_n_neg, nmi_n_neg, wait_n_neg;
+    reg       nmi_n_neg, wait_n_neg;
     always @(negedge clk or negedge reset_n) begin
         if (!reset_n) begin
             data_in_neg <= 8'h00;
-            int_n_neg   <= 1'b1;
             nmi_n_neg   <= 1'b1;
             wait_n_neg  <= 1'b1;
         end else begin
             data_in_neg <= data_in;
-            int_n_neg   <= int_n;
-            nmi_n_neg   <= nmi_n;
+            nmi_n_neg   <= nmi_n_held;
             wait_n_neg  <= wait_n;
         end
+    end
+
+    // INT: the level at the rising edge that starts a T-state, which the
+    // core reads at the rising edge that ends it -- in the last T-state,
+    // the datasheet's sample point.
+    reg int_n_rise;
+    always @(posedge clk or negedge reset_n) begin
+        if (!reset_n) int_n_rise <= 1'b1;
+        else          int_n_rise <= int_n;
     end
 
     // ---- the posedge-only core -----------------------------------------
@@ -107,8 +134,8 @@ module z80_top (
         // rising-edge inputs (live) + falling-edge-sampled copies
         .data_in(data_in),   .data_in_neg(data_in_neg),
         .busreq_n(busreq_n),
-        .int_n_neg(int_n_neg), .wait_n_neg(wait_n_neg),
-        .nmi_n(nmi_n),       .nmi_n_neg(nmi_n_neg),
+        .int_n_rise(int_n_rise), .wait_n_neg(wait_n_neg),
+        .nmi_n(nmi_n_held),  .nmi_n_neg(nmi_n_neg),
         // pin images: clock-high half of the next T-state / clock-low half
         // of the current T-state
         .addr_pos(addr_pos),       .addr_neg(addr_neg),
