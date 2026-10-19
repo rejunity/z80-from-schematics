@@ -37,9 +37,23 @@ IO_PIN_ORDER_CFG: dir::pin_order.cfg
 PDN_MULTILAYER: false
 RT_MAX_LAYER: Metal4
 
+# Plain buffers on z80_top's ports: the port buffers LibreLane inserts
+# (buffer_ports) otherwise come out as this library's delay cells
+# (dlyb_1, ~3 ns at the slow corner) on every input and output -- on the
+# data inputs that much came off the chip's tightest NMOS margin, the
+# opcode's setup TsD(Cr). The core's hold repair needs none of them.
+EXTRA_EXCLUDED_CELLS: ["gf180mcu_fd_sc_mcu7t5v0__dly*"]
+
+# Repair timing once more after global routing, on the routed wires'
+# parasitics instead of placement estimates (LibreLane leaves this off).
+# At the slow corner the resizer had judged its work done, and routing
+# then cost 10-20 ns; this pass wins back about a third of it.
+RUN_POST_GRT_RESIZER_TIMING: true
+RUN_POST_GRT_DESIGN_REPAIR: true
+
 # One Z80-rate clock. 50 ns = 20 MHz, the fastest CMOS Z80 grade
 # (Z84C0020). Met at the typical corners LibreLane signs off; the 5 V
-# cells at the slow corner (ss, 125 C, 4.5 V) reach ~14 MHz (reported,
+# cells at the slow corner (ss, 125 C, 4.5 V) reach ~15.5 MHz (reported,
 # not gated -- a looser target only makes the resizer stop earlier). The
 # negedge input samplers and the falling-edge half of the pin former make
 # some paths half-cycle.

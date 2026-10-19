@@ -10,7 +10,7 @@ core, independent of any particular shuttle wrapper.
 |---|---|
 | PDK | `gf180mcuD`, `54435919` (the pin of LibreLane 3.0.14, used by TinyTapeout's ttgf26d shuttle). wafer.space's project template pins `f6eeac7d` of the same gf180mcuD variant and the same 7-track 5 V cell library (`gf180mcu_fd_sc_mcu7t5v0`, with `gf180mcu_fd_io` pads). |
 | Cells | `gf180mcu_fd_sc_mcu7t5v0` |
-| Clock target | 50 ns (20 MHz), met at the typical corners LibreLane signs off (+3.8 ns); the 5 V cells at the slow corner (ss, 125 °C, 4.5 V) reach ~15 MHz |
+| Clock target | 50 ns (20 MHz), met at the typical corners LibreLane signs off (+7.5 ns); the 5 V cells at the slow corner (ss, 125 °C, 4.5 V) reach ~15.5 MHz |
 | Config | `config.yaml` (Classic flow, relative die sizing) |
 
 ## Run it
@@ -19,7 +19,7 @@ LibreLane via Nix (see `docs/librelane-flow.md` for installing Nix with the
 fossi-foundation binary cache), then from the repository root:
 
     nix profile install github:librelane/librelane/3.0.14
-    make -C asic/gf180mcu                  # RTL -> GDS (~30 min); the PDK is fetched by ciel
+    make -C asic/gf180mcu                  # RTL -> GDS (~20 min); the PDK is fetched by ciel
     make -C asic/gf180mcu summary          # area, per-corner timing, sign-off; non-zero exit on a failure (*)
     make -C asic/gf180mcu sign_of_life     # the routed netlist runs asic/tb_sign_of_life.v
     make -C asic/gf180mcu sign_of_life_rtl # same program on rtl/
@@ -59,14 +59,14 @@ Metal4. Measured with a 20 MHz target:
 
 | | |
 |---|---|
-| Std cells | 8,572 |
-| Cell area | 164,664 µm² |
-| Die | 544 × 562 µm = 0.31 mm² (59 % utilised) |
-| Setup slack @ 20 MHz | +4.2 ns typical (signed off, ~21.8 MHz); -16.8 ns at ss 125 °C 4.5 V (~15 MHz) |
+| Std cells | 8,595 |
+| Cell area | 155,903 µm² |
+| Die | 544 × 562 µm = 0.31 mm² (56 % utilised) |
+| Setup slack @ 20 MHz | +7.5 ns typical (signed off; ~29 MHz); -14.7 ns at ss 125 °C 4.5 V (~15.5 MHz) |
 | Hold slack | +0.26 ns |
 | Route / Magic DRC, LVS, antenna, GDS XOR | all 0 (KLayout DRC is not part of LibreLane's GF180 Classic flow) |
 | Signs of life, routed netlist | PASS (HALT after 554 clocks) |
-| Runtime | 17 min (8 cores, shared) |
+| Runtime | 19 min (8 cores, shared) |
 
 Previous core (main before the restructure, same flow): Sign-off clean (DRC / LVS / antenna / XOR 0), 16,225 cells, 0.29 mm² of cells on a 0.50 mm² die, but at 20 MHz the slow corner missed by 26.7 ns (typical passed with +3.9 ns); 12,112 max-slew violations. ~1 h 50 min.
 
@@ -105,7 +105,7 @@ CPU does not drive it (`chip/z80_chip.v`; `z80_top` itself is unchanged).
 | Pads | 40: `bi_t` at its weakest drive, 4 mA, with slow slew (address and control outputs with their enables, the data bus), `in_c` / `in_s` (inputs; Schmitt for CLK and RESET), `dvdd` / `dvss` (VCC, GND) |
 | Sign-off | DRC, LVS, antenna, XOR all 0; the NMOS Z80's 4 MHz pin timing met at every corner (below); 7 unconnected outputs (`z80_top`'s debug pins, no pads) |
 | Signs of life through the pads | PASS (HALT after 554 clocks) |
-| Runtime | 6 min after `make` (the core is not re-synthesized or re-routed) |
+| Runtime | 7 min after `make` (the core is not re-synthesized or re-routed) |
 
 The outputs drive like the NMOS Z80's as far as `gf180mcu_fd_io` allows:
 the NMOS part sinks 2.0 mA at 0.4 V and sources 250 µA at 2.4 V (PS0178
@@ -120,13 +120,14 @@ characteristics at 4 MHz (Zilog PS0178, Z8400; `../timing/`): the chip
 flow runs on `z80_chip_nmos4.sdc`, generated from the datasheet table, and
 `make -C asic/gf180mcu pin_timing` measures the routed chip with OpenSTA
 at 100 pF and checks every parameter the replica has to meet -- PASS at
-the tt, ss and ff corners. Output delays take 15-45 ns against 65-150 ns
+the tt, ss and ff corners. Output delays take 13-43 ns against 65-150 ns
 limits; the tightest margins are the opcode's setup TsD(Cr) at the slow
-corner (+3.9 ns of 35 ns) and the input holds at the fast corner (+1 to
-+2 ns, after the flow's hold repair; the falling clock edge reaches the
-core late through the Schmitt CLK pad). The faster NMOS grades pass too
-except that setup at the slow corner (125 °C, 4.5 V, beyond the NMOS
-part's 70 °C, 4.75 V): -1.3 ns at 6 MHz, -0.0 ns at 8 MHz.
+corner (+8.9 ns of 35 ns) and the input holds at the fast corner (+0.6
+to +1.4 ns, after the flow's hold repair; the falling clock edge reaches
+the core late through the Schmitt CLK pad). The faster NMOS grades, 6 and
+8 MHz (Z80B, Z80H), pass as well at every corner, the tightest by +0.5 ns
+(an input hold at the fast corner; the opcode's setup keeps +3.8 and
++5.0 ns at the slow one).
 
 The pad ring settings follow open-pdks' LibreLane config for
 `gf180mcu_fd_io` (the PDK version LibreLane 3.0.14 pins predates it) and
@@ -135,5 +136,7 @@ views of the pad cells for synthesis, whose own models do not lint.
 
 ## Notes
 
-- The worst path at the slow corner is a full Z80 clock cycle (rising to rising edge) through the execute block's next-state logic, not one of the half-cycle paths into the falling-edge pin former.
-- A looser target does not buy slow-corner margin: at 80 ns the typical corner has 14 ns spare, the resizer stops early, and the slow corner ends at ~89 ns (-9 ns). Closing 20 MHz at 125 °C / 4.5 V would take logic restructuring or the faster 9-track library.
+- Two kinds of path set the slow corner's clock (~15.5 MHz), about equally: full Z80 clock cycles (rising to rising edge) through decode, the execute block, the register file and the address unit into the address bus's pin former, and half cycles from read data sampled on the falling edge (`data_in_neg`) through the ALU and the register file into the same former, on the next rising edge. The half-cycle ones are also the typical corner's critical paths, which the resizer sizes until the typical corner is met. The 9-track cells (`asic-gf180mcu-9t`) speed up the full-cycle paths a lot but leave the half-cycle ones where they are: ~15.6 MHz at the slow corner, about the same.
+- A looser target does not buy slow-corner margin: at 80 ns the typical corner has 14 ns spare, the resizer stops early, and the slow corner ends at ~89 ns (-9 ns). Closing 20 MHz at 125 °C / 4.5 V would take shorter half-cycle paths (RTL) or a flow that sizes for the slow corner.
+- Post-route repair (`RUN_POST_GRT_RESIZER_TIMING`, `RUN_POST_GRT_DESIGN_REPAIR`; LibreLane leaves both off): the resizer works on estimated wiring and had judged the slow corner nearly done, then routing cost it 10-20 ns. One more pass on the routed wires' parasitics wins back about a third: at the slow corner the full-cycle slack went from -20.6 to -14.7 ns and the half-cycle from -10.1 to -6.2 ns (~14.2 -> ~15.5 MHz; typical ~25.6 -> ~29.5 MHz), and the chip's opcode setup from +5.9 to +8.9 ns, for 2 % more cell area and ~5 minutes.
+- Delay cells: left to itself, LibreLane buffers z80_top's ports and repairs slew with this library's delay cells (521 of them; `dlyb_1` on a port is 3 ns at the slow corner). `EXTRA_EXCLUDED_CELLS` keeps them out: the chip's opcode setup gained 2 ns at the slow corner and the 6 and 8 MHz grades went from failing it (-1.3 / -0.0 ns) to passing; the cells take 7 % less area and the typical corner gained 1.4 ns. The slow corner's single worst path came out 3.8 ns longer, with its total negative slack unchanged -- run-to-run scatter of a corner the resizer cannot close.
