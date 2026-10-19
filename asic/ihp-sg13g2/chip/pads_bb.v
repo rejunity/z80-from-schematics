@@ -13,7 +13,7 @@ module sg13g2_IOPadIn (pad, p2c, vdd, vss, iovdd, iovss);
 endmodule
 
 (* blackbox *)
-module sg13g2_IOPadOut4mA (pad, c2p, vdd, vss, iovdd, iovss);
+module sg13g2_IOPadOut16mA (pad, c2p, vdd, vss, iovdd, iovss);
     output pad;
     input c2p;
     inout vdd;
@@ -23,7 +23,7 @@ module sg13g2_IOPadOut4mA (pad, c2p, vdd, vss, iovdd, iovss);
 endmodule
 
 (* blackbox *)
-module sg13g2_IOPadTriOut4mA (pad, c2p, c2p_en, vdd, vss, iovdd, iovss);
+module sg13g2_IOPadTriOut16mA (pad, c2p, c2p_en, vdd, vss, iovdd, iovss);
     output pad;
     input c2p;
     input c2p_en;
@@ -34,7 +34,7 @@ module sg13g2_IOPadTriOut4mA (pad, c2p, c2p_en, vdd, vss, iovdd, iovss);
 endmodule
 
 (* blackbox *)
-module sg13g2_IOPadInOut4mA (pad, c2p, p2c, c2p_en, vdd, vss, iovdd, iovss);
+module sg13g2_IOPadInOut16mA (pad, c2p, p2c, c2p_en, vdd, vss, iovdd, iovss);
     inout pad;
     input c2p;
     output p2c;
