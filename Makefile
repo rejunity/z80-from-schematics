@@ -44,7 +44,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
-.PHONY: equiv all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test verilator_z80test z80test_rtl halt2int halt2int_probe
+.PHONY: timing_sdc timing_sdc_check equiv all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test verilator_z80test z80test_rtl halt2int halt2int_probe
 
 all: cmodel ctest
 
@@ -178,6 +178,21 @@ perfectz80: tracegen $(BIN)/perfectz80_runner
 perfectz80_rtl: iverilog $(BIN)/perfectz80_runner
 	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --rtl=iverilog 200
 
+# === NMOS pin timing: the chip flows' SDC =================================
+# asic/timing/z80_chip_nmos4.sdc constrains a chip's pins to the NMOS Z80's
+# AC characteristics at 4 MHz (Zilog PS0178, Z8400 table): generated from
+# asic/timing/z8400_nmos.json by asic/timing/pin_timing.py. `make
+# timing_sdc` regenerates it; `make timing_sdc_check` fails if the committed
+# one is out of date. The chips themselves are checked by `make pin_timing`
+# on the asic-<pdk> branches.
+timing_sdc:
+	$(PYTHON) asic/timing/pin_timing.py --write-sdc asic/timing/z80_chip_nmos4.sdc
+
+timing_sdc_check: dirs
+	@$(PYTHON) asic/timing/pin_timing.py --write-sdc $(BUILD)/z80_chip_nmos4.sdc
+	@diff -u asic/timing/z80_chip_nmos4.sdc $(BUILD)/z80_chip_nmos4.sdc \
+	  && echo "asic/timing/z80_chip_nmos4.sdc: up to date with z8400_nmos.json"
+
 # === Formal equivalence of z80_core against a git revision ===============
 # For pure restructurings (same registers, moved or renamed): proves the
 # work tree's z80_core identical to REF's for every state and input --
@@ -195,7 +210,7 @@ equiv:
 # bugs (latches inferred where DFFs were intended, reset domain
 # crossings folded by the synthesizer, etc.) — see docs/librelane-flow.md.
 #
-# `make synth` runs LibreLane via the librelane/run_synth.sh wrapper,
+# `make synth` runs LibreLane via the asic/librelane/run_synth.sh wrapper,
 # which expects `librelane` on PATH (nix profile install). It writes:
 #   build/synth/z80_top.nl.v   — synthesized netlist (symlink)
 #   build/synth/pdk_root.path   — resolved PDK_ROOT for downstream rules
@@ -206,9 +221,9 @@ synth: $(BUILD)/synth/z80_top.nl.v
 # Only the netlist is declared here; pdk_root.path is a side effect.
 # (Grouped-target syntax `&:` would be cleaner but is GNU Make 4.3+
 # only; macOS ships 3.81.)
-$(BUILD)/synth/z80_top.nl.v: $(RTL_SRCS) librelane/config.json librelane/run_synth.sh
+$(BUILD)/synth/z80_top.nl.v: $(RTL_SRCS) asic/librelane/config.json asic/librelane/run_synth.sh
 	@mkdir -p $(BUILD)/synth
-	librelane/run_synth.sh
+	asic/librelane/run_synth.sh
 
 # Build the gate-level iverilog testbench. The sky130_fd_sc_hd Verilog
 # cell models live under $(PDK_ROOT)/sky130A/libs.ref/sky130_fd_sc_hd/verilog/

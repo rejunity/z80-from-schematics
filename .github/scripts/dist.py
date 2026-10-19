@@ -3,10 +3,12 @@
 
   dist.py fpga <board> <out>   fpga/<board>'s bitstreams after `make ci`,
                                named for download, + rz80-<board>.json
-  dist.py asic <pdk> <out>     asic/<pdk>'s latest LibreLane run: the GDS,
-                               a picture of it, maps of its standard cells
-                               by kind and by Z80 block (needs gdstk,
-                               numpy and Pillow) + rz80-<pdk>.json
+  dist.py asic <pdk> <out>     asic/<pdk>'s latest LibreLane runs, the core
+                               and the chip: the GDS, a picture of it, a map
+                               of the cells by Z80 block, and a map of the
+                               core's cells by kind or of the chip's clock
+                               and power (needs gdstk, numpy and Pillow)
+                               + rz80-<pdk>.json
   dist.py site <in> <out>      index.html over everything fpga/asic made
   dist.py summary <in> <url>   job-summary markdown: the layout renders as
                                served by the site deployed at <url>
@@ -97,6 +99,23 @@ BLOCKS = {  # block: (instance name pattern, colour), first match wins, in legen
 PAD_BLOCK = ('I/O pads', (148, 163, 184))
 # the pad ring's corners, fillers and bond pads, darker than the pads
 RING = (58, 66, 80)
+# Clock and power picture of a chip, from its final DEF and its macro's:
+# the power nets' rings, stripes and rails (rails faint), the supply pads in
+# their net's colour, and on top the clock -- the CLK pad and its bond pad,
+# every USE CLOCK wire, every clock buffer -- in green with a dark halo.
+CLOCK = (74, 222, 128)
+POWER = {  # net: (legend, colour)
+    'VDD': ('core supply (VDD)', (248, 113, 113)),
+    'VSS': ('ground (VSS)', (96, 165, 250)),
+    'IOVDD': ('I/O supply (IOVDD)', (251, 191, 36)),
+    'IOVSS': ('I/O ground (IOVSS)', (45, 212, 191)),
+}
+SUPPLY_PADS = [  # (pad master pattern, its net), first match wins
+    (r'gf180mcu_fd_io__dvdd', 'VDD'), (r'gf180mcu_fd_io__dvss', 'VSS'),
+    (r'sg13g2_IOPadIOVdd', 'IOVDD'), (r'sg13g2_IOPadIOVss', 'IOVSS'),
+    (r'sg13g2_IOPadVdd', 'VDD'), (r'sg13g2_IOPadVss', 'VSS'),
+]
+SIGNAL_PAD = (100, 112, 130)
 # (make ci's build, download name): the sbc build with NASCOM BASIC, the
 # same with Tiny BASIC (build_tiny/), the Z80 chip replacement
 VARIANTS = (('build/top_sbc', 'basic'), ('build_tiny/top_sbc', 'tinybasic'), ('build/top_chip', 'chip'))
@@ -168,8 +187,9 @@ def is_pad(master):
 
 
 def cell_kind(name):
-    # a chip's GDS renames the cells inside a hard macro: UF_<library cell>
-    name = re.sub(r'^UF_', '', name)
+    # a chip's GDS renames the cells inside a hard macro with a short tag:
+    # UF_<library cell>, Y3_<library cell>, ...
+    name = re.sub(r'^\w*?_(?=sky130_fd_sc|sg13g2_|gf180mcu_fd_sc)', '', name)
     if re.match(CELL_KINDS['I/O pads'][0], name):
         return 'I/O pads'
     base = re.sub(r'_\d+$', '', re.sub(CELL_LIBRARY_PREFIX, '', name))
@@ -196,7 +216,8 @@ def transform_box(ref):
 
 
 def render_cells(top, png, width=1200, supersample=3):
-    """The cell map; returns the instance count per kind."""
+    """The cell map; returns the instance count per kind (png None: the
+    counts only)."""
     import gdstk
     from PIL import Image, ImageDraw
     (x0, y0), (x1, y1) = top.bounding_box()
@@ -223,10 +244,13 @@ def render_cells(top, png, width=1200, supersample=3):
     cells.sort(key=lambda c: c[0] != 'fill/decap/tap')   # fillers first: real cells draw over them
     for kind, name, (a, b, c, d) in cells:
         counts[kind] += kind != 'I/O pads' or is_pad(name)
+        if png is None:
+            continue
         rgb = RING if kind == 'I/O pads' and not is_pad(name) else CELL_KINDS[kind][1]
         draw.rectangle(((a - x0) * k, (y1 - d) * k, (c - x0) * k, (y1 - b) * k),
                        fill=rgb, outline=tuple(int(v * .55) for v in rgb), width=max(1, supersample // 2))
-    im.resize((w, h), Image.LANCZOS).quantize(256).save(png, optimize=True)
+    if png is not None:
+        im.resize((w, h), Image.LANCZOS).quantize(256).save(png, optimize=True)
     return counts
 
 
@@ -302,6 +326,173 @@ def render_blocks(run, png, width=1200, supersample=3, macro_runs=None):
     return counts
 
 
+
+def def_routes(text, section, keep):
+    """The routed shapes of the nets in a DEF section ('NETS', 'SPECIALNETS')
+    that keep(name, statement) accepts, in DEF units: (net, shape, width,
+    (x1, y1, x2, y2), kind) -- kind 'path' for a centreline segment (width
+    the special wire's, None for a regular net's), 'rect' for a rectangle."""
+    start = text.find('\n' + section + ' ')
+    if start < 0:
+        return []
+    out = []
+    for stmt in text[start:text.find('\nEND ' + section, start)].split(';'):
+        m = re.match(r'\s*-\s+(\S+)', stmt)
+        if not m or not keep(m.group(1), stmt):
+            continue
+        net = m.group(1)
+        for a, b, c, d in re.findall(r'\+\s*RECT\s+\S+\s*\(\s*(-?\d+)\s+(-?\d+)\s*\)\s*\(\s*(-?\d+)\s+(-?\d+)\s*\)', stmt):
+            out.append((net, 'RECT', None, (int(a), int(b), int(c), int(d)), 'rect'))
+        for seg in re.split(r'\b(?:ROUTED|FIXED|COVER|SHIELD|NEW)\b', stmt)[1:]:
+            toks = seg.split()
+            if not toks:
+                continue
+            width = int(toks[1]) if len(toks) > 1 and toks[1].isdigit() else None
+            shape = (re.search(r'\+\s*SHAPE\s+(\w+)', seg) or [None, None])[1]
+            pts, last = [], None
+            for item in re.finditer(r'(RECT\s*)?\(\s*([^)]*)\)', seg):
+                vals = item.group(2).split()
+                if item.group(1):          # RECT ( dx1 dy1 dx2 dy2 ) at the last point
+                    if last and len(vals) == 4:
+                        dx1, dy1, dx2, dy2 = map(int, vals)
+                        out.append((net, shape, None, (last[0] + dx1, last[1] + dy1, last[0] + dx2, last[1] + dy2), 'rect'))
+                    continue
+                if len(vals) < 2:
+                    continue
+                last = (last[0] if vals[0] == '*' else int(vals[0]), last[1] if vals[1] == '*' else int(vals[1]))
+                pts.append(last)
+            out += [(net, shape, width, (p[0], p[1], q[0], q[1]), 'path') for p, q in zip(pts, pts[1:])]
+    return out
+
+
+def render_power_clock(run, png, macro_runs, width=1200, supersample=3):
+    """A chip's clock and power distribution (see CLOCK / POWER); returns
+    the legend entries drawn: {label: (colour, count)}."""
+    import numpy as np
+    from PIL import Image, ImageDraw
+    cfg = json.load(open(run + 'resolved.json'))
+    if not (got := read_def(run)):
+        return None
+    (x0, y0, x1, y1), placed = got
+    sizes = {}
+    lefs = (cfg.get('CELL_LEFS') or []) + (cfg.get('PAD_LEFS') or []) + (cfg.get('EXTRA_LEFS') or [])
+    lefs += [f for m in (cfg.get('MACROS') or {}).values() for f in (m.get('lef') or [])]
+    for lef in lefs:
+        for macro, body in re.findall(r'MACRO\s+(\S+)(.*?)END\s+\1\b', open(lef).read(), re.S):
+            if size := re.search(r'SIZE\s+([\d.]+)\s+BY\s+([\d.]+)', body):
+                sizes[macro] = (float(size.group(1)), float(size.group(2)))
+    w, h = width, round(width * (y1 - y0) / (x1 - x0))
+    k = w * supersample / (x1 - x0)
+    W, H = w * supersample, h * supersample
+    px = lambda x, y: ((x - x0) * k, (y1 - y) * k)
+    img = np.empty((h, w, 3))
+    img[:] = BACKGROUND
+
+    def layer(draw_fn, rgb, opacity):
+        nonlocal img
+        mask = Image.new('L', (W, H), 0)
+        draw_fn(ImageDraw.Draw(mask))
+        a = np.asarray(mask.resize((w, h), Image.BOX), float)[..., None] / 255 * opacity
+        img = img * (1 - a) + np.array(rgb, float) * a
+
+    def box(name, master, x, y, orient):
+        cw, ch = sizes[master]
+        if orient in ('E', 'W', 'FE', 'FW'):
+            cw, ch = ch, cw
+        return x, y, x + cw, y + ch
+
+    # the macro's own cells and wiring, moved to where the chip placed it
+    dbu = lambda t: int(re.search(r'UNITS DISTANCE MICRONS (\d+)', t).group(1))
+    text = open(glob.glob(run + 'final/def/*.def')[0]).read()
+    sources = [(text, dbu(text), 0.0, 0.0)]
+    macro_boxes = []
+    for name, master, mx, my, orient in placed:
+        if master in (macro_runs or {}) and master in sizes:
+            macro_boxes.append(box(name, master, mx, my, orient))
+            if orient == 'N' and (defs := glob.glob(macro_runs[master] + 'final/def/*.def')):
+                inner = open(defs[0]).read()
+                sources.append((inner, dbu(inner), mx, my))
+                placed = placed + [(n, m, mx + x, my + y, o) for n, m, x, y, o in read_def(macro_runs[master])[1]]
+
+    # pads: signal grey, supply in its net's colour, CLK green; the ring's
+    # corners and fillers dark; IHP's bond pads (IO_BOND_<pad>) as their pad
+    masters = {name: master for name, master, *_ in placed}
+    def pad_colour(name, master):
+        if name.startswith('IO_BOND_'):
+            pad = name[len('IO_BOND_'):]
+            return pad_colour(pad, masters.get(pad, ''))
+        if re.search(r'(^|_)CLK$', name):
+            return CLOCK
+        net = next((n for pat, n in SUPPLY_PADS if re.match(pat, master)), None)
+        if net:
+            return POWER[net][1]
+        return SIGNAL_PAD if is_pad(master) or master.startswith('bondpad') else RING
+    pads = [(pad_colour(n, m), m, box(n, m, x, y, o)) for n, m, x, y, o in placed
+            if m in sizes and (cell_kind(m) == 'I/O pads' or m.startswith('bondpad'))]
+    pad_count = lambda rgb: sum(1 for c, m, _ in pads if c == rgb and is_pad(m))
+    for rgb in {c for c, *_ in pads}:
+        def draw(d, rgb=rgb):
+            for c, _, (a, b, cc, dd) in pads:
+                if c == rgb:
+                    d.rectangle((*px(a, dd), *px(cc, b)), fill=255)
+        layer(draw, rgb, .85)
+    def outline(d):
+        for a, b, c, dd in macro_boxes:
+            d.rectangle((*px(a, dd), *px(c, b)), outline=255, width=supersample * 2)
+    layer(outline, (148, 163, 184), .6)
+
+    # power: every power net's special wiring (no fill); the cell rows'
+    # rails faint, rings and stripes solid
+    def is_power(name, stmt):
+        return name in POWER
+    for net in POWER:
+        segs = []
+        for t, u, ox, oy in sources:
+            segs += [(shape, wd, kind, (ax / u + ox, ay / u + oy, bx / u + ox, by / u + oy), wd and wd / u)
+                     for n, shape, wd, (ax, ay, bx, by), kind in def_routes(t, 'SPECIALNETS', lambda n, s: n == net)
+                     if shape != 'DRCFILL']
+        if not segs:
+            continue
+        def shapes(d, rails):
+            for shape, wd, kind, (ax, ay, bx, by), wum in segs:
+                if (shape == 'FOLLOWPIN') != rails:
+                    continue
+                if kind == 'rect':
+                    d.rectangle((*px(min(ax, bx), max(ay, by)), *px(max(ax, bx), min(ay, by))), fill=255)
+                else:
+                    half = (wum or 0) / 2
+                    d.rectangle((*px(min(ax, bx) - half, max(ay, by) + half),
+                                 *px(max(ax, bx) + half, min(ay, by) - half)), fill=255)
+        layer(lambda d: shapes(d, True), POWER[net][1], .3)
+        layer(lambda d: shapes(d, False), POWER[net][1], .8)
+
+    # clock: every USE CLOCK wire, chip and macro, and the clock buffers, on
+    # top: a dark halo, then green; never thinner than 3 px
+    wires = []
+    for t, u, ox, oy in sources:
+        wires += [((ax / u + ox, ay / u + oy), (bx / u + ox, by / u + oy))
+                  for n, shape, wd, (ax, ay, bx, by), kind in def_routes(t, 'NETS', lambda n, s: '+ USE CLOCK' in s)
+                  if kind == 'path']
+    bufs = [box(n, m, x, y, o) for n, m, x, y, o in placed
+            if m in sizes and re.match(r'(clkbuf|clkload|clkinv)', n.split('.')[-1])]
+    def clock(d, grow):
+        lw = (3 + 2 * grow) * supersample
+        for p, q in wires:
+            d.line((*px(*p), *px(*q)), fill=255, width=lw)
+        for a, b, c, dd in bufs:
+            (ax, ay), (bx, by) = px(a, dd), px(c, b)
+            g = max(0, (3 * supersample - (bx - ax)) / 2) + grow * supersample
+            d.rectangle((ax - g, ay - g, bx + g, by + g), fill=255)
+    layer(lambda d: clock(d, 2), BACKGROUND, .9)
+    layer(lambda d: clock(d, 0), CLOCK, 1.0)
+    # legend: the clock buffers; the pads of each supply net and the signals
+    counts = {'clock: CLK pad, wires, buffers': (CLOCK, len(bufs))}
+    counts.update({label: (rgb, pad_count(rgb)) for label, rgb in POWER.values() if pad_count(rgb)})
+    counts['signal pads'] = (SIGNAL_PAD, pad_count(SIGNAL_PAD))
+    Image.fromarray(img.round().astype(np.uint8)).quantize(256).save(png, optimize=True)
+    return counts
+
+
 def collect(run, key, name, stack, out, extra=None, macro_runs=None):
     """One LibreLane run: rz80-<key>.gds, its pictures and rz80-<key>.json;
     macro_runs as for render_blocks."""
@@ -309,7 +500,7 @@ def collect(run, key, name, stack, out, extra=None, macro_runs=None):
     m = json.load(open(run + 'final/metrics.json'))
     design = cfg['DESIGN_NAME']
     os.makedirs(out, exist_ok=True)
-    files, cells, blocks = [], None, None
+    files, cells, blocks, power = [], None, None, None
     gds = run + f'final/gds/{design}.gds'
     if os.path.isfile(gds):
         shutil.copy(gds, os.path.join(out, f'rz80-{key}.gds'))
@@ -320,8 +511,14 @@ def collect(run, key, name, stack, out, extra=None, macro_runs=None):
             top = gdstk.read_gds(gds).top_level()[0]
             render(top, png, stack)
             files.append(f'rz80-{key}.png')
-            cells = render_cells(top, os.path.join(out, f'rz80-{key}-cells.png'))
-            files.append(f'rz80-{key}-cells.png')
+            if macro_runs:   # a chip: its clock and power, not a cell map
+                cells = render_cells(top, None)
+                power = render_power_clock(run, os.path.join(out, f'rz80-{key}-power.png'), macro_runs)
+                if power:
+                    files.append(f'rz80-{key}-power.png')
+            else:
+                cells = render_cells(top, os.path.join(out, f'rz80-{key}-cells.png'))
+                files.append(f'rz80-{key}-cells.png')
             blocks = render_blocks(run, os.path.join(out, f'rz80-{key}-blocks.png'), macro_runs=macro_runs)
             if blocks:
                 files.append(f'rz80-{key}-blocks.png')
@@ -342,7 +539,7 @@ def collect(run, key, name, stack, out, extra=None, macro_runs=None):
             'utilisation': m.get('design__instance__utilization'),
             'clock_period_ns': cfg.get('CLOCK_PERIOD'),
             'signoff_corners': gate, 'setup_ws_ns': min(ws) if ws else None,
-            'cells': cells, 'blocks': blocks, 'built_from': os.environ.get('BUILT_FROM', ''), 'run': RUN_URL,
+            'cells': cells, 'blocks': blocks, 'power': power, 'built_from': os.environ.get('BUILT_FROM', ''), 'run': RUN_URL,
             **(extra or {})}
     json.dump(info, open(os.path.join(out, f'rz80-{key}.json'), 'w'), indent=1)
 
@@ -383,8 +580,8 @@ def asic_facts(p):
     w, h = p['die_um']
     facts = [('Die', f'{w:,.0f} × {h:,.0f} µm ({w * h / 1e6:.2f} mm²)')]
     if p.get('pads'):
-        facts.append(('Pads', f"{p['pads']}, placed like the Z80's"))
-    if p.get('std_cells') is not None:
+        facts.append(('Pads', f"{p['pads']}, each on the side of the Z80's own"))
+    if p.get('std_cells') is not None and not p.get('pads'):   # a chip's are its pad glue only
         u = p.get('utilisation')
         facts.append(('Std cells', f"{p['std_cells']:,}" + (f' ({u * 100:.0f} % utilisation)' if u else '')))
     if p.get('clock_period_ns'):
@@ -406,8 +603,10 @@ def site(src, out):
     commit = f'<a href="{SERVER}/{REPO}/commit/{sha}">main @ {sha[:7]}</a>' if sha else 'main'
     run = f'<a href="{RUN_URL}">Targets run</a>' if RUN_URL else 'Targets run'
 
-    cards = []
+    chip_cards, core_cards = [], []
     for p in pdks:
+        chip = bool(p.get('pads'))
+
         def picture(f, caption):
             img = (f'<a href="{f}"><img src="{f}" alt="{e(p["name"])}: {caption}" loading="lazy"></a>'
                    if f in p['files'] else '<div class="noimg">no picture</div>')
@@ -419,22 +618,28 @@ def site(src, out):
                             f' <span class="muted">{counts[name]:,}</span></li>'
                             for name, (_, colour) in table.items() if (counts or {}).get(name))
             return f'<div><h4>{title}</h4><ul class="legend">{items}</ul></div>' if items else ''
+        second = (f"rz80-{p['pdk']}-power.png", 'clock and power') if chip else (f"rz80-{p['pdk']}-cells.png", 'cells by kind')
         links = [f'<a href="{f}"{" download" if f.endswith(".gds") else ""}>{label}</a>'
                  f' <span class="size">{size(os.path.join(out, f))}</span>'
                  for f, label in ((f"rz80-{p['pdk']}.gds", 'GDS'), (f"rz80-{p['pdk']}.png", 'layout'),
-                                  (f"rz80-{p['pdk']}-cells.png", 'cells'), (f"rz80-{p['pdk']}-blocks.png", 'blocks'))
+                                  (second[0], second[1].split()[0]), (f"rz80-{p['pdk']}-blocks.png", 'blocks'))
                  if f in p['files']]
         links.append(f'<a href="{p.get("readme") or readme_url("asic", p["pdk"])}">README</a>')
-        cards.append(f"""<article class="pdk">
+        if chip:   # the clock and power picture's legend: (colour, count) per entry
+            power = {name: (None, tuple(colour)) for name, (colour, _) in (p.get('power') or {}).items()}
+            second_legend = legend('Clock and power', power, {n: c for n, (_, c) in (p.get('power') or {}).items()})
+        else:
+            second_legend = legend('Cells by kind', CELL_KINDS, p.get('cells'))
+        (chip_cards if chip else core_cards).append(f"""<article class="pdk">
 <div class="pics">
 {picture(f"rz80-{p['pdk']}.png", 'layout')}
-{picture(f"rz80-{p['pdk']}-cells.png", 'cells by kind')}
+{picture(*second)}
 {picture(f"rz80-{p['pdk']}-blocks.png", 'cells by Z80 block')}
 </div>
 <div class="body">
 <div><h3>{e(p['name'])}</h3><p class="muted">{e(p.get('pdk_variant') or '')} · {e(p.get('library') or '')}</p>
 <dl>{facts}</dl><p class="links">{' · '.join(links)}</p></div>
-{legend('Cells by kind', CELL_KINDS, p.get('cells'))}
+{second_legend}
 {legend('Cells by Z80 block', {PAD_BLOCK[0]: (None, PAD_BLOCK[1]), **BLOCKS}, p.get('blocks'))}
 </div>
 </article>""")
@@ -506,11 +711,20 @@ footer {{ color: var(--muted); font-size: 13px; margin-top: 36px; }}
 <p class="muted">The Z80 core of <a href="{SERVER}/{REPO}">{e(REPO)}</a> on every ASIC PDK and FPGA board,
 from the latest {run} on main where all of them passed: {commit}, published {when}.</p>
 
-<h2>ASIC layouts</h2>
-<p class="muted">The bare core (no pad ring), RTL to GDS with LibreLane. Both pictures are drawn from the GDS:
-the layout shows the cell rows and the metal stack, bottom metal blue to top metal yellow; the two cell maps
-show every standard cell, coloured by kind and by the Z80 block it was synthesized in.</p>
-{chr(10).join(cards) or '<p>none in this build</p>'}
+<h2>ASIC chip layouts</h2>
+<p class="muted">The core as a chip: z80_top, hardened on its own, as a hard macro in a ring of I/O pads,
+each pin's pad on the side of the die where the Z80 has its own. The layout shows the metal stack, bottom
+metal blue to top metal yellow; the clock and power picture the clock in green -- the CLK pad, every clock
+wire and buffer -- over the power rings, stripes and rails (core supply red, ground blue; a split I/O
+supply amber and teal) and the supply pads in their net's colour; the block map every cell by the Z80
+block it was synthesized in.</p>
+{chr(10).join(chip_cards) or '<p>none in this build</p>'}
+
+<h2>ASIC core layouts</h2>
+<p class="muted">The bare core (no pad ring), RTL to GDS with LibreLane. The pictures are drawn from the GDS
+and the DEF: the layout shows the cell rows and the metal stack, bottom metal blue to top metal yellow; the
+two cell maps show every standard cell, coloured by kind and by the Z80 block it was synthesized in.</p>
+{chr(10).join(core_cards) or '<p>none in this build</p>'}
 
 <h2>FPGA bitstreams</h2>
 <p class="muted">BASIC computer: NASCOM BASIC 4.7 on the board's serial console. Tiny BASIC: the same computer
@@ -548,17 +762,25 @@ def summary(src, url):
         lines = [f'{k}: {v}' for k, v in asic_facts(p)]
         lines += [f'{label}: {counts(p, key)}' for key, label in (('cells', 'Cells'), ('blocks', 'Blocks')) if counts(p, key)]
         return '<br>'.join(lines)
-    print(f'## Layouts\n\nDrawn from each GDS, as on the [site]({url}) this run deployed: the cell rows and '
-          'metal stack; every standard cell by kind (flip-flops orange, buffers and delays teal, other logic '
-          'blue, fill/decap/tap dark); every cell by the Z80 block it was synthesized in (ALU red, register '
-          'file yellow, decoder PLA purple, execute blue, address green, timing cyan, core sequencer pink, '
-          'pin logic white, I/O pads grey).\n')
-    print('| ' + ' | '.join(p['name'] for p in pdks) + ' |')
-    print('|' + '---|' * len(pdks))
-    for suffix in ('', '-cells', '-blocks'):
-        print('| ' + ' | '.join(picture(p, suffix) for p in pdks) + ' |')
-    print('| ' + ' | '.join(facts(p) for p in pdks) + ' |')
-
+    chips = [p for p in pdks if p.get('pads')]
+    cores = [p for p in pdks if not p.get('pads')]
+    print(f'## Layouts\n\nDrawn from each GDS and DEF, as on the [site]({url}) this run deployed.\n')
+    for title, group, middle, note in (
+            ('Chip layouts', chips, '-power', 'the metal stack; the clock (green: CLK pad, clock wires and '
+             'buffers) over the power distribution (core supply red, ground blue, a split I/O supply amber '
+             'and teal); every cell by Z80 block'),
+            ('Core layouts', cores, '-cells', 'the cell rows and metal stack; every standard cell by kind '
+             '(flip-flops orange, buffers and delays teal, other logic blue, fill/decap/tap dark); every cell '
+             'by the Z80 block it was synthesized in (ALU red, register file yellow, decoder PLA purple, '
+             'execute blue, address green, timing cyan, core sequencer pink, pin logic white, I/O pads grey)')):
+        if not group:
+            continue
+        print(f'### {title}\n\n{note[0].upper() + note[1:]}.\n')
+        print('| ' + ' | '.join(p['name'] for p in group) + ' |')
+        print('|' + '---|' * len(group))
+        for suffix in ('', middle, '-blocks'):
+            print('| ' + ' | '.join(picture(p, suffix) for p in group) + ' |')
+        print('| ' + ' | '.join(facts(p) for p in group) + ' |\n')
 
 if __name__ == '__main__':
     cmd, args = (sys.argv[1], sys.argv[2:]) if len(sys.argv) > 1 else ('', [])
