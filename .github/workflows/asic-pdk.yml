@@ -73,12 +73,17 @@ jobs:
       - name: Install LibreLane ${{ env.LIBRELANE_VERSION }} and iverilog
         run: nix profile install github:librelane/librelane/$LIBRELANE_VERSION nixpkgs#iverilog
 
-      # LibreLane pins the PDK version, so its version keys the cache
+      # LibreLane pins the PDK version, unless asic/<pdk>/Makefile pins its
+      # own (PDK_VERSION, fetched with LibreLane's ciel): both key the cache
+      - name: PDK version pinned by the Makefile
+        id: pdk
+        run: echo "version=$(sed -n 's/^PDK_VERSION *:= *//p' asic/$PDK/Makefile)" >> "$GITHUB_OUTPUT"
+
       - name: Cache the PDK (ciel)
         uses: actions/cache@v4
         with:
           path: ~/.ciel
-          key: ciel-${{ inputs.pdk }}-librelane-${{ env.LIBRELANE_VERSION }}
+          key: ciel-${{ inputs.pdk }}-librelane-${{ env.LIBRELANE_VERSION }}${{ steps.pdk.outputs.version && format('-{0}', steps.pdk.outputs.version) || '' }}
 
       - name: Signs of life (RTL)
         run: make -C asic/$PDK sign_of_life_rtl
