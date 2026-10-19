@@ -22,7 +22,8 @@ analog timing of those edges. That the replica's events fall on those
 edges is the cycle-level tests' job (perfectz80 pin comparisons).
 
 usage: pin_timing.py RUN [--grade 4|6|8] [--load PF] [--edge NS]
-                         [--corners tt,ss,ff] [--sta PATH] [--keep DIR]
+                         [--corners tt,ss,...] [--sta PATH] [--keep DIR]
+         (default: every process corner of the run, nominal parasitics)
        pin_timing.py --write-sdc FILE [--grade ...] [--load ...]
          (the same contract as the chip flows' SDC)
 exit: 0 every check passes at every corner, 1 a check fails, 2 no run.
@@ -60,9 +61,12 @@ def corner_files(run, cfg, corner):
     return libs, (spef[0] if spef else None)
 
 
-# pad pins of the PDKs' output pads: (data in, output enable, pad)
+# pad pins of the PDKs' output pads: (data in, output enable, pad); both
+# enables are active high
 PAD_ARCS = [("A", "OE", "PAD"),                 # gf180mcu_fd_io bi_t / bi_24t
             ("c2p", "c2p_en", "pad")]           # sg13g2_io
+# process corners, in the order they are printed: typical, slow, fast
+CORNER_ORDER = ["tt", "typ", "ss", "slow", "ff", "fast"]
 
 
 def sta_script(cfg, run, libs, spef, clk, load, edge):
@@ -104,18 +108,27 @@ def sta_script(cfg, run, libs, spef, clk, load, edge):
           "    }",
           "  }",
           "}"]
-    # pass 1: output data only (the pads' enable arcs off); pass 2: the
-    # output enables only (float and turn-on)
-    for kind, off in (("out", "enable"), ("oe", "data")):
-        L.append(f"pad_arcs set_disable_timing {off}")
-        for p in OUTS:
-            for e in ("rise", "fall"):
-                for d in (("rise", "fall") if kind == "out" else ("both",)):
-                    to = f"-{d}_to" if d != "both" else "-to"
-                    for m in ("max", "min"):
-                        key = f"{kind} {p} {e} {d} {m}" if kind == "out" else f"oe {p} {e} {m}"
-                        L.append(f"q {{{key}}} {m} arr -{e}_from [get_clocks CLK] {to} [get_ports {{{p}}}]")
-        L.append(f"pad_arcs unset_disable_timing {off}")
+    # pass 1: output data only (the pads' enable arcs off)
+    L.append("pad_arcs set_disable_timing enable")
+    for p in OUTS:
+        for e in ("rise", "fall"):
+            for d in ("rise", "fall"):
+                for m in ("max", "min"):
+                    L.append(f"q {{out {p} {e} {d} {m}}} {m} arr -{e}_from [get_clocks CLK] -{d}_to [get_ports {{{p}}}]")
+    L.append("pad_arcs unset_disable_timing enable")
+    # pass 2: the output enables only -- the pad floating (its enable
+    # falls) and turning on (rises), apart
+    L.append("pad_arcs set_disable_timing data")
+    for p in OUTS:
+        if p not in OE_PADS:
+            continue
+        en = " ".join(f"{OE_PADS[p]}/{e}" for _, e, _ in PAD_ARCS)
+        for e in ("rise", "fall"):
+            for kind, thr in (("off", "fall"), ("on", "rise")):
+                for m in ("max", "min"):
+                    L.append(f"q {{{kind} {p} {e} {m}}} {m} arr -{e}_from [get_clocks CLK] "
+                             f"-{thr}_through [get_pins -quiet {{{en}}}] -to [get_ports {{{p}}}]")
+    L.append("pad_arcs unset_disable_timing data")
     # inputs, once against each CLK edge: input delay 0 at that PIN edge,
     # paths captured on the same CLK edge a period later (setup) or at the
     # same edge (hold)
@@ -130,7 +143,8 @@ def sta_script(cfg, run, libs, spef, clk, load, edge):
 
 def parse(text, clk):
     """{('out', port, launch, trans, max|min): delay from the CLK pin edge,
-        ('oe', port, launch, max|min): same, through the pad's enable,
+        ('off' | 'on', port, launch, max|min): same, the pad floating /
+                                               turning on (its enable),
         ('in', port, edge, setup|hold): requirement at the pin, ns}"""
     T, TH = clk["period"], clk["th"]
     res = {}
@@ -145,7 +159,7 @@ def parse(text, clk):
         except ValueError:
             continue
         key = tuple(f[:-1])
-        if key[0] == "out" or key[0] == "oe":
+        if key[0] in ("out", "off", "on"):
             res[key] = v - (TH if key[2] == "fall" else 0.0)
         elif key[0] == "in":
             res[key] = (T - v) if key[3] == "setup" else -v
@@ -195,8 +209,8 @@ class Contract:
         dmax = lambda x, l, t: d(max, x, l, t, "max")
         dmin = lambda x, l, t: d(min, x, l, t, "min")
 
-        def oe(x, launch, mm):
-            vals = [m.get(("oe", p, launch, mm)) for p in ports(x)]
+        def oe(kind, x, launch, mm):          # kind: off (float) / on
+            vals = [m.get((kind, p, launch, mm)) for p in ports(x)]
             vals = [v for v in vals if v is not None]
             return (max if mm == "max" else min)(vals) if vals else None
 
@@ -242,12 +256,12 @@ class Contract:
                              (51, "IORQ_n", "fall", "fall"), (52, "IORQ_n", "rise", "rise")]:
             check(pid, dmax(x, l, t))
         # data valid from CLK fall: driven value or the pad turning on
-        dvalid = mx(dmax("D", "fall", "both"), oe("D", "fall", "max"))
+        dvalid = mx(dmax("D", "fall", "both"), oe("on", "D", "fall", "max"))
         check(53, dvalid)
         # float delays: the pads' output enables released from CLK rise
-        check(42, oe("D", "rise", "max"), "data float")
-        check(43, mx(*[oe(p, "rise", "max") for p in ("MREQ_n", "IORQ_n", "RD_n", "WR_n")]), "control float")
-        check(44, oe("A", "rise", "max"), "address float")
+        check(42, oe("off", "D", "rise", "max"), "data float")
+        check(43, mx(*[oe("off", p, "rise", "max") for p in ("MREQ_n", "IORQ_n", "RD_n", "WR_n")]), "control float")
+        check(44, oe("off", "A", "rise", "max"), "address float")
 
         # ---- inputs: what the replica needs vs what the system gives --
         check(15, need("D", "rise", "setup"), "M1 / INTA data")
@@ -269,7 +283,7 @@ class Contract:
         # ---- pulse widths and pin-to-pin separations -----------------
         strobe_up = mx(*[dmax(p, "fall", "rise") for p in ("MREQ_n", "IORQ_n", "RD_n", "WR_n")])
         a_chg = dmin("A", "rise", "both")
-        d_chg = mn(dmin("D", "rise", "both"), oe("D", "rise", "min"))
+        d_chg = mn(dmin("D", "rise", "both"), oe("off", "D", "rise", "min"), oe("on", "D", "rise", "min"))
         sep = {
             7: plus(TH, dmin("MREQ_n", "fall", "fall"), -(dmax("A", "rise", "both") or 0)) if dmax("A", "rise", "both") is not None else None,
             10: plus(TH, dmin("MREQ_n", "fall", "fall"), -(dmax("MREQ_n", "rise", "rise") or 0)) if dmax("MREQ_n", "rise", "rise") is not None else None,
@@ -345,6 +359,9 @@ def write_sdc(con, path, load, edge):
          "set_false_path -from [get_ports NMI_n]",
          "# RESET floats the address bus directly (z80_chip.v), unclocked",
          "set_false_path -from [get_ports RESET_n] -to [get_ports {A[*]}]",
+         "# MREQ IORQ RD WR float while BUSACK is low and come back high: their",
+         "# pads, enabled by z80_top's busack_n, never turn on driving low",
+         "set_false_path -rise_through [get_pins u_top/busack_n] -fall_to [get_ports {MREQ_n IORQ_n RD_n WR_n}]",
          "# read data is held until RD (IORQ in INTA) rises, not 0 ns past the",
          "# sampling edge (P16 ThD(RDr)): pin_timing.py checks the replica's hold",
          "# against its own RD / IORQ rise; the flow does not repair a hold the",
@@ -394,7 +411,7 @@ def main():
     ap.add_argument("--grade", default="4", choices=["4", "6", "8"], help="NMOS speed grade, MHz (default 4: Z80A)")
     ap.add_argument("--load", type=float, default=100.0, help="output load, pF (datasheet test load: 100)")
     ap.add_argument("--edge", type=float, default=None, help="clock and input edge, ns (default: what the grade's minimum period leaves)")
-    ap.add_argument("--corners", default="tt,ss,ff")
+    ap.add_argument("--corners", default="", help="process corners to check, e.g. tt,ss (default: all of the run's)")
     ap.add_argument("--sta", default=os.environ.get("STA", "sta"))
     ap.add_argument("--keep", help="keep the OpenSTA scripts and logs in this directory")
     ap.add_argument("--write-sdc", metavar="FILE", help="write the flow's SDC for this grade instead (RUN is ignored)")
@@ -408,8 +425,11 @@ def main():
     cfg = json.load(open(os.path.join(a.run, "resolved.json")))
     con = Contract(a.grade, a.load)
     edge = a.edge if a.edge is not None else con.clk["tr"]
-    corners = [c for c in cfg["STA_CORNERS"] if c.startswith("nom_") and
-               any(f"_{k}_" in c for k in a.corners.split(","))]
+    want = [k for k in a.corners.split(",") if k]
+    corners = [c for c in cfg["STA_CORNERS"] if c.startswith("nom_") and (not want or c.split("_")[1] in want)]
+    corners.sort(key=lambda c: CORNER_ORDER.index(c.split("_")[1]) if c.split("_")[1] in CORNER_ORDER else len(CORNER_ORDER))
+    if not corners:
+        print(f"pin_timing: no corner of {a.run} matches {a.corners!r}"); return 2
     c = con.clk
     print(f"{cfg['DESIGN_NAME']} ({os.path.basename(os.path.normpath(a.run))}) vs Zilog Z8400 NMOS, "
           f"{a.grade} MHz: clock {c['period']:g} ns, {c['twch']:g}/{c['twcl']:g} ns high/low, "
