@@ -51,18 +51,23 @@ together. The cell models come from the run's `resolved.json`
 ## Results
 
 Restructured core (`optimise-luts`: control word + shared datapath, exchange
-flip-flops, one IDU, WZ operand latch):
+flip-flops, one IDU, WZ operand latch), its pins on the sides where the
+Z80 has its pads, in the Z80's order (`pin_order.cfg`, as on the gf180mcu
+and IHP cores, whose chips put them in a pad ring):
 
 | | |
 |---|---|
-| Std cells | 8,320 |
-| Cell area | 64,892 µm² |
-| Die | 429 × 440 µm = 0.19 mm² (37 % utilised) |
-| Setup slack @ 20 MHz | +3.8 ns worst corner (ss 100 °C 1.60 V); +11.7 ns typical |
-| Hold slack | +0.10 ns |
+| Std cells | 8,435 |
+| Cell area | 66,141 µm² |
+| Die | 432 × 443 µm = 0.19 mm² (38 % utilised) |
+| Setup slack @ 20 MHz | +10.7 ns typical (signed off); -1.4 ns at ss 100 °C 1.60 V (~19.5 MHz) |
+| Hold slack | +0.11 ns |
 | Route / Magic / KLayout DRC, LVS, antenna, GDS XOR | all 0 |
 | Signs of life, routed netlist | PASS (HALT after 554 clocks) |
-| Runtime | 28 min (8 cores, shared) |
+| Runtime | 16 min (8 cores, shared) |
+
+With the tool's own pin placement the slow corner had +3.8 ns (8,320
+cells, 429 × 440 µm); fixing the pins to their sides costs it ~5 ns.
 
 Previous core (main before the restructure, same flow): Did not finish: at 45 % core utilisation global routing failed (93 % of tracks used, 5,095 overflows); at 30 % it was still in detailed routing after 4.5 h on 8 cores. Synthesis: ~92,500 µm² of cells.
 
