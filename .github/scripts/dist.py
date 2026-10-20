@@ -717,11 +717,19 @@ extracts them from the PDK's layouts, on the routed chip's wiring -- and run at 
         if not there(f'{d}/results.json'):
             continue
         res = json.load(open(os.path.join(base, d, 'results.json')))
-        bad = len(res.get('functional_mismatches') or [])
+        mism = res.get('functional_mismatches') or []
+        bad = len(mism)
+        if mism:      # [clock edge (ns), pin, the RTL's value(, the transistors')]
+            bad = f"{bad} ({', '.join(f'{m[1]} at {float(m[0]):.0f} ns' for m in mism[:6])}{', ...' if bad > 6 else ''})"
         params = res.get('parameters') or []
+
+        def spice(r):   # the range over every cycle, and edges the RTL makes that the pins did not
+            miss = len(r.get('missing_at_ns') or [])
+            rng = (f"{r['spice_min']:.1f} – {r['spice_max']:.1f} ns <span class=\"muted\">({r['n']})</span>"
+                   if r['n'] else '–')
+            return rng + (f" <strong>+ {miss} missing</strong>" if miss else '')
         trs = ''.join(f"<tr><td>{r['id']}</td><td>{e(r['symbol'])}</td><td>{'≤' if r['bound'] == 'max' else '≥'} "
-                      f"{r['limit']:g} ns</td><td>{r['spice_min']:.1f} – {r['spice_max']:.1f} ns "
-                      f"<span class=\"muted\">({r['n']})</span></td><td>{ns(r.get('sta'))}</td>"
+                      f"{r['limit']:g} ns</td><td>{spice(r)}</td><td>{ns(r.get('sta'))}</td>"
                       f"<td>{'ok' if r['pass'] else '<strong>fails</strong>'}</td></tr>" for r in params)
         table = (f"""<details><summary>The datasheet's AC parameters: {sum(r['pass'] for r in params)} of {len(params)}
 met, over every cycle that has them</summary><div class="scroll"><table>

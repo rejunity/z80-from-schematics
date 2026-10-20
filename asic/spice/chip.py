@@ -172,6 +172,28 @@ def prepare_netlist(src, dst):
     return dropped, n_caps
 
 
+def clock_breaks(corner, edges, vdd):
+    """[times]: corners for a source that only makes breakpoints, over the
+    core clock's edges. ngspice's step control (on the devices' charges,
+    trtol 7) lets a single 1-2 ns step carry the CLK pad's Schmitt trigger,
+    the clock tree and every flip-flop through an edge: the delays inside
+    it collapse, a flip-flop can settle in its old state, and Newton's
+    method can land latches elsewhere in their other state with their
+    clocks still (both seen, at tt and at ff). After a breakpoint ngspice
+    restarts with a tenth of the gap to the next, so corners every 0.5 ns,
+    from just before the pin's ramp crosses the pad's threshold (pads.json)
+    to 7 ns after it, keep those steps at 0.2 ns or less."""
+    dc = json.load(open(os.path.join(HERE, "pads", "gf180mcu", "pads.json")))["corners"][corner]["cells"][
+        "gf180mcu_fd_io__in_s"]["dc"]
+    r = EDGE / 0.8
+    out = []
+    for t0, clk, rst, kv in edges:
+        t_sw = t0 - r / 2 + r * (dc["vt_rise"] / vdd if clk else 1 - dc["vt_fall"] / vdd)
+        out += [t_sw - 0.5 + 0.5 * k for k in range(16)]
+    assert all(b > a for a, b in zip(out, out[1:])) and out[0] > 0
+    return out
+
+
 def deck(work, corner, edges, threads, tstop):
     mc, temp, vdd = CORNERS[corner]
     d = os.path.join(work, corner)
@@ -198,6 +220,12 @@ def deck(work, corner, edges, threads, tstop):
     L.append(f"V_rst {node('RESET_n')} 0 PWL(0 0 " + " ".join(f"{a:.3f}n {b:g}" for a, b in ramp(trst, 0, vdd)) + ")")
     for p in ("WAIT_n", "INT_n", "NMI_n", "BUSRQ_n"):
         L.append(f"V_{p.lower()} {node(p)} 0 PWL(0 0 20n {vdd})")
+    brk = clock_breaks(corner, edges, vdd)
+    L.append("V_brk brk 0 PWL(0 0")
+    for k in range(0, len(brk), 16):
+        L.append("+ " + " ".join(f"{b:.3f}n 0" for b in brk[k:k + 16]))
+    L[-1] += ")"
+    L.append("R_brk brk 0 1meg")
     # the memory: through a 50 ohm switch, from 40 ns after the RTL's RD
     # edge to 60 ns after the edge that ends the read
     en = [(0, 0)]
@@ -223,7 +251,8 @@ def deck(work, corner, edges, threads, tstop):
           ".endc", ".end"]
     sp = os.path.join(d, "chip.sp")
     open(sp, "w").write("\n".join(L) + "\n")
-    print(f"chip: {sp}: {dropped} fill cells dropped, {n_caps} lumped capacitors, {len(win)} read windows", flush=True)
+    print(f"chip: {sp}: {dropped} fill cells dropped, {n_caps} lumped capacitors, {len(win)} read windows, "
+          f"{len(brk)} breakpoints over the clock's edges", flush=True)
     return sp
 
 
@@ -267,6 +296,8 @@ def value_at(t, v, at):
 
 
 BUS = {"A": [f"A[{i}]" for i in range(16)], "D": [f"D[{i}]" for i in range(8)]}
+CTRL = {"M1_n": "M1", "MREQ_n": "MREQ", "IORQ_n": "IORQ", "RD_n": "RD", "WR_n": "WR", "RFSH_n": "RFSH",
+        "HALT_n": "HALT"}                     # the pins and their names in tb_chip_ref.v's lines
 
 
 def cycles_of(edges):
@@ -316,7 +347,8 @@ SEPARATIONS = {
 
 def bus_event(t, w, edges, i, bus, t_ref):
     """when the bus is valid after the RTL changes it at edge i: the last
-    of its changing bits through OUT_LEVEL (None if nothing changes)"""
+    of its changing bits through OUT_LEVEL (None if nothing changes, NaN
+    if a bit does not change within 150 ns)"""
     key = "A" if bus == "A" else "DO"
     old, new = int(edges[i - 1][3][key], 16), int(edges[i][3][key], 16)
     times = []
@@ -326,18 +358,20 @@ def bus_event(t, w, edges, i, bus, t_ref):
         if was != want:
             c = crossing(t, w[pin], OUT_LEVEL, bool(want), t_ref - 5)
             if c is None:
-                return None
+                return float("nan")      # the RTL changes it here, the transistors did not
             times.append(c)
     return max(times) if times else None
 
 
 def measure(t, w, edges):
-    """[(cycle kind, cycle index, {(param, occurrence): (t_ref, t_event)})]"""
+    """[(cycle kind, cycle index, {(param, occurrence): (t_ref, t_event)},
+    [(param, t_ref): edges the RTL makes that the pins did not within
+    150 ns])]"""
     out = []
     for n, (kind, r, f) in enumerate(cycles_of(edges)):
         if kind not in DELAYS:
             continue
-        ev, seen = {}, {}
+        ev, seen, miss = {}, {}, []
         for pid, (T, rf), pin, trans in DELAYS[kind]:
             idx = (r if rf == "r" else f)
             if T - 1 >= len(idx):
@@ -348,11 +382,16 @@ def measure(t, w, edges):
                 te = bus_event(t, w, edges, i, pin, t_ref)
             else:
                 te = crossing(t, w[pin], OUT_LEVEL, trans == "rise", t_ref - 5)
+                a, b = ("0", "1") if trans == "rise" else ("1", "0")
+                if te is None and edges[i - 1][3][CTRL[pin]] == a and edges[i][3][CTRL[pin]] == b:
+                    te = float("nan")
             occ = seen.get(pid, 0)
             seen[pid] = occ + 1
-            if te is not None:
+            if te is not None and te != te:
+                miss.append((pid, t_ref))
+            elif te is not None:
                 ev[(pid, occ)] = (t_ref, te)
-        out.append((kind, n, ev))
+        out.append((kind, n, ev, miss))
     return out
 
 
@@ -360,15 +399,13 @@ def check_functional(t, w, edges):
     """the transistor-level pins against the RTL at every clock edge after
     RESET, 110 ns after it (just before the next one): mismatches"""
     bad = []
-    names = {"M1_n": "M1", "MREQ_n": "MREQ", "IORQ_n": "IORQ", "RD_n": "RD", "WR_n": "WR",
-             "RFSH_n": "RFSH", "HALT_n": "HALT"}
     for t0, clk, rst, kv in edges:
         if not rst or t0 < 200:
             continue
         at = t0 + 110
         if at > t[-1]:
             break
-        for pin, key in names.items():
+        for pin, key in CTRL.items():
             if (value_at(t, w[pin], at) > OUT_LEVEL) != (kv[key] == "1"):
                 bad.append((t0, pin, kv[key]))
         a = sum(1 << k for k, p in enumerate(BUS["A"]) if value_at(t, w[p], at) > OUT_LEVEL)
@@ -533,11 +570,13 @@ def diagram(path, title, sub, t0, t1, t, w, men, edges, kind, cyc, ann, vdd):
                          f"stroke='#1f4f9a' fill='none' stroke-width='1.4'/>")
                 if X(b) - X(a) > 44:
                     txt = f"{v:04X}" if r == "A" else f"{v:02X}"
-                    if r == "D":
-                        mid = (a + b) / 2
-                        mem = value_at(t, men, mid) > vdd / 2
-                        cpu = any(kv["DD"] == "1" for tt, c, rs, kv in edges if a - 125 <= tt <= b)
-                        txt += " from memory" if mem else " from the CPU" if cpu else " (bus floating)"
+                    if r == "D":         # who put the value there, just after it settled
+                        at = a + 5
+                        mem = value_at(t, men, at) > vdd / 2
+                        cpu = next((kv["DD"] for tt, c, rs, kv in reversed(edges) if tt <= at), "0") == "1"
+                        port = kind == "ioread" and at >= edges[cyc[1][0]][0]
+                        txt += ((" from the port" if port else " from memory") if mem else
+                                " from the CPU" if cpu else " (bus floating)")
                     o.append(f"<text x='{(X(a) + X(b)) / 2:.1f}' y='{(hi + lo) / 2 + 4:.1f}' font-size='11' "
                              f"text-anchor='middle' {FONT}>{esc(txt)}</text>")
         else:
@@ -652,25 +691,28 @@ def figures(work, corner, edges, out, sta_file):
     cycles = cycles_of(edges)
     os.makedirs(out, exist_ok=True)
     # every parameter over every cycle that has it
-    allv = {}
-    for kind, n, ev in meas:
+    allv, lost = {}, {}
+    for kind, n, ev, miss in meas:
         for (pid, occ), (tr, te) in ev.items():
             allv.setdefault(pid, []).append(te - tr)
+        for pid, tr in miss:
+            lost.setdefault(pid, []).append(tr)
         for pid, (p_late, o_late), (p_early, o_early) in SEPARATIONS.get(kind, []):
             if (p_late, o_late) in ev and (p_early, o_early) in ev:
                 allv.setdefault(pid, []).append(ev[(p_late, o_late)][1] - ev[(p_early, o_early)][1])
     rows = []
-    for pid in sorted(allv):
+    for pid in sorted(set(allv) | set(lost)):
         sym, bound, lim = ds[pid]
-        vals = allv[pid]
-        worst = max(vals) if bound == "max" else min(vals)
-        ok = worst <= lim if bound == "max" else worst >= lim
-        rows.append({"id": pid, "symbol": sym, "bound": bound, "limit": lim, "spice_min": min(vals),
-                     "spice_max": max(vals), "n": len(vals), "sta": sta.get(pid), "pass": ok})
+        vals = allv.get(pid, [])
+        worst = (max(vals) if bound == "max" else min(vals)) if vals else None
+        ok = bool(vals) and pid not in lost and (worst <= lim if bound == "max" else worst >= lim)
+        rows.append({"id": pid, "symbol": sym, "bound": bound, "limit": lim,
+                     "spice_min": min(vals) if vals else None, "spice_max": max(vals) if vals else None,
+                     "n": len(vals), "missing_at_ns": lost.get(pid, []), "sta": sta.get(pid), "pass": ok})
     # the figures: of each kind the first cycle whose address changes at T1
     figs = []
     for kind in ROWS:
-        cand = [(k, n, ev) for k, n, ev in meas if k == kind and (6, 0) in ev]
+        cand = [(k, n, ev) for k, n, ev, _ in meas if k == kind and (6, 0) in ev]
         if not cand:
             continue
         _, n, ev = cand[0]
@@ -719,9 +761,11 @@ def figures(work, corner, edges, out, sta_file):
     print(f"\n  {'#':>2} {'parameter':16} {'limit':>9}  {'SPICE (every cycle)':>22}  {'STA':>6}")
     for r in rows:
         lim = f"{'<=' if r['bound'] == 'max' else '>='}{r['limit']:6.1f}"
-        sp = f"{r['spice_min']:.1f} .. {r['spice_max']:.1f} ({r['n']})"
+        sp = f"{r['spice_min']:.1f} .. {r['spice_max']:.1f} ({r['n']})" if r["n"] else "-"
         st = f"{r['sta']:.1f}" if r["sta"] is not None else "-"
-        print(f"  {r['id']:2d} {r['symbol']:16} {lim:>9}  {sp:>22}  {st:>6}  {'ok' if r['pass'] else 'FAIL'}")
+        print(f"  {r['id']:2d} {r['symbol']:16} {lim:>9}  {sp:>22}  {st:>6}  {'ok' if r['pass'] else 'FAIL'}"
+              + (f"  (no edge within 150 ns of the clock at {', '.join(f'{x:.0f}' for x in r['missing_at_ns'])} ns)"
+                 if r["missing_at_ns"] else ""))
     return res
 
 
