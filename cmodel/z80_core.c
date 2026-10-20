@@ -455,7 +455,14 @@ static void z80_exec_step(z80_t *c)
         else finish(c);
         break;
     case EXEC_ADD_HL_RP:
-        if (m == 1) { do_add16(c); z80_start_mcycle(c, BUSOP_INTERNAL, c->rf[hlp], 0, 7); }
+        /* the die's M2 and M3: internal M-cycles of 4 and 3 T (BUSREQ can
+           take the bus between them; perfectz80) */
+        if (m == 1) {                        /* the latch holds HL from before the sum */
+            uint16_t hl0 = c->rf[hlp];
+            do_add16(c);
+            z80_start_mcycle(c, BUSOP_INTERNAL, hl0, 0, 4);
+        }
+        else if (m == 2) z80_start_mcycle(c, BUSOP_INTERNAL, c->rf[hlp], 0, 3);
         else finish(c);
         break;
 
@@ -732,12 +739,14 @@ static void z80_exec_step(z80_t *c)
         break;
 
     /* ---------- ED page (non-block) ---------- */
-    case EXEC_ADC16:
-        if (m == 1) z80_start_mcycle(c, BUSOP_INTERNAL, c->rf[RFP_HL], 0, 7);
+    case EXEC_ADC16:                          /* internal M-cycles of 4 and 3 T, as ADD */
+        if (m == 1) z80_start_mcycle(c, BUSOP_INTERNAL, c->rf[RFP_HL], 0, 4);
+        else if (m == 2) z80_start_mcycle(c, BUSOP_INTERNAL, c->rf[RFP_HL], 0, 3);
         else { do_adc16(c, false); finish(c); }
         break;
     case EXEC_SBC16:
-        if (m == 1) z80_start_mcycle(c, BUSOP_INTERNAL, c->rf[RFP_HL], 0, 7);
+        if (m == 1) z80_start_mcycle(c, BUSOP_INTERNAL, c->rf[RFP_HL], 0, 4);
+        else if (m == 2) z80_start_mcycle(c, BUSOP_INTERNAL, c->rf[RFP_HL], 0, 3);
         else { do_adc16(c, true); finish(c); }
         break;
     case EXEC_NEG:
@@ -1147,7 +1156,6 @@ static void start_seq_inta(z80_t *c, uint8_t len)
 static void begin_next(z80_t *c)
 {
     c->nmi_resp = false;
-    if (!c->pins.busreq_n) { c->bus_granted = true; return; } /* DMA owns the bus */
 
     bool allow_int = !c->ei_delay;
     c->ei_delay = false;
@@ -1261,6 +1269,8 @@ static void advance(z80_t *c)
     c->res2 = m1_t2 ? c->res2 : c->res_s;
     c->sres = c->res2 ? false : (m1_t2 ? c->res_s : c->sres);
     c->res_s = !c->pins.reset_n;
+    bool breq = c->busreq_s;                 /* BUSREQ at this T-state's rising edge */
+    c->busreq_s = !c->pins.busreq_n;
     c->rd_hold = hold;
     if (c->rst_idle) {
         /* the ring has stopped: T1 of an M1 at 0000 once RES2 was clear on the
@@ -1275,8 +1285,23 @@ static void advance(z80_t *c)
     }
     uint16_t sp0 = c->rf[RFP_SP];
     bool from_write = c->bus_op == BUSOP_MWR;
-    if (!c->stalled)                         /* else hold this T-state as a Tw */
+    if (c->bus_granted) {
+        /* bus grant (DMA, perfectz80 / PS0178 Figure 10): the M-cycle after
+           the grant is set up and held; BUSREQ seen high on this T-state's
+           rising edge releases it here (BUSACK rose on its falling edge) */
+        if (!breq) c->bus_granted = false;
+    } else if (!c->stalled) {                /* else hold this T-state as a Tw */
+        bool last = c->t_state >= c->m_len;
         end_tstate(c);
+        /* BUSREQ seen low on the rising edge that started the M-cycle's last
+           T-state: the bus goes to the DMA master after it, at any M-cycle
+           boundary; the next M-cycle (or instruction, or interrupt
+           response) waits for the release. A 1- or 2-T internal cycle
+           extends this M-cycle on the die (an M1's T5 / T6, CALL's 4-T
+           read): no boundary before it. */
+        bool ext_next = c->bus_op == BUSOP_INTERNAL && c->m_len <= 2 && c->t_state == 1;
+        if (last && breq && !ext_next) c->bus_granted = true;
+    }
     if (res2) {                              /* this T-state was the last */
         /* the SP-1 of a push's first byte belongs, on the die, to the falling
            edge that ends the M-cycle before it (M1 T5, the NMI / INT response,
@@ -1315,6 +1340,7 @@ static void reset_state(z80_t *c)
     c->phase_primed = false; c->stalled = false; c->wait_sampled = false;
     c->q = 0; c->f_modified = false;
     c->res_s = c->res2 = c->sres = c->rst_idle = c->srst_m1 = c->rd_hold = false;
+    c->busreq_s = false;
 
     c->pins.m1_n = c->pins.mreq_n = c->pins.iorq_n = 1;
     c->pins.rd_n = c->pins.wr_n = c->pins.rfsh_n = 1;
@@ -1376,36 +1402,6 @@ void z80_phase_step(z80_t *c)
         c->prev_nmi_n = c->pins.nmi_n;
     }
 
-    /* bus grant (DMA): while BUSREQ held, release the bus and idle.
-       Silicon-faithful per pz80 prog15_busreq_m1: on busreq_n=1 release,
-       settle for ~2 phases before starting the post-grant M1 fetch. */
-    if (c->bus_granted) {
-        if (!c->pins.busreq_n) {
-            c->busreq_release_filter = 0;
-            c->pins.busack_n = 0;
-            c->pins.m1_n = c->pins.mreq_n = c->pins.iorq_n = 1;
-            c->pins.rd_n = c->pins.wr_n = c->pins.rfsh_n = 1;
-            c->pins.data_drive = false;
-            c->pins.halt_n = c->halted ? 0 : 1;
-            return;
-        }
-        if (c->busreq_release_filter < 2) {
-            c->busreq_release_filter++;
-            /* Stay in bus-grant idle during settle window. */
-            c->pins.busack_n = 0;
-            c->pins.m1_n = c->pins.mreq_n = c->pins.iorq_n = 1;
-            c->pins.rd_n = c->pins.wr_n = c->pins.rfsh_n = 1;
-            c->pins.data_drive = false;
-            c->pins.halt_n = c->halted ? 0 : 1;
-            return;
-        }
-        c->bus_granted = false;          /* BUSREQ released: resume */
-        c->busreq_release_filter = 0;
-        c->pins.busack_n = 1;
-        z80_start_m1(c);
-        c->phase_primed = false;
-    }
-
     /* Tw repeats T2 in memory writes, but its .P half must not regenerate
        the initial T2.P (WR high). Preserve the already asserted strobe. */
     bool hold_write_strobe = c->phase_primed && c->phi == 1 && c->stalled &&
@@ -1424,13 +1420,13 @@ void z80_phase_step(z80_t *c)
        that single phase the latch falls to 0 so subsequent .N→.P advances
        run normally. This is the silicon's behavior: each Tw is decided by
        one falling-edge sample. */
-    if (!c->rst_idle && is_wait_sample_phase(c))
+    if (!c->rst_idle && !c->bus_granted && is_wait_sample_phase(c))
         c->wait_sampled = (c->pins.wait_n == 0);
     else
         c->wait_sampled = false;
     c->stalled = c->wait_sampled;
 
-    if (!c->rst_idle && !c->stalled && is_latch_phase(c))
+    if (!c->rst_idle && !c->bus_granted && !c->stalled && is_latch_phase(c))
         do_latch(c);
 
     /* NMI / INT silicon sample point: rising edge of the last T-state of
@@ -1438,7 +1434,7 @@ void z80_phase_step(z80_t *c)
        per Zilog UM0080. Sample once per M-cycle here; the last M-cycle's
        sample is the one begin_next() reads. While WAIT is asserted we hold
        the previous sample (T-state didn't advance), matching silicon. */
-    if (!c->rst_idle && !c->stalled && c->t_state == c->m_len && c->phi == 0) {
+    if (!c->rst_idle && !c->bus_granted && !c->stalled && c->t_state == c->m_len && c->phi == 0) {
         c->nmi_sampled = c->nmi_pending;
         c->int_sampled = !c->pins.int_n;
     }
@@ -1457,7 +1453,12 @@ void z80_phase_step(z80_t *c)
                &c->pins.rd_n, &c->pins.wr_n,   &c->pins.rfsh_n);
 
     if (hold_write_strobe) c->pins.wr_n = 0;
-    if (c->bus_op == BUSOP_INTERNAL || c->rst_idle ||
+    /* ... except that a RESET cut in a long internal cycle's T1, with RES2
+       already set as the T1 starts, forces it into an opcode-fetch-like read
+       and the bus drives the address latch (perfectz80: HL in ADD HL,rr's
+       M2) */
+    bool int_cut = c->bus_op == BUSOP_INTERNAL && c->m_len > 2 && c->t_state == 1 && c->res2;
+    if ((c->bus_op == BUSOP_INTERNAL && !int_cut) || c->rst_idle ||
         (c->bus_op == BUSOP_M1 && c->t_state >= 5) || (c->bus_op == BUSOP_INTA && c->t_state >= 7))
         c->pins.addr = held_addr;
 
@@ -1476,6 +1477,15 @@ void z80_phase_step(z80_t *c)
     /* RES2 / the special-reset latch after this T-state's falling edge */
     bool res2_f = (c->phi == 0) ? c->res2 : (m1_t2 ? c->res2 : c->res_s);
     bool sres_f = (c->phi == 0) ? c->sres : (res2_f ? false : (m1_t2 ? c->res_s : c->sres));
+    /* bus grant: strobes idle, the address held; BUSACK low, rising in the
+       low half of the granted T-state whose rising edge saw BUSREQ high */
+    c->pins.busack_n = c->bus_granted ? ((c->phi == 1 && !c->busreq_s) ? 1 : 0) : 1;
+    if (c->bus_granted) {
+        c->pins.m1_n = c->pins.mreq_n = c->pins.iorq_n = 1;
+        c->pins.rd_n = c->pins.wr_n = c->pins.rfsh_n = 1;
+        c->pins.data_drive = false;
+        c->pins.addr = held_addr;
+    }
     if (c->rst_idle) {
         c->pins.m1_n = c->pins.mreq_n = c->pins.iorq_n = 1;
         c->pins.rd_n = c->pins.wr_n = c->pins.rfsh_n = 1;

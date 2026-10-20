@@ -92,7 +92,7 @@ interactive controls (Enter, Backspace, Ctrl-C / Ctrl-Space = BREAK, Ctrl-\\ = e
     make pin_scenarios          # INT/NMI/WAIT/BUSREQ/RESET scenarios — C tracegen path
     make pin_scenarios_rtl      # same scenarios — iverilog RTL path
     make pin_scenarios_netlist  # same scenarios — LibreLane gate-level netlist path
-    make event_sweep            # RESET / INT / NMI at every T-state of 15 instructions vs perfectz80 (~2 min)
+    make event_sweep            # RESET / INT / NMI / BUSREQ / WAIT at every T-state of 24 instructions vs perfectz80
     make all-tests           # every gate above in sequence
     make clean
 
@@ -135,8 +135,8 @@ fossi-foundation substituter configured (see [docs/librelane-flow.md](docs/libre
 | ✅  | Gate-level vs perfectz80 — **C model** path                     | 13/13 PASS: control pins and the address in every half-cycle (transfers, refresh, internal T-states); `data_o` 100 % |
 | ✅  | Gate-level vs perfectz80 — **iverilog RTL** path                | 12/12 PASS, same 12 programs        |
 | ✅  | Gate-level vs perfectz80 — **LibreLane sky130 netlist** path    | 12/12 PASS, same 12 programs ("ultimate test") |
-| 🚧  | Pin-scenario programs vs perfectz80 (14 INT/NMI/WAIT/BUSREQ/RESET scenarios) | C model 14/14, RTL 13/14: `prog15_busreq_m1` (BUSREQ, known difference 16) is left |
-| ✅  | RESET / INT / NMI timing sweep vs perfectz80 (`make event_sweep`, [docs/event-sweep.md](docs/event-sweep.md)) | 2375 / 2375 cases pin-identical, including the die's sampled RESET and the special reset |
+| ✅  | Pin-scenario programs vs perfectz80 (14 INT/NMI/WAIT/BUSREQ/RESET scenarios) | 14/14 in the C model and the RTL, the address included in every phase |
+| ✅  | RESET / INT / NMI / BUSREQ / WAIT timing sweep vs perfectz80 (`make event_sweep`, [docs/event-sweep.md](docs/event-sweep.md)) | 5879 / 5905 cases pin-identical in every half-cycle (address and BUSACK included); the 26 others are RESET in ADD HL,BC / INC BC's write-back (known difference 19) |
 
 Legend: ✅ pass / 100 % &nbsp; 🟡 ≥ 95 % (close, known artifacts) &nbsp; 🚧 < 95 % (work in progress).
 

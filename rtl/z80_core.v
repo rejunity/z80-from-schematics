@@ -62,7 +62,7 @@ module z80_core (
     input  wire        res_s,          // RESET, sampled on this T-state's rising edge (1 = active)
     // inputs consumed on the rising edge (live pins)
     input  wire [7:0]  data_in,        // M1 opcode / INTA vector, end of T2.N / Tw2.N
-    input  wire        busreq_n,       // BUSREQ, instruction boundary + grant
+    input  wire        busreq_n,       // BUSREQ at this T-state's rising edge (z80_top)
     input  wire        nmi_n,          // NMI edge detect, clock-low half
     // inputs sampled on the falling edge by z80_top
     input  wire [7:0]  data_in_neg,    // MRD data at T3, IORD data at T4
@@ -252,9 +252,14 @@ module z80_core (
     // contention tables, "ir:1", "hl:1"), and so do the T-states an M1 or
     // INTA runs past its refresh (an M1's T5 / T6, IM1 / IM2's seventh).
     // m_addr still carries the IDU / EA work of those T-states.
-    wire hold_pos = idle_pos | (bus_op_n == `BUSOP_INTERNAL) ||
+    // A RESET cut in a long internal cycle's T1, with RES2 already set as
+    // the T1 starts, forces it into an opcode-fetch-like read: the bus then
+    // drives the address latch (perfectz80: HL in ADD HL,rr's M2).
+    wire int_cut_pos = int_g_n && (t_n == 4'd1) && res2_n && !rst_idle_n;
+    wire int_cut_neg = int_g && (t_state == 4'd1) && res2 && !rst_idle;
+    wire hold_pos = idle_pos | ((bus_op_n == `BUSOP_INTERNAL) && !int_cut_pos) ||
                     ((bus_op_n == `BUSOP_M1) && (t_n >= 4'd5)) || ((bus_op_n == `BUSOP_INTA) && (t_n >= 4'd7));
-    wire hold_neg = idle_neg | (bus_op == `BUSOP_INTERNAL) ||
+    wire hold_neg = idle_neg | ((bus_op == `BUSOP_INTERNAL) && !int_cut_neg) ||
                     ((bus_op == `BUSOP_M1) && (t_state >= 4'd5)) || ((bus_op == `BUSOP_INTA) && (t_state >= 4'd7));
     assign addr_pos       = hold_pos ? addr_neg : tp_addr;
     assign data_out_pos   = tp_dout;
@@ -295,8 +300,10 @@ module z80_core (
     assign halt_n_pos   = (halted_n && !halt_rst) ? 1'b0 : 1'b1;
     assign halt_n_neg   = ((halted || exec_halt_in_m1) && !halt_exit && !halt_rst) ? 1'b0 : 1'b1;
     // BUSACK follows the grant flag, which only changes on the rising edge.
+    // A granted T-state whose rising edge saw BUSREQ high is the last one:
+    // BUSACK rises on its falling edge, the held M-cycle starts after it.
     assign busack_n_pos = bus_granted_n ? 1'b0 : 1'b1;
-    assign busack_n_neg = bus_granted   ? 1'b0 : 1'b1;
+    assign busack_n_neg = (bus_granted && !busreq_n) ? 1'b0 : 1'b1;
     assign dbg_t = t_state; assign dbg_m = m_cycle;
 
     // =======================================================================
@@ -905,7 +912,7 @@ module z80_core (
         // edge, and the NMI edges seen up to it (nmi_pending as that edge
         // left it). Refreshed once per M-cycle; the last M-cycle's sample
         // is the one the instruction boundary uses to accept.
-        if (t_state == m_len) begin
+        if (t_state == m_len && !bus_granted) begin
             nmi_sampled_n = nmi_pending;
             int_sampled_n = ~int_n_rise;
         end
@@ -952,16 +959,13 @@ module z80_core (
         // write wins.
         if (rfsh_end && !bus_granted) reg_r_n = {reg_r[7], (reg_r[6:0] + 7'd1)};
 
-        // bus grant (DMA): idle while BUSREQ held. BUSREQ is sampled on the
-        // rising edge (as on silicon), so the post-grant M1 always starts
-        // T1 on a rising edge.
+        // bus grant (DMA, perfectz80 / PS0178 Figure 10): the M-cycle that
+        // follows the grant is set up and held, the bus idles with BUSACK
+        // low. BUSREQ seen high on this T-state's rising edge releases it:
+        // BUSACK rises on the falling edge, the held M-cycle starts T1 on
+        // the next rising edge.
         if (bus_granted) begin
-            if (busreq_n) begin                  // released: resume with a fresh M1
-                bus_granted_n = 1'b0;
-                bus_op_n = `BUSOP_M1; m_addr_n = r_pc; m_len_n = 4'd4;
-                t_n = 4'd1; m_cycle_n = 3'd1;
-            end
-            // else: hold all state (idle)
+            if (busreq_n) bus_granted_n = 1'b0;
         end
         // WAIT sampled low: hold this T-state as a Tw
         else if (stall) begin
@@ -1010,10 +1014,8 @@ module z80_core (
                 // 4.1 + ZEXALL <daa,cpl,scf,ccf>).
                 reg_q_n = f_modified_n ? f_next : 8'h00;
                 f_modified_n = 1'b0;
-                // begin_next: decide bus grant / NMI / INT / HALT / next opcode
-                if (!busreq_n) begin
-                    bus_granted_n = 1'b1;            // DMA owns the bus next cycle
-                end else begin
+                // begin_next: decide NMI / INT / HALT / next opcode
+                begin
                     allow_int = ~ei_delay_n;         // ei_delay_n reflects EI this cycle
                     ei_delay_n = 1'b0;
                     // Accept based on the SAMPLED interrupt state (latched at
@@ -1054,6 +1056,14 @@ module z80_core (
                     end
                 end
             end
+            // BUSREQ seen low on the rising edge that started this, the
+            // M-cycle's last T-state: the bus goes to the DMA master after
+            // it, at any M-cycle boundary -- the next M-cycle (or the next
+            // instruction, or the interrupt response) waits for the release.
+            // A 1- or 2-T internal cycle extends this M-cycle on the die (an
+            // M1's T5 / T6, CALL's 4-T read): no boundary before it.
+            if (!busreq_n && !((bus_op_n == `BUSOP_INTERNAL) && (m_len_n <= 4'd2)))
+                bus_granted_n = 1'b1;
         end
         end  // !rst_idle
 

@@ -311,8 +311,12 @@ module z80_execute (
                     ctl_ab = AB_REG; ctl_ri = RI_HLP; ctl_inc = INC_P1; ctl_wz = WZ_IDU;  // WZ = HL+1
                     ctl_pw = 1'b1; ctl_pwi = RI_HLP; ctl_pws = PW_A16;
                     wr_flags(FS_A16);
-                    mstart(`BUSOP_INTERNAL, AL_A16, 4'd7);
-                end else ctl_fin = 1'b1;
+                    at_pair(`BUSOP_INTERNAL, RI_HLP, 4'd4);         // the latch holds HL
+                end
+                // the die's M2 and M3: internal M-cycles of 4 and 3 T (BUSREQ
+                // can take the bus between them; perfectz80)
+                else if (m_cycle == 3'd2) at_pair(`BUSOP_INTERNAL, RI_HLP, 4'd3);
+                else ctl_fin = 1'b1;
             end
 
             `EXEC_LD_R_N: begin
@@ -543,8 +547,9 @@ module z80_execute (
             end
 
             // ---------- ED page (non-block) ----------
-            `EXEC_ADC16, `EXEC_SBC16: begin
-                if (m_cycle == 3'd1) at_pair(`BUSOP_INTERNAL, RI_HL, 4'd7);
+            `EXEC_ADC16, `EXEC_SBC16: begin                   // internal 4 + 3 T, as ADD
+                if (m_cycle == 3'd1) at_pair(`BUSOP_INTERNAL, RI_HL, 4'd4);
+                else if (m_cycle == 3'd2) at_pair(`BUSOP_INTERNAL, RI_HL, 4'd3);
                 else begin
                     ctl_ab = AB_REG; ctl_ri = RI_HL; ctl_inc = INC_P1; ctl_wz = WZ_IDU;  // WZ = HL+1
                     ctl_pw = 1'b1; ctl_pwi = RI_HL; ctl_pws = PW_A16;

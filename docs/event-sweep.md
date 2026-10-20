@@ -1,10 +1,9 @@
-# RESET / INT / NMI timing sweep
+# RESET / INT / NMI / BUSREQ / WAIT timing sweep
 
-`make event_sweep` drives RESET, INT and NMI pulses into the iverilog RTL and
-into the perfectz80 transistor-level netlist at every T-state of a set of
-instructions. It compares the two half-cycle by half-cycle. CI runs it on
-every push; it takes about 45 s on 10 cores and about 2 minutes on a GitHub
-runner.
+`make event_sweep` drives RESET, INT, NMI, BUSREQ and WAIT pulses into the
+iverilog RTL and into the perfectz80 transistor-level netlist at every
+T-state of a set of instructions. It compares the two half-cycle by
+half-cycle. CI runs it on every push.
 
 Files:
 
@@ -35,6 +34,7 @@ A case matches when:
 - every control pin agrees in every half-cycle;
 - the address agrees in every half-cycle: transfers, refreshes (I:R), and
   the internal and idle T-states, where the bus keeps its last address;
+- BUSACK is one of the control pins;
 - the data agrees wherever both sides drive WR.
 
 Instructions under test:
@@ -52,18 +52,23 @@ Instructions under test:
 - LDIR
 - HALT
 - LD A,I and LD A,R (P/V from IFF2)
+- ADD HL,BC and ADC HL,BC (internal M-cycles of 4 + 3 T)
+- EX (SP),HL, DJNZ (taken), RLD, INC BC
+- IN A,(n), OUT (n),A, INI
 
 | group | pulses |
 |---|---|
-| `int` | INT from every T-state of seven instructions until INTA (IM1, EI) |
-| `nmi` | 1 T NMI pulse at every T-state of all 15 instructions |
+| `int` | INT from every T-state of eleven instructions until INTA (IM1, EI) |
+| `nmi` | 1 T NMI pulse at every T-state of all 24 instructions |
 | `nmi_short` | 1/16 T and 1/4 T NMI pulses at every 1/16 T of INC A, LD A,(HL), LD (HL),A, INC (HL) |
 | `nmi_reentry` | NMI held low; two pulses before acceptance; a second pulse during the response; nested; RETN with INT pending |
-| `reset` | 4 T RESET at every T-state of six instructions |
+| `reset` | 4 T RESET at every T-state of ten instructions |
 | `reset_release` | release swept over a clock, 3 and 4 T after assertion |
 | `reset_wait` | RESET while a read is held by WAIT |
 | `reset_short` | 1/4 to 2 T RESET around M1 (the special-reset window) |
-| `combo` | RESET during an INT or NMI response; an NMI edge while RESET is low; NMI or INT held across RESET |
+| `combo` | RESET during an INT or NMI response; an NMI edge while RESET is low; NMI or INT held across RESET; BUSREQ at the boundary of an INT, an NMI and HALT ending on INT |
+| `busreq` | 1 T and 4 T BUSREQ at every T-state of all 24 instructions: grant, BUSACK, resume |
+| `wait` | 1 T and 3 T WAIT at every T-state of all 24 instructions |
 
 ### What a simulation can and can't tell
 
@@ -88,18 +93,23 @@ minimum widths, which depend on analog timing.
 
 | group | cases | match | differ |
 |---|---|---|---|
-| int | 130 | 130 | 0 |
-| nmi | 474 | 474 | 0 |
+| int | 254 | 254 | 0 |
+| nmi | 750 | 750 | 0 |
 | nmi_short | 1184 | 1184 | 0 |
 | nmi_reentry | 43 | 43 | 0 |
-| reset | 112 | 112 | 0 |
+| reset | 206 | 180 | 26 |
 | reset_release | 64 | 64 | 0 |
 | reset_wait | 32 | 32 | 0 |
 | reset_short | 240 | 240 | 0 |
-| combo | 96 | 96 | 0 |
+| combo | 132 | 132 | 0 |
+| busreq | 1500 | 1500 | 0 |
+| wait | 1500 | 1500 | 0 |
 
-All 2375 cases match; the baseline is empty. When the sweep was written
-(main `ec3c5d2`) 809 did. Since then:
+5879 of 5905 cases match. The 26 in the baseline are RESET stopping ADD HL,BC
+or INC BC in the T-states where the die still writes their result
+(docs/known-differences.md row 19): the register dump after reset differs,
+the pins do not. When the sweep was written (main `ec3c5d2`, 2287 cases) 809
+did. Since then:
 - `e60d06e` latches INT on the rising edge that starts the last T-state and
   catches an NMI pulse of any width, as perfectz80 does: INT and NMI were
   taken half a clock early (a pulse in the high half of the last T-state),
@@ -120,6 +130,13 @@ All 2375 cases match; the baseline is empty. When the sweep was written
   stopped after one more T-state with the strobe patterns of a cut cycle,
   registers kept, T1 at 0000 on the third rising edge after release, and
   the special reset. docs/timing.md "RESET" has the details.
+- The address is compared in every half-cycle: internal T-states keep the
+  last address on the bus.
+- BUSREQ is the die's (the `busreq`, `wait` and BUSREQ combo cases came with
+  it): sampled like INT, a grant after any M-cycle with the next one held,
+  BUSACK falling on the next rising edge and rising on the falling edge of
+  the T-state that sees the release, the die's internal M-cycle boundaries
+  (ADD / ADC HL,rr: 4 + 3 T). docs/timing.md "BUSREQ / BUSACK".
 
 `build/event_sweep/report.md` has the per-instruction grids.
 `build/event_sweep/diff/` has a side-by-side trace for every differing case.

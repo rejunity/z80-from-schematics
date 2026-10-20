@@ -182,11 +182,30 @@ both side with silicon.
 
 ## BUSREQ / BUSACK
 
-`pin_busreq_n` sampled at the rising edge of the last phase of any M-cycle. When
-granted, after the current M-cycle the core asserts `pin_busack_n ← 0` and tri-states
-(in RTL: stops driving — `pin_data_drive=0`, address/control released to high-Z model
-via a `bus_release` mux/enable) until BUSREQ deasserts. No internal tri-states; the
-release is modeled with output-enable lines on the pin mux.
+As the NMOS die does it (perfectz80; PS0178 Figure 10):
+
+- BUSREQ is sampled on the rising edge that starts each T-state (`z80_top`
+  `busreq_rise`), like INT.
+- **Grant**: when it was low at the start of an M-cycle's last T-state, the bus
+  goes to the DMA master after that M-cycle -- at any M-cycle boundary, inside
+  an instruction too. The next M-cycle (the next one of the instruction, the
+  next instruction, or an interrupt response) is set up and held. BUSACK falls
+  on the rising edge that ends the M-cycle; the strobes idle, the data bus is
+  not driven, and the address keeps its last value (the chip's pads float it on
+  BUSACK).
+- **Release**: in each granted T-state, BUSREQ high at its rising edge makes it
+  the last: BUSACK rises on its falling edge and the held M-cycle starts T1 on
+  the next rising edge. The shortest grant is one T-state.
+- **M-cycle boundaries** are the die's, internal cycles included: ADD HL,rr and
+  ADC / SBC HL,rr run internal M-cycles of 4 and 3 T-states; the 1- and 2-T
+  internal states after an M1 or a read (an M1's T5 / T6, CALL's 4-T operand
+  read) belong to that M-cycle and are no boundary.
+- INT and NMI are not sampled while the bus is granted; at an instruction
+  boundary the interrupt decision is taken first and the response waits for
+  the release.
+
+No internal tri-states; the release is modeled with output-enable lines on the
+pin mux. The event sweep's `busreq` group pins all of this.
 
 ## RESET
 

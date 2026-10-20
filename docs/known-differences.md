@@ -28,9 +28,9 @@ Status legend:
 | 11 | `DD 36` / `FD 36` cycle count                 | timing                    | resolved |
 | 12 | `INI` / `IND` / `INIR` / `INDR` flag set      | undocumented / flag       | watching |
 | 13 | `LDIR` / `LDDR` Q-leak into next instruction  | undocumented / flag       | watching |
-| 14 | Pin-scenario vs perfectz80 (informational)    | timing                    | watching |
-| 15 | RTL clocking: reset / BUSREQ settle vs C model | timing                    | watching |
-| 16 | BUSREQ / BUSACK vs the NMOS Z80               | timing / bus              | watching |
+| 14 | Pin-scenario vs perfectz80 (informational)    | timing                    | resolved |
+| 15 | RTL clocking: reset / BUSREQ settle vs C model | timing                    | resolved |
+| 16 | BUSREQ / BUSACK vs the NMOS Z80               | timing / bus              | resolved |
 | 17 | RESET / INT / NMI sweep vs perfectz80         | timing / interrupt        | resolved |
 | 18 | Refresh and idle address bus                  | timing / bus              | resolved |
 | 19 | RESET between an instruction and its write-back | timing / reset          | watching |
@@ -143,8 +143,8 @@ Notes for each row:
      programs (`prog9_inta_im1`..`prog22_wait_cpir`) drive INT / NMI /
      WAIT / BUSREQ / RESET through the `.events` sidecar and diff
      against perfectz80 per-half-cycle. **Current status
-     (2026-10-20)**: 13 / 14 PASS cleanly through the RTL, 14 / 14
-     through the C model. Until then `perfectz80_runner` set NMI, INT and
+     (2026-10-20)**: 14 / 14 PASS through the RTL and through the C model,
+     the address included in every phase. Until then `perfectz80_runner` set NMI, INT and
      WAIT high again at every phase, so perfectz80 saw a one-phase pulse
      where the C model and the RTL held the scenario's level from its
      `lo` event to its `hi` event; it now holds the level too. That
@@ -153,9 +153,8 @@ Notes for each row:
      programs pass, like `prog21_wait_ldir` and `prog22_wait_cpir`.
      `prog10_halt_nmi` and `prog13_halt_int` pass since the HALT pin
      rises in the low half of the last T4 (row 17), `prog17_reset` since
-     both models run the die's sampled RESET. Left:
-     - `prog15_busreq_m1` (RTL 109 / 200, C passes): the RTL resumes a
-       T-state early after BUSREQ is released (rows 15, 16).
+     both models run the die's sampled RESET, `prog15_busreq_m1` since
+     both grant and release BUSREQ as the die does (row 16).
 
      `.events` is now consumed by all paths — C tracegen, iverilog
      RTL, Verilator, LibreLane gate-level netlist — via per-pin
@@ -191,11 +190,8 @@ Notes for each row:
      - **Reset** — resolved 2026-10-20: both models run the die's sampled
        RESET (docs/timing.md "RESET"); `prog17_reset` and the sweep's 544
        RESET cases match perfectz80.
-     - **BUSREQ release**: the C model settles 2 half-cycles after
-       `busreq_n` rises (`prog15_busreq_m1`); the RTL samples `busreq_n`
-       on the rising edge and restarts M1 on that edge. (The previous 2×
-       RTL could restart on a falling edge and run phase-swapped
-       thereafter; that is fixed.)
+     - **BUSREQ release** — resolved 2026-10-20: both models grant and
+       release as the die does (row 16).
      - **Pins during a bus grant**: both now idle their strobes while
        BUSACK is low. The previous 2× RTL kept driving the frozen
        M-cycle's strobes.
@@ -205,43 +201,36 @@ Notes for each row:
      Watching: fold the reset / BUSREQ settle into the RTL once the
      pin-scenario gates become hard.
 
- 16. **BUSREQ / BUSACK vs the NMOS Z80 (silicon and datasheet)** —
-     found by sweeping BUSREQ through perfectz80, the C model and the RTL
-     (the pin_scenarios harness never compares BUSACK, and its BUSREQ
-     events are long steps):
-     - **Grant point**: the NMOS Z80 grants the bus at the end of *any*
-       machine cycle (PS0178 Figure 10; perfectz80 grants after the M1 of
-       `LD SP,nn` and again after each of its operand reads) and then
-       resumes the same instruction. Both models grant only at instruction
-       boundaries, so DMA can wait up to a whole instruction longer.
-     - **Sample edge**: BUSREQ is sampled on the rising edge that starts
-       the M-cycle's last T-state, like INT (TsBUSREQ / ThBUSREQ); both
-       models sample the edge that ends it, a T-state later.
+ 16. **BUSREQ / BUSACK vs the NMOS Z80 — resolved 2026-10-20.** Found by
+     sweeping BUSREQ through perfectz80; both models now do what the die
+     does (docs/timing.md "BUSREQ / BUSACK"):
+     - **Grant point**: after *any* machine cycle (PS0178 Figure 10), the
+       next one held until the release -- inside an instruction too (after
+       the M1 of `LD SP,nn`, after each operand read). The models granted
+       only at instruction boundaries.
+     - **Sample edge**: BUSREQ is sampled on the rising edge that starts the
+       M-cycle's last T-state, like INT (TsBUSREQ / ThBUSREQ); the models
+       sampled the edge that ends it.
      - **BUSACK edges**: BUSACK falls on the rising edge after the sample
-       (TdCr(BUSACKf)); the C model drops it half a clock late. On release
-       the sample is on a rising edge, BUSACK rises on the next falling
-       edge (TdCf(BUSACKr)) and M1 starts on the rising edge after that.
-       The C model raises BUSACK with M1, half a clock late; the RTL
-       starts M1 on the sampling edge itself, a T-state early. The C model
-       freezes its half-cycle counter during the grant, so a release that
-       arrives before a falling edge restarts it out of step with the
-       clock.
-     - **M-cycle boundaries**: silicon's grant points follow the
-       datasheet's M-cycle split, internal cycles included (`ADD HL,BC`:
-       4 + 4 + 3 T-states, grants at each boundary). The models merge some
-       internal cycles (`ADD HL,BC`: M1 + one 7-T-state cycle).
-     Watching: a separate branch reworks both sequencers (grant at every
-     M-cycle end, the datasheet's M-cycle splits, the BUSACK edges) and
-     gates it on BUSREQ sweeps against perfectz80 for every instruction
-     class.
+       (TdCr(BUSACKf)). On release the sample is on a rising edge, BUSACK
+       rises on the next falling edge (TdCf(BUSACKr)) and the held M-cycle
+       starts on the rising edge after that; the shortest grant is one
+       T-state.
+     - **M-cycle boundaries**: the die's, internal cycles included -- ADD /
+       ADC / SBC HL,rr now run internal M-cycles of 4 + 3 T-states, and the
+       1- and 2-T internal states after an M1 or a read are part of it.
+     The event sweep's `busreq` group (1 T and 4 T at every T-state of 24
+     instructions) and the BUSREQ-with-INT / NMI / HALT combos match;
+     `prog15_busreq_m1` passes in both models.
 
- 17. RESET / INT / NMI sweep vs perfectz80 (`make event_sweep`, see
-     [event-sweep.md](event-sweep.md), from hardesk) — pulses at every
-     T-state of 15 instructions, diffed per half-cycle against perfectz80.
-     **All 2375 cases match (2026-10-20)**; `tests/event_sweep/baseline.txt`
-     is empty and CI fails on any difference. The last 544 were RESET: it
-     is now the die's sampled RESET in both models, with the special reset
-     and registers kept (row 1; docs/timing.md "RESET").
+ 17. RESET / INT / NMI / BUSREQ / WAIT sweep vs perfectz80 (`make
+     event_sweep`, see [event-sweep.md](event-sweep.md), from hardesk) —
+     pulses at every T-state of 24 instructions, diffed per half-cycle
+     against perfectz80, the address and BUSACK included. **5879 of 5905
+     cases match (2026-10-20)**; the 26 in `tests/event_sweep/baseline.txt`
+     are row 19 (RESET in ADD HL,BC / INC BC's write-back), and CI fails on
+     any other difference. RESET is the die's sampled RESET with the special
+     reset and registers kept (row 1); BUSREQ the die's grant (row 16).
 
  18. **Refresh and idle address bus vs perfectz80 — resolved
      2026-10-20.** The address now agrees with perfectz80 in every
@@ -264,16 +253,20 @@ Notes for each row:
        the pins now hold instead.
 
  19. **RESET between an instruction and its write-back** — the die
-     finishes some results in the next M1: A and F after INC A, A after
-     LD A,(HL), DE after POP DE and the EX DE,HL swap land in its T1-T3
-     (perfectz80, RESET at every T-state of each). A RESET that stops that
-     M1 early loses them; RZ80 writes every result on the instruction's
-     last edge and keeps them (the push SP-1, which the die does on the
-     edge that ends the previous cycle, is modelled). RZ80 also runs some
-     long internal M-cycles as one where the die has two (ADD HL,rr's
-     4 + 3 T), so a RESET cut inside them is approximate, and RESET during
-     WAIT or a bus grant is untested. None of these is in the event
-     sweep's instruction set yet.
+     finishes some results in the next M1, which a RESET that stops that
+     M1 early loses (perfectz80, RESET at every T-state; the register
+     dump after reset shows it):
+     - INC A: H and N in the next M1's T2, A and the other flags in T3;
+     - LD A,(HL): A in the next M1's T2; POP DE: DE in its T1; EX DE,HL:
+       the swap in its T3;
+     - ADD HL,rr: L as the die's M2 ends, H in the next M1's T1, the flags
+       in its T2 / T3; INC rr: the pair late in the M1's T5 / T6.
+     RZ80 writes every result on the instruction's last edge (ADD HL,rr
+     and INC rr theirs earlier still) and keeps them. The push SP-1, which
+     the die does on the edge that ends the previous cycle, is modelled.
+     The sweep's `reset_add_hl_bc` (20) and `reset_inc_bc` (6) cases are
+     these, in the baseline; RESET with WAIT is untested. Modelling it means
+     holding each class's writes until the T-state the die does them in.
 
 Add rows as new differences are discovered. Each "watching" row should gain a
 test that pins the chosen behaviour or escalates it.

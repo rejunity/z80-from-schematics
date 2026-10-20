@@ -335,10 +335,10 @@ typedef struct {
        is the power-on reset. */
     bool         res_s, res2, sres, rst_idle, srst_m1, rd_hold;
 
-    /* BUSREQ release filter: pz80 settles for ~2 phases between busreq_n=1
-       and the post-grant M1 fetch (prog15_busreq_m1 trace). Bus_granted
-       entry edge is not filtered (pz80 enters bus grant promptly). */
-    uint8_t      busreq_release_filter; /* phases of busreq_n=1 during grant    */
+    /* BUSREQ, as sampled on the rising edge that started this T-state (true
+       = requested): in an M-cycle's last T-state it decides the grant, in a
+       granted T-state the release (perfectz80; PS0178 Figure 10). */
+    bool         busreq_s;
 } z80_t;
 
 typedef enum {

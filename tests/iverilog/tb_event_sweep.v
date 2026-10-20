@@ -62,6 +62,8 @@ module tb_event_sweep;
         case (pin)
             0: nmi_n   = level;
             1: int_n   = level;
+            2: wait_n  = level;
+            3: busreq_n = level;
             4: reset_n = level;
         endcase
     endtask
@@ -112,7 +114,7 @@ module tb_event_sweep;
                             hold_until = half + 2 * hold_t;
                         end
                     end else in_read = 0;
-                    if (!wait_n && (half >= hold_until || !reset_n)) wait_n = 1'b1;
+                    if (hold >= 0 && !wait_n && (half >= hold_until || !reset_n)) wait_n = 1'b1;
                 end
             end
             // Pin events at sixteenth s = (t - mark_t - 1) / 2, mark_t = mark_half*16.

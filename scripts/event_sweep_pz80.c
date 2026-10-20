@@ -42,6 +42,8 @@ static void drive(void *st, int pin, bool high) {
     switch (pin) {
     case 0: cpu_writeNMI(st, high); break;
     case 1: cpu_writeINT(st, high); break;
+    case 2: cpu_writeWAIT(st, high); break;
+    case 3: cpu_writeBUSRQ(st, high); break;
     case 4: cpu_writeRESET(st, high); break;
     }
 }

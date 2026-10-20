@@ -38,8 +38,8 @@ PZ80 = os.path.join(ROOT, "build", "bin", "event_sweep_pz80")
 OUT = os.path.join(ROOT, "build", "event_sweep")
 BASELINE = os.path.join(ROOT, "tests", "event_sweep", "baseline.txt")
 
-NMI, INT, RESET = 0, 1, 4
-PIN_NAMES = {NMI: "nmi", INT: "int", RESET: "reset"}
+NMI, INT, WAIT, BUSREQ, RESET = 0, 1, 2, 3, 4
+PIN_NAMES = {NMI: "nmi", INT: "int", WAIT: "wait", BUSREQ: "busreq", RESET: "reset"}
 
 # name: (bytes, T-states on a Z80, note)
 TARGETS = {
@@ -58,10 +58,19 @@ TARGETS = {
     "halt":     ([0x76], 4, "HALT"),
     "ld_a_i":   ([0xed, 0x57], 9, "LD A,I: P/V from IFF2"),
     "ld_a_r":   ([0xed, 0x5f], 9, "LD A,R: P/V from IFF2"),
+    "add_hl_bc": ([0x09], 11, "internal M-cycles of 4 + 3 T"),
+    "adc_hl_bc": ([0xed, 0x4a], 15, "ED prefix, internal M-cycles of 4 + 3 T"),
+    "ex_sp_hl": ([0xe3], 19, "read, read+1, write, write+2"),
+    "djnz":     ([0x10, 0x02, 0x00, 0x00], 13, "taken (B=0 -> FF), M1 + 1, internal 5 T"),
+    "rld":      ([0xed, 0x6f], 18, "read, internal 4 T, write"),
+    "inc_bc":   ([0x03], 6, "M1 of 6 T"),
+    "in_a_n":   ([0xdb, 0x10], 11, "I/O read"),
+    "out_n_a":  ([0xd3, 0x10], 11, "I/O write"),
+    "ini":      ([0xed, 0xa2], 16, "I/O read, memory write"),
 }
 BASIC = ["inc_a", "ld_a_hl", "ld_hl_a", "inc_hl"]
 GROUPS = ["int", "nmi", "nmi_short", "nmi_reentry", "reset", "reset_release",
-          "reset_wait", "reset_short", "combo"]
+          "reset_wait", "reset_short", "combo", "busreq", "wait"]
 
 
 def program(target, im=1, ei=False, nmi_nops=0):
@@ -134,7 +143,7 @@ def cases(groups, phases):
     out = []
     want = lambda g: "all" in groups or g in groups
     if want("int"):          # IM1, EI, INT held until INTA
-        for t in BASIC + ["halt", "ld_a_i", "ld_a_r"]:
+        for t in BASIC + ["halt", "ld_a_i", "ld_a_r", "add_hl_bc", "ex_sp_hl", "djnz", "in_a_n"]:
             for n in range(TARGETS[t][1] + 2):
                 for j in ph:
                     out.append(case(f"int_{t}_T{n}_p{j:02d}", "int", t, [(INT, at(n, j), -1)],
@@ -175,7 +184,7 @@ def cases(groups, phases):
                             [(NMI, at(2, 4), at(3, 4))], run=300, ei=ei, int_at=0x0066,
                             meta={"kind": "retn_int"}))
     if want("reset"):        # 4 T pulse at every T-state
-        for t in BASIC + ["halt", "push_bc"]:
+        for t in BASIC + ["halt", "push_bc", "add_hl_bc", "inc_bc", "in_a_n", "out_n_a"]:
             for n in range(TARGETS[t][1] + 2):
                 for j in ph:
                     out.append(case(f"reset_{t}_T{n}_p{j:02d}", "reset", t,
@@ -220,10 +229,37 @@ def cases(groups, phases):
             out.append(case(f"combo_nmi_held_reset_p{j:02d}", "combo", "inc_a",
                             [(NMI, at(1, j), at(31, j)), (RESET, at(3, 0), at(7, 0))],
                             run=300, meta={"kind": "nmi_held_across_reset"}))
+        for n in range(0, 6):      # INT / NMI / HALT+INT with BUSREQ at the same boundary
+            for j in ph:
+                out.append(case(f"combo_int_busreq_T{n}_p{j:02d}", "combo", "inc_a",
+                                [(INT, at(2, 4), -1), (BUSREQ, at(n, j), at(n, j) + 32)],
+                                ei=True, inta_release=True, meta={"kind": "int_busreq"}))
+                out.append(case(f"combo_nmi_busreq_T{n}_p{j:02d}", "combo", "inc_a",
+                                [(NMI, at(2, 4), at(3, 4)), (BUSREQ, at(n, j), at(n, j) + 32)],
+                                meta={"kind": "nmi_busreq"}))
+                out.append(case(f"combo_halt_busreq_T{n}_p{j:02d}", "combo", "halt",
+                                [(INT, at(6, 4), -1), (BUSREQ, at(n + 4, j), at(n + 4, j) + 32)],
+                                ei=True, inta_release=True, meta={"kind": "halt_int_busreq"}))
         for j in range(0, 16, 4):  # INT held across RESET: IFF clear until EI
             out.append(case(f"combo_int_held_reset_p{j:02d}", "combo", "inc_a",
                             [(INT, at(1, j), -1), (RESET, at(1, 8), at(5, 8))], run=300,
                             ei=True, inta_release=True, meta={"kind": "int_held_across_reset"}))
+    if want("busreq"):       # BUSREQ low 1 T and 4 T from every T-state: grant, BUSACK, resume
+        for t in TARGETS:
+            for n in range(TARGETS[t][1] + 2):
+                for j in ph:
+                    for w in (1, 4):
+                        out.append(case(f"busreq{w}_{t}_T{n}_p{j:02d}", "busreq", t,
+                                        [(BUSREQ, at(n, j), at(n, j) + 16 * w)],
+                                        meta={"n": n, "phase": j, "width": w}))
+    if want("wait"):         # WAIT low 1 T and 3 T from every T-state
+        for t in TARGETS:
+            for n in range(TARGETS[t][1] + 2):
+                for j in ph:
+                    for w in (1, 3):
+                        out.append(case(f"wait{w}_{t}_T{n}_p{j:02d}", "wait", t,
+                                        [(WAIT, at(n, j), at(n, j) + 16 * w)],
+                                        meta={"n": n, "phase": j, "width": w}))
     return out
 
 

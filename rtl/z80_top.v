@@ -122,6 +122,15 @@ module z80_top (
         else        res_rise <= ~reset_n;
     end
 
+    // BUSREQ: the level at the rising edge that starts a T-state (PS0178
+    // TsBUSREQ / ThBUSREQ; perfectz80): in an M-cycle's last T-state it
+    // decides the grant, in a granted T-state the release.
+    reg busreq_rise;
+    always @(posedge clk or negedge por_n) begin
+        if (!por_n) busreq_rise <= 1'b1;
+        else        busreq_rise <= busreq_n;
+    end
+
     // INT: the level at the rising edge that starts a T-state, which the
     // core reads at the rising edge that ends it -- in the last T-state,
     // the datasheet's sample point.
@@ -151,7 +160,7 @@ module z80_top (
         .clk(clk), .por_n(por_n), .res_s(res_rise),
         // rising-edge inputs (live) + falling-edge-sampled copies
         .data_in(data_in),   .data_in_neg(data_in_neg),
-        .busreq_n(busreq_n),
+        .busreq_n(busreq_rise),
         .int_n_rise(int_n_rise), .wait_n_neg(wait_n_neg),
         .nmi_n(nmi_n_held),  .nmi_n_neg(nmi_n_neg),
         // pin images: clock-high half of the next T-state / clock-low half

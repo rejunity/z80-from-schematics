@@ -58,10 +58,13 @@ module tb_bus_controls;
     // Reset hold and bus grant (BUSACK) idle every strobe and release the
     // data bus (docs/known-differences.md row 15).
     wire idle = dut.u_core.rst_idle || dut.u_core.bus_granted;
+    // BUSACK: low while granted; it rises in the low half of the granted
+    // T-state whose rising edge saw BUSREQ high (the release)
+    wire ref_busack = !(dut.u_core.bus_granted && !(phi && dut.busreq_rise));
     wire [8:0] expected = {idle ? 7'b0111111 :
                           {ref_drive, ref_m1, ref_mreq, ref_iorq, ref_rd,
                            ref_wait_write ? 1'b0 : ref_wr, ref_rfsh},
-                          ref_halt, !dut.u_core.bus_granted};
+                          ref_halt, ref_busack};
     integer i, steps = 0, waits = 0, grants = 0, halts = 0;
     reg [7:0] bus_seen = 0;
     reg [8:0] before_pins;
