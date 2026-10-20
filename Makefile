@@ -11,6 +11,9 @@
 #   make test       run the full C + RTL + compare suite
 #   make zexdoc     run ZEXDOC through the C model
 #   make zexall     run ZEXALL through the C model
+#   make phase_identity  every pin of every phase vs PHASE_REF=<rev>
+#   make cfast      the phase engine generated from the timing tables
+#   make cfast_identity  cfast phase by phase vs PHASE_REF=<rev>
 #   make clean      remove build artifacts
 # =============================================================================
 
