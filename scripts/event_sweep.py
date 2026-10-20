@@ -13,8 +13,8 @@
 #
 # A case matches when the control pins (mreq iorq rd wr m1 rfsh halt busack)
 # agree in every half-cycle, the address agrees wherever both sides transfer
-# data (MREQ or IORQ with RD or WR; refresh addresses are don't-care, as in
-# compare_signal_timing.py), and the data agrees wherever both drive WR. Differences are checked
+# data (MREQ or IORQ with RD or WR) or refresh (RFSH low: I:R; idle addresses
+# are don't-care), and the data agrees wherever both drive WR. Differences are checked
 # against tests/event_sweep/baseline.txt: a difference that is not in the
 # baseline, or that changed, fails the run. Cases in the baseline that now
 # match are reported as a warning so the baseline can be trimmed.
@@ -272,10 +272,10 @@ CONTROL = [("mreq", MREQ), ("iorq", IORQ), ("rd", RD), ("wr", WR), ("m1", M1),
            ("rfsh", RFSH), ("halt", HALT), ("busack", BUSACK)]
 
 
-def transfer(r):
-    """MREQ or IORQ with RD or WR: the address means something. Refresh
-    and idle addresses are don't-care, as in compare_signal_timing.py."""
-    return (not r[MREQ] or not r[IORQ]) and (not r[RD] or not r[WR])
+def addressed(r):
+    """The address means something: a transfer (MREQ or IORQ with RD or
+    WR) or a refresh (RFSH low: I:R). Idle addresses are don't-care."""
+    return ((not r[MREQ] or not r[IORQ]) and (not r[RD] or not r[WR])) or not r[RFSH]
 
 
 def first_difference(a, b):
@@ -288,7 +288,7 @@ def first_difference(a, b):
         if rb is None:
             return ra[H], ["length"]
         what = [n for n, i in CONTROL if ra[i] != rb[i]]
-        if transfer(ra) and transfer(rb) and ra[ADDR] != rb[ADDR]:
+        if addressed(ra) and addressed(rb) and ra[ADDR] != rb[ADDR]:
             what.append("addr")
         if not ra[WR] and not rb[WR] and ra[DATA] != rb[DATA]:
             what.append("data")
@@ -325,7 +325,7 @@ def signature(rows):
     h = hashlib.sha1()
     for r in rows:
         h.update(bytes([r[i] for _, i in CONTROL]))
-        if transfer(r): h.update(r[ADDR].to_bytes(2, "little"))
+        if addressed(r): h.update(r[ADDR].to_bytes(2, "little"))
         if not r[WR]: h.update(bytes([r[DATA]]))
     return h.hexdigest()[:12]
 

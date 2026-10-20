@@ -32,7 +32,7 @@ Status legend:
 | 15 | RTL clocking: reset / BUSREQ settle vs C model | timing                    | watching |
 | 16 | BUSREQ / BUSACK vs the NMOS Z80               | timing / bus              | watching |
 | 17 | RESET / INT / NMI sweep vs perfectz80         | timing / interrupt        | watching |
-| 18 | Refresh and idle address bus                  | timing / bus              | watching |
+| 18 | Idle address bus (refresh resolved)           | timing / bus              | watching |
 
 Notes for each row:
 
@@ -163,7 +163,8 @@ Notes for each row:
      `data_o` with an **address-bus don't-care tolerance**: phases
      where no data transfer is in progress on either side (refresh
      windows, idle phases between M-cycles, T1.P setup) are treated as
-     matches regardless of `addr` value. With the tolerance in place,
+     matches regardless of `addr` value; the refresh address itself is
+     gated separately (row 18). With the tolerance in place,
      `addr` matches at **100 %** on 10/12 trace programs (8 hand + 4
      random), with the residual 95-98 % on `prog_rnd_02` / `prog_rnd_03`
      being the reset-register-init delta (row 1) surfacing via PUSH
@@ -243,15 +244,19 @@ Notes for each row:
        restarts on the first rising edge (row 15).
 
  18. **Refresh and idle address bus vs perfectz80** — the pin
-     comparisons treat the address as don't-care outside transfers (row
-     14). Comparing it in every phase, on all trace and pin-scenario
-     programs up to their first control-pin difference:
-     - **Refresh**: perfectz80 drives I:R, the R from before this M1's
-       increment (the first M1 after reset refreshes 0000). The RTL
-       increments R at the T3 rising edge and drives I:(R+1) in all
-       3,322 refresh phases; bit 7 and I agree. Matters to DRAM
-       controllers that use the refresh address and to the ZX81, whose
-       display hangs its line counter on A6 of the refresh address.
+     comparisons treat the address as don't-care outside transfers and
+     refreshes (row 14). Comparing it in every phase, on all trace and
+     pin-scenario programs up to their first control-pin difference:
+     - **Refresh — resolved 2026-10-20.** perfectz80 drives I:R, the R
+       from before this M1's increment (the first M1 after reset
+       refreshes 0000); RZ80 used to step R at the T3 rising edge and
+       drive I:(R+1). R now steps on the rising edge that ends the
+       refresh (T4 of an M1, the second refresh T-state of an INTA), in
+       the C model and the RTL, and every refresh phase matches. Matters
+       to DRAM controllers that use the refresh address and to the ZX81,
+       whose display hangs its line counter on A6 of the refresh
+       address. `compare_signal_timing.py` gates on it and the event
+       sweep compares it.
      - **Internal T-states** (no MREQ / IORQ): the address differs in
        468 of 2,215 phases; in 178 of them perfectz80 still shows the
        last refresh address (IR), as the Spectrum's contention tables

@@ -34,10 +34,10 @@ the data bus for every half-cycle from the marker on.
 A case matches when:
 - every control pin agrees in every half-cycle;
 - the address agrees wherever both sides transfer data (MREQ or IORQ with RD
-  or WR);
+  or WR) or refresh (RFSH low: I:R);
 - the data agrees wherever both sides drive WR.
 
-Refresh and idle addresses are don't-care, as in `compare_signal_timing.py`.
+Idle addresses are don't-care, as in `compare_signal_timing.py`.
 
 Instructions under test:
 - INC A (no memory access)

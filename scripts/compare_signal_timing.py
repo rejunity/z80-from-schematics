@@ -43,7 +43,8 @@ VERILATOR_SIM = os.path.join(ROOT, "build", "obj_dir", "sim_z80")
 PZ_OFFSET = 1
 
 # Always-on control-pin parity (CPU-driven, no don't-cares) — this is the
-# gate of record and affects exit code.
+# gate of record and affects exit code. The refresh address (I:R wherever
+# RFSH is low on both sides) is part of the gate too.
 COMPARED  = ["mreq","iorq","rd","wr","m1","rfsh","halt"]
 # Bus parity: addr is valid when (mreq||iorq) is low; data_o is valid
 # when wr is low. Compared only on phases where BOTH the C model AND
@@ -283,9 +284,7 @@ def compare(prog, phases, source="c"):
         target strobe (MREQ or IORQ) AND a direction strobe (RD or WR).
         Cases this catches:
           - Refresh windows: MREQ low + RFSH low, but RD/WR both high.
-            The bus addr is just the DRAM refresh row with no CPU-data
-            meaning. Our model legitimately leads with the next M-cycle's
-            address while perfectz80 stays on {I,R}.
+            No CPU data, but the address (I:R) is gated separately.
           - Idle phases between M-cycles: all strobes high. addr may be
             transitioning or stale on either side.
           - T1.P / setup phases: addr being driven but strobes haven't
@@ -295,6 +294,8 @@ def compare(prog, phases, source="c"):
 
     for i in range(n):
         diff = [(col, c[i][col], g[i][col]) for col in COMPARED if c[i][col] != g[i][col]]
+        if c[i]["rfsh"] == "0" and g[i]["rfsh"] == "0" and c[i]["addr"] != g[i]["addr"]:
+            diff.append(("refresh addr", c[i]["addr"], g[i]["addr"]))
         bus_diff = []
         if COMPARE_BUS:
             # Compare addr at every phase, with the settle tolerance.

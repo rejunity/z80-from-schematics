@@ -259,6 +259,10 @@ module z80_core (
                      ((bus_op == `BUSOP_IORD) && (t_state == 4'd4));
     wire latch_pos = ((bus_op == `BUSOP_M1)   && (t_state == 4'd2)) ||
                      ((bus_op == `BUSOP_INTA) && (t_state == 4'd4));
+    // last refresh T-state (T4 of an M1, count 6 of an INTA): R steps on
+    // the rising edge that ends it
+    wire rfsh_end  = ((bus_op == `BUSOP_M1)   && (t_state == 4'd4)) ||
+                     ((bus_op == `BUSOP_INTA) && (t_state == 4'd6));
     // WAIT *sample edge* per Zilog UM0080: the FALLING edge of T2 for
     // memory cycles, of the automatic Tw for I/O, of the second automatic
     // Tw for INTA. z80_top's negedge sampler took the pin there; the saved
@@ -833,7 +837,6 @@ module z80_core (
         // the fetch is an IDU job of the same edge (execute, mid-M-cycle).
         if (latch_pos && !stall) begin
             tmp8_n  = data_in;
-            reg_r_n = {reg_r[7], (reg_r[6:0] + 7'd1)};
             if (bus_op == `BUSOP_M1) begin
                 ir_n = data_in;
                 if (suppress_decode) suppress_decode_n = 1'b0;     // ack / halt: no PC++ / decode
@@ -843,6 +846,13 @@ module z80_core (
                 ir_n = data_in; irq_seq_n = 2'd0;
             end
         end
+
+        // refresh counter: R steps (low 7 bits) on the rising edge that
+        // ends the refresh -- T4 of an M1, the second refresh T-state of an
+        // INTA -- so the refresh address shows I:R from before the step, as
+        // on silicon (perfectz80). Ahead of the execute step, so LD R,A's
+        // write wins.
+        if (rfsh_end && !bus_granted) reg_r_n = {reg_r[7], (reg_r[6:0] + 7'd1)};
 
         // bus grant (DMA): idle while BUSREQ held. BUSREQ is sampled on the
         // rising edge (as on silicon), so the post-grant M1 always starts

@@ -164,7 +164,8 @@ does the same, issuing a few micro-ops on T-states before the last one:
 
 All other register loads happen on the last T-state of an M-cycle, together
 with the start of the next bus cycle. R's 7-bit refresh increment stays a
-small incrementer of its own: it shares the opcode-latch edge with PC+1.
+small incrementer of its own, on the rising edge that ends the refresh (T4),
+after the refresh address has shown I:R.
 
 ### ALU (`alu_*`)
 Organized as a **4-bit nibble unit applied twice** (low nibble then high nibble) with

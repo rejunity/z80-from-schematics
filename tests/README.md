@@ -208,11 +208,12 @@ breakdown.
 | `make pin_scenarios_netlist` | LibreLane sky130 gate-level netlist vs perfectz80 on the 12 pin-scenarios | **Informational**; same as above plus any synth-introduced deltas |
 
 `compare_signal_timing.py` (the driver for `make perfectz80` / `_rtl` /
-`_netlist`) reports informational bus-value parity — `data_o` (where wr
-is low on both sides) and `addr` (compared with a **don't-care
-tolerance**: phases where no data transfer is in progress on either
-side — refresh windows, idle phases, T1.P setup — are treated as
-matches regardless of value). Currently `data_o` is at **100 % match**
+`_netlist`) gates on the refresh address (I:R wherever RFSH is low on
+both sides) along with the control pins, and reports informational
+bus-value parity — `data_o` (where wr is low on both sides) and `addr`
+(compared with a **don't-care tolerance**: phases where no data transfer
+is in progress on either side — refresh windows, idle phases, T1.P
+setup — are treated as matches regardless of value). Currently `data_o` is at **100 % match**
 wherever it's defined; `addr` matches **100 %** on 10/12 programs, with
 the residual 95-98 % on `prog_rnd_02` / `prog_rnd_03` being the
 reset-register-init delta (our 0xFFFF vs perfectz80 netlist's 0x5555)

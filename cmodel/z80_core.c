@@ -1080,8 +1080,6 @@ static void do_latch(z80_t *c)
     case BUSOP_M1:
         c->ir   = c->pins.data_in;
         c->tmp8 = c->pins.data_in;
-        /* refresh counter: only low 7 bits increment */
-        c->reg_r = (uint8_t)((c->reg_r & 0x80u) | ((c->reg_r + 1u) & 0x7Fu));
         if (c->suppress_decode) {
             c->suppress_decode = false;      /* ack M1: discard opcode, no PC++/decode */
         } else {
@@ -1097,7 +1095,6 @@ static void do_latch(z80_t *c)
             c->ctl = z80_pla(c->prefix, c->ir);
             c->decoded = true; /* supplied opcode consumes no memory byte */
         }
-        c->reg_r = (uint8_t)((c->reg_r & 0x80u) | ((c->reg_r + 1u) & 0x7Fu));
         break;
     case BUSOP_MRD:
     case BUSOP_IORD:
@@ -1171,6 +1168,12 @@ static void advance(z80_t *c)
     }
     c->phi = 0;
     if (c->stalled) return;                  /* hold this T-state as a Tw */
+    /* refresh counter: R steps (low 7 bits) on the rising edge that ends the
+       refresh -- T4 of an M1, the second refresh T-state of an INTA -- so the
+       refresh address shows I:R from before the step, as on silicon
+       (perfectz80). Before the execute step, so LD R,A's write wins. */
+    if ((c->bus_op == BUSOP_M1 && c->t_state == 4) || (c->bus_op == BUSOP_INTA && c->t_state == 6))
+        c->reg_r = (uint8_t)((c->reg_r & 0x80u) | ((c->reg_r + 1u) & 0x7Fu));
     c->t_state = (uint8_t)(c->t_state + 1);
     if (c->t_state > c->m_len) {
         z80_exec_step(c);                    /* set up next M-cycle / finish */

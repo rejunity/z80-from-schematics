@@ -32,12 +32,14 @@ Phase-exact actions:
 - **T1.N**: `pin_mreq_n ← 0`; `pin_rd_n ← 0`.
 - **T2.N**: sample `pin_wait_n`. If asserted (low), insert `Tw` (repeat a T2-like
   wait state) and re-sample at next .N. If not waited, latch `pin_data_in → IR`
-  (the fetched opcode) and run `R` increment.
+  (the fetched opcode).
 - **T3.P**: `pin_m1_n ← 1`; `pin_rd_n ← 1`; `pin_mreq_n ← 1`; `pin_addr ← {I,R}`;
   `pin_rfsh_n ← 0`. (Refresh address presented.)
 - **T3.N**: `pin_mreq_n ← 0` (refresh memory request).
 - **T4.P**: (decode continues; this is where decoded control begins driving datapath).
-- **T4.N**: `pin_mreq_n ← 1`.
+- **T4.N**: `pin_mreq_n ← 1`. `R` steps (low 7 bits) on the rising edge that
+  ends T4, so the refresh address is I:R from before the step, as on silicon
+  (an INTA steps it at the end of its second refresh T-state).
 - After T4.N the next M-cycle of the instruction begins (or the next M1).
 
 Note: M1 deasserts at T3.P in our model. Verified against the perfectz80 gate-level
