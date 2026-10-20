@@ -44,7 +44,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
-.PHONY: timing_sdc timing_sdc_check equiv all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist event_sweep basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test verilator_z80test z80test_rtl halt2int halt2int_probe
+.PHONY: pinhash phase_identity timing_sdc timing_sdc_check equiv all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist event_sweep basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test verilator_z80test z80test_rtl halt2int halt2int_probe
 
 all: cmodel ctest
 
@@ -566,6 +566,26 @@ zexdoc: zexrunner
 
 zexall: zexrunner
 	@$(PYTHON) $(SCRIPTS)/run_zex.py zexall $(ZEX_MAX)
+
+# ----------------------------------------------------------------------------
+# phase identity: the work tree's model against a reference revision
+# ----------------------------------------------------------------------------
+# Every pin of every phase (the 14 trace columns + data_drive, as a rolling
+# hash) and the register file every 1M phases, through ZEXDOC, prelim,
+# z80test, all trace programs and pin scenarios, random memory soups and a
+# random data bus under random INT/NMI/WAIT/BUSREQ/RESET activity
+# (scripts/phase_identity.py, scripts/pinhash.c). PHASE_REF=<rev> picks the
+# reference (default HEAD: proves uncommitted work changes no pin);
+# PHASE_ARGS=--long runs ZEXDOC and z80test to the end.
+PHASE_REF  ?= HEAD
+PHASE_ARGS ?=
+pinhash: cmodel $(BIN)/pinhash
+$(BIN)/pinhash: $(SCRIPTS)/pinhash.c $(CMODEL_LIB) $(CMODEL_HDRS)
+	@mkdir -p $(BIN)
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(CMODEL_LIB) -o $@
+
+phase_identity: dirs
+	@$(PYTHON) $(SCRIPTS)/phase_identity.py --ref $(PHASE_REF) $(PHASE_ARGS)
 
 # ----------------------------------------------------------------------------
 # full suite
