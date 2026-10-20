@@ -217,44 +217,22 @@ static void set_prefix_from_ir(z80_t *c)
 /* convenience for read-byte (the byte latched during the just-finished cycle) */
 #define RB (c->tmp8)
 
-static void z80_exec_step(z80_t *c)
+/* =====================================================================
+ * ALU input mux and ALU  (mirror rtl/z80_core.v's always @* alu-input mux
+ * and its u_alu instance).
+ *
+ * The mux selects the ALU's inputs: defaults track the PLA control word;
+ * per-exec overrides match V's case (exec_w). For EXEC_BLOCK the active
+ * inputs depend on (cat, m_cycle); the alu output is ignored at M-cycles
+ * where the formula is not committed. Both are combinational, so the
+ * sequencer evaluates them when it first reads an output (alu_res() /
+ * alu_fout() in z80_exec_step), from the datapath as the M-cycle ended:
+ * a step that updates an input before reading the outputs evaluates them
+ * first (ALU_EVAL).
+ * =================================================================== */
+static void alu_eval(z80_t *c, uint8_t m, uint8_t *alu_r, uint8_t *alu_fo)
 {
-    z80_control_t *ctl = &c->ctl;
-    uint8_t m = c->m_cycle;
-    uint8_t hlp = hl_pair(c);          /* HL / IX / IY for 16-bit "HL" ops */
-
-    /* (IX+d)/(IY+d) displacement preamble: fetch d (M2), then a 5T address calc
-       cycle (M3) for most ops; LD (IX+d),n folds the 2T IX+d compute into its
-       N immediate read instead, saving one M-cycle (spec timing 19T not 22T). */
-    uint8_t  mm = m;
-    uint16_t memaddr = c->rf[hlp];
-    if (ctl->idx && ctl->use_disp) {
-        if (m == 1) { z80_start_mcycle(c, BUSOP_MRD, z80_pc_inc(c), 0, 0); return; }
-        if (m == 2) {
-            int8_t d = (int8_t)c->tmp8;
-            c->rf[RFP_WZ] = (uint16_t)(c->rf[hlp] + d);
-        }
-        if (ctl->exec == EXEC_LD_M_N) {
-            mm = (uint8_t)(m - 1);          /* no separate internal cycle */
-            memaddr = c->rf[RFP_WZ];
-        } else {
-            if (m == 2) {
-                z80_start_mcycle(c, BUSOP_INTERNAL, c->rf[RFP_WZ], 0, 5);
-                return;
-            }
-            mm = (uint8_t)(m - 2);
-            memaddr = c->rf[RFP_WZ];
-        }
-    }
-
-    /* =====================================================================
-     * ALU input mux  (mirrors rtl/z80_core.v's always @* alu-input mux).
-     *
-     * Drives the inputs to the single z80_alu() call below. Defaults track
-     * the PLA control word; per-exec overrides match V's case (exec_w).
-     * For EXEC_BLOCK the active inputs depend on (cat, m_cycle); the alu
-     * output is ignored at M-cycles where the formula is not committed.
-     * =================================================================== */
+    const z80_control_t *ctl = &c->ctl;
     uint8_t alu_md  = (uint8_t)ctl->flag_mode;
     uint8_t alu_a   = z80_A(c);
     uint8_t alu_b   = 0;
@@ -327,16 +305,45 @@ static void z80_exec_step(z80_t *c)
         default: break;
     }
 
-    /* The ALU (mirrors the u_alu instance in V): the mux above drives its
-       inputs, latched here with F and Q; the sequencer reads its outputs
-       through alu_res() / alu_fout(), which evaluate z80_alu() on first use.
-       One pure combinational evaluation, so the M-cycles that read neither
-       output skip it. */
-    const uint8_t alu_f = z80_F(c), alu_q = c->q, alu_op = (uint8_t)ctl->alu_op;
+    z80_alu(alu_md, (uint8_t)ctl->alu_op, alu_rot, alu_bit, alu_xy,
+            alu_a, alu_b, z80_F(c), c->q, alu_r, alu_fo);
+}
+
+static void z80_exec_step(z80_t *c)
+{
+    z80_control_t *ctl = &c->ctl;
+    uint8_t m = c->m_cycle;
+    uint8_t hlp = hl_pair(c);          /* HL / IX / IY for 16-bit "HL" ops */
+
+    /* (IX+d)/(IY+d) displacement preamble: fetch d (M2), then a 5T address calc
+       cycle (M3) for most ops; LD (IX+d),n folds the 2T IX+d compute into its
+       N immediate read instead, saving one M-cycle (spec timing 19T not 22T). */
+    uint8_t  mm = m;
+    uint16_t memaddr = c->rf[hlp];
+    if (ctl->idx && ctl->use_disp) {
+        if (m == 1) { z80_start_mcycle(c, BUSOP_MRD, z80_pc_inc(c), 0, 0); return; }
+        if (m == 2) {
+            int8_t d = (int8_t)c->tmp8;
+            c->rf[RFP_WZ] = (uint16_t)(c->rf[hlp] + d);
+        }
+        if (ctl->exec == EXEC_LD_M_N) {
+            mm = (uint8_t)(m - 1);          /* no separate internal cycle */
+            memaddr = c->rf[RFP_WZ];
+        } else {
+            if (m == 2) {
+                z80_start_mcycle(c, BUSOP_INTERNAL, c->rf[RFP_WZ], 0, 5);
+                return;
+            }
+            mm = (uint8_t)(m - 2);
+            memaddr = c->rf[RFP_WZ];
+        }
+    }
+
+    /* The ALU's outputs (alu_eval above), evaluated on first use: the
+       M-cycles that read neither skip the mux and the ALU. */
     uint8_t alu_r = 0, alu_fo = 0;
     bool    alu_valid = false;
-#define ALU_EVAL()  ((void)(alu_valid || (z80_alu(alu_md, alu_op, alu_rot, alu_bit, alu_xy, \
-                     alu_a, alu_b, alu_f, alu_q, &alu_r, &alu_fo), alu_valid = true)))
+#define ALU_EVAL()  ((void)(alu_valid || (alu_eval(c, m, &alu_r, &alu_fo), alu_valid = true)))
 #define alu_res()   (ALU_EVAL(), alu_r)
 #define alu_fout()  (ALU_EVAL(), alu_fo)
 
@@ -837,6 +844,7 @@ static void z80_exec_step(z80_t *c)
             if (m == 1) z80_start_mcycle(c, BUSOP_MRD, c->rf[RFP_HL], 0, 0);
             else if (m == 2) z80_start_mcycle(c, BUSOP_MWR, c->rf[RFP_DE], RB, 2); /* 5T write */
             else if (m == 3) {
+                ALU_EVAL();                 /* flags from BC, HL before the IDU */
                 uint16_t bc = (uint16_t)(c->rf[RFP_BC] - 1); c->rf[RFP_BC] = bc;
                 c->rf[RFP_HL] = (uint16_t)(c->rf[RFP_HL] + (dec ? -1 : 1));
                 c->rf[RFP_DE] = (uint16_t)(c->rf[RFP_DE] + (dec ? -1 : 1));
@@ -865,6 +873,7 @@ static void z80_exec_step(z80_t *c)
         else if (cat == 1) {                /* CPI/CPD/CPIR/CPDR */
             if (m == 1) z80_start_mcycle(c, BUSOP_MRD, c->rf[RFP_HL], 0, 0);
             else if (m == 2) {
+                ALU_EVAL();                 /* flags from BC, HL before the IDU */
                 uint16_t bc = (uint16_t)(c->rf[RFP_BC] - 1); c->rf[RFP_BC] = bc;
                 c->rf[RFP_WZ] = (uint16_t)(c->rf[RFP_WZ] + (dec ? -1 : 1));
                 c->rf[RFP_HL] = (uint16_t)(c->rf[RFP_HL] + (dec ? -1 : 1));
@@ -897,6 +906,7 @@ static void z80_exec_step(z80_t *c)
             else if (m == 3) { c->tmpl = RB;   /* data */
                                z80_start_mcycle(c, BUSOP_MWR, c->rf[RFP_HL], RB, 0); }
             else if (m == 4) {
+                ALU_EVAL();                 /* flags from B, HL before the IDU */
                 uint8_t newB = (uint8_t)(getr(c, REG_B) - 1); setr(c, REG_B, newB);
                 c->rf[RFP_HL] = (uint16_t)(c->rf[RFP_HL] + (dec ? -1 : 1));
                 z80_setF(c, alu_fout());
@@ -955,6 +965,7 @@ static void z80_exec_step(z80_t *c)
                 z80_start_mcycle(c, BUSOP_IOWR, c->rf[RFP_BC], c->tmpl, 0); /* BC has new B */
             }
             else if (m == 4) {
+                ALU_EVAL();                 /* flags from HL before the IDU */
                 c->rf[RFP_HL] = (uint16_t)(c->rf[RFP_HL] + (dec ? -1 : 1));
                 uint8_t newB = getr(c, REG_B);
                 z80_setF(c, alu_fout());
