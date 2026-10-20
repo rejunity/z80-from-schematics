@@ -12,6 +12,7 @@
                                (asic/spice/chip/<pdk>/), its pins as a logic
                                analyser shows them, and all of that
                                simulation's figures in spice/chip/<pdk>/
+                               (other corners' in spice/chip/<pdk>/<corner>/)
                                + rz80-<pdk>.json
   dist.py site <in> <out>      index.html over everything fpga/asic made,
                                and over <in>/spice/: the pads and the NMI
@@ -583,6 +584,12 @@ def asic(pdk, out):
                 os.makedirs(dst, exist_ok=True)
                 for f in json.load(open(res))['figures'] + ['results.json']:
                     shutil.copy(os.path.join(os.path.dirname(pins), f), dst)
+                # the other corners' runs, committed in <corner>/ beside it
+                for cres in sorted(glob.glob(os.path.join(os.path.dirname(pins), '*', 'results.json'))):
+                    cdst = os.path.join(dst, os.path.basename(os.path.dirname(cres)))
+                    os.makedirs(cdst, exist_ok=True)
+                    for f in json.load(open(cres))['figures'] + ['results.json']:
+                        shutil.copy(os.path.join(os.path.dirname(cres), f), cdst)
 
 
 def load(src):
@@ -619,6 +626,7 @@ PAD_SETS = {  # spice/pads/<pdk>/ (spice-pads.yml): (name, its pads)
     'gf180mcu': ('GF180', "gf180mcu_fd_io's 5 V pads"),
     'ihp-sg13g2': ('IHP SG13G2', "sg13g2_io's 3.3 V pads"),
 }
+CHIP_CORNERS = ('tt', 'ss', 'ff')
 CHIP_FIGURES = (('fetch', 'opcode fetch (M1)'), ('mread', 'memory read'), ('mwrite', 'memory write'),
                 ('iowrite', 'I/O write'), ('ioread', 'I/O read'))
 
@@ -716,35 +724,79 @@ extracts them from the PDK's layouts, on the routed chip's wiring -- and run at 
         d = f'chip/{pdk}'
         if not there(f'{d}/results.json'):
             continue
-        res = json.load(open(os.path.join(base, d, 'results.json')))
-        mism = res.get('functional_mismatches') or []
-        bad = len(mism)
-        if mism:      # [clock edge (ns), pin, the RTL's value(, the transistors')]
-            bad = f"{bad} ({', '.join(f'{m[1]} at {float(m[0]):.0f} ns' for m in mism[:6])}{', ...' if bad > 6 else ''})"
-        params = res.get('parameters') or []
+        # tt's run in chip/<pdk>/, the other corners' in chip/<pdk>/<corner>/
+        runs = [(json.load(open(os.path.join(base, d, 'results.json'))), d)]
+        runs += [(json.load(open(p)), f'{d}/{os.path.basename(os.path.dirname(p))}')
+                 for p in sorted(glob.glob(os.path.join(base, d, '*', 'results.json')))]
+        runs.sort(key=lambda r: CHIP_CORNERS.index(r[0].get('corner')) if r[0].get('corner') in CHIP_CORNERS else 9)
+        res = runs[0][0]
+
+        def mismatches(r):
+            mism = r.get('functional_mismatches') or []
+            if not mism:  # [clock edge (ns), pin, the RTL's value(, the transistors')]
+                return '0'
+            more = ', ...' if len(mism) > 6 else ''
+            return f"<strong>{len(mism)}</strong> ({', '.join(f'{m[1]} at {float(m[0]):.0f} ns' for m in mism[:6])}{more})"
 
         def spice(r):   # the range over every cycle, and edges the RTL makes that the pins did not
             miss = len(r.get('missing_at_ns') or [])
             rng = (f"{r['spice_min']:.1f} – {r['spice_max']:.1f} ns <span class=\"muted\">({r['n']})</span>"
                    if r['n'] else '–')
             return rng + (f" <strong>+ {miss} missing</strong>" if miss else '')
-        trs = ''.join(f"<tr><td>{r['id']}</td><td>{e(r['symbol'])}</td><td>{'≤' if r['bound'] == 'max' else '≥'} "
-                      f"{r['limit']:g} ns</td><td>{spice(r)}</td><td>{ns(r.get('sta'))}</td>"
-                      f"<td>{'ok' if r['pass'] else '<strong>fails</strong>'}</td></tr>" for r in params)
-        table = (f"""<details><summary>The datasheet's AC parameters: {sum(r['pass'] for r in params)} of {len(params)}
-met, over every cycle that has them</summary><div class="scroll"><table>
-<thead><tr><th>#</th><th>Parameter</th><th>Limit</th><th>SPICE (cycles)</th><th>STA</th><th></th></tr></thead>
+
+        def margin(r):  # the parameter closest to its limit, over every cycle
+            ps = [p for p in r.get('parameters') or [] if p['n']]
+            if not ps:
+                return '–'
+            gap = lambda p: p['limit'] - p['spice_max'] if p['bound'] == 'max' else p['spice_min'] - p['limit']
+            p = min(ps, key=gap)
+            return f"{gap(p):.1f} ns <span class=\"muted\">{e(p['symbol'])}</span>"
+
+        rows = []
+        for r, rd in runs:
+            ps = r.get('parameters') or []
+            figs = links([(f'{rd}/program.svg', 'program')] + [(f'{rd}/{k}.svg', label) for k, label in CHIP_FIGURES])
+            rows.append(f"<tr><td class=\"nw\"><strong>{e(r.get('corner', ''))}</strong></td><td>{mismatches(r)}</td>"
+                        f"<td>{sum(p['pass'] for p in ps)} of {len(ps)}</td><td>{margin(r)}</td><td>{figs}</td></tr>")
+        # every parameter at every corner, in the first run's order
+        by = [{p['id']: p for p in r.get('parameters') or []} for r, _ in runs]
+
+        def cell(p):
+            if not p:
+                return '–'
+            s = spice(p) + (f" <span class=\"muted\">STA {p['sta']:.1f}</span>" if p.get('sta') is not None else '')
+            return s if p['pass'] else f'{s} <strong>fails</strong>'
+        params = res.get('parameters') or []
+        met = sum(all(c.get(p['id'], {}).get('pass', True) for c in by) for p in params)
+        heads = ''.join(f"<th>{e(r.get('corner', ''))}: SPICE (cycles)</th>" for r, _ in runs)
+
+        def prow(p):
+            cells = ''.join(f'<td>{cell(c.get(p["id"]))}</td>' for c in by)
+            return (f"<tr><td>{p['id']}</td><td>{e(p['symbol'])}</td><td>{'≤' if p['bound'] == 'max' else '≥'} "
+                    f"{p['limit']:g} ns</td>{cells}</tr>")
+        trs = ''.join(prow(p) for p in params)
+        table = (f"""<details><summary>The datasheet's AC parameters: {met} of {len(params)} met at every corner,
+over every cycle that has them</summary><div class="scroll"><table>
+<thead><tr><th>#</th><th>Parameter</th><th>Limit</th>{heads}</tr></thead>
 <tbody>{trs}</tbody></table></div></details>""" if params else '')
-        g = grid(fig(f'{d}/program.svg', 'power-up, RESET, and the program at 4 MHz', wide=True),
+        g = grid(fig(f'{d}/program.svg', f"power-up, RESET, and the program at 4 MHz, {e(res.get('corner', ''))}", wide=True),
                  *[fig(f'{d}/{k}.svg', label) for k, label in CHIP_FIGURES])
         name = PDKS.get(pdk, pdk)
+        corners = ', '.join(e(r.get('corner', '')) for r, _ in runs)
         parts.append(f"""<h3 class="sec">The whole chip, {e(name)}</h3>
 <p class="muted">The chip's layout extracted with Magic to its transistors and their wiring, and run in
-ngspice at the {e(res.get('corner', ''))} corner: power-up, RESET, and a short program
+ngspice at each corner ({corners}): power-up, RESET, and a short program
 -- a memory read, a memory write, an I/O write and read -- at 4 MHz with 15 ns edges, its outputs into
-100 pF (<a href="{code}/chip.py">chip.py</a>; hours, so run now and then and committed). Its pins against
-the RTL at every clock edge after RESET: {bad} mismatches. The cycles are measured as the Z80 manual
-draws them.</p>
+100 pF (<a href="{code}/chip.py">chip.py</a>; hours, so run now and then and committed). Its pins are
+checked against the RTL at every clock edge after RESET, and the cycles measured as the Z80 manual
+draws them; the figures below are {e(res.get('corner', ''))}'s.</p>
+<div class="scroll"><table>
+<thead><tr><th>Corner</th><th>Pins against the RTL: mismatches</th><th>AC parameters met</th>
+<th>Closest to its limit</th><th>Figures</th></tr></thead>
+<tbody>
+{chr(10).join(rows)}
+</tbody>
+</table></div>
 {table}
 {g}""")
 

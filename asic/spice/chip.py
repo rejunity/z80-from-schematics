@@ -777,8 +777,10 @@ def main():
     ap.add_argument("--threads", type=int, default=os.cpu_count() or 4)
     ap.add_argument("--steps", default="extract,reference,simulate,figures")
     ap.add_argument("--sta", help="pin_timing.py's output for the run (STA's numbers beside SPICE's)")
-    ap.add_argument("--out", default=os.path.join(HERE, "chip", "gf180mcu"))
+    ap.add_argument("--out", help="figures and results.json (default: chip/gf180mcu/, other corners "
+                                  "in chip/gf180mcu/<corner>/)")
     a = ap.parse_args()
+    out = a.out or os.path.join(HERE, "chip", "gf180mcu", *([] if a.corner == "tt" else [a.corner]))
     work = os.path.abspath(a.work or os.path.join(a.run, "transistor"))
     os.makedirs(work, exist_ok=True)
     steps = a.steps.split(",")
@@ -790,7 +792,7 @@ def main():
     if "simulate" in steps:
         simulate(work, a.corner, edges, a.threads)
     if "figures" in steps:
-        figures(work, a.corner, edges, a.out, a.sta)
+        figures(work, a.corner, edges, out, a.sta)
     return 0
 
 
