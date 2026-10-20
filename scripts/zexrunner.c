@@ -72,7 +72,9 @@ int main(int argc, char **argv)
     printf("\n=== zexrunner: %s ===\n", argv[1]);
     printf("instructions executed: %lld%s\n", count, hit_limit ? " (LIMIT REACHED)" : "");
     printf("final PC=%04X  loaded %zu bytes\n", s->cpu.rf[RFP_PC], n);
-    printf("elapsed: %.2f s  (%.2f Minstr/s)\n", secs, (double)count / secs / 1e6);
+    printf("elapsed: %.2f s  (%.2f Minstr/s, %llu phases, %.1f Mphases/s)\n",
+           secs, (double)count / secs / 1e6, (unsigned long long)s->cpu.cycle,
+           (double)s->cpu.cycle / secs / 1e6);
     free(s);
     return hit_limit ? 3 : 0;
 }

@@ -35,7 +35,7 @@ def sh(cmd, **kw):
     return p.stdout
 
 
-def build(src_dir, out_dir, tick):
+def build(src_dir, out_dir):
     """Compile src_dir/*.c (the model) + scripts/pinhash.c into out_dir/pinhash."""
     os.makedirs(out_dir, exist_ok=True)
     srcs = sorted(glob.glob(os.path.join(src_dir, "*.c")))
@@ -89,6 +89,8 @@ def main():
     ap.add_argument("--long", action="store_true")
     ap.add_argument("--jobs", type=int, default=2)
     ap.add_argument("--only", default="")
+    ap.add_argument("--new-exe", default="",
+                    help="the work tree's pinhash as built by make (default: build one)")
     a = ap.parse_args()
 
     rev = sh(["git", "-C", ROOT, "rev-parse", "--short", a.ref]).strip()
@@ -100,9 +102,9 @@ def main():
     arch = subprocess.run(["git", "-C", ROOT, "archive", rev, "cmodel"],
                           capture_output=True, check=True).stdout
     subprocess.run(["tar", "-x", "-C", ref_dir], input=arch, check=True)
-    ref_exe = build(src, ref_dir, False)
-    new_exe = build(os.path.join(ROOT, "cmodel"),
-                    os.path.join(ROOT, "build", "phase_new"), True)
+    ref_exe = build(src, ref_dir)
+    new_exe = a.new_exe or build(os.path.join(ROOT, "cmodel"),
+                                 os.path.join(ROOT, "build", "phase_new"))
     has_tick = "Z80_PIN_M1" in open(os.path.join(ROOT, "cmodel", "z80.h")).read()
     print(f"phase identity: work tree vs {a.ref} ({rev}); front ends: "
           f"{'sys/own, tick' if has_tick else 'sys/own'}")

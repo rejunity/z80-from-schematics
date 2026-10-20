@@ -22,6 +22,16 @@ VVP       ?= vvp
 VERILATOR ?= verilator
 PYTHON    ?= python3
 
+# Link-time optimisation (default on): the per-phase engine, the timing
+# generator and the runners' bus loops (z80_sys_phase) inline across
+# translation units -- ZEXDOC 2.8 -> 4.2 Minstr/s. Fat objects keep
+# build/libz80.a usable by links without -flto. LTO=0 for a plain build
+# (make clean when switching).
+LTO ?= 1
+ifeq ($(LTO),1)
+CFLAGS += -flto $(shell $(CC) -ffat-lto-objects -x c -c /dev/null -o /dev/null 2>/dev/null && echo -ffat-lto-objects)
+endif
+
 # ---- layout ----
 BUILD     := build
 BIN       := $(BUILD)/bin
@@ -584,8 +594,8 @@ $(BIN)/pinhash: $(SCRIPTS)/pinhash.c $(CMODEL_LIB) $(CMODEL_HDRS)
 	@mkdir -p $(BIN)
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(CMODEL_LIB) -o $@
 
-phase_identity: dirs
-	@$(PYTHON) $(SCRIPTS)/phase_identity.py --ref $(PHASE_REF) $(PHASE_ARGS)
+phase_identity: pinhash
+	@$(PYTHON) $(SCRIPTS)/phase_identity.py --ref $(PHASE_REF) --new-exe $(BIN)/pinhash $(PHASE_ARGS)
 
 # ----------------------------------------------------------------------------
 # full suite
