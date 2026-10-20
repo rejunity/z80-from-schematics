@@ -54,7 +54,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
-.PHONY: cfast cfast_identity pinhash phase_identity timing_sdc timing_sdc_check equiv all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist event_sweep basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test verilator_z80test z80test_rtl halt2int halt2int_probe
+.PHONY: cfast cfast_identity pinhash phase_identity zexrunner_tick timing_sdc timing_sdc_check equiv all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist event_sweep basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test verilator_z80test z80test_rtl halt2int halt2int_probe
 
 all: cmodel ctest
 
@@ -97,11 +97,16 @@ $(BIN)/tracegen: $(SCRIPTS)/tracegen.c $(CMODEL_LIB) $(CMODEL_HDRS)
 	@mkdir -p $(BIN)
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(CMODEL_LIB) -o $@
 
-# ZEX CP/M harness runner
+# ZEX CP/M harness runner; zexrunner_tick runs its bus through z80_tick
 zexrunner: cmodel $(BIN)/zexrunner
 $(BIN)/zexrunner: $(SCRIPTS)/zexrunner.c $(CMODEL_LIB) $(CMODEL_HDRS)
 	@mkdir -p $(BIN)
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(CMODEL_LIB) -o $@
+
+zexrunner_tick: cmodel $(BIN)/zexrunner_tick
+$(BIN)/zexrunner_tick: $(SCRIPTS)/zexrunner.c $(CMODEL_LIB) $(CMODEL_HDRS)
+	@mkdir -p $(BIN)
+	$(CC) $(CFLAGS) -DZEX_TICK $(INCLUDES) $< $(CMODEL_LIB) -o $@
 
 # Patrik Rak z80test (raxoft) harness — ZX Spectrum .tap loader + ROM stubs
 # at 0x10 (RST 10 print) and 0x1601 (CHAN-OPEN no-op). Tests/z80test/*.tap
@@ -604,7 +609,7 @@ phase_identity: pinhash
 # cfast/gen_fast.py turns them into straight-line phase steps that
 # cfast/z80_fast.c runs around the model's own sequencer, with
 # z80_phase_step for what the steps don't cover: z80f_tick, one phase per
-# call (zexrunner_fast -t), and z80f_run, the steps back to back with the
+# call (zexrunner_fast), and z80f_run, the steps back to back with the
 # bus inlined (cfast/z80_fast_run.h, zexfast). make cfast_identity checks
 # both phase by phase against PHASE_REF.
 CFAST     := cfast

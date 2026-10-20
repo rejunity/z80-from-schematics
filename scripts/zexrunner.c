@@ -3,14 +3,16 @@
  * against the C model. Loads a .com at 0x0100, provides a minimal BDOS shim
  * (console functions 2 and 9), and runs to completion.
  *
- *   zexrunner [-t] <prog.com> [max_instructions]
+ *   zexrunner <prog.com> [max_instructions]
  *
  * BDOS is trapped by placing a RET at 0x0005 and acting whenever the core is
  * about to fetch there; program exit is detected when PC returns to 0x0000.
- * -t runs the bus in this file's loop through the pin word API (z80_tick),
- * one phase per tick, instead of z80_sys_step_instr; same phases, same pins.
- * Built with -DZ80_FAST (make cfast: zexrunner_fast), -t ticks cfast's
- * generated engine (z80f_tick) instead.
+ *
+ * Built with -DZEX_TICK (zexrunner_tick) the bus runs in this file's loop
+ * through the pin word API (z80_tick), one phase per tick, instead of
+ * z80_sys_step_instr -- same phases, same pins; with -DZ80_FAST
+ * (zexrunner_fast, make cfast) through cfast's generated engine
+ * (z80f_tick). One path per binary keeps the phase engine inlined in it.
  * ==========================================================================*/
 /* Expose clock_gettime / CLOCK_MONOTONIC / struct timespec from <time.h>:
    Linux glibc hides POSIX.1-2008 extensions at -std=c99 unless asked;
@@ -24,6 +26,7 @@
 #ifdef Z80_FAST
 #include "z80_fast.h"
 static z80f_t fast_core;
+#define ZEX_TICK
 #define TICK(cpu, pins) z80f_tick(&fast_core, pins)
 #else
 #define TICK(cpu, pins) z80_tick(cpu, pins)
@@ -45,6 +48,7 @@ static void bdos(z80_system_t *s)
     fflush(stdout);
 }
 
+#ifdef ZEX_TICK
 /* The tick loop: z80_sys_phase's memory and I/O, on the pin word. Runs to
    the next instruction boundary. */
 static void tick_instr(z80_system_t *s, uint64_t *pins_io)
@@ -67,12 +71,11 @@ static void tick_instr(z80_system_t *s, uint64_t *pins_io)
     } while (cpu->instr_count == ic);
     *pins_io = pins;
 }
+#endif
 
 int main(int argc, char **argv)
 {
-    int tick = (argc > 1 && !strcmp(argv[1], "-t"));
-    if (tick) { argv++; argc--; }
-    if (argc < 2) { fprintf(stderr, "usage: %s [-t] <prog.com> [max_instr]\n", argv[0]); return 2; }
+    if (argc < 2) { fprintf(stderr, "usage: %s <prog.com> [max_instr]\n", argv[0]); return 2; }
     long long max_instr = (argc > 2) ? atoll(argv[2]) : 4000000000LL;
 
     FILE *f = fopen(argv[1], "rb");
@@ -95,15 +98,20 @@ int main(int argc, char **argv)
 #endif
     long long count = 0;
     int hit_limit = 0;
+#ifdef ZEX_TICK
     uint64_t pins = 0;
+#endif
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     for (;;) {
         uint16_t pc = s->cpu.rf[RFP_PC];
         if (pc == 0x0000) break;            /* warm boot -> done */
         if (pc == 0x0005) bdos(s);          /* service before executing the RET at 5 */
-        if (tick) tick_instr(s, &pins);
-        else      z80_sys_step_instr(s);
+#ifdef ZEX_TICK
+        tick_instr(s, &pins);
+#else
+        z80_sys_step_instr(s);
+#endif
         if (++count >= max_instr) { hit_limit = 1; break; }
     }
     clock_gettime(CLOCK_MONOTONIC, &t1);
