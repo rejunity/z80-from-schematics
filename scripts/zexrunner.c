@@ -9,6 +9,8 @@
  * about to fetch there; program exit is detected when PC returns to 0x0000.
  * -t runs the bus in this file's loop through the pin word API (z80_tick),
  * one phase per tick, instead of z80_sys_step_instr; same phases, same pins.
+ * Built with -DZ80_FAST (make cfast: zexrunner_fast), -t ticks cfast's
+ * generated engine (z80f_tick) instead.
  * ==========================================================================*/
 /* Expose clock_gettime / CLOCK_MONOTONIC / struct timespec from <time.h>:
    Linux glibc hides POSIX.1-2008 extensions at -std=c99 unless asked;
@@ -19,6 +21,13 @@
 #include <string.h>
 #include <time.h>
 #include "z80_sim.h"
+#ifdef Z80_FAST
+#include "z80_fast.h"
+static z80f_t fast_core;
+#define TICK(cpu, pins) z80f_tick(&fast_core, pins)
+#else
+#define TICK(cpu, pins) z80_tick(cpu, pins)
+#endif
 
 static void bdos(z80_system_t *s)
 {
@@ -44,7 +53,7 @@ static void tick_instr(z80_system_t *s, uint64_t *pins_io)
     uint8_t *mem = s->mem, *io = s->io;
     uint64_t pins = *pins_io, ic = cpu->instr_count;
     do {
-        pins = z80_tick(cpu, pins);
+        pins = TICK(cpu, pins);
         uint16_t a = Z80_GET_ADDR(pins);
         uint8_t  d = 0;                         /* an undriven bus reads 0 */
         if (pins & Z80_MREQ) {
@@ -81,6 +90,9 @@ int main(int argc, char **argv)
     z80_set_pc(&s->cpu, 0x0100);
     s->cpu.rf[RFP_SP] = 0xFFFE;
 
+#ifdef Z80_FAST
+    z80f_init(&fast_core, &s->cpu);
+#endif
     long long count = 0;
     int hit_limit = 0;
     uint64_t pins = 0;

@@ -54,7 +54,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
-.PHONY: pinhash phase_identity timing_sdc timing_sdc_check equiv all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist event_sweep basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test verilator_z80test z80test_rtl halt2int halt2int_probe
+.PHONY: cfast cfast_identity pinhash phase_identity timing_sdc timing_sdc_check equiv all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist event_sweep basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test verilator_z80test z80test_rtl halt2int halt2int_probe
 
 all: cmodel ctest
 
@@ -596,6 +596,55 @@ $(BIN)/pinhash: $(SCRIPTS)/pinhash.c $(CMODEL_LIB) $(CMODEL_HDRS)
 
 phase_identity: pinhash
 	@$(PYTHON) $(SCRIPTS)/phase_identity.py --ref $(PHASE_REF) --new-exe $(BIN)/pinhash $(PHASE_ARGS)
+
+# ----------------------------------------------------------------------------
+# cfast: the phase engine generated from the model's timing tables (prototype)
+# ----------------------------------------------------------------------------
+# cfast/dump_tables.c prints cmodel/'s timing ROM and timing points;
+# cfast/gen_fast.py turns them into straight-line phase steps that
+# cfast/z80_fast.c runs around the model's own sequencer, with
+# z80_phase_step for what the steps don't cover: z80f_tick, one phase per
+# call (zexrunner_fast -t), and z80f_run, the steps back to back with the
+# bus inlined (cfast/z80_fast_run.h, zexfast). make cfast_identity checks
+# both phase by phase against PHASE_REF.
+CFAST     := cfast
+CFAST_GEN := $(BUILD)/cfast
+CFAST_INC := -I$(CMODEL) -I$(CFAST) -I$(CFAST_GEN)
+CFAST_DEP := $(CFAST)/z80_fast.c $(CFAST)/z80_fast.h $(CFAST_GEN)/z80_fast_steps.h \
+             $(CMODEL_SRCS) $(CMODEL_HDRS)
+
+cfast: $(BIN)/zexrunner_fast $(BIN)/pinhash_fast $(BIN)/zexfast $(BIN)/pinhash_run
+
+$(CFAST_GEN)/dump_tables: $(CFAST)/dump_tables.c $(CMODEL_SRCS) $(CMODEL_HDRS)
+	@mkdir -p $(CFAST_GEN)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -o $@
+
+$(CFAST_GEN)/tables.json: $(CFAST_GEN)/dump_tables
+	$< > $@
+
+$(CFAST_GEN)/z80_fast_steps.h: $(CFAST)/gen_fast.py $(CFAST_GEN)/tables.json
+	$(PYTHON) $(CFAST)/gen_fast.py $(CFAST_GEN)/tables.json $(CFAST_GEN)
+
+$(BIN)/zexrunner_fast: $(SCRIPTS)/zexrunner.c $(CFAST_DEP)
+	@mkdir -p $(BIN)
+	$(CC) $(CFLAGS) -DZ80_FAST $(CFAST_INC) $< $(CFAST)/z80_fast.c $(CMODEL)/z80_sim.c -o $@
+
+$(BIN)/pinhash_fast: $(SCRIPTS)/pinhash.c $(CFAST_DEP)
+	@mkdir -p $(BIN)
+	$(CC) $(CFLAGS) -DZ80_FAST $(CFAST_INC) $< $(CFAST)/z80_fast.c $(CMODEL)/z80_sim.c -o $@
+
+# the run frame: cfast/zexfast.c, and pinhash compiled around z80f_run
+$(BIN)/zexfast: $(CFAST)/zexfast.c $(CFAST)/z80_fast_run.h $(CFAST_DEP)
+	@mkdir -p $(BIN)
+	$(CC) $(CFLAGS) $(CFAST_INC) $< -o $@
+
+$(BIN)/pinhash_run: $(SCRIPTS)/pinhash.c $(CFAST)/z80_fast_run.h $(CFAST_DEP)
+	@mkdir -p $(BIN)
+	$(CC) $(CFLAGS) -DZ80_FAST_RUN $(CFAST_INC) $< $(CMODEL)/z80_sim.c -o $@
+
+cfast_identity: cfast pinhash
+	@$(PYTHON) $(SCRIPTS)/phase_identity.py --ref $(PHASE_REF) --new-exe $(BIN)/pinhash \
+	  --fast-exe $(BIN)/pinhash_fast --run-exe $(BIN)/pinhash_run $(PHASE_ARGS)
 
 # ----------------------------------------------------------------------------
 # full suite

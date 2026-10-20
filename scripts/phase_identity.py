@@ -5,13 +5,17 @@
 # compare_traces.py plus data_drive) and the register file at checkpoints.
 #
 #   phase_identity.py [--ref REV] [--long] [--jobs N] [--only SUBSTR]
+#                     [--new-exe PINHASH] [--fast-exe PINHASH_FAST]
+#                     [--run-exe PINHASH_RUN]
 #
 # Builds cmodel/ of REV (default HEAD) into build/phase_ref/<rev>/ and runs
 # scripts/pinhash.c against both models on each scenario below, diffing the
 # checkpoint lines (a rolling hash of all pins, printed every 1M phases).
 # The work tree is run through each bus front end it offers: z80_sys_phase
 # (sys) or the harness' bus model around z80_phase_step (own), and the pin
-# word API z80_tick (tick) when cmodel/z80.h has it.
+# word API z80_tick (tick) when cmodel/z80.h has it, and cfast's generated
+# engine, z80f_tick (fast) with --fast-exe and z80f_run (run) with
+# --run-exe.
 #
 # Scenarios: ZEXDOC, prelim, the three z80test variants, every trace program
 # (tests/traces, with compare_traces.py's NMI pulse) and pin scenario (with
@@ -91,6 +95,10 @@ def main():
     ap.add_argument("--only", default="")
     ap.add_argument("--new-exe", default="",
                     help="the work tree's pinhash as built by make (default: build one)")
+    ap.add_argument("--fast-exe", default="",
+                    help="also check cfast: a pinhash built -DZ80_FAST (make cfast)")
+    ap.add_argument("--run-exe", default="",
+                    help="also check cfast's run frame: a pinhash built -DZ80_FAST_RUN")
     a = ap.parse_args()
 
     rev = sh(["git", "-C", ROOT, "rev-parse", "--short", a.ref]).strip()
@@ -107,7 +115,8 @@ def main():
                                  os.path.join(ROOT, "build", "phase_new"))
     has_tick = "Z80_PIN_M1" in open(os.path.join(ROOT, "cmodel", "z80.h")).read()
     print(f"phase identity: work tree vs {a.ref} ({rev}); front ends: "
-          f"{'sys/own, tick' if has_tick else 'sys/own'}")
+          f"{'sys/own, tick' if has_tick else 'sys/own'}{', cfast tick' if a.fast_exe else ''}"
+          f"{', cfast run' if a.run_exe else ''}")
 
     jobs = []
     for name, args, own in scenarios(a.long):
@@ -115,7 +124,9 @@ def main():
             continue
         base = "own" if own else "sys"
         jobs.append((name, args, [("ref", ref_exe, base), ("new", new_exe, base)]
-                     + ([("tick", new_exe, "tick")] if has_tick else [])))
+                     + ([("tick", new_exe, "tick")] if has_tick else [])
+                     + ([("fast", a.fast_exe, "fast")] if a.fast_exe else [])
+                     + ([("run", a.run_exe, "run")] if a.run_exe else [])))
 
     ok = True
     total = 0

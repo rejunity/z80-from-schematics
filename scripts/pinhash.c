@@ -31,6 +31,8 @@
  *   -m MODE    sys:  the library's z80_sys_phase (memory + I/O model)
  *              own:  this file's bus model around z80_phase_step
  *              tick: this file's bus model around z80_tick (pin word API)
+ *              fast: the same around cfast's z80f_tick (built -DZ80_FAST)
+ *              run:  the same inlined in cfast's z80f_run (-DZ80_FAST_RUN)
  *   -d A:B     dump the trace lines (tracegen format) of phases [A, B)
  *   -q         don't print the program's console output
  *
@@ -42,9 +44,18 @@
 #include <stdlib.h>
 #include <string.h>
 #include "z80_sim.h"
+#ifdef Z80_FAST_RUN
+#define Z80_FAST
+#include "z80_fast.c"            /* cfast, compiled into this unit */
+#elif defined(Z80_FAST)
+#include "z80_fast.h"
+#endif
+#ifdef Z80_FAST
+static z80f_t fast_core;
+#endif
 
 enum { PROG_COM, PROG_TAP, PROG_HEX, PROG_RAND };
-enum { MODE_SYS, MODE_OWN, MODE_TICK };
+enum { MODE_SYS, MODE_OWN, MODE_TICK, MODE_FAST, MODE_RUN };
 
 static z80_system_t *S;
 static int      prog_kind;
@@ -195,9 +206,10 @@ static uint64_t tick_inputs(void)
     return p;
 }
 
-static void tick_phase(uint64_t ph, cols_t *k)
+/* the bus model on the pins a tick returned; sets D for the next phase */
+static void tick_bus(uint64_t ph, uint64_t *pp, cols_t *k)
 {
-    uint64_t p = z80_tick(&S->cpu, tick_inputs());
+    uint64_t p = *pp;
     uint16_t a = Z80_GET_ADDR(p);
     const z80_t *c = &S->cpu;
     k->t = c->t_state; k->phi = c->phi; k->m = c->m_cycle;
@@ -220,7 +232,18 @@ static void tick_phase(uint64_t ph, cols_t *k)
         d = 0;
     Z80_SET_DATA(p, d);
     k->data_i = d;
-    tick_pins = p;
+    *pp = tick_pins = p;
+}
+
+static void tick_phase(uint64_t ph, cols_t *k)
+{
+#ifdef Z80_FAST
+    uint64_t p = (mode == MODE_FAST) ? z80f_tick(&fast_core, tick_inputs())
+                                     : z80_tick(&S->cpu, tick_inputs());
+#else
+    uint64_t p = z80_tick(&S->cpu, tick_inputs());
+#endif
+    tick_bus(ph, &p, k);
 }
 #endif
 
@@ -342,9 +365,48 @@ static void console(void)
     }
 }
 
+/* the run: phases done, rolling hash, instructions seen */
+static unsigned long long max_ph = 0, every = 1000000, dump_a = 1, dump_b = 0;
+static uint64_t ph, h = 0x243F6A8885A308D3ull, last_ic;
+
+/* after a phase: hash it, checkpoint, react to an instruction boundary;
+   nonzero when the run is over */
+static int phase_done(const cols_t *k)
+{
+    h = (h ^ hash_word(k)) * 0x9E3779B97F4A7C15ull;
+    h ^= h >> 29;
+    if (ph >= dump_a && ph < dump_b) dump_line(k);
+    ph++;
+    if (ph % every == 0) checkpoint('C', ph, h);
+    if (S->cpu.instr_count != last_ic) {        /* instruction boundary */
+        last_ic = S->cpu.instr_count;
+        /* program exit, unless random RESET / interrupts may land there */
+        if ((prog_kind == PROG_COM || prog_kind == PROG_TAP) && !rand_ev &&
+            S->cpu.rf[RFP_PC] == 0x0000)
+            return 1;
+        console();
+    }
+    return max_ph && ph >= max_ph;
+}
+
+#ifdef Z80_FAST_RUN
+/* run mode: the bus model and the tail inlined between cfast's steps */
+static int run_phase(uint64_t *pins)
+{
+    cols_t k;
+    tick_bus(ph, pins, &k);
+    if (phase_done(&k)) return 1;
+    apply_inputs(ph);
+    *pins = tick_inputs();
+    return 0;
+}
+#define ZF_BUS(p)      do { if (run_phase(&(p))) zf_exit = 1; } while (0)
+#define ZF_BOUNDARY(c) 0
+#include "z80_fast_run.h"
+#endif
+
 int main(int argc, char **argv)
 {
-    unsigned long long max_ph = 0, every = 1000000, dump_a = 1, dump_b = 0;
     const char *ev_path = NULL, *prog = NULL;
     double scale = 1.0;
     for (int i = 1; i < argc; i++) {
@@ -366,6 +428,8 @@ int main(int argc, char **argv)
             if      (!strcmp(v, "sys"))  mode = MODE_SYS;
             else if (!strcmp(v, "own"))  mode = MODE_OWN;
             else if (!strcmp(v, "tick")) mode = MODE_TICK;
+            else if (!strcmp(v, "fast")) mode = MODE_FAST;
+            else if (!strcmp(v, "run"))  mode = MODE_RUN;
             else { fprintf(stderr, "pinhash: unknown mode %s\n", v); return 2; }
             i++;
         }
@@ -376,6 +440,12 @@ int main(int argc, char **argv)
     if (rand_bus && mode == MODE_SYS) { fprintf(stderr, "pinhash: -b needs -m own or tick\n"); return 2; }
 #ifndef Z80_PIN_M1
     if (mode == MODE_TICK) { fprintf(stderr, "pinhash: this build has no z80_tick\n"); return 2; }
+#endif
+#ifndef Z80_FAST
+    if (mode == MODE_FAST) { fprintf(stderr, "pinhash: built without cfast (-DZ80_FAST)\n"); return 2; }
+#endif
+#ifndef Z80_FAST_RUN
+    if (mode == MODE_RUN) { fprintf(stderr, "pinhash: built without -DZ80_FAST_RUN\n"); return 2; }
 #endif
     if (every == 0) every = 1000000;
 
@@ -405,10 +475,17 @@ int main(int argc, char **argv)
         }
     }
 
+#ifdef Z80_FAST
+    z80f_init(&fast_core, &S->cpu);
+#endif
     printf("# pinhash %s\n", prog);
-    uint64_t h = 0x243F6A8885A308D3ull;
-    uint64_t last_ic = S->cpu.instr_count;
-    uint64_t ph = 0;
+    last_ic = S->cpu.instr_count;
+#ifdef Z80_FAST_RUN
+    if (mode == MODE_RUN) {
+        apply_inputs(0);
+        z80f_run(&fast_core, tick_inputs());
+    } else
+#endif
     for (;;) {
         if (max_ph && ph >= max_ph) break;
         apply_inputs(ph);
@@ -416,23 +493,18 @@ int main(int argc, char **argv)
         if (mode == MODE_SYS)      { z80_sys_phase(S); cols_from_struct(&k); }
         else if (mode == MODE_OWN) { own_phase(ph); cols_from_struct(&k); }
 #ifdef Z80_PIN_M1
-        else                       tick_phase(ph, &k);
+        else                       tick_phase(ph, &k);   /* tick, fast */
 #endif
-        h = (h ^ hash_word(&k)) * 0x9E3779B97F4A7C15ull;
-        h ^= h >> 29;
-        if (ph >= dump_a && ph < dump_b) dump_line(&k);
-        ph++;
-        if (ph % every == 0) checkpoint('C', ph, h);
-        if (S->cpu.instr_count != last_ic) {        /* instruction boundary */
-            last_ic = S->cpu.instr_count;
-            /* program exit, unless random RESET / interrupts may land there */
-            if ((prog_kind == PROG_COM || prog_kind == PROG_TAP) && !rand_ev &&
-                S->cpu.rf[RFP_PC] == 0x0000)
-                break;
-            console();
-        }
+        if (phase_done(&k)) break;
     }
     checkpoint('E', ph, h);
+#if defined(Z80_FAST) && defined(ZF_STATS)
+    {
+        extern unsigned long long zf_slow_ticks, zf_resumes;
+        fprintf(stderr, "cfast: %llu of %llu phases slow, %llu resumptions\n",
+                zf_slow_ticks, (unsigned long long)ph, zf_resumes);
+    }
+#endif
     free(S);
     return 0;
 }
