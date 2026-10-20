@@ -132,7 +132,7 @@ fossi-foundation substituter configured (see [docs/librelane-flow.md](docs/libre
 | ✅  | Real KC85 silicon — sync   capture (`make silicon_cycles`)      | 50 / 50 OK,  0 emu mismatches       |
 | ✅  | Real KC85 silicon — 20 MHz capture (`make silicon_async`)       | CPU ≈ 1.767 MHz, pins ✓             |
 | ✅  | HALT-to-INT T-state timing (`make halt2int`)                    | 10/10 sweep samples in silicon range (Brewer 2014 / Woodmass HALT2INT 2021) |
-| ✅  | Gate-level vs perfectz80 — **C model** path                     | 13/13 PASS: control pins and the refresh address in every half-cycle; `addr` 100 % wherever MREQ / IORQ with RD / WR; `data_o` 100 % |
+| ✅  | Gate-level vs perfectz80 — **C model** path                     | 13/13 PASS: control pins and the address in every half-cycle (transfers, refresh, internal T-states); `data_o` 100 % |
 | ✅  | Gate-level vs perfectz80 — **iverilog RTL** path                | 12/12 PASS, same 12 programs        |
 | ✅  | Gate-level vs perfectz80 — **LibreLane sky130 netlist** path    | 12/12 PASS, same 12 programs ("ultimate test") |
 | 🚧  | Pin-scenario programs vs perfectz80 (14 INT/NMI/WAIT/BUSREQ/RESET scenarios) | C model 14/14, RTL 13/14: `prog15_busreq_m1` (BUSREQ, known difference 16) is left |

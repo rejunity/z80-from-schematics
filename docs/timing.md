@@ -240,6 +240,15 @@ internal M-cycles as one where the die has two (ADD HL,rr's 4 + 3 T), so a cut
 inside them is approximate; RESET during WAIT or a bus grant is untested
 (docs/known-differences.md).
 
+## Address bus in internal T-states
+
+Internal T-states drive no new address: the bus keeps the last one -- the
+refresh address after an M1 (the Spectrum's contention tables' "ir:1"), the
+operand address after a read ("hl:1", "pc+1:1"). The same holds through an
+M1's T5 / T6, IM1 / IM2's seventh INTA T-state, the RESET idle and a bus
+grant (perfectz80, every half-cycle). The address latch (`m_addr`) still
+carries the IDU / EA work of those T-states; the pins take the held value.
+
 ## WAIT summary
 
 WAIT is sampled at `.N` of T2 in memory M-cycles, at `.N` of the automatic Tw in I/O

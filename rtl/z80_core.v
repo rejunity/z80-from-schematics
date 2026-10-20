@@ -126,6 +126,7 @@ module z80_core (
     // marks the opcode fetch it replaces.
     reg        res2, sres, rst_idle, srst_m1;
     reg        rd_hold;        // RD still low from a T1 cut (one idle T-state)
+    reg [15:0] addr_hold;      // the address the last T-state's low half drove
 
     // ---- next state ----
     reg [7:0]  reg_i_n, reg_r_n, ir_n;
@@ -245,7 +246,17 @@ module z80_core (
                     ((bus_op_n == `BUSOP_IORD) || (bus_op_n == `BUSOP_IOWR));
     wire idle_pos = bus_granted_n | rst_idle_n;    // T-state being entered
     wire idle_neg = bus_granted | rst_idle;        // current T-state
-    assign addr_pos       = tp_addr;
+    // Internal T-states, the reset idle and a bus grant drive no new
+    // address: the bus keeps the last one -- the refresh address after an
+    // M1, the operand address after a read (perfectz80; the Spectrum's
+    // contention tables, "ir:1", "hl:1"), and so do the T-states an M1 or
+    // INTA runs past its refresh (an M1's T5 / T6, IM1 / IM2's seventh).
+    // m_addr still carries the IDU / EA work of those T-states.
+    wire hold_pos = idle_pos | (bus_op_n == `BUSOP_INTERNAL) ||
+                    ((bus_op_n == `BUSOP_M1) && (t_n >= 4'd5)) || ((bus_op_n == `BUSOP_INTA) && (t_n >= 4'd7));
+    wire hold_neg = idle_neg | (bus_op == `BUSOP_INTERNAL) ||
+                    ((bus_op == `BUSOP_M1) && (t_state >= 4'd5)) || ((bus_op == `BUSOP_INTA) && (t_state >= 4'd7));
+    assign addr_pos       = hold_pos ? addr_neg : tp_addr;
     assign data_out_pos   = tp_dout;
     assign data_drive_pos = idle_pos ? 1'b0 : tp_drive;
     assign m1_n_pos       = idle_pos | tp_m1;
@@ -254,7 +265,7 @@ module z80_core (
     assign rd_n_pos       = rd_hold_pos ? 1'b0 : (idle_pos | io_cut | tp_rd);
     // wr_n_pos is assigned below: it needs `stall` (WR hold across Tw).
     assign rfsh_n_pos     = idle_pos | tp_rfsh;
-    assign addr_neg       = tn_addr;
+    assign addr_neg       = hold_neg ? addr_hold : tn_addr;
     assign data_out_neg   = tn_dout;
     assign data_drive_neg = (idle_neg | cut_t1) ? 1'b0 : tn_drive;
     assign m1_n_neg       = idle_neg | tn_m1;
@@ -1086,7 +1097,9 @@ module z80_core (
             suppress_decode <= 1'b0; bus_granted <= 1'b0; irq_seq <= 2'd0;
             reg_q <= 8'h00; f_modified <= 1'b0;
             res2 <= 1'b1; sres <= 1'b0; rst_idle <= 1'b1; srst_m1 <= 1'b0; rd_hold <= 1'b0;
+            addr_hold <= 16'h0000;
         end else begin
+            addr_hold <= addr_neg;
             res2 <= res2_n; sres <= sres_n; rst_idle <= rst_idle_n; srst_m1 <= srst_m1_n;
             rd_hold <= cut_t1;
             reg_i <= reg_i_n; reg_r <= reg_r_n; ir <= ir_n;

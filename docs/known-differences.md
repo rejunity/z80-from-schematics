@@ -32,7 +32,7 @@ Status legend:
 | 15 | RTL clocking: reset / BUSREQ settle vs C model | timing                    | watching |
 | 16 | BUSREQ / BUSACK vs the NMOS Z80               | timing / bus              | watching |
 | 17 | RESET / INT / NMI sweep vs perfectz80         | timing / interrupt        | resolved |
-| 18 | Idle address bus (refresh resolved)           | timing / bus              | watching |
+| 18 | Refresh and idle address bus                  | timing / bus              | resolved |
 | 19 | RESET between an instruction and its write-back | timing / reset          | watching |
 
 Notes for each row:
@@ -243,25 +243,25 @@ Notes for each row:
      is now the die's sampled RESET in both models, with the special reset
      and registers kept (row 1; docs/timing.md "RESET").
 
- 18. **Refresh and idle address bus vs perfectz80** — the pin
-     comparisons treat the address as don't-care outside transfers and
-     refreshes (row 14). Comparing it in every phase, on all trace and
-     pin-scenario programs up to their first control-pin difference:
-     - **Refresh — resolved 2026-10-20.** perfectz80 drives I:R, the R
-       from before this M1's increment (the first M1 after reset
-       refreshes 0000); RZ80 used to step R at the T3 rising edge and
-       drive I:(R+1). R now steps on the rising edge that ends the
-       refresh (T4 of an M1, the second refresh T-state of an INTA), in
-       the C model and the RTL, and every refresh phase matches. Matters
-       to DRAM controllers that use the refresh address and to the ZX81,
-       whose display hangs its line counter on A6 of the refresh
-       address. `compare_signal_timing.py` gates on it and the event
-       sweep compares it.
-     - **Internal T-states** (no MREQ / IORQ): the address differs in
-       468 of 2,215 phases; in 178 of them perfectz80 still shows the
-       last refresh address (IR), as the Spectrum's contention tables
-       assume ("ir:1"), and the RTL shows another register.
-     Every phase with MREQ or IORQ and RD or WR (3,971) agrees.
+ 18. **Refresh and idle address bus vs perfectz80 — resolved
+     2026-10-20.** The address now agrees with perfectz80 in every
+     half-cycle, in the C model and the RTL, on every trace program, pin
+     scenario and event-sweep case; `compare_signal_timing.py` and the
+     sweep gate on it.
+     - **Refresh.** perfectz80 drives I:R, the R from before this M1's
+       increment (the first M1 after reset refreshes 0000); RZ80 stepped R
+       at the T3 rising edge and drove I:(R+1). R now steps on the rising
+       edge that ends the refresh (T4 of an M1, the second refresh T-state
+       of an INTA). Matters to DRAM controllers that use the refresh
+       address and to the ZX81, whose display hangs its line counter on A6
+       of the refresh address.
+     - **Internal T-states.** The bus keeps the last address: the refresh
+       address after an M1 ("ir:1" in the Spectrum's contention tables),
+       the operand address after a read ("hl:1", "pc+1:1"), and so through
+       an M1's T5 / T6, IM1 / IM2's seventh INTA T-state, the reset idle
+       and a bus grant. RZ80 drove its address latch, which carries the
+       IDU / EA work of those T-states (468 of 2,215 phases differed);
+       the pins now hold instead.
 
  19. **RESET between an instruction and its write-back** — the die
      finishes some results in the next M1: A and F after INC A, A after

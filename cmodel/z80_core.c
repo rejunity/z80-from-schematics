@@ -1443,6 +1443,13 @@ void z80_phase_step(z80_t *c)
         c->int_sampled = !c->pins.int_n;
     }
 
+    /* Internal T-states and the reset idle drive no new address: the bus
+       keeps the last one -- the refresh address after an M1, the operand
+       address after a read (perfectz80; the Spectrum's contention tables,
+       "ir:1", "hl:1"), and so do the T-states an M1 or INTA runs past its
+       refresh (an M1's T5 / T6, IM1 / IM2's seventh). m_addr still carries
+       the IDU / EA work. */
+    uint16_t held_addr = c->pins.addr;
     z80_timing(c->bus_op, c->t_state, c->phi, c->m_len, c->m_addr, c->m_wdata,
                c->reg_i, c->reg_r,
                &c->pins.addr, &c->pins.data_out, &c->pins.data_drive,
@@ -1450,6 +1457,9 @@ void z80_phase_step(z80_t *c)
                &c->pins.rd_n, &c->pins.wr_n,   &c->pins.rfsh_n);
 
     if (hold_write_strobe) c->pins.wr_n = 0;
+    if (c->bus_op == BUSOP_INTERNAL || c->rst_idle ||
+        (c->bus_op == BUSOP_M1 && c->t_state >= 5) || (c->bus_op == BUSOP_INTA && c->t_state >= 7))
+        c->pins.addr = held_addr;
 
     /* RESET (perfectz80): the idle drives nothing. `res2` -- set on the
        previous falling edge -- makes this T-state the last before the idle:

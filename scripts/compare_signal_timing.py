@@ -43,8 +43,9 @@ VERILATOR_SIM = os.path.join(ROOT, "build", "obj_dir", "sim_z80")
 PZ_OFFSET = 1
 
 # Always-on control-pin parity (CPU-driven, no don't-cares) — this is the
-# gate of record and affects exit code. The refresh address (I:R wherever
-# RFSH is low on both sides) is part of the gate too.
+# gate of record and affects exit code. The address is part of the gate in
+# every phase: transfers, refreshes (I:R), and the internal and idle
+# T-states, where the bus keeps its last address.
 COMPARED  = ["mreq","iorq","rd","wr","m1","rfsh","halt"]
 # Bus parity: addr is valid when (mreq||iorq) is low; data_o is valid
 # when wr is low. Compared only on phases where BOTH the C model AND
@@ -294,8 +295,8 @@ def compare(prog, phases, source="c"):
 
     for i in range(n):
         diff = [(col, c[i][col], g[i][col]) for col in COMPARED if c[i][col] != g[i][col]]
-        if c[i]["rfsh"] == "0" and g[i]["rfsh"] == "0" and c[i]["addr"] != g[i]["addr"]:
-            diff.append(("refresh addr", c[i]["addr"], g[i]["addr"]))
+        if c[i]["addr"] != g[i]["addr"]:
+            diff.append(("addr", c[i]["addr"], g[i]["addr"]))
         bus_diff = []
         if COMPARE_BUS:
             # Compare addr at every phase, with the settle tolerance.

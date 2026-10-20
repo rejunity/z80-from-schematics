@@ -12,9 +12,9 @@
 # dump the pins for every half-cycle from the marker fetch's T1.
 #
 # A case matches when the control pins (mreq iorq rd wr m1 rfsh halt busack)
-# agree in every half-cycle, the address agrees wherever both sides transfer
-# data (MREQ or IORQ with RD or WR) or refresh (RFSH low: I:R; idle addresses
-# are don't-care), and the data agrees wherever both drive WR. Differences are checked
+# and the address agree in every half-cycle -- transfers, refreshes, and the
+# internal and idle T-states, where the bus keeps its last address -- and the
+# data agrees wherever both drive WR. Differences are checked
 # against tests/event_sweep/baseline.txt: a difference that is not in the
 # baseline, or that changed, fails the run. Cases in the baseline that now
 # match are reported as a warning so the baseline can be trimmed.
@@ -275,9 +275,10 @@ CONTROL = [("mreq", MREQ), ("iorq", IORQ), ("rd", RD), ("wr", WR), ("m1", M1),
 
 
 def addressed(r):
-    """The address means something: a transfer (MREQ or IORQ with RD or
-    WR) or a refresh (RFSH low: I:R). Idle addresses are don't-care."""
-    return ((not r[MREQ] or not r[IORQ]) and (not r[RD] or not r[WR])) or not r[RFSH]
+    """The address is compared in every half-cycle: transfers, refreshes,
+    and the internal and idle T-states, where the bus keeps its last
+    address."""
+    return True
 
 
 def first_difference(a, b):
