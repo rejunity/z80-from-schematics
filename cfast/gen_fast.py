@@ -38,7 +38,8 @@
 #   ZF_PHASE_CHK(next)   the same after an M1 opcode latch, which leaves
 #                        fast mode for a HALT
 #   ZF_SLOW_AT(step)     hand this phase to the reference engine
-#   ZF_GOTO_T1P()        continue with the T1.P of (c->bus_op, c->m_len)
+#   ZF_GOTO_T1P(k)       continue with the T1.P of template k = bus_op << 4 | m_len
+#                        (end_mcycle() returns it)
 #
 # Fast mode never sees WAIT, BUSREQ, RESET or NMI asserted, a halt, an
 # interrupt acknowledge or the NMI response: the frames run those phases
@@ -109,7 +110,7 @@ def main():
         if ph[(op, n, 1)]["refresh_end"]:
             body.append(R_STEP)
         body += ["c->pins.busreq_n = 1;   /* this phase's level, for begin_next */",
-                 "end_mcycle(c);", "ZF_GOTO_T1P();"]
+                 "ZF_GOTO_T1P(end_mcycle(c));"]
         code.append(f"ZF_LABEL({ids[-1]}): /* {name} m_len {n}: M-cycle end */\n    "
                     + "\n    ".join(body))
 

@@ -108,7 +108,7 @@ uint64_t z80f_tick(z80f_t *f, uint64_t pins)
 #define ZF_PHASE_T1P(next) ZF_PHASE(next)
 #define ZF_PHASE_CHK(next) ZF_PHASE(next)
 #define ZF_SLOW_AT(s)      return slow_tick(f, pins)
-#define ZF_GOTO_T1P()      ZF_GOTO_STEP(zf_template[(c->bus_op & 7) << 4 | (c->m_len & 15)])
+#define ZF_GOTO_T1P(k)     ZF_GOTO_STEP(zf_template[k])
 #include "z80_fast_steps.h"
 #undef ZF_LABEL
 #undef ZF_CLOCK

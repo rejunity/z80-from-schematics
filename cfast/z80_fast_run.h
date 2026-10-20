@@ -78,7 +78,7 @@ static uint64_t z80f_run(z80f_t *f, uint64_t pins)
         if (__builtin_expect(zf_exit != 0, 0)) { ZF_LEAVE(next); return pins; } \
         if (__builtin_expect((pins & ZF_SLOW_IN) != 0 || !f->fast, 0)) { ZF_LEAVE(next); goto zf_slow; } } while (0)
 #define ZF_SLOW_AT(s)      do { ZF_SYNC((s) - 1); goto zf_slow; } while (0)
-#define ZF_GOTO_T1P()      goto *t1p_label[(c->bus_op & 7) << 4 | (c->m_len & 15)]
+#define ZF_GOTO_T1P(k)     goto *t1p_label[k]
 #include "z80_fast_steps.h"
 #undef ZF_LABEL
 #undef ZF_CLOCK

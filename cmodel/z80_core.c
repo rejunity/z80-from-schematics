@@ -1238,7 +1238,7 @@ static void begin_next(z80_t *c)
 
 /* The end of an M-cycle: the sequencer sets up the next one or finishes the
    instruction, and an instruction boundary decides what follows. */
-static void end_mcycle(z80_t *c)
+static unsigned end_mcycle(z80_t *c)
 {
     z80_exec_step(c);                        /* set up next M-cycle / finish */
     if (c->instr_done) {
@@ -1255,6 +1255,7 @@ static void end_mcycle(z80_t *c)
         c->prefix = PFX_NONE;
         begin_next(c);
     }
+    return (unsigned)(c->bus_op & 7) << 4 | (c->m_len & 15);
 }
 
 static void advance(z80_t *c)
