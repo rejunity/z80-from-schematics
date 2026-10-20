@@ -3,10 +3,12 @@
  * against the C model. Loads a .com at 0x0100, provides a minimal BDOS shim
  * (console functions 2 and 9), and runs to completion.
  *
- *   zexrunner <prog.com> [max_instructions]
+ *   zexrunner [-t] <prog.com> [max_instructions]
  *
  * BDOS is trapped by placing a RET at 0x0005 and acting whenever the core is
  * about to fetch there; program exit is detected when PC returns to 0x0000.
+ * -t runs the bus in this file's loop through the pin word API (z80_tick),
+ * one phase per tick, instead of z80_sys_step_instr; same phases, same pins.
  * ==========================================================================*/
 /* Expose clock_gettime / CLOCK_MONOTONIC / struct timespec from <time.h>:
    Linux glibc hides POSIX.1-2008 extensions at -std=c99 unless asked;
@@ -34,9 +36,34 @@ static void bdos(z80_system_t *s)
     fflush(stdout);
 }
 
+/* The tick loop: z80_sys_phase's memory and I/O, on the pin word. Runs to
+   the next instruction boundary. */
+static void tick_instr(z80_system_t *s, uint64_t *pins_io)
+{
+    z80_t   *cpu = &s->cpu;
+    uint8_t *mem = s->mem, *io = s->io;
+    uint64_t pins = *pins_io, ic = cpu->instr_count;
+    do {
+        pins = z80_tick(cpu, pins);
+        uint16_t a = Z80_GET_ADDR(pins);
+        uint8_t  d = 0;                         /* an undriven bus reads 0 */
+        if (pins & Z80_MREQ) {
+            if (pins & Z80_WR)      mem[a] = Z80_GET_DATA(pins);
+            else if (pins & Z80_RD) d = mem[a];
+        } else if (pins & Z80_IORQ) {
+            if (pins & Z80_WR)      io[a] = Z80_GET_DATA(pins);
+            else if (pins & Z80_RD) d = io[a];
+        }
+        Z80_SET_DATA(pins, d);
+    } while (cpu->instr_count == ic);
+    *pins_io = pins;
+}
+
 int main(int argc, char **argv)
 {
-    if (argc < 2) { fprintf(stderr, "usage: %s <prog.com> [max_instr]\n", argv[0]); return 2; }
+    int tick = (argc > 1 && !strcmp(argv[1], "-t"));
+    if (tick) { argv++; argc--; }
+    if (argc < 2) { fprintf(stderr, "usage: %s [-t] <prog.com> [max_instr]\n", argv[0]); return 2; }
     long long max_instr = (argc > 2) ? atoll(argv[2]) : 4000000000LL;
 
     FILE *f = fopen(argv[1], "rb");
@@ -56,13 +83,15 @@ int main(int argc, char **argv)
 
     long long count = 0;
     int hit_limit = 0;
+    uint64_t pins = 0;
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     for (;;) {
         uint16_t pc = s->cpu.rf[RFP_PC];
         if (pc == 0x0000) break;            /* warm boot -> done */
         if (pc == 0x0005) bdos(s);          /* service before executing the RET at 5 */
-        z80_sys_step_instr(s);
+        if (tick) tick_instr(s, &pins);
+        else      z80_sys_step_instr(s);
         if (++count >= max_instr) { hit_limit = 1; break; }
     }
     clock_gettime(CLOCK_MONOTONIC, &t1);

@@ -1453,3 +1453,26 @@ void z80_phase_step(z80_t *c)
                       (c->nmi_sampled || (c->int_sampled && c->iff1)));
     c->pins.halt_n = ((c->halted || exec_halt_in_m1) && !halt_exit) ? 0 : 1;
 }
+
+/* ---- pin word API ----
+   z80_phase_step() behind the 64-bit pin word: the requests and the data
+   byte of `pins` go to the input side of z80_pins_t, the phase runs, and
+   the driven side comes back as active-high bits. */
+uint64_t z80_tick(z80_t *c, uint64_t pins)
+{
+    c->pins.data_in  = Z80_GET_DATA(pins);
+    c->pins.wait_n   = !(pins & Z80_WAIT);
+    c->pins.int_n    = !(pins & Z80_INT);
+    c->pins.nmi_n    = !(pins & Z80_NMI);
+    c->pins.busreq_n = !(pins & Z80_BUSREQ);
+    c->pins.reset_n  = !(pins & Z80_RES);
+    z80_phase_step(c);
+    const z80_pins_t *p = &c->pins;
+    return (pins & ~Z80_OUT_PIN_MASK)
+         | p->addr | ((uint64_t)p->data_out << Z80_PIN_D0)
+         | (p->m1_n     ? 0 : Z80_M1)   | (p->mreq_n ? 0 : Z80_MREQ)
+         | (p->iorq_n   ? 0 : Z80_IORQ) | (p->rd_n   ? 0 : Z80_RD)
+         | (p->wr_n     ? 0 : Z80_WR)   | (p->halt_n ? 0 : Z80_HALT)
+         | (p->rfsh_n   ? 0 : Z80_RFSH) | (p->busack_n ? 0 : Z80_BUSACK)
+         | (p->data_drive ? Z80_DOE : 0);
+}
