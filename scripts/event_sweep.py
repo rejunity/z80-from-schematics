@@ -56,6 +56,8 @@ TARGETS = {
     "rlc_hl":   ([0xcb, 0x06], 15, "CB prefix, read + write"),
     "ldir":     ([0xed, 0xb0], 58, "repeating block move, BC=3"),
     "halt":     ([0x76], 4, "HALT"),
+    "ld_a_i":   ([0xed, 0x57], 9, "LD A,I: P/V from IFF2"),
+    "ld_a_r":   ([0xed, 0x5f], 9, "LD A,R: P/V from IFF2"),
 }
 BASIC = ["inc_a", "ld_a_hl", "ld_hl_a", "inc_hl"]
 GROUPS = ["int", "nmi", "nmi_short", "nmi_reentry", "reset", "reset_release",
@@ -132,7 +134,7 @@ def cases(groups, phases):
     out = []
     want = lambda g: "all" in groups or g in groups
     if want("int"):          # IM1, EI, INT held until INTA
-        for t in BASIC + ["halt"]:
+        for t in BASIC + ["halt", "ld_a_i", "ld_a_r"]:
             for n in range(TARGETS[t][1] + 2):
                 for j in ph:
                     out.append(case(f"int_{t}_T{n}_p{j:02d}", "int", t, [(INT, at(n, j), -1)],

@@ -459,6 +459,11 @@ module z80_core (
     reg  [7:0] alu_a, alu_b, alu_xy;
     reg  [4:0] alu_md;
     reg  [2:0] alu_rot, alu_bit;
+    // NMOS race: an INT accepted at the end of LD A,I / LD A,R clears IFF2
+    // while the instruction writes P/V from it, so P/V reads 0 (perfectz80;
+    // an NMI there leaves P/V = IFF2). This is the boundary's decision: no
+    // NMI pending, INT low at the last T-state's rising edge, IFF1 set.
+    wire ldair_int = ~nmi_pending & ~int_n_rise & iff1;
     always @* begin
         alu_a = A_cur;
         alu_b = 8'h00;
@@ -479,7 +484,7 @@ module z80_core (
             `EXEC_NEG: begin alu_md = `FLAG_NEG; alu_a = A_cur; end
             `EXEC_LD_A_IR: begin alu_md = `FLAG_LD_A_I;
                               alu_b = aux_w[0] ? reg_r : reg_i;
-                              alu_bit = {2'b0, iff2}; end
+                              alu_bit = {2'b0, iff2 & ~ldair_int}; end
             `EXEC_IN_C: begin alu_md = `FLAG_IN; alu_b = rbyte; end
             `EXEC_RRD, `EXEC_RLD: begin
                 alu_md = (exec_w == `EXEC_RRD) ? `FLAG_RRD : `FLAG_RLD;

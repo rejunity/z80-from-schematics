@@ -281,7 +281,11 @@ static void z80_exec_step(z80_t *c)
         case EXEC_LD_A_IR:
             alu_md  = (uint8_t)FLAG_LD_A_I;
             alu_b   = ctl->aux ? c->reg_r : c->reg_i;
-            alu_bit = c->iff2 ? 1u : 0u;
+            /* NMOS race: an INT accepted at the end of LD A,I / LD A,R
+               clears IFF2 while the instruction writes P/V from it, so P/V
+               reads 0 (perfectz80; an NMI there leaves P/V = IFF2). The
+               boundary's decision, from the T_last.P samples. */
+            alu_bit = (c->iff2 && !(c->int_sampled && c->iff1 && !c->nmi_sampled)) ? 1u : 0u;
             break;
         case EXEC_IN_C:    alu_md = (uint8_t)FLAG_IN; alu_b = c->tmp8; break;
         case EXEC_RRD: case EXEC_RLD:

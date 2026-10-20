@@ -92,7 +92,7 @@ interactive controls (Enter, Backspace, Ctrl-C / Ctrl-Space = BREAK, Ctrl-\\ = e
     make pin_scenarios          # INT/NMI/WAIT/BUSREQ/RESET scenarios — C tracegen path
     make pin_scenarios_rtl      # same scenarios — iverilog RTL path
     make pin_scenarios_netlist  # same scenarios — LibreLane gate-level netlist path
-    make event_sweep            # RESET / INT / NMI at every T-state of 13 instructions vs perfectz80 (~2 min)
+    make event_sweep            # RESET / INT / NMI at every T-state of 15 instructions vs perfectz80 (~2 min)
     make all-tests           # every gate above in sequence
     make clean
 
@@ -136,7 +136,7 @@ fossi-foundation substituter configured (see [docs/librelane-flow.md](docs/libre
 | ✅  | Gate-level vs perfectz80 — **iverilog RTL** path                | 12/12 PASS, same 12 programs        |
 | ✅  | Gate-level vs perfectz80 — **LibreLane sky130 netlist** path    | 12/12 PASS, same 12 programs ("ultimate test") |
 | 🚧  | Pin-scenario programs vs perfectz80 (12 INT/NMI/WAIT/BUSREQ/RESET scenarios) | 5/12 PASS clean (`prog9, 12, 16, 18, 20`); 7/12 have HALT-pin / WAIT-insertion / BUSREQ / RESET timing diffs vs gate-level (informational; functional behavior verified by Rak + FUSE + HALT2INT probe) |
-| 🚧  | RESET / INT / NMI timing sweep vs perfectz80 (`make event_sweep`, [docs/event-sweep.md](docs/event-sweep.md)) | 1743 / 2287 cases pin-identical; the rest are listed in a baseline that CI holds them to (all RESET) |
+| 🚧  | RESET / INT / NMI timing sweep vs perfectz80 (`make event_sweep`, [docs/event-sweep.md](docs/event-sweep.md)) | 1831 / 2375 cases pin-identical; the rest are listed in a baseline that CI holds them to (all RESET) |
 
 Legend: ✅ pass / 100 % &nbsp; 🟡 ≥ 95 % (close, known artifacts) &nbsp; 🚧 < 95 % (work in progress).
 

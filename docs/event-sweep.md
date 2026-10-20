@@ -53,11 +53,12 @@ Instructions under test:
 - RLC (HL)
 - LDIR
 - HALT
+- LD A,I and LD A,R (P/V from IFF2)
 
 | group | pulses |
 |---|---|
-| `int` | INT from every T-state of five instructions until INTA (IM1, EI) |
-| `nmi` | 1 T NMI pulse at every T-state of all 13 instructions |
+| `int` | INT from every T-state of seven instructions until INTA (IM1, EI) |
+| `nmi` | 1 T NMI pulse at every T-state of all 15 instructions |
 | `nmi_short` | 1/16 T and 1/4 T NMI pulses at every 1/16 T of INC A, LD A,(HL), LD (HL),A, INC (HL) |
 | `nmi_reentry` | NMI held low; two pulses before acceptance; a second pulse during the response; nested; RETN with INT pending |
 | `reset` | 4 T RESET at every T-state of six instructions |
@@ -89,8 +90,8 @@ minimum widths, which depend on analog timing.
 
 | group | cases | match | differ |
 |---|---|---|---|
-| int | 86 | 86 | 0 |
-| nmi | 430 | 430 | 0 |
+| int | 130 | 130 | 0 |
+| nmi | 474 | 474 | 0 |
 | nmi_short | 1184 | 1184 | 0 |
 | nmi_reentry | 43 | 43 | 0 |
 | reset | 112 | 0 | 112 |
@@ -99,7 +100,7 @@ minimum widths, which depend on analog timing.
 | reset_short | 240 | 0 | 240 |
 | combo | 96 | 0 | 96 |
 
-1743 of 2287 cases match. When the sweep was written (main `ec3c5d2`) 809
+1831 of 2375 cases match. When the sweep was written (main `ec3c5d2`) 809
 did. Since then `e60d06e` latches INT on the rising edge that starts the
 last T-state and catches an NMI pulse of any width, as perfectz80 does:
 that fixed the two largest groups, INT and NMI taken half a clock early
@@ -110,7 +111,10 @@ pending at the end of HALT itself (24 cases). A second NMI edge during
 the NMI response, from its M1's T1 to the end of its two pushes, is now
 lost, as in perfectz80, even when NMI then stays low (20 cases). INT held
 in an NMI handler is taken one instruction after RETN: RETN copies IFF2 to
-IFF1 after its boundary's INT decision (1 case).
+IFF1 after its boundary's INT decision (1 case). An INT accepted at the
+end of LD A,I or LD A,R leaves P/V = 0 in the pushed F, the NMOS race
+(the LD A,I / LD A,R cases were added with the fix; an NMI there keeps
+P/V = IFF2).
 
 `build/event_sweep/report.md` has the per-instruction grids.
 `build/event_sweep/diff/` has a side-by-side trace for every differing case.

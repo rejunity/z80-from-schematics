@@ -19,7 +19,7 @@ Status legend:
 | 2  | SCF / CCF X / Y flags (NMOS Q variant)        | undocumented / flag       | resolved |
 | 3  | `OUT (C),0` (ED71)                            | undocumented              | accepted |
 | 4  | M1 deassert phase                             | timing                    | resolved |
-| 5  | `LD A,I` / `LD A,R` PF interrupt race         | undocumented / interrupt  | watching |
+| 5  | `LD A,I` / `LD A,R` PF interrupt race         | undocumented / interrupt  | resolved |
 | 6  | Verilator build on host                       | environment               | resolved |
 | 7  | DDCB / FDCB `(IX+d)` ZEXDOC subtests          | tooling (stale binary)    | resolved |
 | 8  | Interrupt / HALT subsystem in RTL             | resolved                  | resolved |
@@ -59,9 +59,14 @@ Notes for each row:
      starting at T3.P, which is what both models produce. No code change
      needed; `make perfectz80` is the gate of record.
 
-  5. `LD A,I/R` PF interrupt race — the documented race that clears PF if INT
-     arrives during the instruction is modelled only at the sequencer's INT
-     sample point; corner timing may differ from silicon.
+  5. `LD A,I/R` PF interrupt race — **resolved 2026-10-20.** On the NMOS
+     Z80 an INT accepted at the end of LD A,I / LD A,R clears IFF2 while
+     the instruction writes P/V from it, so P/V reads 0. perfectz80 shows
+     it from every INT start up to the last T-state's rising edge (pushed F
+     29 instead of 2D); an NMI accepted there leaves P/V = IFF2. RZ80 used
+     IFF2 unconditionally. The C model and the RTL now clear P/V when the
+     boundary's decision accepts an INT; the event sweep's LD A,I / LD A,R
+     cases and `test_int.c` pin it. (The CMOS Z84C00 fixed the race.)
 
   6. Verilator build on host — earlier blocked on Apple clang 14 vs macOS SDK
      C++17 libc++. Resolved with Apple clang 21 + Verilator 5.042 from Homebrew;
@@ -228,8 +233,8 @@ Notes for each row:
 
  17. RESET / INT / NMI sweep vs perfectz80 (`make event_sweep`, see
      [event-sweep.md](event-sweep.md), from hardesk) — pulses at every
-     T-state of 13 instructions, diffed per half-cycle against perfectz80.
-     544 of 2287 cases differ, all listed in `tests/event_sweep/baseline.txt`
+     T-state of 15 instructions, diffed per half-cycle against perfectz80.
+     544 of 2375 cases differ, all listed in `tests/event_sweep/baseline.txt`
      (CI fails on any new or changed difference). The differences, in
      perfectz80's terms:
      - RESET is sampled at rising edges, the current bus cycle finishes,
