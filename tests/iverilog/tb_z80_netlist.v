@@ -77,7 +77,7 @@ module tb_z80;
     integer i, phases, nmiph;
     integer nmi_lo, nmi_hi, int_lo, int_hi, wait_lo, wait_hi;
     integer busreq_lo, busreq_hi, reset_lo, reset_hi;
-    reg [1023:0] progf;
+    reg [8*512-1:0] progf;          // paths up to 512 characters
 
     task dump;
         $display("%0d %0d %0d %04X %02X %02X %0d %0d %0d %0d %0d %0d %0d %0d",

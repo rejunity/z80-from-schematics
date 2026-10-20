@@ -93,13 +93,12 @@ int main(int argc, char **argv) {
 
     void* st = cpu_initAndResetChip();
     /* After initAndReset, perfectz80 is past reset. We dump from here. */
+    /* Every input starts high and keeps the level of its last event, as
+       in the C tracegen and the RTL testbenches (+<pin>_lo / +<pin>_hi):
+       "30 wait 0" then "38 wait 1" holds WAIT low from phase 30 to 37. */
+    cpu_writeNMI(st, true); cpu_writeINT(st, true);
+    cpu_writeWAIT(st, true);
     for (int i = 0; i < phases; i++) {
-        /* apply pin-events for THIS phase (override default high). default
-           any unspecified-event pin to high. We re-apply every phase so a
-           single 1-phase pulse stays pulsed only for that phase unless
-           the sidecar also specifies the release. */
-        cpu_writeNMI(st, true); cpu_writeINT(st, true);
-        cpu_writeWAIT(st, true);
         events_apply(st, i);
 
         /* present read data from our memory just like the iverilog/Verilator

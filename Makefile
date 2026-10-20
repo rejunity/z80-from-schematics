@@ -327,7 +327,9 @@ PIN_SCENARIOS = \
 	  $(TESTS)/traces/pin_scenarios/prog17_reset.hex \
 	  $(TESTS)/traces/pin_scenarios/prog18_di_then_int.hex \
 	  $(TESTS)/traces/pin_scenarios/prog19_nmi_in_int.hex \
-	  $(TESTS)/traces/pin_scenarios/prog20_block_int.hex
+	  $(TESTS)/traces/pin_scenarios/prog20_block_int.hex \
+	  $(TESTS)/traces/pin_scenarios/prog21_wait_ldir.hex \
+	  $(TESTS)/traces/pin_scenarios/prog22_wait_cpir.hex
 
 pin_scenarios: tracegen $(BIN)/perfectz80_runner
 	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py 200 $(PIN_SCENARIOS) \

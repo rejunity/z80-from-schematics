@@ -54,7 +54,7 @@ module tb_event_sweep;
     integer ev_pin [0:7], ev_lo [0:7], ev_hi [0:7];
     integer n_ev, fd, r, k, e, run, marker, hold, hold_t, int_at, inta_release;
     integer t, half, mark_half, hold_until, in_read;
-    reg [1023:0] progf, evf;
+    reg [8*512-1:0] progf, evf;     // paths up to 512 characters
     reg found;
 
     task drive(input integer pin, input integer level);

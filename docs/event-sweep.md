@@ -85,63 +85,57 @@ that half sees the pulse. The sweep therefore shows whether the chip's
 input logic can catch such a pulse; it does not test the data sheet's
 minimum widths, which depend on analog timing.
 
-## Results (rejunity `main`, October 2026)
+## Results (rejunity `main`, 20 October 2026)
 
 | group | cases | match | differ |
 |---|---|---|---|
-| int | 86 | 66 | 20 |
-| nmi | 430 | 392 | 38 |
-| nmi_short | 1184 | 330 | 854 |
-| nmi_reentry | 43 | 21 | 22 |
+| int | 86 | 74 | 12 |
+| nmi | 430 | 418 | 12 |
+| nmi_short | 1184 | 1184 | 0 |
+| nmi_reentry | 43 | 22 | 21 |
 | reset | 112 | 0 | 112 |
 | reset_release | 64 | 0 | 64 |
 | reset_wait | 32 | 0 | 32 |
 | reset_short | 240 | 0 | 240 |
 | combo | 96 | 0 | 96 |
 
+1698 of 2287 cases match. When the sweep was written (main `ec3c5d2`) 809
+did. Since then `e60d06e` latches INT on the rising edge that starts the
+last T-state and catches an NMI pulse of any width, as perfectz80 does:
+that fixed the two largest groups, INT and NMI taken half a clock early
+(a pulse in the high half of the last T-state) and NMI pulses that span no
+falling edge.
+
 `build/event_sweep/report.md` has the per-instruction grids.
 `build/event_sweep/diff/` has a side-by-side trace for every differing case.
 
 Where the RTL matches perfectz80:
-- INT and NMI are taken at the right instruction boundary from every other
+- INT and NMI are taken at the right instruction boundary from every
   position, for every instruction tried.
+- NMI pulses of 1/16 T and 1/4 T are taken from every 1/16 T position.
 - The stacked PC and the response cycles are the same, including LDIR
   between iterations, CALL, JR and prefixed instructions.
 - NMI held low, two pulses before acceptance, and nested NMIs all match.
 
-The differences fall into six groups.
+The differences left fall into four groups.
 
-1. **INT and NMI are sampled half a clock late.** Take an INT or NMI that
-   arrives in the high half of an instruction's last T-state. perfectz80
-   does not take it until after the next instruction. RZ80 samples at the
-   falling edge in that T-state (`docs/clocking.md`, "T_last.P"), so it
-   takes it one instruction earlier. This is the `e` column in the INT and
-   NMI grids.
-
-2. **Short NMI pulses.** perfectz80 takes every NMI pulse in the sweep,
-   including a 1/16 T pulse that starts and ends inside one clock half. Its
-   NMI input latch is transparent while the clock is high and while it is
-   low. RZ80 detects NMI only at a falling edge, so it takes a sub-T pulse
-   only when the pulse covers one. This is the `m` cells in the short-pulse
-   grids.
-
-3. **NMI during the NMI response.** A second NMI edge arriving during the
+1. **NMI during the NMI response.** A second NMI edge arriving during the
    NMI response (from the response M1 to the end of its two pushes) is lost
    in perfectz80: there is one NMI and the program resumes. RZ80 latches it
    and enters the handler a second time before running the handler's first
    instruction. A pulse after the response starts a nested NMI in both.
 
-4. **RETN with INT pending.** INT is held low from the NMI handler's first
+2. **RETN with INT pending.** INT is held low from the NMI handler's first
    fetch, and EI was in effect before the NMI. perfectz80 runs one
    instruction after RETN before acknowledging the INT. RZ80 acknowledges
    it right after RETN.
 
-5. **HALT pin.** When an INT or NMI ends HALT, perfectz80 releases HALT in
+3. **HALT pin.** When an INT or NMI ends HALT, perfectz80 releases HALT in
    the low half of the last T4. RZ80 releases it half a clock later.
    If the interrupt is already pending at the HALT fetch, perfectz80 never
    asserts HALT; RZ80 drives it low for one half-cycle.
 
-6. **RESET.** perfectz80 treats RESET as a sampled input. RZ80 resets
+4. **RESET.** perfectz80 treats RESET as a sampled input. RZ80 resets
    asynchronously:
    - **Assertion.** perfectz80 samples RESET at rising edges. It finishes
      the bus cycle in progress and goes idle 0–8 half-cycles after RESET

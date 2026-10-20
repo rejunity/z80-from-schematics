@@ -32,6 +32,7 @@ Status legend:
 | 15 | RTL clocking: reset / BUSREQ settle vs C model | timing                    | watching |
 | 16 | BUSREQ / BUSACK vs the NMOS Z80               | timing / bus              | watching |
 | 17 | RESET / INT / NMI sweep vs perfectz80         | timing / interrupt        | watching |
+| 18 | Refresh and idle address bus                  | timing / bus              | watching |
 
 Notes for each row:
 
@@ -127,29 +128,25 @@ Notes for each row:
      exactly the "Q-flag carry-over" effect this row described).
 
  14. Pin-scenario vs perfectz80 (`make pin_scenarios` /
-     `pin_scenarios_rtl` / `pin_scenarios_netlist`) — twelve trace
-     programs (`prog9_inta_im1`..`prog20_block_int`) drive INT / NMI /
+     `pin_scenarios_rtl` / `pin_scenarios_netlist`) — fourteen trace
+     programs (`prog9_inta_im1`..`prog22_wait_cpir`) drive INT / NMI /
      WAIT / BUSREQ / RESET through the `.events` sidecar and diff
      against perfectz80 per-half-cycle. **Current status
-     (2026-06-18)**: 5 / 12 PASS cleanly:
-     - `prog9_inta_im1` ✓
-     - `prog12_inta_im2` ✓
-     - `prog16_ei_delay` ✓
-     - `prog18_di_then_int` ✓
-     - `prog20_block_int` ✓
-
-     5 / 12 have informational ctrl-pin timing diffs (post the
-     2026-06-18 C1 reset + RFSH-edge + HALT-pin-at-T4.N fixes):
-     - `prog10_halt_nmi`   (**1** / 200, was 5) — last residual HALT-pin diff during NMI ack
-     - `prog17_reset`      (131 / 200) — reset deferral (silicon completes current M-cycle before applying reset state)
-     - `prog11_wait_mem`   (142 / 200) — WAIT-insertion sub-T-state phasing
-     - `prog13_halt_int`   (144 / 200) — HALT-pin during NOP-loop M-cycles
-     - `prog14_wait_io`    (147 / 200) — IORQ + WAIT timing during IN/OUT
-     - `prog15_busreq_m1`  (154 / 200) — BUSREQ-aborts-M1 M-cycle ordering
-
-     `prog9_inta_im1`, `prog12_inta_im2`, `prog16_ei_delay`,
-     `prog18_di_then_int`, `prog19_nmi_in_int`, `prog20_block_int`
-     all PASS clean (6 / 12).
+     (2026-10-20)**: 10 / 14 PASS cleanly through the RTL, 11 / 14
+     through the C model. Until then `perfectz80_runner` set NMI, INT and
+     WAIT high again at every phase, so perfectz80 saw a one-phase pulse
+     where the C model and the RTL held the scenario's level from its
+     `lo` event to its `hi` event; it now holds the level too. That
+     difference alone made `prog11_wait_mem`, `prog13_halt_int` and
+     `prog14_wait_io` differ in ~145 / 200 phases; with it gone both WAIT
+     programs pass, like `prog21_wait_ldir` and `prog22_wait_cpir`.
+     Left:
+     - `prog10_halt_nmi`, `prog13_halt_int` (1 / 200 each, RTL and C):
+       HALT is released half a clock late (row 17).
+     - `prog17_reset` (RTL 131 / 200, C 1 / 200): RESET restart and
+       filter (rows 15, 17).
+     - `prog15_busreq_m1` (RTL 109 / 200, C passes): the RTL resumes a
+       T-state early after BUSREQ is released (rows 15, 16).
 
      `.events` is now consumed by all paths — C tracegen, iverilog
      RTL, Verilator, LibreLane gate-level netlist — via per-pin
@@ -158,7 +155,7 @@ Notes for each row:
      the simplifications-audit list rather than gating CI. Functional
      behaviour on all of these is verified by Rak + FUSE +
      `make halt2int` even where the per-phase pin trace differs.
-     When all twelve reach control-pin parity, this row flips to
+     When all of them reach control-pin parity, this row flips to
      `resolved` and the gates become hard.
 
      Additionally, `scripts/compare_signal_timing.py` (used by
@@ -230,16 +227,11 @@ Notes for each row:
      class.
 
  17. RESET / INT / NMI sweep vs perfectz80 (`make event_sweep`, see
-     [event-sweep.md](event-sweep.md)) — pulses at every T-state of 13
-     instructions, diffed per half-cycle against perfectz80. 1478 of
-     2287 cases differ, all listed in `tests/event_sweep/baseline.txt`
+     [event-sweep.md](event-sweep.md), from hardesk) — pulses at every
+     T-state of 13 instructions, diffed per half-cycle against perfectz80.
+     589 of 2287 cases differ, all listed in `tests/event_sweep/baseline.txt`
      (CI fails on any new or changed difference). The differences, in
      perfectz80's terms:
-     - INT / NMI arriving in the high half of the last T-state is taken
-       one instruction later than RZ80 takes it (RZ80 samples at the
-       falling edge in T_last, `docs/clocking.md`).
-     - NMI pulses that span no falling edge are still taken (the input
-       latch is transparent in both clock halves); RZ80 misses them.
      - A second NMI during the NMI response is lost; RZ80 re-enters.
      - After RETN with INT pending, one instruction runs before INTA.
      - HALT is released in T4's low half when an interrupt ends it, and
@@ -249,6 +241,22 @@ Notes for each row:
        (row 1), and RESET covering only the rising edge into an M1 T2 is
        a special reset that keeps I. RZ80 resets asynchronously and
        restarts on the first rising edge (row 15).
+
+ 18. **Refresh and idle address bus vs perfectz80** — the pin
+     comparisons treat the address as don't-care outside transfers (row
+     14). Comparing it in every phase, on all trace and pin-scenario
+     programs up to their first control-pin difference:
+     - **Refresh**: perfectz80 drives I:R, the R from before this M1's
+       increment (the first M1 after reset refreshes 0000). The RTL
+       increments R at the T3 rising edge and drives I:(R+1) in all
+       1,762 refresh phases; bit 7 and I agree. Matters to DRAM
+       controllers that use the refresh address and to the ZX81, whose
+       display hangs its line counter on A6 of the refresh address.
+     - **Internal T-states** (no MREQ / IORQ): the address differs in
+       324 of 2,215 phases; in half of them perfectz80 still shows the
+       last refresh address (IR), as the Spectrum's contention tables
+       assume ("ir:1"), and the RTL shows another register.
+     Every phase with MREQ or IORQ and RD or WR (3,971) agrees.
 
 Add rows as new differences are discovered. Each "watching" row should gain a
 test that pins the chosen behaviour or escalates it.
