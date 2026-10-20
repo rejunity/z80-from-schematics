@@ -1,6 +1,6 @@
 /* ============================================================================
  * z80_fast.c - cfast's tick frame: the generated phase steps (build/cfast/
- * z80_fast_steps.h, from cfast/gen_fast.py) around the reference model.
+ * z80_fast_*.h, from cfast/gen_fast.py) around the reference model.
  *
  * The model is compiled into this unit so the steps call its own file-static
  * parts: do_latch() at a data latch and end_mcycle() (the sequencer and the
@@ -23,9 +23,7 @@
 #include "../cmodel/z80_regfile.c"
 #include "../cmodel/z80_timing.c"
 
-#define ZF_STEP_ENUM
-#include "z80_fast_steps.h"
-#undef ZF_STEP_ENUM
+#include "z80_fast_enum.h"
 
 /* inputs only the reference engine handles */
 #define ZF_SLOW_IN (Z80_RES | Z80_BUSREQ | Z80_WAIT | Z80_NMI)
@@ -93,9 +91,7 @@ uint64_t z80f_tick(z80f_t *f, uint64_t pins)
 #if ZF_GNU
     static void *const step_label[FS_COUNT] = {
         [FS_NONE] = &&zf_bad,
-#define ZF_STEP_LABELS
-#include "z80_fast_steps.h"
-#undef ZF_STEP_LABELS
+#include "z80_fast_labels.h"
     };
 #define ZF_GOTO_STEP(s) goto *step_label[s]
 #else
@@ -121,9 +117,7 @@ uint64_t z80f_tick(z80f_t *f, uint64_t pins)
 #if !ZF_GNU
 zf_dispatch:
     switch (zf_target) {
-#define ZF_STEP_CASES
-#include "z80_fast_steps.h"
-#undef ZF_STEP_CASES
+#include "z80_fast_cases.h"
     default: break;
     }
 #endif

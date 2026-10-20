@@ -32,9 +32,7 @@ static uint64_t z80f_run(z80f_t *f, uint64_t pins)
     int      zf_exit = 0;
     static void *const step_label[FS_COUNT] = {
         [FS_NONE] = &&zf_bad,
-#define ZF_STEP_LABELS
-#include "z80_fast_steps.h"
-#undef ZF_STEP_LABELS
+#include "z80_fast_labels.h"
     };
     if (!f->fast || (pins & ZF_SLOW_IN))
         goto zf_slow;

@@ -54,7 +54,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
-.PHONY: cfast cfast_identity pinhash phase_identity zexrunner_tick timing_sdc timing_sdc_check equiv all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist event_sweep basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test verilator_z80test z80test_rtl halt2int halt2int_probe
+.PHONY: cfast cfast_identity cfast_single cfast_single_identity pinhash phase_identity zexrunner_tick timing_sdc timing_sdc_check equiv all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist event_sweep basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test verilator_z80test z80test_rtl halt2int halt2int_probe
 
 all: cmodel ctest
 
@@ -650,6 +650,27 @@ $(BIN)/pinhash_run: $(SCRIPTS)/pinhash.c $(CFAST)/z80_fast_run.h $(CFAST_DEP)
 cfast_identity: cfast pinhash
 	@$(PYTHON) $(SCRIPTS)/phase_identity.py --ref $(PHASE_REF) --new-exe $(BIN)/pinhash \
 	  --fast-exe $(BIN)/pinhash_fast --run-exe $(BIN)/pinhash_run $(PHASE_ARGS)
+
+# cfast as one header (stb style, cfast/amalgamate.py): the model, the
+# generated steps, z80f_tick and z80f_run. cfast_single_identity checks the
+# header's two frames like cfast_identity.
+CFAST_SINGLE := $(CFAST_GEN)/z80_cfast.h
+cfast_single: $(CFAST_SINGLE) $(BIN)/zexfast_single $(BIN)/pinhash_single
+
+$(CFAST_SINGLE): $(CFAST)/amalgamate.py $(CFAST)/z80_fast_run.h $(CFAST_DEP)
+	$(PYTHON) $(CFAST)/amalgamate.py $(CFAST_GEN) $@
+
+$(BIN)/zexfast_single: $(CFAST)/zexfast.c $(CFAST_SINGLE)
+	@mkdir -p $(BIN)
+	$(CC) $(CFLAGS) -DZEX_SINGLE -I$(CFAST_GEN) $< -o $@
+
+$(BIN)/pinhash_single: $(SCRIPTS)/pinhash.c $(CFAST_SINGLE)
+	@mkdir -p $(BIN)
+	$(CC) $(CFLAGS) -DZ80_FAST_RUN -DZ80_SINGLE -I$(CMODEL) -I$(CFAST_GEN) $< $(CMODEL)/z80_sim.c -o $@
+
+cfast_single_identity: cfast_single pinhash
+	@$(PYTHON) $(SCRIPTS)/phase_identity.py --ref $(PHASE_REF) --new-exe $(BIN)/pinhash \
+	  --fast-exe $(BIN)/pinhash_single --run-exe $(BIN)/pinhash_single $(PHASE_ARGS)
 
 # ----------------------------------------------------------------------------
 # full suite

@@ -32,7 +32,8 @@
  *              own:  this file's bus model around z80_phase_step
  *              tick: this file's bus model around z80_tick (pin word API)
  *              fast: the same around cfast's z80f_tick (built -DZ80_FAST)
- *              run:  the same inlined in cfast's z80f_run (-DZ80_FAST_RUN)
+ *              run:  the same inlined in cfast's z80f_run (-DZ80_FAST_RUN;
+ *                    with -DZ80_SINGLE from the one-header build)
  *   -d A:B     dump the trace lines (tracegen format) of phases [A, B)
  *   -q         don't print the program's console output
  *
@@ -44,7 +45,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include "z80_sim.h"
-#ifdef Z80_FAST_RUN
+#if defined(Z80_FAST_RUN) && defined(Z80_SINGLE)
+#define Z80_FAST
+#define Z80_IMPL
+#include "z80_cfast.h"           /* cfast's one-header build */
+#elif defined(Z80_FAST_RUN)
 #define Z80_FAST
 #include "z80_fast.c"            /* cfast, compiled into this unit */
 #elif defined(Z80_FAST)
@@ -402,7 +407,11 @@ static int run_phase(uint64_t *pins)
 }
 #define ZF_BUS(p)      do { if (run_phase(&(p))) zf_exit = 1; } while (0)
 #define ZF_BOUNDARY(c) 0
+#ifdef Z80_SINGLE
+#include "z80_cfast.h"           /* again, with ZF_BUS: z80f_run */
+#else
 #include "z80_fast_run.h"
+#endif
 #endif
 
 int main(int argc, char **argv)
