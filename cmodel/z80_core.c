@@ -1129,7 +1129,7 @@ static void do_latch(z80_t *c)
             c->suppress_decode = false;      /* ack M1: discard opcode, no PC++/decode */
         } else {
             (void)z80_pc_inc(c);             /* PC advances past opcode */
-            c->ctl = z80_pla(c->prefix, c->ir);
+            c->ctl = z80_pla_rom[c->prefix][c->ir];
             c->decoded = true;
         }
         break;
@@ -1137,7 +1137,7 @@ static void do_latch(z80_t *c)
         c->tmp8 = c->pins.data_in;
         if (c->im == 0) {
             c->ir = c->pins.data_in;
-            c->ctl = z80_pla(c->prefix, c->ir);
+            c->ctl = z80_pla_rom[c->prefix][c->ir];
             c->decoded = true; /* supplied opcode consumes no memory byte */
         }
         break;
@@ -1291,6 +1291,7 @@ void z80_reset(z80_t *c)
     reset_state(c);
     z80_timing_rom_init();
     tpoint_rom_init();
+    z80_pla_rom_init();
 }
 
 /* Seed the program counter from outside (e.g. loading a CP/M .com at 0x0100).

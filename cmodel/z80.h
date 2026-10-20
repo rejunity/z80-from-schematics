@@ -452,6 +452,12 @@ z80_control_t z80_pla(z80_prefix_t prefix, uint8_t op);
 /* Back-compat wrapper for callers still spelling it z80_pla_decode. */
 z80_control_t z80_pla_decode(z80_prefix_t prefix, uint8_t opcode);
 
+/* The decode ROM: z80_pla() of every (prefix, opcode), built by
+   z80_pla_rom_init() (z80_reset calls it); the core's M1 latch reads it. */
+#define Z80_PLA_ROM_PREFIXES 7
+extern z80_control_t z80_pla_rom[Z80_PLA_ROM_PREFIXES][256];
+void z80_pla_rom_init(void);
+
 /* ---------------------------------------------------------------------------
  * Trace record (shared format, docs/timing.md / brief).
  * ------------------------------------------------------------------------- */
