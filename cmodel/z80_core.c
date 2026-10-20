@@ -1079,6 +1079,16 @@ static bool is_latch_phase(const z80_t *c)
     }
 }
 
+/* The rising edge that ends the refresh -- T4 of an M1, the second refresh
+   T-state of an INTA: R steps (low 7 bits) there, so the refresh address
+   shows I:R from before the step, as on silicon (perfectz80). advance()
+   steps it before the execute step, so LD R,A's write wins. */
+static bool is_refresh_end(const z80_t *c)
+{
+    return (c->bus_op == BUSOP_M1 && c->t_state == 4) ||
+           (c->bus_op == BUSOP_INTA && c->t_state == 6);
+}
+
 /* ---- the phase's timing ROM entries ----
    Both predicates above, like the timing module's pins (z80_timing_rom),
    depend on (bus_op, t_state, phi) alone: tpoint_rom tabulates them under
@@ -1207,6 +1217,27 @@ static void begin_next(z80_t *c)
     z80_start_m1(c);
 }
 
+/* The end of an M-cycle: the sequencer sets up the next one or finishes the
+   instruction, and an instruction boundary decides what follows. */
+static void end_mcycle(z80_t *c)
+{
+    z80_exec_step(c);                        /* set up next M-cycle / finish */
+    if (c->instr_done) {
+        /* Commit Q: holds F if THIS instruction wrote F, else 0. SCF/CCF
+           in the NEXT instruction read it to derive X/Y from (A | Q).
+           Per Sean Young's "Undocumented Z80 Documented" §4.1: Q resets
+           to 0 after any instruction that does NOT modify F. Verified
+           against real-silicon CRC by ZEXALL's <daa,cpl,scf,ccf> test;
+           an earlier attempt to make Q persist across non-F-modifying
+           instructions broke that CRC (run 27650481834). */
+        c->q = c->f_modified ? z80_F(c) : 0;
+        c->f_modified = false;
+        c->instr_count++;
+        c->prefix = PFX_NONE;
+        begin_next(c);
+    }
+}
+
 static void advance(z80_t *c)
 {
     if (c->phi == 0) {
@@ -1215,30 +1246,11 @@ static void advance(z80_t *c)
     }
     c->phi = 0;
     if (c->stalled) return;                  /* hold this T-state as a Tw */
-    /* refresh counter: R steps (low 7 bits) on the rising edge that ends the
-       refresh -- T4 of an M1, the second refresh T-state of an INTA -- so the
-       refresh address shows I:R from before the step, as on silicon
-       (perfectz80). Before the execute step, so LD R,A's write wins. */
-    if ((c->bus_op == BUSOP_M1 && c->t_state == 4) || (c->bus_op == BUSOP_INTA && c->t_state == 6))
+    if (is_refresh_end(c))
         c->reg_r = (uint8_t)((c->reg_r & 0x80u) | ((c->reg_r + 1u) & 0x7Fu));
     c->t_state = (uint8_t)(c->t_state + 1);
-    if (c->t_state > c->m_len) {
-        z80_exec_step(c);                    /* set up next M-cycle / finish */
-        if (c->instr_done) {
-            /* Commit Q: holds F if THIS instruction wrote F, else 0. SCF/CCF
-               in the NEXT instruction read it to derive X/Y from (A | Q).
-               Per Sean Young's "Undocumented Z80 Documented" §4.1: Q resets
-               to 0 after any instruction that does NOT modify F. Verified
-               against real-silicon CRC by ZEXALL's <daa,cpl,scf,ccf> test;
-               an earlier attempt to make Q persist across non-F-modifying
-               instructions broke that CRC (run 27650481834). */
-            c->q = c->f_modified ? z80_F(c) : 0;
-            c->f_modified = false;
-            c->instr_count++;
-            c->prefix = PFX_NONE;
-            begin_next(c);
-        }
-    }
+    if (c->t_state > c->m_len)
+        end_mcycle(c);
 }
 
 /* ---- reset ---- */
