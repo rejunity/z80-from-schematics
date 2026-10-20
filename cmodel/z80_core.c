@@ -1079,6 +1079,46 @@ static bool is_latch_phase(const z80_t *c)
     }
 }
 
+/* ---- the phase's timing ROM entries ----
+   Both predicates above, like the timing module's pins (z80_timing_rom),
+   depend on (bus_op, t_state, phi) alone: tpoint_rom tabulates them under
+   the same index (built by z80_reset), so a phase reads one byte for its
+   timing points and one ROM entry for its pins. */
+enum { TP_WAIT_SAMPLE = 1, TP_LATCH = 2 };
+static uint8_t tpoint_rom[Z80_TIMING_ROM_SIZE];
+static bool    tpoint_rom_built;
+
+static void tpoint_rom_init(void)
+{
+    if (tpoint_rom_built) return;
+    z80_t t;
+    memset(&t, 0, sizeof t);
+    for (unsigned op = 0; op < 8; op++)
+        for (unsigned ts = 0; ts < 16; ts++)
+            for (unsigned phi = 0; phi < 2; phi++) {
+                t.bus_op = (uint8_t)op; t.t_state = (uint8_t)ts; t.phi = (uint8_t)phi;
+                tpoint_rom[Z80_TIMING_ROM_INDEX(op, ts, phi)] = (uint8_t)
+                    ((is_wait_sample_phase(&t) ? TP_WAIT_SAMPLE : 0) |
+                     (is_latch_phase(&t) ? TP_LATCH : 0));
+            }
+    tpoint_rom_built = true;
+}
+
+static inline unsigned rom_index(const z80_t *c)
+{
+    return Z80_TIMING_ROM_INDEX(c->bus_op, c->t_state > 15 ? 15 : c->t_state, c->phi);
+}
+
+/* The timing module's pins for the phase: z80_timing() of (bus_op, t_state,
+   phi, m_addr, m_wdata, I, R), read from its ROM. */
+static inline void drive_pins(z80_t *c, unsigned rom)
+{
+    const z80_timing_rom_t *e = &z80_timing_rom[rom];
+    memcpy((uint8_t *)&c->pins + Z80_TIMING_ROM_FIRST, e->lvl, Z80_TIMING_ROM_LEN);
+    c->pins.data_out = c->m_wdata;
+    c->pins.addr = e->refresh ? (uint16_t)((c->reg_i << 8) | c->reg_r) : c->m_addr;
+}
+
 static void do_latch(z80_t *c)
 {
     switch (c->bus_op) {
@@ -1249,6 +1289,8 @@ void z80_reset(z80_t *c)
      * docs/known-differences.md row 1. */
     for (int i = 0; i < RFP_COUNT; i++) c->rf[i] = 0x5555;
     reset_state(c);
+    z80_timing_rom_init();
+    tpoint_rom_init();
 }
 
 /* Seed the program counter from outside (e.g. loading a CP/M .com at 0x0100).
@@ -1369,13 +1411,15 @@ void z80_phase_step(z80_t *c)
        that single phase the latch falls to 0 so subsequent .N→.P advances
        run normally. This is the silicon's behavior: each Tw is decided by
        one falling-edge sample. */
-    if (is_wait_sample_phase(c))
+    unsigned rom = rom_index(c);
+    uint8_t  tp  = tpoint_rom[rom];
+    if (tp & TP_WAIT_SAMPLE)
         c->wait_sampled = (c->pins.wait_n == 0);
     else
         c->wait_sampled = false;
     c->stalled = c->wait_sampled;
 
-    if (!c->stalled && is_latch_phase(c))
+    if (!c->stalled && (tp & TP_LATCH))
         do_latch(c);
 
     /* NMI / INT silicon sample point: rising edge of the last T-state of
@@ -1388,11 +1432,7 @@ void z80_phase_step(z80_t *c)
         c->int_sampled = !c->pins.int_n;
     }
 
-    z80_timing(c->bus_op, c->t_state, c->phi, c->m_len, c->m_addr, c->m_wdata,
-               c->reg_i, c->reg_r,
-               &c->pins.addr, &c->pins.data_out, &c->pins.data_drive,
-               &c->pins.m1_n, &c->pins.mreq_n, &c->pins.iorq_n,
-               &c->pins.rd_n, &c->pins.wr_n,   &c->pins.rfsh_n);
+    drive_pins(c, rom);
 
     if (hold_write_strobe) c->pins.wr_n = 0;
 

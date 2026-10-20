@@ -10,6 +10,8 @@
  * Convention: t.P = (phi==0), t.N = (phi==1). See docs/timing.md for the
  * phase-by-phase contract this implements.
  * ==========================================================================*/
+#include <assert.h>
+#include <string.h>
 #include "z80.h"
 
 void z80_timing(uint8_t   bus_op,     /* z80_busop_t                          */
@@ -113,4 +115,58 @@ void z80_timing(uint8_t   bus_op,     /* z80_busop_t                          */
     default: /* BUSOP_INTERNAL / NONE: no bus activity, hold address */
         break;
     }
+}
+
+/* ============================================================================
+ * The timing ROM: z80_timing() compiled into a table.
+ *
+ * The strobes and the data enable are a function of (bus_op, t_state, phi)
+ * alone, and the address only selects between m_addr and the refresh I:R;
+ * data_out is m_wdata in every state. z80_timing_rom_init() evaluates the
+ * function above over that space once, so the phase engine drives the pins
+ * with one lookup and the function stays the readable source of truth. From
+ * T7 on no bus cycle asserts anything, so t_state saturates at 15.
+ *
+ * An entry holds the pins as the bytes of z80_pins_t from data_drive through
+ * rfsh_n (adjacent bools), ready to copy over the core's pins. z80_reset()
+ * calls the builder; a second build would write the same bytes.
+ * ==========================================================================*/
+/* the image must fit an entry's lvl[] (C99 static assert) */
+typedef char z80_timing_rom_fits[
+    (Z80_TIMING_ROM_LEN <= sizeof(((z80_timing_rom_t *)0)->lvl)) ? 1 : -1];
+
+z80_timing_rom_t z80_timing_rom[Z80_TIMING_ROM_SIZE];
+static bool rom_built;
+
+static void timing_pins(unsigned op, unsigned t, unsigned phi, uint8_t m_len,
+                        uint16_t m_addr, uint8_t m_wdata, uint8_t i, uint8_t r,
+                        z80_pins_t *p)
+{
+    memset(p, 0, sizeof *p);
+    z80_timing((uint8_t)op, (uint8_t)t, (uint8_t)phi, m_len, m_addr, m_wdata, i, r,
+               &p->addr, &p->data_out, &p->data_drive,
+               &p->m1_n, &p->mreq_n, &p->iorq_n, &p->rd_n, &p->wr_n, &p->rfsh_n);
+}
+
+void z80_timing_rom_init(void)
+{
+    if (rom_built) return;
+    for (unsigned op = 0; op < 8; op++)
+        for (unsigned t = 0; t < 16; t++)
+            for (unsigned phi = 0; phi < 2; phi++) {
+                z80_pins_t p, q;
+                /* m_addr 0000 against I:R FFFF tells the refresh select */
+                timing_pins(op, t, phi, 0, 0x0000, 0x00, 0xFF, 0xFF, &p);
+                z80_timing_rom_t *e = &z80_timing_rom[Z80_TIMING_ROM_INDEX(op, t, phi)];
+                memset(e, 0, sizeof *e);
+                memcpy(e->lvl, (const uint8_t *)&p + Z80_TIMING_ROM_FIRST, Z80_TIMING_ROM_LEN);
+                e->refresh = (p.addr == 0xFFFF);
+                /* the ROM's premises: no m_len dependence, the address is
+                   m_addr or I:R, data_out is m_wdata */
+                timing_pins(op, t, phi, (uint8_t)t, 0x1234, 0x5A, 0xAB, 0xCD, &q);
+                assert(memcmp((const uint8_t *)&q + Z80_TIMING_ROM_FIRST, e->lvl,
+                              Z80_TIMING_ROM_LEN) == 0);
+                assert(q.addr == (e->refresh ? 0xABCD : 0x1234) && q.data_out == 0x5A);
+            }
+    rom_built = true;
 }

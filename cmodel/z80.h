@@ -8,6 +8,7 @@
 #ifndef Z80_H
 #define Z80_H
 
+#include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -116,6 +117,23 @@ void z80_timing(uint8_t bus_op, uint8_t t_state, uint8_t phi, uint8_t m_len,
                 uint16_t *addr, uint8_t *data_out, bool *data_drive,
                 bool *m1_n, bool *mreq_n, bool *iorq_n,
                 bool *rd_n,  bool *wr_n,   bool *rfsh_n);
+
+/* The timing ROM: z80_timing() tabulated over (bus_op, t_state, phi) by
+   z80_timing_rom_init() (z80_reset calls it). The core drives its pins from
+   it; z80_timing() remains the source of truth. lvl[] holds the pins as the
+   bytes of z80_pins_t from data_drive through rfsh_n; refresh selects I:R
+   over m_addr for the address bus. t_state saturates at 15. */
+typedef struct {
+    uint8_t lvl[7];
+    uint8_t refresh;
+} z80_timing_rom_t;
+#define Z80_TIMING_ROM_SIZE 256
+#define Z80_TIMING_ROM_INDEX(op, t, phi) \
+    ((((unsigned)(op) & 7u) << 5) | (((unsigned)(t) & 15u) << 1) | ((unsigned)(phi) & 1u))
+#define Z80_TIMING_ROM_FIRST offsetof(z80_pins_t, data_drive)
+#define Z80_TIMING_ROM_LEN   (offsetof(z80_pins_t, rfsh_n) + 1 - Z80_TIMING_ROM_FIRST)
+extern z80_timing_rom_t z80_timing_rom[Z80_TIMING_ROM_SIZE];
+void z80_timing_rom_init(void);
 
 /* ---------------------------------------------------------------------------
  * Control word (PLA output). Conceptual fields; see docs/pla.md.
