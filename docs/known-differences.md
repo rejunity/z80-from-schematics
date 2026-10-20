@@ -249,11 +249,11 @@ Notes for each row:
      - **Refresh**: perfectz80 drives I:R, the R from before this M1's
        increment (the first M1 after reset refreshes 0000). The RTL
        increments R at the T3 rising edge and drives I:(R+1) in all
-       1,762 refresh phases; bit 7 and I agree. Matters to DRAM
+       3,322 refresh phases; bit 7 and I agree. Matters to DRAM
        controllers that use the refresh address and to the ZX81, whose
        display hangs its line counter on A6 of the refresh address.
      - **Internal T-states** (no MREQ / IORQ): the address differs in
-       324 of 2,215 phases; in half of them perfectz80 still shows the
+       468 of 2,215 phases; in 178 of them perfectz80 still shows the
        last refresh address (IR), as the Spectrum's contention tables
        assume ("ir:1"), and the RTL shows another register.
      Every phase with MREQ or IORQ and RD or WR (3,971) agrees.
