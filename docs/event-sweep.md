@@ -92,21 +92,23 @@ minimum widths, which depend on analog timing.
 | int | 86 | 86 | 0 |
 | nmi | 430 | 430 | 0 |
 | nmi_short | 1184 | 1184 | 0 |
-| nmi_reentry | 43 | 22 | 21 |
+| nmi_reentry | 43 | 42 | 1 |
 | reset | 112 | 0 | 112 |
 | reset_release | 64 | 0 | 64 |
 | reset_wait | 32 | 0 | 32 |
 | reset_short | 240 | 0 | 240 |
 | combo | 96 | 0 | 96 |
 
-1722 of 2287 cases match. When the sweep was written (main `ec3c5d2`) 809
+1742 of 2287 cases match. When the sweep was written (main `ec3c5d2`) 809
 did. Since then `e60d06e` latches INT on the rising edge that starts the
 last T-state and catches an NMI pulse of any width, as perfectz80 does:
 that fixed the two largest groups, INT and NMI taken half a clock early
 (a pulse in the high half of the last T-state) and NMI pulses that span no
 falling edge. The HALT pin now rises in the low half of the last T4 when
 an INT or NMI ends HALT, and stays high when the interrupt is already
-pending at the end of HALT itself (24 cases).
+pending at the end of HALT itself (24 cases). A second NMI edge during
+the NMI response, from its M1's T1 to the end of its two pushes, is now
+lost, as in perfectz80, even when NMI then stays low (20 cases).
 
 `build/event_sweep/report.md` has the per-instruction grids.
 `build/event_sweep/diff/` has a side-by-side trace for every differing case.
@@ -119,20 +121,14 @@ Where the RTL matches perfectz80:
   between iterations, CALL, JR and prefixed instructions.
 - NMI held low, two pulses before acceptance, and nested NMIs all match.
 
-The differences left fall into three groups.
+The differences left fall into two groups.
 
-1. **NMI during the NMI response.** A second NMI edge arriving during the
-   NMI response (from the response M1 to the end of its two pushes) is lost
-   in perfectz80: there is one NMI and the program resumes. RZ80 latches it
-   and enters the handler a second time before running the handler's first
-   instruction. A pulse after the response starts a nested NMI in both.
-
-2. **RETN with INT pending.** INT is held low from the NMI handler's first
+1. **RETN with INT pending.** INT is held low from the NMI handler's first
    fetch, and EI was in effect before the NMI. perfectz80 runs one
    instruction after RETN before acknowledging the INT. RZ80 acknowledges
    it right after RETN.
 
-3. **RESET.** perfectz80 treats RESET as a sampled input. RZ80 resets
+2. **RESET.** perfectz80 treats RESET as a sampled input. RZ80 resets
    asynchronously:
    - **Assertion.** perfectz80 samples RESET at rising edges. It finishes
      the bus cycle in progress and goes idle 0–8 half-cycles after RESET

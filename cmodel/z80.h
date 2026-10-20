@@ -272,6 +272,9 @@ typedef struct {
     bool         halted;
     bool         nmi_pending;   /* sticky latch: any falling edge on NMI seen */
     bool         prev_nmi_n;    /* for edge detection                        */
+    bool         nmi_resp;      /* in the NMI response (M1 + pushes): the
+                                   chip holds its NMI flip-flop clear, so an
+                                   NMI edge there is lost (perfectz80)       */
     /* NMI / INT silicon sample latches. Per Zilog UM0080, both are sampled at
        the rising edge of the last T-state of the last M-cycle (= T_last.P in
        our phase model). nmi_sampled freezes nmi_pending's value at that

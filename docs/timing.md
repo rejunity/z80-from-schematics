@@ -144,7 +144,11 @@ interrupt device drives data only during acknowledge. `test_int_ack.c` checks
 the same cases against the C model.
 
 NMI: similar to M1 but no data fetch used for vector; pushes PC and jumps to `0066h`;
-copies `IFF1→IFF2`, clears `IFF1`.
+copies `IFF1→IFF2`, clears `IFF1`. The NMI edge latch is held clear for the whole
+response, from its M1's T1 to the last T-state of the second push: an NMI falling
+edge there is lost, even when NMI then stays low (perfectz80). An edge from the
+handler's first T-state on starts a nested NMI. An NMI edge during an INT response
+is kept and taken right after it.
 
 ## HALT
 

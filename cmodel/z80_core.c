@@ -1125,6 +1125,7 @@ static void start_seq_inta(z80_t *c, uint8_t len)
    the next opcode fetch. (docs/timing.md interrupt/HALT/BUSREQ sections) */
 static void begin_next(z80_t *c)
 {
+    c->nmi_resp = false;
     if (!c->pins.busreq_n) { c->bus_granted = true; return; } /* DMA owns the bus */
 
     bool allow_int = !c->ei_delay;
@@ -1142,6 +1143,7 @@ static void begin_next(z80_t *c)
          * halted flag and start the NMI ack sequence -- no PC bump. */
         if (c->halted) c->halted = false;
         c->iff2 = c->iff1; c->iff1 = false;        /* IFF1->IFF2, disable */
+        c->nmi_resp = true;
         start_seq_m1(c, EXEC_NMI, 5, true);        /* 5T ack, opcode discarded */
         return;
     }
@@ -1206,6 +1208,7 @@ static void reset_state(z80_t *c)
     c->prefix = PFX_NONE;
     c->nmi_pending = false;
     c->prev_nmi_n = true;
+    c->nmi_resp = false;
     c->nmi_sampled = false;
     c->int_sampled = false;
     c->ei_delay = false;
@@ -1350,6 +1353,12 @@ void z80_phase_step(z80_t *c)
     if (c->phase_primed)
         advance(c);
     c->phase_primed = true;
+
+    /* NMI edges during the NMI response -- its M1 and the two pushes, from
+       T1.P to the last T.N -- are lost, even when NMI then stays low: the
+       chip holds its NMI flip-flop clear (perfectz80; event sweep
+       nmir_entry). An edge from the handler's first T1.P on is kept. */
+    if (c->nmi_resp) c->nmi_pending = false;
 
     /* WAIT sample + latch (UM0080). Sample only at the spec edge; outside
        that single phase the latch falls to 0 so subsequent .N→.P advances

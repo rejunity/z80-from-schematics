@@ -835,6 +835,11 @@ module z80_core (
         // falling edge and now.
         prev_nmi_n_n  = nmi_n;
         nmi_pending_n = nmi_pending_mid | (nmi_n_neg & ~nmi_n);
+        // During the NMI response (its M1 and the two pushes) the chip
+        // holds its NMI flip-flop clear: an NMI edge there is lost, even
+        // when NMI then stays low (perfectz80; event sweep nmir_entry).
+        // An edge from the handler's first T-state on is kept.
+        if (irq_seq == 2'd1) nmi_pending_n = 1'b0;
 
         // M1 opcode / INTA vector latch at the end of T2.N. Not while WAIT
         // is holding T2 as a Tw -- the opcode is captured on the rising

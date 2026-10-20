@@ -136,7 +136,7 @@ fossi-foundation substituter configured (see [docs/librelane-flow.md](docs/libre
 | ✅  | Gate-level vs perfectz80 — **iverilog RTL** path                | 12/12 PASS, same 12 programs        |
 | ✅  | Gate-level vs perfectz80 — **LibreLane sky130 netlist** path    | 12/12 PASS, same 12 programs ("ultimate test") |
 | 🚧  | Pin-scenario programs vs perfectz80 (12 INT/NMI/WAIT/BUSREQ/RESET scenarios) | 5/12 PASS clean (`prog9, 12, 16, 18, 20`); 7/12 have HALT-pin / WAIT-insertion / BUSREQ / RESET timing diffs vs gate-level (informational; functional behavior verified by Rak + FUSE + HALT2INT probe) |
-| 🚧  | RESET / INT / NMI timing sweep vs perfectz80 (`make event_sweep`, [docs/event-sweep.md](docs/event-sweep.md)) | 1722 / 2287 cases pin-identical; the rest are listed in a baseline that CI holds them to (NMI during the NMI response, RETN→INT, RESET) |
+| 🚧  | RESET / INT / NMI timing sweep vs perfectz80 (`make event_sweep`, [docs/event-sweep.md](docs/event-sweep.md)) | 1742 / 2287 cases pin-identical; the rest are listed in a baseline that CI holds them to (RETN→INT, RESET) |
 
 Legend: ✅ pass / 100 % &nbsp; 🟡 ≥ 95 % (close, known artifacts) &nbsp; 🚧 < 95 % (work in progress).
 

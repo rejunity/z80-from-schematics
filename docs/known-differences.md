@@ -229,10 +229,9 @@ Notes for each row:
  17. RESET / INT / NMI sweep vs perfectz80 (`make event_sweep`, see
      [event-sweep.md](event-sweep.md), from hardesk) — pulses at every
      T-state of 13 instructions, diffed per half-cycle against perfectz80.
-     565 of 2287 cases differ, all listed in `tests/event_sweep/baseline.txt`
+     545 of 2287 cases differ, all listed in `tests/event_sweep/baseline.txt`
      (CI fails on any new or changed difference). The differences, in
      perfectz80's terms:
-     - A second NMI during the NMI response is lost; RZ80 re-enters.
      - After RETN with INT pending, one instruction runs before INTA.
      - RESET is sampled at rising edges, the current bus cycle finishes,
        T1 comes 3 rising edges after release, SP / BC / DE / HL are kept
