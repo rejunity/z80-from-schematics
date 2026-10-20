@@ -14,7 +14,8 @@
 # A bus-cycle template is a (bus_op, m_len) pair; it has one labelled step
 # per phase it produces, T1.P .. Tlast.N, and one for its M-cycle end. A
 # step is straight-line code with the phase's constants folded in: the pins
-# (the timing ROM, z80_timing), whether it latches data (do_latch), samples
+# (the timing ROM, z80_timing), whether it latches data (the bus cycle's
+# latch_*(), as do_latch() picks it), samples
 # INT (Tlast.P) or ends the refresh (R steps). Steps of a template follow
 # each other in the text, so a frame that does not return between phases
 # falls through them; an M-cycle end runs the model's sequencer
@@ -85,7 +86,8 @@ def main():
                     body.append(R_STEP)
             chk = False
             if p["latch"]:
-                body.append("c->pins.data_in = Z80_GET_DATA(pins); do_latch(c);")
+                latch = {"M1": "latch_m1", "MRD": "latch_rd", "IORD": "latch_rd"}[name]
+                body.append(f"c->pins.data_in = Z80_GET_DATA(pins); {latch}(c);")
                 if name == "M1":
                     body.append("if (c->ctl.exec == EXEC_HALT) f->fast = false;")
                     chk = True

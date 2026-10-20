@@ -1139,32 +1139,41 @@ static inline void drive_pins(z80_t *c, unsigned rom)
     c->pins.addr = e->refresh ? (uint16_t)((c->reg_i << 8) | c->reg_r) : c->m_addr;
 }
 
+/* The data latch of each bus cycle: the byte on D0-D7 at the cycle's latch
+   point (is_latch_phase). do_latch() picks the cycle's own. */
+static inline void latch_m1(z80_t *c)
+{
+    c->ir   = c->pins.data_in;
+    c->tmp8 = c->pins.data_in;
+    if (c->suppress_decode) {
+        c->suppress_decode = false;      /* ack M1: discard opcode, no PC++/decode */
+    } else {
+        (void)z80_pc_inc(c);             /* PC advances past opcode */
+        c->ctl = z80_pla_rom[c->prefix][c->ir];
+        c->decoded = true;
+    }
+}
+static inline void latch_inta(z80_t *c)  /* interrupt-ack: latch bus byte, refresh */
+{
+    c->tmp8 = c->pins.data_in;
+    if (c->im == 0) {
+        c->ir = c->pins.data_in;
+        c->ctl = z80_pla_rom[c->prefix][c->ir];
+        c->decoded = true; /* supplied opcode consumes no memory byte */
+    }
+}
+static inline void latch_rd(z80_t *c)    /* MRD / IORD */
+{
+    c->tmp8 = c->pins.data_in;
+}
+
 static void do_latch(z80_t *c)
 {
     switch (c->bus_op) {
-    case BUSOP_M1:
-        c->ir   = c->pins.data_in;
-        c->tmp8 = c->pins.data_in;
-        if (c->suppress_decode) {
-            c->suppress_decode = false;      /* ack M1: discard opcode, no PC++/decode */
-        } else {
-            (void)z80_pc_inc(c);             /* PC advances past opcode */
-            c->ctl = z80_pla_rom[c->prefix][c->ir];
-            c->decoded = true;
-        }
-        break;
-    case BUSOP_INTA:                          /* interrupt-ack: latch bus byte, refresh */
-        c->tmp8 = c->pins.data_in;
-        if (c->im == 0) {
-            c->ir = c->pins.data_in;
-            c->ctl = z80_pla_rom[c->prefix][c->ir];
-            c->decoded = true; /* supplied opcode consumes no memory byte */
-        }
-        break;
+    case BUSOP_M1:   latch_m1(c);   break;
+    case BUSOP_INTA: latch_inta(c); break;
     case BUSOP_MRD:
-    case BUSOP_IORD:
-        c->tmp8 = c->pins.data_in;
-        break;
+    case BUSOP_IORD: latch_rd(c);   break;
     default: break;
     }
 }
