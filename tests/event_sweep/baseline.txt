@@ -96,7 +96,6 @@ combo_nmi_reset_T8_p04 22 mreq,rfsh ec2d79e46091
 combo_nmi_reset_T8_p12 23 rfsh 25da4aa0d83a
 combo_nmi_reset_T9_p04 27 mreq e73ee2ab04e9
 combo_nmi_reset_T9_p12 27 mreq e73ee2ab04e9
-nmir_retn_int_ei1 169 mreq,rd 0967c9bf3c55
 reset_halt_T0_p04 6 mreq,rfsh 4884da211bd6
 reset_halt_T0_p12 7 rfsh ac43319620c3
 reset_halt_T1_p04 8 m1 5481814e187f

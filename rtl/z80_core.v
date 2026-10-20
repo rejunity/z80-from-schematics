@@ -889,7 +889,12 @@ module z80_core (
             case (ctl_iff)
                 IFF_DI:   begin iff1_n = 1'b0; iff2_n = 1'b0; end
                 IFF_EI:   begin iff1_n = 1'b1; iff2_n = 1'b1; ei_delay_n = 1'b1; end
-                IFF_RETN: iff1_n = iff2;
+                // RETN / RETI copy IFF2 to IFF1 after this boundary's INT
+                // decision, which still sees the old IFF1: INT held in an
+                // NMI handler is taken one instruction after RETN
+                // (perfectz80). IFF1 implies IFF2, so that is EI's block
+                // whenever RETN raises IFF1.
+                IFF_RETN: begin iff1_n = iff2; ei_delay_n = ~iff1; end
                 default:  ;
             endcase
             if (ctl_im)    im_n = aux_w[1:0];

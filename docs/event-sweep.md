@@ -92,14 +92,14 @@ minimum widths, which depend on analog timing.
 | int | 86 | 86 | 0 |
 | nmi | 430 | 430 | 0 |
 | nmi_short | 1184 | 1184 | 0 |
-| nmi_reentry | 43 | 42 | 1 |
+| nmi_reentry | 43 | 43 | 0 |
 | reset | 112 | 0 | 112 |
 | reset_release | 64 | 0 | 64 |
 | reset_wait | 32 | 0 | 32 |
 | reset_short | 240 | 0 | 240 |
 | combo | 96 | 0 | 96 |
 
-1742 of 2287 cases match. When the sweep was written (main `ec3c5d2`) 809
+1743 of 2287 cases match. When the sweep was written (main `ec3c5d2`) 809
 did. Since then `e60d06e` latches INT on the rising edge that starts the
 last T-state and catches an NMI pulse of any width, as perfectz80 does:
 that fixed the two largest groups, INT and NMI taken half a clock early
@@ -108,7 +108,9 @@ falling edge. The HALT pin now rises in the low half of the last T4 when
 an INT or NMI ends HALT, and stays high when the interrupt is already
 pending at the end of HALT itself (24 cases). A second NMI edge during
 the NMI response, from its M1's T1 to the end of its two pushes, is now
-lost, as in perfectz80, even when NMI then stays low (20 cases).
+lost, as in perfectz80, even when NMI then stays low (20 cases). INT held
+in an NMI handler is taken one instruction after RETN: RETN copies IFF2 to
+IFF1 after its boundary's INT decision (1 case).
 
 `build/event_sweep/report.md` has the per-instruction grids.
 `build/event_sweep/diff/` has a side-by-side trace for every differing case.
@@ -121,31 +123,26 @@ Where the RTL matches perfectz80:
   between iterations, CALL, JR and prefixed instructions.
 - NMI held low, two pulses before acceptance, and nested NMIs all match.
 
-The differences left fall into two groups.
+The differences left are all RESET.
 
-1. **RETN with INT pending.** INT is held low from the NMI handler's first
-   fetch, and EI was in effect before the NMI. perfectz80 runs one
-   instruction after RETN before acknowledging the INT. RZ80 acknowledges
-   it right after RETN.
-
-2. **RESET.** perfectz80 treats RESET as a sampled input. RZ80 resets
-   asynchronously:
-   - **Assertion.** perfectz80 samples RESET at rising edges. It finishes
-     the bus cycle in progress and goes idle 0–8 half-cycles after RESET
-     falls, and it ignores a pulse that covers no rising edge. RZ80 drops
-     every strobe at once and resets on any pulse.
-   - **Restart.** The first T1 at 0000 comes 3 rising edges after release
-     in perfectz80, at every release phase. In RZ80 it comes after 1.
-   - **Registers.** perfectz80 keeps SP, BC, DE and HL across reset. An SP
-     half-decremented by an interrupted PUSH or interrupt response
-     (8FFF/8FFE/8FFD) is kept too. RZ80 sets them to 5555 (known
-     difference 1).
-   - **Special reset.** RESET can cover only the rising edge that starts T2
-     of an M1 cycle: low somewhere in T1, high again before T3. Then
-     perfectz80 restarts at 0000 with I kept (3F), the "special reset"
-     (`reset_short`, 36 of 240 cases). A pulse that covers only the rising
-     edge into T3 or T4 gives a normal reset, and so does any pulse covering
-     two or more rising edges. RZ80 has no special reset.
+**RESET.** perfectz80 treats RESET as a sampled input. RZ80 resets
+asynchronously:
+- **Assertion.** perfectz80 samples RESET at rising edges. It finishes
+  the bus cycle in progress and goes idle 0–8 half-cycles after RESET
+  falls, and it ignores a pulse that covers no rising edge. RZ80 drops
+  every strobe at once and resets on any pulse.
+- **Restart.** The first T1 at 0000 comes 3 rising edges after release
+  in perfectz80, at every release phase. In RZ80 it comes after 1.
+- **Registers.** perfectz80 keeps SP, BC, DE and HL across reset. An SP
+  half-decremented by an interrupted PUSH or interrupt response
+  (8FFF/8FFE/8FFD) is kept too. RZ80 sets them to 5555 (known
+  difference 1).
+- **Special reset.** RESET can cover only the rising edge that starts T2
+  of an M1 cycle: low somewhere in T1, high again before T3. Then
+  perfectz80 restarts at 0000 with I kept (3F), the "special reset"
+  (`reset_short`, 36 of 240 cases). A pulse that covers only the rising
+  edge into T3 or T4 gives a normal reset, and so does any pulse covering
+  two or more rising edges. RZ80 has no special reset.
 
 ## The baseline
 

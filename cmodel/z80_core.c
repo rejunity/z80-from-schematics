@@ -745,6 +745,11 @@ static void z80_exec_step(z80_t *c)
                            z80_start_mcycle(c, BUSOP_MRD, z80_SP(c), 0, 0); }
         else { z80_setSP(c, (uint16_t)(z80_SP(c) + 1));
                uint16_t nn = z80_pair_hi_lo(RB, c->tmpl); z80_setPC(c, nn); c->rf[RFP_WZ] = nn;
+               /* IFF2 -> IFF1 after this boundary's INT decision, which still
+                  sees the old IFF1: INT held in an NMI handler is taken one
+                  instruction after RETN (perfectz80). IFF1 implies IFF2, so
+                  that is EI's block whenever RETN raises IFF1. */
+               if (!c->iff1) c->ei_delay = true;
                c->iff1 = c->iff2; finish(c); }
         break;
     case EXEC_LD_I_A:
