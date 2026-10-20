@@ -41,9 +41,14 @@ module tb_bus_controls;
         .data_drive(ref_drive), .m1_n(ref_m1), .mreq_n(ref_mreq),
         .iorq_n(ref_iorq), .rd_n(ref_rd), .wr_n(ref_wr), .rfsh_n(ref_rfsh)
     );
-    wire ref_halt = !(dut.u_core.halted || ((dut.u_core.exec_w == `EXEC_HALT) &&
+    // HALT: low from T4.N of the HALT M1; high again from T4.N of the HALT
+    // NOP whose end accepts an NMI or INT (sampled on the rising edge
+    // before), so an interrupt pending at the end of HALT never lowers it
+    wire ref_halt_exit = phi && (dut.u_core.t_state == dut.u_core.m_len) &&
+                         (dut.u_core.nmi_pending || (!dut.int_n_rise && dut.u_core.iff1));
+    wire ref_halt = !((dut.u_core.halted || ((dut.u_core.exec_w == `EXEC_HALT) &&
                        (dut.u_core.bus_op == `BUSOP_M1) &&
-                       (dut.u_core.t_state == 4) && phi));
+                       (dut.u_core.t_state == 4) && phi)) && !ref_halt_exit);
     // A memory-write Tw.P retains WR; the base timing decoder describes
     // only the initial T2.P before WR first falls.
     reg ref_wait_write = 0;

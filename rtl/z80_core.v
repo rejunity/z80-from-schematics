@@ -226,18 +226,23 @@ module z80_core (
     assign rd_n_neg       = idle_neg | tn_rd;
     assign wr_n_neg       = idle_neg | tn_wr;
     assign rfsh_n_neg     = idle_neg | tn_rfsh;
-    // Silicon-faithful halt pin: assert at T4.N of the HALT instruction's
-    // M1 (one half-T-state before instruction-done flips `halted`), so
-    // the pin LEADS the flag by one phase -- matches perfectz80's
-    // gate-level trace on prog10_halt_nmi / prog19_nmi_in_int. After
-    // instruction-done, the `halted` register takes over. Mirrors
-    // cmodel/z80_core.c halt_n driving. Being a clock-low-half event it
-    // only appears in the *_neg image.
+    // Silicon-faithful halt pin (perfectz80): it changes on the falling
+    // edge of an instruction's last T-state, to the state the next
+    // instruction runs in -- low from T4.N of the HALT instruction's M1
+    // (half a T-state before instruction-done sets `halted`), high again
+    // from T4.N of the HALT NOP whose end accepts an NMI or INT. The
+    // rising edge that started that T-state made the decision
+    // (nmi_pending / int_n_rise / IFF1), so an interrupt pending at the
+    // end of HALT itself never lowers the pin. After instruction-done,
+    // the `halted` register takes over. Mirrors cmodel/z80_core.c halt_n
+    // driving. Being a clock-low-half event it only appears in the *_neg
+    // image.
     wire exec_halt_in_m1 = (exec_w == `EXEC_HALT)
                         && (bus_op == `BUSOP_M1)
                         && (t_state == 4'd4);
+    wire halt_exit = (t_state == m_len) && (nmi_pending | (~int_n_rise & iff1));
     assign halt_n_pos   = halted_n ? 1'b0 : 1'b1;
-    assign halt_n_neg   = (halted || exec_halt_in_m1) ? 1'b0 : 1'b1;
+    assign halt_n_neg   = ((halted || exec_halt_in_m1) && !halt_exit) ? 1'b0 : 1'b1;
     // BUSACK follows the grant flag, which only changes on the rising edge.
     assign busack_n_pos = bus_granted_n ? 1'b0 : 1'b1;
     assign busack_n_neg = bus_granted   ? 1'b0 : 1'b1;

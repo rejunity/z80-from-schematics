@@ -159,7 +159,10 @@ copies `IFF1→IFF2`, clears `IFF1`.
     each re-fetching at PC (= post-HALT-byte). PC is NOT incremented
     further during the loop.
   - `pin_halt_n` asserts low while halted; refresh continues every NOP
-    M1.
+    M1. It falls in the low half of T4 of the HALT M1 and rises in the
+    low half of T4 of the NOP M1 whose end accepts an INT or NMI; when
+    the interrupt is already pending at the end of HALT, it never falls
+    (perfectz80).
   - INT / NMI sampled at the rising edge of the last T-state of each
     NOP M-cycle. When sampled active (and IFF1=1 for INT), the next
     M-cycle is the ack (IM1/IM2 INTA = 7 T, NMI ack = 5 T). PC stays put —

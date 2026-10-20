@@ -89,8 +89,8 @@ minimum widths, which depend on analog timing.
 
 | group | cases | match | differ |
 |---|---|---|---|
-| int | 86 | 74 | 12 |
-| nmi | 430 | 418 | 12 |
+| int | 86 | 86 | 0 |
+| nmi | 430 | 430 | 0 |
 | nmi_short | 1184 | 1184 | 0 |
 | nmi_reentry | 43 | 22 | 21 |
 | reset | 112 | 0 | 112 |
@@ -99,12 +99,14 @@ minimum widths, which depend on analog timing.
 | reset_short | 240 | 0 | 240 |
 | combo | 96 | 0 | 96 |
 
-1698 of 2287 cases match. When the sweep was written (main `ec3c5d2`) 809
+1722 of 2287 cases match. When the sweep was written (main `ec3c5d2`) 809
 did. Since then `e60d06e` latches INT on the rising edge that starts the
 last T-state and catches an NMI pulse of any width, as perfectz80 does:
 that fixed the two largest groups, INT and NMI taken half a clock early
 (a pulse in the high half of the last T-state) and NMI pulses that span no
-falling edge.
+falling edge. The HALT pin now rises in the low half of the last T4 when
+an INT or NMI ends HALT, and stays high when the interrupt is already
+pending at the end of HALT itself (24 cases).
 
 `build/event_sweep/report.md` has the per-instruction grids.
 `build/event_sweep/diff/` has a side-by-side trace for every differing case.
@@ -117,7 +119,7 @@ Where the RTL matches perfectz80:
   between iterations, CALL, JR and prefixed instructions.
 - NMI held low, two pulses before acceptance, and nested NMIs all match.
 
-The differences left fall into four groups.
+The differences left fall into three groups.
 
 1. **NMI during the NMI response.** A second NMI edge arriving during the
    NMI response (from the response M1 to the end of its two pushes) is lost
@@ -130,12 +132,7 @@ The differences left fall into four groups.
    instruction after RETN before acknowledging the INT. RZ80 acknowledges
    it right after RETN.
 
-3. **HALT pin.** When an INT or NMI ends HALT, perfectz80 releases HALT in
-   the low half of the last T4. RZ80 releases it half a clock later.
-   If the interrupt is already pending at the HALT fetch, perfectz80 never
-   asserts HALT; RZ80 drives it low for one half-cycle.
-
-4. **RESET.** perfectz80 treats RESET as a sampled input. RZ80 resets
+3. **RESET.** perfectz80 treats RESET as a sampled input. RZ80 resets
    asynchronously:
    - **Assertion.** perfectz80 samples RESET at rising edges. It finishes
      the bus cycle in progress and goes idle 0–8 half-cycles after RESET

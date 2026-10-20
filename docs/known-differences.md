@@ -132,7 +132,7 @@ Notes for each row:
      programs (`prog9_inta_im1`..`prog22_wait_cpir`) drive INT / NMI /
      WAIT / BUSREQ / RESET through the `.events` sidecar and diff
      against perfectz80 per-half-cycle. **Current status
-     (2026-10-20)**: 10 / 14 PASS cleanly through the RTL, 11 / 14
+     (2026-10-20)**: 12 / 14 PASS cleanly through the RTL, 13 / 14
      through the C model. Until then `perfectz80_runner` set NMI, INT and
      WAIT high again at every phase, so perfectz80 saw a one-phase pulse
      where the C model and the RTL held the scenario's level from its
@@ -140,9 +140,8 @@ Notes for each row:
      difference alone made `prog11_wait_mem`, `prog13_halt_int` and
      `prog14_wait_io` differ in ~145 / 200 phases; with it gone both WAIT
      programs pass, like `prog21_wait_ldir` and `prog22_wait_cpir`.
-     Left:
-     - `prog10_halt_nmi`, `prog13_halt_int` (1 / 200 each, RTL and C):
-       HALT is released half a clock late (row 17).
+     `prog10_halt_nmi` and `prog13_halt_int` pass since the HALT pin
+     rises in the low half of the last T4 (row 17). Left:
      - `prog17_reset` (RTL 131 / 200, C 1 / 200): RESET restart and
        filter (rows 15, 17).
      - `prog15_busreq_m1` (RTL 109 / 200, C passes): the RTL resumes a
@@ -230,13 +229,11 @@ Notes for each row:
  17. RESET / INT / NMI sweep vs perfectz80 (`make event_sweep`, see
      [event-sweep.md](event-sweep.md), from hardesk) — pulses at every
      T-state of 13 instructions, diffed per half-cycle against perfectz80.
-     589 of 2287 cases differ, all listed in `tests/event_sweep/baseline.txt`
+     565 of 2287 cases differ, all listed in `tests/event_sweep/baseline.txt`
      (CI fails on any new or changed difference). The differences, in
      perfectz80's terms:
      - A second NMI during the NMI response is lost; RZ80 re-enters.
      - After RETN with INT pending, one instruction runs before INTA.
-     - HALT is released in T4's low half when an interrupt ends it, and
-       never asserted if the interrupt is pending at the HALT fetch.
      - RESET is sampled at rising edges, the current bus cycle finishes,
        T1 comes 3 rising edges after release, SP / BC / DE / HL are kept
        (row 1), and RESET covering only the rising edge into an M1 T2 is
