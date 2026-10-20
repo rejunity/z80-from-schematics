@@ -405,7 +405,7 @@ static int run_phase(uint64_t *pins)
     *pins = tick_inputs();
     return 0;
 }
-#define ZF_BUS(p)      do { if (run_phase(&(p))) zf_exit = 1; } while (0)
+#define ZF_BUS(p)      do { ZF_SYNC_STATE(); if (run_phase(&(p))) zf_exit = 1; } while (0)
 #define ZF_BOUNDARY(c) 0
 #ifdef Z80_SINGLE
 #include "z80_cfast.h"           /* again, with ZF_BUS: z80f_run */
