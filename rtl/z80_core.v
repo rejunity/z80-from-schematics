@@ -58,7 +58,8 @@
 
 module z80_core (
     input  wire        clk,
-    input  wire        reset_n,
+    input  wire        por_n,          // power-on reset (async; not a Z80 pin)
+    input  wire        res_s,          // RESET, sampled on this T-state's rising edge (1 = active)
     // inputs consumed on the rising edge (live pins)
     input  wire [7:0]  data_in,        // M1 opcode / INTA vector, end of T2.N / Tw2.N
     input  wire        busreq_n,       // BUSREQ, instruction boundary + grant
@@ -117,9 +118,14 @@ module z80_core (
     reg        nmi_pending, prev_nmi_n, ei_delay, suppress_decode, bus_granted;
     reg        nmi_sampled, int_sampled;  // latched at T_last.P per UM0080
     reg [1:0]  irq_seq;        // 0 none, 1 NMI, 2 INT, 3 HALT-nop
-    reg        in_reset_hold;  // set by async reset, cleared (sync) by the
-                               // first rising edge after release; nothing
-                               // moves while it is set
+    // RESET (perfectz80): res2 is the die's full reset, taken from res_s on
+    // each falling edge except in the low half of an M1's T2, where it
+    // holds; while it was set on the previous falling edge no T-state
+    // follows the current one (rst_idle) until it clears. sres is the
+    // special-reset latch, taken from res_s in that low half; srst_m1
+    // marks the opcode fetch it replaces.
+    reg        res2, sres, rst_idle, srst_m1;
+    reg        rd_hold;        // RD still low from a T1 cut (one idle T-state)
 
     // ---- next state ----
     reg [7:0]  reg_i_n, reg_r_n, ir_n;
@@ -139,6 +145,7 @@ module z80_core (
     reg        nmi_pending_mid;   // nmi_pending after the clock-high-half edge detect
     reg [1:0]  irq_seq_n;
     reg        allow_int;
+    reg        res2_n, sres_n, rst_idle_n, srst_m1_n;
 
     // =======================================================================
     // decode PLA
@@ -199,32 +206,62 @@ module z80_core (
         .m1_n(tn_m1), .mreq_n(tn_mreq), .iorq_n(tn_iorq),
         .rd_n(tn_rd), .wr_n(tn_wr), .rfsh_n(tn_rfsh)
     );
-    // Bus released to a DMA master (BUSACK low), or core frozen in reset
-    // hold: strobes idle, data bus not driven -- matches the C model's
-    // bus-grant idle pins. The address image holds its last value (the
-    // real chip floats it; a pad ring can use busack_n as output enable).
-    // The *_pos image is never forced idle for reset: while reset_n is low
-    // z80_top's former is held at the idle pattern asynchronously, and the
-    // first rising edge after release must present T1.P of the first M1.
-    wire idle_pos = bus_granted_n;                 // T-state being entered
-    wire idle_neg = bus_granted | in_reset_hold;   // current T-state
+    // Bus released to a DMA master (BUSACK low), or the reset idle: strobes
+    // idle, data bus not driven -- matches the C model's idle pins. The
+    // address image holds its last value (the real chip floats it; a pad
+    // ring can use busack_n / reset as output enables).
+    //
+    // RESET cuts (perfectz80): `cut` -- RES2 was set on the previous
+    // falling edge, so this T-state is the last before the reset idle.
+    //  - T1 cut, any cycle: the die forces the M-cycle to an opcode fetch
+    //    on that falling edge, so MREQ and RD fall in T1.N even in a write
+    //    or I/O cycle; MREQ rises on the next rising edge, RD on the
+    //    falling edge after it (RD stays low in the idle T.P);
+    //  - T2 cut: MREQ / RD release in T2.N and WR never falls; an I/O
+    //    cycle cut after T2 never asserts IORQ / RD / WR at all (io_cut,
+    //    from T2.P);
+    //  - I/O Tw cut: IORQ and RD / WR release in Tw.N; INTA Tw cut: IORQ.
+    //  - the 1- and 2-T internal cycles extend the M1 or a read on the die
+    //    (T5 / T6 of the ring, no T1): a cut there drives nothing; the
+    //    longer ones are M-cycles of their own, and a cut in their T1 is
+    //    like any other -- and when RES2 rises on their T1.N, MREQ falls
+    //    there and holds through T2.P;
+    //  - a T1 cut followed by a restart at once keeps RD low into the
+    //    restarted M1 (rd_hold): it releases only in an idle T.N.
+    wire m1_t2    = ((bus_op == `BUSOP_M1) || (bus_op == `BUSOP_INTA)) && (t_state == 4'd2) && !rst_idle;
+    wire ext      = (bus_op == `BUSOP_INTERNAL) && (m_len <= 4'd2);
+    wire int_g    = (bus_op == `BUSOP_INTERNAL) && !ext;
+    wire int_g_n  = (bus_op_n == `BUSOP_INTERNAL) && (m_len_n > 4'd2);
+    wire cut      = res2 && !rst_idle;
+    wire cut_t1   = cut && !ext && (t_state == 4'd1);
+    wire cut_t2   = cut && !ext && (t_state == 4'd2);
+    wire int_mreq_neg = int_g && (t_state == 4'd1) && !res2 && res2_n && !rst_idle;
+    wire int_mreq_pos = int_g_n && (t_n == 4'd2) && res2_n && !rst_idle_n;
+    wire rd_hold_neg  = rst_idle && rd_hold && !res2;          // restart follows this idle T
+    wire rd_hold_pos  = cut_t1 || (rst_idle && rd_hold && !res2);
+    wire cut_iotw = cut && ((bus_op == `BUSOP_IORD) || (bus_op == `BUSOP_IOWR)) && (t_state == 4'd3);
+    wire cut_inta = cut && (bus_op == `BUSOP_INTA) && ((t_state == 4'd3) || (t_state == 4'd4));
+    wire io_cut   = res2_n && !rst_idle_n && (t_n == 4'd2) &&
+                    ((bus_op_n == `BUSOP_IORD) || (bus_op_n == `BUSOP_IOWR));
+    wire idle_pos = bus_granted_n | rst_idle_n;    // T-state being entered
+    wire idle_neg = bus_granted | rst_idle;        // current T-state
     assign addr_pos       = tp_addr;
     assign data_out_pos   = tp_dout;
     assign data_drive_pos = idle_pos ? 1'b0 : tp_drive;
     assign m1_n_pos       = idle_pos | tp_m1;
-    assign mreq_n_pos     = idle_pos | tp_mreq;
-    assign iorq_n_pos     = idle_pos | tp_iorq;
-    assign rd_n_pos       = idle_pos | tp_rd;
+    assign mreq_n_pos     = int_mreq_pos ? 1'b0 : (idle_pos | tp_mreq);
+    assign iorq_n_pos     = idle_pos | io_cut | tp_iorq;
+    assign rd_n_pos       = rd_hold_pos ? 1'b0 : (idle_pos | io_cut | tp_rd);
     // wr_n_pos is assigned below: it needs `stall` (WR hold across Tw).
     assign rfsh_n_pos     = idle_pos | tp_rfsh;
     assign addr_neg       = tn_addr;
     assign data_out_neg   = tn_dout;
-    assign data_drive_neg = idle_neg ? 1'b0 : tn_drive;
+    assign data_drive_neg = (idle_neg | cut_t1) ? 1'b0 : tn_drive;
     assign m1_n_neg       = idle_neg | tn_m1;
-    assign mreq_n_neg     = idle_neg | tn_mreq;
-    assign iorq_n_neg     = idle_neg | tn_iorq;
-    assign rd_n_neg       = idle_neg | tn_rd;
-    assign wr_n_neg       = idle_neg | tn_wr;
+    assign mreq_n_neg     = (cut_t1 | int_mreq_neg) ? 1'b0 : (idle_neg | cut_t2 | tn_mreq);
+    assign iorq_n_neg     = idle_neg | cut_t1 | cut_t2 | cut_iotw | cut_inta | tn_iorq;
+    assign rd_n_neg       = (cut_t1 | rd_hold_neg) ? 1'b0 : (idle_neg | cut_t2 | cut_iotw | tn_rd);
+    assign wr_n_neg       = idle_neg | cut_t1 | cut_t2 | cut_iotw | tn_wr;
     assign rfsh_n_neg     = idle_neg | tn_rfsh;
     // Silicon-faithful halt pin (perfectz80): it changes on the falling
     // edge of an instruction's last T-state, to the state the next
@@ -241,8 +278,11 @@ module z80_core (
                         && (bus_op == `BUSOP_M1)
                         && (t_state == 4'd4);
     wire halt_exit = (t_state == m_len) && (nmi_pending | (~int_n_rise & iff1));
-    assign halt_n_pos   = halted_n ? 1'b0 : 1'b1;
-    assign halt_n_neg   = ((halted || exec_halt_in_m1) && !halt_exit) ? 1'b0 : 1'b1;
+    // RESET: HALT rises on the falling edge where RES2 or the special-reset
+    // latch sets, and stays high (perfectz80)
+    wire halt_rst  = res2_n | sres_n;
+    assign halt_n_pos   = (halted_n && !halt_rst) ? 1'b0 : 1'b1;
+    assign halt_n_neg   = ((halted || exec_halt_in_m1) && !halt_exit && !halt_rst) ? 1'b0 : 1'b1;
     // BUSACK follows the grant flag, which only changes on the rising edge.
     assign busack_n_pos = bus_granted_n ? 1'b0 : 1'b1;
     assign busack_n_neg = bus_granted   ? 1'b0 : 1'b1;
@@ -285,7 +325,7 @@ module z80_core (
     // decoder describes). Keep WR asserted so the write is one continuous
     // pulse from T2.N to T3.N (tb_wait_write.v; cmodel hold_write_strobe).
     wire hold_wr = stall && (bus_op == `BUSOP_MWR);
-    assign wr_n_pos = idle_pos | (hold_wr ? 1'b0 : tp_wr);
+    assign wr_n_pos = idle_pos | io_cut | (hold_wr ? 1'b0 : tp_wr);
     // the byte read this T-state: live opcode / vector, the falling-edge
     // MRD / IORD sample, or the data latch
     wire [7:0] rbyte = latch_pos ? data_in : latch_neg ? data_in_neg : tmp8;
@@ -297,7 +337,11 @@ module z80_core (
     // address latch holds (PC+1 of the opcode fetch, block-move pointer
     // and counter steps) run on earlier T-states.
     wire m_end   = (t_state + 4'd1) > m_len;            // last T-state of the M-cycle
-    wire wr_edge = !in_reset_hold && !bus_granted && !stall;
+    // PC = 0: while RES2 is set (the cut T-state and the reset idle), and on
+    // the opcode latch of the special reset's fetch. From registered state
+    // only: the sequencer reads pc_next, so it must not drive this.
+    wire pc_clr  = res2 | (srst_m1 && latch_pos && !stall && (bus_op == `BUSOP_M1));
+    wire wr_edge = !rst_idle && !bus_granted && !stall;
     wire ex_edge = wr_edge && m_end;
 
     // =======================================================================
@@ -739,11 +783,18 @@ module z80_core (
         endcase
     end
 
-    // PC / SP / WZ loads
+    // PC / SP / WZ loads. The SP-1 of a push's first byte belongs, on the
+    // die, to the falling edge that ends the M-cycle before it (M1 T5, the
+    // NMI / INT response, CALL's extra T) -- the edge a RESET cut blocks
+    // (perfectz80) -- so it is dropped when this T-state is the last before
+    // the reset idle. The second byte's SP-1 happens in T2.N of the first
+    // write on the die, before any cut that leaves that write's T3 standing.
+    wire        push_cut = res2 && !rst_idle && ctl_mstart && (bus_op != `BUSOP_MWR) &&
+                           (ctl_sp == SP_IDU) && (ctl_inc == INC_M1);
     reg         pc_we, sp_we, wz_we;
     reg  [15:0] pc_d, sp_d, wz_d;
     always @* begin
-        pc_we = 1'b1; sp_we = 1'b1; wz_we = 1'b1;
+        pc_we = 1'b1; sp_we = !push_cut; wz_we = 1'b1;
         case (ctl_pc)
             PC_IDU:  pc_d = idu;
             PC_EA:   pc_d = ea;
@@ -772,7 +823,7 @@ module z80_core (
     wire [15:0] pc_next;        // PC after this edge (next M1 address)
     wire [7:0]  f_next;         // F after this edge (Q commit)
     z80_regfile u_regs (
-        .clk(clk), .reset_n(reset_n), .we(wr_edge), .ex_en(ex_edge),
+        .clk(clk), .por_n(por_n), .pc_clr(pc_clr), .we(wr_edge), .ex_en(ex_edge),
         .ex_dehl(ctl_ex_dehl), .ex_af(ctl_ex_af), .exx(ctl_exx),
         .pw_we(ctl_pw), .pw_sel(pw_idx), .pw_d(pw_data),
         .bw_we(ctl_bw && bw_en), .bw_sel(bw_pair), .bw_hi(bw_hi), .bw_d(bw_data),
@@ -807,11 +858,28 @@ module z80_core (
         nmi_pending_n = nmi_pending; prev_nmi_n_n = prev_nmi_n;
         allow_int = 1'b0;
         nmi_pending_mid = nmi_pending;
+        res2_n = res2; sres_n = sres; rst_idle_n = rst_idle; srst_m1_n = srst_m1;
 
-        // Everything below is one T-state of work. While in_reset_hold is
-        // set (the first rising edge after reset release) nothing moves:
-        // that edge merely ENTERS T1 of the first M1.
-        if (!in_reset_hold) begin
+        // ===== RESET (perfectz80; docs/timing.md "RESET") =====
+        // RES2 takes the pin sample (res_s, from this T-state's rising edge)
+        // on this T-state's falling edge, except in the low half of an M1's
+        // T2 (INTA's too), where it holds; there the special-reset latch
+        // takes it instead. RES2 clears that latch.
+        res2_n = m1_t2 ? res2 : res_s;
+        sres_n = res2_n ? 1'b0 : (m1_t2 ? res_s : sres);
+
+        if (rst_idle) begin
+            // the T-state ring has stopped: T1 of an M1 at PC (0000) follows
+            // once RES2 was clear on the previous falling edge -- the third
+            // rising edge after the pin is released
+            if (!res2) begin
+                rst_idle_n = 1'b0;
+                bus_op_n = `BUSOP_M1; m_addr_n = r_pc; m_wdata_n = 8'h00;
+                m_len_n = 4'd4; t_n = 4'd1; m_cycle_n = 3'd1;
+            end
+        end else begin
+
+        // Everything below is one T-state of work.
 
         // ===== clock-low-half work: what the chip did on the FALLING edge
         // of this T-state. Inputs are the *_neg copies z80_top captured on
@@ -855,6 +923,10 @@ module z80_core (
             if (bus_op == `BUSOP_M1) begin
                 ir_n = data_in;
                 if (suppress_decode) suppress_decode_n = 1'b0;     // ack / halt: no PC++ / decode
+                // special reset (perfectz80): the fetch after the one whose
+                // T2 rising edge saw RESET runs as a NOP that leaves PC at
+                // 0000; I, R, the IFFs and IM are kept
+                if (srst_m1) begin ir_n = 8'h00; srst_m1_n = 1'b0; end
             end else if (im == 2'd0) begin                         // INTA
                 // IM0: the device supplies the opcode; PC still points at
                 // its operands, so decode it without a fetch / PC++.
@@ -962,33 +1034,48 @@ module z80_core (
                         bus_op_n = `BUSOP_M1; m_addr_n = pc_next; m_wdata_n = 8'h0;
                         m_len_n = 4'd4; t_n = 4'd1; m_cycle_n = 3'd1;
                         suppress_decode_n = 1'b1;
+                        srst_m1_n = sres_n;
                     end else begin
                         irq_seq_n = 2'd0;
                         bus_op_n = `BUSOP_M1; m_addr_n = pc_next; m_wdata_n = 8'h0;
                         m_len_n = 4'd4; t_n = 4'd1; m_cycle_n = 3'd1;
+                        srst_m1_n = sres_n;
                     end
                 end
             end
         end
-        end  // !in_reset_hold
+        end  // !rst_idle
+
+        // RES2 was set on the previous falling edge: this T-state was the
+        // last. What it did stands, but no T-state follows it; the reset
+        // clears PC, I, R, IFF1 / IFF2, IM and HALT and keeps every other
+        // register, WZ and the exchange flip-flops (perfectz80). The clears
+        // repeat on every idle edge while RES2 stays set, so RESET alone
+        // brings a chip without power-on reset (por_n tied off) to a known
+        // state. The die finishes some results in the next M1's T1-T3 (A
+        // after INC A, DE after POP DE, EX DE,HL), which a cut there loses
+        // and RZ80 keeps: docs/known-differences.md row 19.
+        if (res2) begin
+            rst_idle_n = 1'b1;
+            reg_i_n = 8'h00; reg_r_n = 8'h00;
+            iff1_n = 1'b0; iff2_n = 1'b0; im_n = 2'd0; halted_n = 1'b0;
+            prefix_n = `PFX_NONE; irq_seq_n = 2'd0; suppress_decode_n = 1'b0;
+            ei_delay_n = 1'b0; nmi_sampled_n = 1'b0; int_sampled_n = 1'b0;
+            nmi_pending_n = 1'b0; bus_granted_n = 1'b0; srst_m1_n = 1'b0;
+            f_modified_n = 1'b0;
+        end
     end
 
     // =======================================================================
     // registers
     // =======================================================================
-    // Async-assert reset drives every FF to a constant (required for
-    // async-reset DFF cell inference, and for gate-level sim where FFs have
-    // no initializers). Release is synchronous: the first rising edge after
-    // reset_n goes high clears `in_reset_hold` WITHOUT advancing state (the
-    // combinational logic holds everything while it is set), so that edge
-    // enters T1 of the first M1 at PC=0 and z80_top's former loads the T1.P
-    // pin image on it. The C model additionally models silicon's reset-
-    // assert filter (~5 half-cycles of continued execution) and release
-    // settle (~4 half-cycles) -- RTL resets immediately on reset_n=0 and
-    // starts immediately on release; a pin_scenarios (informational)
-    // divergence only, see docs/known-differences.md.
-    always @(posedge clk or negedge reset_n) begin
-        if (!reset_n) begin
+    // The power-on reset drives every FF to a constant (async-reset DFF
+    // cells; gate-level sim has no initializers) and leaves the core in the
+    // RESET idle (res2, rst_idle), as if the pin had been held: T1 of the
+    // first M1 comes on the third rising edge after RESET is seen high.
+    // The RESET pin itself acts synchronously, through res_s (above).
+    always @(posedge clk or negedge por_n) begin
+        if (!por_n) begin
             reg_i <= 8'h00; reg_r <= 8'h00; ir <= 8'h00;
             t_state <= 4'd1; m_cycle <= 3'd1;
             bus_op <= `BUSOP_M1; m_len <= 4'd4; m_addr <= 16'h0000; m_wdata <= 8'h00;
@@ -998,9 +1085,10 @@ module z80_core (
             nmi_sampled <= 1'b0; int_sampled <= 1'b0;
             suppress_decode <= 1'b0; bus_granted <= 1'b0; irq_seq <= 2'd0;
             reg_q <= 8'h00; f_modified <= 1'b0;
-            in_reset_hold <= 1'b1;
+            res2 <= 1'b1; sres <= 1'b0; rst_idle <= 1'b1; srst_m1 <= 1'b0; rd_hold <= 1'b0;
         end else begin
-            in_reset_hold <= 1'b0;
+            res2 <= res2_n; sres <= sres_n; rst_idle <= rst_idle_n; srst_m1 <= srst_m1_n;
+            rd_hold <= cut_t1;
             reg_i <= reg_i_n; reg_r <= reg_r_n; ir <= ir_n;
             t_state <= t_n; m_cycle <= m_cycle_n;
             bus_op <= bus_op_n; m_len <= m_len_n; m_addr <= m_addr_n; m_wdata <= m_wdata_n;

@@ -21,7 +21,7 @@ module tb_bus_controls;
     wire [8:0] pins = {data_drive, m1_n, mreq_n, iorq_n, rd_n,
                        wr_n, rfsh_n, halt_n, busack_n};
     z80_top dut (
-        .clk(clk), .reset_n(reset_n),
+        .clk(clk), .por_n(reset_n), .reset_n(reset_n),
         .addr(addr), .data_in(data_in), .data_out(data_out), .data_drive(data_drive),
         .m1_n(m1_n), .mreq_n(mreq_n), .iorq_n(iorq_n), .rd_n(rd_n),
         .wr_n(wr_n), .rfsh_n(rfsh_n), .halt_n(halt_n), .busack_n(busack_n),
@@ -57,7 +57,7 @@ module tb_bus_controls;
         else ref_wait_write <= dut.u_core.hold_wr;
     // Reset hold and bus grant (BUSACK) idle every strobe and release the
     // data bus (docs/known-differences.md row 15).
-    wire idle = dut.u_core.in_reset_hold || dut.u_core.bus_granted;
+    wire idle = dut.u_core.rst_idle || dut.u_core.bus_granted;
     wire [8:0] expected = {idle ? 7'b0111111 :
                           {ref_drive, ref_m1, ref_mreq, ref_iorq, ref_rd,
                            ref_wait_write ? 1'b0 : ref_wr, ref_rfsh},

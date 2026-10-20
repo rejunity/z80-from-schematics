@@ -188,6 +188,58 @@ granted, after the current M-cycle the core asserts `pin_busack_n ← 0` and tri
 via a `bus_release` mux/enable) until BUSREQ deasserts. No internal tri-states; the
 release is modeled with output-enable lines on the pin mux.
 
+## RESET
+
+The NMOS die treats RESET as a sampled input, not as an asynchronous reset.
+This is how perfectz80 behaves, traced through its netlist (perfectz80 node
+numbers in parentheses); the C model and the RTL follow it, and the event
+sweep's 544 RESET cases match.
+
+- **Sample.** A master-slave flip-flop (132 / 136) takes the pin on every
+  rising edge. A pulse that covers no rising edge is ignored. (`res_s`,
+  `z80_top.res_rise`.)
+- **Full reset (RES2; 95 / 197).** It takes the sample on the falling edge in
+  the middle of each T-state, except in the low half of an M1's T2 (INTA's
+  too), where it holds.
+- **Stop.** While RES2 was set on the previous falling edge, no T-state
+  follows the current one: the CPU finishes the T-state in hand and the one
+  after it, then idles with every strobe high. A cycle cut short releases its
+  strobes as follows:
+  - cut after T1: MREQ and RD fall in T1.N as in an opcode fetch, even in a
+    write, I/O or long internal cycle; MREQ rises on the next rising edge, RD
+    on the falling edge after it, or RD stays low into a restart that follows
+    at once;
+  - cut after T2: MREQ and RD release in T2.N, WR never falls, and an I/O
+    cycle asserts nothing at all;
+  - cut after an I/O cycle's Tw: IORQ and RD / WR release in Tw.N;
+  - the 1- and 2-T internal cycles are extensions of an M1 or a read on the
+    die (ring states T5 / T6) and drive nothing; when RES2 rises on the T1.N
+    of a longer internal cycle, MREQ falls there and holds through T2.P.
+- **Clears.** PC, I, R, IFF1 / IFF2, IM and the HALT state; the HALT pin
+  rises on the falling edge where RES2 or the special-reset latch sets. Every
+  other register (AF, BC, DE, HL, IX, IY, SP and the alternates), WZ and the
+  exchange flip-flops are kept. The SP-1 of a push's first byte, which the die
+  does on the falling edge that ends the cycle before the write, is lost when
+  the reset stops the ring there.
+- **Restart.** T1 of an M1 at 0000 follows once RES2 was clear on the
+  previous falling edge: the third rising edge after RESET is released.
+- **Special reset (157 / 172).** In the low half of an M1's T2 a second latch
+  takes the sample instead of RES2. A pulse that covers that rising edge only
+  (low in T1, high again before T3) lets the instruction finish; the next
+  opcode fetch then runs as a NOP that leaves PC at 0000, and I, R, the IFFs,
+  IM and every register are kept (Brewer 2014). RES2 clears the latch, so a
+  pulse covering two or more rising edges is a normal reset.
+- **Power-on** is `z80_top.por_n`, not a Z80 pin: every flop to its power-up
+  value, the register file to 5555 as perfectz80 comes up, and the core in
+  the reset idle until RESET is seen high.
+
+Not modelled: the die finishes some results in the next M1's T1-T3 (A and F
+after INC A, A after LD A,(HL), DE after POP DE, the EX DE,HL swap), which a
+RESET that stops that M1 early loses and RZ80 keeps; RZ80 runs some long
+internal M-cycles as one where the die has two (ADD HL,rr's 4 + 3 T), so a cut
+inside them is approximate; RESET during WAIT or a bus grant is untested
+(docs/known-differences.md).
+
 ## WAIT summary
 
 WAIT is sampled at `.N` of T2 in memory M-cycles, at `.N` of the automatic Tw in I/O

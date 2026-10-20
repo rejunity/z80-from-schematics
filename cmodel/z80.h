@@ -323,16 +323,17 @@ typedef struct {
     uint8_t      q;
     bool         f_modified;
 
-    /* Reset state machine (matches perfectz80 prog17_reset trace).
-       Zilog UM0080 spec: reset_n must be held low for "≥ 3 clock periods"
-       to be recognized. The chip continues executing during the filter
-       window (including starting fresh M-cycles), then enters frozen-idle
-       hold. On reset_n rising edge: ~4-phase settle before the post-reset
-       M1 fetch at PC=0 begins. See docs/perfect-branch.md for the
-       trace-derived analysis. */
-    uint8_t      reset_assert_filter;   /* phases of reset_n=0 before hold      */
-    uint8_t      reset_release_filter;  /* phases of reset_n=1 before unfreeze  */
-    bool         in_reset_hold;         /* true => frozen at idle pins, PC=0    */
+    /* RESET, as the die does it (perfectz80; docs/timing.md "RESET"):
+       the pin is sampled on every rising edge (res_s); the full reset res2
+       takes that sample on the falling edge in the middle of each T-state,
+       except in the low half of an M1's T2, where it holds and the special-
+       reset latch sres takes it instead. While res2 was set on the previous
+       falling edge, no T-state follows the current one (rst_idle); T1 of an
+       M1 at 0000 comes once it clears. srst_m1 marks the opcode fetch the
+       special reset replaces; rd_hold keeps RD low after a cut T1 (through
+       the idle T.P, and into a restart that follows at once). z80_reset()
+       is the power-on reset. */
+    bool         res_s, res2, sres, rst_idle, srst_m1, rd_hold;
 
     /* BUSREQ release filter: pz80 settles for ~2 phases between busreq_n=1
        and the post-grant M1 fetch (prog15_busreq_m1 trace). Bus_granted

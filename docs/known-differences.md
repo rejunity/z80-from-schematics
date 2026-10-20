@@ -15,7 +15,7 @@ Status legend:
 
 | #  | Area                                          | Class                     | Status   |
 |----|-----------------------------------------------|---------------------------|----------|
-| 1  | Reset register initialisation                 | reference ambiguity       | accepted |
+| 1  | Reset register initialisation                 | reference ambiguity       | resolved |
 | 2  | SCF / CCF X / Y flags (NMOS Q variant)        | undocumented / flag       | resolved |
 | 3  | `OUT (C),0` (ED71)                            | undocumented              | accepted |
 | 4  | M1 deassert phase                             | timing                    | resolved |
@@ -31,14 +31,20 @@ Status legend:
 | 14 | Pin-scenario vs perfectz80 (informational)    | timing                    | watching |
 | 15 | RTL clocking: reset / BUSREQ settle vs C model | timing                    | watching |
 | 16 | BUSREQ / BUSACK vs the NMOS Z80               | timing / bus              | watching |
-| 17 | RESET / INT / NMI sweep vs perfectz80         | timing / interrupt        | watching |
+| 17 | RESET / INT / NMI sweep vs perfectz80         | timing / interrupt        | resolved |
 | 18 | Idle address bus (refresh resolved)           | timing / bus              | watching |
+| 19 | RESET between an instruction and its write-back | timing / reset          | watching |
 
 Notes for each row:
 
-  1. Reset register init — real Z80 leaves SP / AF / main regs undefined at
-     power-up; we force `SP=FFFF, AF=FFFF`, alternates / IX / IY = `FFFF` for
-     deterministic C↔RTL compare.
+  1. Reset register init — **resolved 2026-10-20.** perfectz80 comes up with
+     every register pair at 5555 and keeps every register across RESET; only
+     PC, I, R, IFF1 / IFF2 and IM are cleared. RZ80's power-on reset
+     (`z80_top.por_n`, not a Z80 pin; `z80_reset()` in C) loads 5555, and
+     RESET keeps every register, WZ and the exchange flip-flops
+     (docs/timing.md "RESET"). The real NMOS part comes up with random
+     registers; the ASIC chip ties `por_n` off and RESET alone initialises
+     the control state.
 
   2. SCF / CCF X / Y flags — NMOS Q-register variant implemented: X / Y derived
      from `(A | Q)`, where Q holds the F value left by the previous F-modifying
@@ -137,7 +143,7 @@ Notes for each row:
      programs (`prog9_inta_im1`..`prog22_wait_cpir`) drive INT / NMI /
      WAIT / BUSREQ / RESET through the `.events` sidecar and diff
      against perfectz80 per-half-cycle. **Current status
-     (2026-10-20)**: 12 / 14 PASS cleanly through the RTL, 13 / 14
+     (2026-10-20)**: 13 / 14 PASS cleanly through the RTL, 14 / 14
      through the C model. Until then `perfectz80_runner` set NMI, INT and
      WAIT high again at every phase, so perfectz80 saw a one-phase pulse
      where the C model and the RTL held the scenario's level from its
@@ -146,9 +152,8 @@ Notes for each row:
      `prog14_wait_io` differ in ~145 / 200 phases; with it gone both WAIT
      programs pass, like `prog21_wait_ldir` and `prog22_wait_cpir`.
      `prog10_halt_nmi` and `prog13_halt_int` pass since the HALT pin
-     rises in the low half of the last T4 (row 17). Left:
-     - `prog17_reset` (RTL 131 / 200, C 1 / 200): RESET restart and
-       filter (rows 15, 17).
+     rises in the low half of the last T4 (row 17), `prog17_reset` since
+     both models run the die's sampled RESET. Left:
      - `prog15_busreq_m1` (RTL 109 / 200, C passes): the RTL resumes a
        T-state early after BUSREQ is released (rows 15, 16).
 
@@ -183,10 +188,9 @@ Notes for each row:
      retiming is trace-identical to the C model on `make compare`, FUSE,
      Rak and BASIC. Deliberate residual RTL↔C differences, all confined
      to the informational pin-scenario programs:
-     - **Reset**: the C model carries silicon's ~5-half-cycle reset-assert
-       filter and ~4-half-cycle release settle (`prog17_reset`). The RTL
-       resets asynchronously the moment `reset_n` falls and starts T1 of
-       the first M1 on the first rising edge after release.
+     - **Reset** — resolved 2026-10-20: both models run the die's sampled
+       RESET (docs/timing.md "RESET"); `prog17_reset` and the sweep's 544
+       RESET cases match perfectz80.
      - **BUSREQ release**: the C model settles 2 half-cycles after
        `busreq_n` rises (`prog15_busreq_m1`); the RTL samples `busreq_n`
        on the rising edge and restarts M1 on that edge. (The previous 2×
@@ -234,14 +238,10 @@ Notes for each row:
  17. RESET / INT / NMI sweep vs perfectz80 (`make event_sweep`, see
      [event-sweep.md](event-sweep.md), from hardesk) — pulses at every
      T-state of 15 instructions, diffed per half-cycle against perfectz80.
-     544 of 2375 cases differ, all listed in `tests/event_sweep/baseline.txt`
-     (CI fails on any new or changed difference). The differences, in
-     perfectz80's terms:
-     - RESET is sampled at rising edges, the current bus cycle finishes,
-       T1 comes 3 rising edges after release, SP / BC / DE / HL are kept
-       (row 1), and RESET covering only the rising edge into an M1 T2 is
-       a special reset that keeps I. RZ80 resets asynchronously and
-       restarts on the first rising edge (row 15).
+     **All 2375 cases match (2026-10-20)**; `tests/event_sweep/baseline.txt`
+     is empty and CI fails on any difference. The last 544 were RESET: it
+     is now the die's sampled RESET in both models, with the special reset
+     and registers kept (row 1; docs/timing.md "RESET").
 
  18. **Refresh and idle address bus vs perfectz80** — the pin
      comparisons treat the address as don't-care outside transfers and
@@ -262,6 +262,18 @@ Notes for each row:
        last refresh address (IR), as the Spectrum's contention tables
        assume ("ir:1"), and the RTL shows another register.
      Every phase with MREQ or IORQ and RD or WR (3,971) agrees.
+
+ 19. **RESET between an instruction and its write-back** — the die
+     finishes some results in the next M1: A and F after INC A, A after
+     LD A,(HL), DE after POP DE and the EX DE,HL swap land in its T1-T3
+     (perfectz80, RESET at every T-state of each). A RESET that stops that
+     M1 early loses them; RZ80 writes every result on the instruction's
+     last edge and keeps them (the push SP-1, which the die does on the
+     edge that ends the previous cycle, is modelled). RZ80 also runs some
+     long internal M-cycles as one where the die has two (ADD HL,rr's
+     4 + 3 T), so a RESET cut inside them is approximate, and RESET during
+     WAIT or a bus grant is untested. None of these is in the event
+     sweep's instruction set yet.
 
 Add rows as new differences are discovered. Each "watching" row should gain a
 test that pins the chosen behaviour or escalates it.

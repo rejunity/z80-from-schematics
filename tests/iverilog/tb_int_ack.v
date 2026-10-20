@@ -11,7 +11,7 @@ module tb_int_ack;
     wire m1, mr, io, rd, wr, refresh, halt;
     wire [7:0] din = !m1 && !io ? vector : (!mr && !rd ? mem[addr] : 8'h00);
     z80_top dut (
-        .clk(clk), .reset_n(reset_n), .wait_n(wait_n),
+        .clk(clk), .por_n(reset_n), .reset_n(reset_n), .wait_n(wait_n),
         .int_n(int_n), .nmi_n(1'b1), .busreq_n(1'b1),
         .addr(addr), .data_in(din), .data_out(dout), .data_drive(),
         .m1_n(m1), .mreq_n(mr), .iorq_n(io), .rd_n(rd), .wr_n(wr),

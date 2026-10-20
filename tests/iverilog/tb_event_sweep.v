@@ -28,7 +28,8 @@
 
 module tb_event_sweep;
     reg         clk = 1'b0;
-    reg         reset_n = 1'b0;
+    reg         por_n = 1'b0;           // power-on reset, first half only
+    reg         reset_n = 1'b0;         // the RESET pin
     reg         wait_n = 1'b1, int_n = 1'b1, nmi_n = 1'b1, busreq_n = 1'b1;
     wire [7:0]  data_in;
     wire [15:0] addr;
@@ -39,7 +40,7 @@ module tb_event_sweep;
     reg  [7:0]  mem [0:65535];
 
     z80_top dut (
-        .clk(clk), .reset_n(reset_n),
+        .clk(clk), .por_n(por_n), .reset_n(reset_n),
         .addr(addr), .data_in(data_in), .data_out(data_out), .data_drive(data_drive),
         .m1_n(m1_n), .mreq_n(mreq_n), .iorq_n(iorq_n), .rd_n(rd_n), .wr_n(wr_n),
         .rfsh_n(rfsh_n), .halt_n(halt_n), .busack_n(busack_n),
@@ -84,7 +85,8 @@ module tb_event_sweep;
         for (k = 0; k < 65536; k = k + 1) mem[k] = 8'h00;
         $readmemh(progf, mem);
 
-        // Power-on reset: 4 T low, released in a clock-low half.
+        // Power-on: por_n for the first half-cycle, RESET 4 T low, released
+        // in a clock-low half.
         found = 0; mark_half = 0; hold_until = -1; in_read = 0;
         half = 0;
         for (t = 0; t >= 0; t = t + 1) begin
@@ -93,6 +95,7 @@ module tb_event_sweep;
                 clk = (t % 32 == 0);
                 half = t / 16;
             end
+            if (t == 8) por_n = 1'b1;
             if (!found && t == 4 * 32 + 16 + 8) reset_n = 1'b1;
             if (t % 16 == 1) begin
                 if (!found && !m1_n && addr == marker) begin

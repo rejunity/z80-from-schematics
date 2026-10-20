@@ -36,16 +36,25 @@
 // (gf180mcu_fd_sc_mcu{7,9}t5v0__dffnq / dffnrnq / dffnsnq); check the
 // mapped netlist for them. See docs/clocking.md.
 //
-// Reset: active-low async assert. While reset_n is low the former sits at
-// the idle pin pattern (strobes high, bus not driven, BUSACK high) and the
-// core holds. The first rising edge after release starts T1 of the first
-// M1 at PC=0000.
+// Two resets:
+//  - por_n, the power-on reset: active-low async assert of every flop to
+//    its power-up value (the register file to 5555, as perfectz80 comes
+//    up). Not a Z80 pin: testbenches pulse it at time 0, FPGA tops drive
+//    it from their power-on logic, the ASIC chip ties it off (registers
+//    come up random, like the NMOS part's).
+//  - reset_n, the RESET pin: sampled on every rising edge, as the die
+//    does (a master-slave flip-flop), and acted on by the core
+//    synchronously -- it finishes the T-state in hand and one more, keeps
+//    the registers, and starts T1 of an M1 at 0000 on the third rising
+//    edge after release (z80_core "RESET"; docs/timing.md). Power-on
+//    leaves the core in that reset until the pin is seen high.
 // ===========================================================================
 `include "z80_defs.vh"
 
 module z80_top (
     input  wire        clk,
-    input  wire        reset_n,
+    input  wire        por_n,           // power-on reset (not a Z80 pin)
+    input  wire        reset_n,         // the RESET pin
     // bus
     output wire [15:0] addr,
     input  wire [7:0]  data_in,
@@ -81,8 +90,8 @@ module z80_top (
         if (nmi_hold_clr) nmi_hold <= 1'b0;
         else              nmi_hold <= 1'b1;
     end
-    always @(posedge clk or negedge reset_n) begin
-        if (!reset_n) nmi_hold_clr <= 1'b1;
+    always @(posedge clk or negedge por_n) begin
+        if (!por_n) nmi_hold_clr <= 1'b1;
         else          nmi_hold_clr <= nmi_hold;
     end
     wire nmi_n_held = nmi_n & ~nmi_hold;
@@ -92,8 +101,8 @@ module z80_top (
     // (GF180 dffnsnq); data resets to 0 (dffnrnq).
     reg [7:0] data_in_neg;
     reg       nmi_n_neg, wait_n_neg;
-    always @(negedge clk or negedge reset_n) begin
-        if (!reset_n) begin
+    always @(negedge clk or negedge por_n) begin
+        if (!por_n) begin
             data_in_neg <= 8'h00;
             nmi_n_neg   <= 1'b1;
             wait_n_neg  <= 1'b1;
@@ -104,12 +113,21 @@ module z80_top (
         end
     end
 
+    // RESET: the level at the rising edge that starts a T-state (the die's
+    // master-slave flip-flop, perfectz80 nodes 132 / 136), 1 = in reset.
+    // Power-on holds it until the pin has been seen high.
+    reg res_rise;
+    always @(posedge clk or negedge por_n) begin
+        if (!por_n) res_rise <= 1'b1;
+        else        res_rise <= ~reset_n;
+    end
+
     // INT: the level at the rising edge that starts a T-state, which the
     // core reads at the rising edge that ends it -- in the last T-state,
     // the datasheet's sample point.
     reg int_n_rise;
-    always @(posedge clk or negedge reset_n) begin
-        if (!reset_n) int_n_rise <= 1'b1;
+    always @(posedge clk or negedge por_n) begin
+        if (!por_n) int_n_rise <= 1'b1;
         else          int_n_rise <= int_n;
     end
 
@@ -130,7 +148,7 @@ module z80_top (
     wire        busack_pos, busack_neg;
 
     z80_core u_core (
-        .clk(clk), .reset_n(reset_n),
+        .clk(clk), .por_n(por_n), .res_s(res_rise),
         // rising-edge inputs (live) + falling-edge-sampled copies
         .data_in(data_in),   .data_in_neg(data_in_neg),
         .busreq_n(busreq_n),
@@ -162,12 +180,12 @@ module z80_top (
 
     reg [PW-1:0] pin_a;     // rising-edge half of the former
     reg [PW-1:0] pin_b;     // falling-edge half of the former
-    always @(posedge clk or negedge reset_n) begin
-        if (!reset_n) pin_a <= PINS_IDLE;
+    always @(posedge clk or negedge por_n) begin
+        if (!por_n) pin_a <= PINS_IDLE;
         else          pin_a <= pins_pos ^ pin_b;
     end
-    always @(negedge clk or negedge reset_n) begin
-        if (!reset_n) pin_b <= {PW{1'b0}};
+    always @(negedge clk or negedge por_n) begin
+        if (!por_n) pin_b <= {PW{1'b0}};
         else          pin_b <= pins_neg ^ pin_a;
     end
     wire [PW-1:0] pins = pin_a ^ pin_b;

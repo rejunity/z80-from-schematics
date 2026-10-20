@@ -1089,7 +1089,19 @@ static void do_latch(z80_t *c)
     case BUSOP_M1:
         c->ir   = c->pins.data_in;
         c->tmp8 = c->pins.data_in;
-        if (c->suppress_decode) {
+        if (c->srst_m1) {
+            /* special reset (perfectz80): the fetch after the one whose T2
+               rising edge saw RESET runs as a NOP that leaves PC at 0000;
+               I, R, the IFFs and IM are kept */
+            c->srst_m1 = false;
+            c->ir = 0x00;
+            c->rf[RFP_PC] = 0x0000;
+            if (!c->suppress_decode) {
+                c->ctl = z80_pla(c->prefix, c->ir);
+                c->decoded = true;
+            }
+            c->suppress_decode = false;
+        } else if (c->suppress_decode) {
             c->suppress_decode = false;      /* ack M1: discard opcode, no PC++/decode */
         } else {
             (void)z80_pc_inc(c);             /* PC advances past opcode */
@@ -1166,19 +1178,17 @@ static void begin_next(z80_t *c)
     }
     if (c->halted) {
         start_seq_m1(c, EXEC_NOP, 4, true);        /* HALT: execute NOPs */
+        c->srst_m1 = c->sres;
         return;
     }
     z80_start_m1(c);
+    c->srst_m1 = c->sres;
 }
 
-static void advance(z80_t *c)
+/* the work of the rising edge that ends a T-state: refresh step, next
+   T-state, and at the end of an M-cycle the execute step / next M-cycle */
+static void end_tstate(z80_t *c)
 {
-    if (c->phi == 0) {
-        c->phi = 1;
-        return;
-    }
-    c->phi = 0;
-    if (c->stalled) return;                  /* hold this T-state as a Tw */
     /* refresh counter: R steps (low 7 bits) on the rising edge that ends the
        refresh -- T4 of an M1, the second refresh T-state of an INTA -- so the
        refresh address shows I:R from before the step, as on silicon
@@ -1202,6 +1212,81 @@ static void advance(z80_t *c)
             c->prefix = PFX_NONE;
             begin_next(c);
         }
+    }
+}
+
+/* RESET (perfectz80; docs/timing.md "RESET"): RES2 stopped the T-state ring
+   after the T-state just ended. What it did stands; the reset clears PC, I,
+   R, IFF1 / IFF2, IM and HALT and keeps every other register, WZ and the
+   exchange flip-flops. The die finishes some results in the next M1's
+   T1-T3 (A after INC A, DE after POP DE, EX DE,HL), which a cut there loses
+   and this model keeps: docs/known-differences.md. */
+static void enter_reset_idle(z80_t *c)
+{
+    c->rst_idle = true;
+    c->rf[RFP_PC] = 0x0000;
+    c->reg_i = 0; c->reg_r = 0;
+    c->iff1 = c->iff2 = false;
+    c->im = 0;
+    c->halted = false;
+    c->prefix = PFX_NONE;
+    c->nmi_pending = false;
+    c->nmi_resp = false;
+    c->nmi_sampled = c->int_sampled = false;
+    c->ei_delay = false;
+    c->suppress_decode = false;
+    c->bus_granted = false;
+    c->pins.busack_n = 1;
+    c->srst_m1 = false;
+    c->f_modified = false;
+}
+
+static void advance(z80_t *c)
+{
+    if (c->phi == 0) {
+        c->phi = 1;
+        return;
+    }
+    c->phi = 0;
+    /* Rising edge: the end of this T-state. RESET first. RES2 took this
+       T-state's pin sample (res_s) on its falling edge, except in the low half
+       of an M1's (INTA's) T2, where it holds and the special-reset latch sres
+       takes the sample instead; RES2 clears that latch. Then the pin is
+       sampled for the next T-state. */
+    bool m1_t2 = !c->rst_idle && (c->bus_op == BUSOP_M1 || c->bus_op == BUSOP_INTA) && c->t_state == 2;
+    bool res2  = c->res2;                    /* set on the previous falling edge */
+    bool ext   = c->bus_op == BUSOP_INTERNAL && c->m_len <= 2;   /* M1 / read extension */
+    bool cut_t1 = res2 && !c->rst_idle && !ext && c->t_state == 1;
+    bool hold  = c->rst_idle && c->rd_hold && !res2;   /* restart right after a T1 cut */
+    c->res2 = m1_t2 ? c->res2 : c->res_s;
+    c->sres = c->res2 ? false : (m1_t2 ? c->res_s : c->sres);
+    c->res_s = !c->pins.reset_n;
+    c->rd_hold = hold;
+    if (c->rst_idle) {
+        /* the ring has stopped: T1 of an M1 at 0000 once RES2 was clear on the
+           previous falling edge -- the third rising edge after release */
+        if (!res2) {                         /* PC is 0000 since the cut */
+            c->rst_idle = false;
+            z80_start_m1(c);
+        } else {
+            enter_reset_idle(c);             /* the clears hold while RES2 does */
+        }
+        return;
+    }
+    uint16_t sp0 = c->rf[RFP_SP];
+    bool from_write = c->bus_op == BUSOP_MWR;
+    if (!c->stalled)                         /* else hold this T-state as a Tw */
+        end_tstate(c);
+    if (res2) {                              /* this T-state was the last */
+        /* the SP-1 of a push's first byte belongs, on the die, to the falling
+           edge that ends the M-cycle before it (M1 T5, the NMI / INT response,
+           CALL's extra T) -- the edge the cut blocks (perfectz80); the second
+           byte's happens in T2.N of the first write */
+        if (!from_write && c->bus_op == BUSOP_MWR && c->t_state == 1 &&
+            c->rf[RFP_SP] == (uint16_t)(sp0 - 1u))
+            c->rf[RFP_SP] = sp0;
+        enter_reset_idle(c);
+        c->rd_hold = cut_t1;
     }
 }
 
@@ -1229,6 +1314,7 @@ static void reset_state(z80_t *c)
     c->decoded = false; c->instr_done = false; c->ucode = 0;
     c->phase_primed = false; c->stalled = false; c->wait_sampled = false;
     c->q = 0; c->f_modified = false;
+    c->res_s = c->res2 = c->sres = c->rst_idle = c->srst_m1 = c->rd_hold = false;
 
     c->pins.m1_n = c->pins.mreq_n = c->pins.iorq_n = 1;
     c->pins.rd_n = c->pins.wr_n = c->pins.rfsh_n = 1;
@@ -1283,47 +1369,12 @@ void z80_phase_step(z80_t *c)
 {
     c->cycle++;
 
-    /* Reset state machine. Silicon-faithful per perfectz80 prog17_reset trace:
-     *   - reset_n falling edge: NOT recognized immediately. Filter ~5 phases
-     *     (~3 clocks, matches Zilog UM0080 spec). During the filter the chip
-     *     continues normal execution, including starting fresh M-cycles.
-     *   - Filter elapsed: enter frozen-idle hold (reset_state() clears
-     *     registers, sets all pins to idle, t_state=1, m_cycle=1).
-     *   - reset_n rising edge while in hold: settle for ~4 phases before
-     *     beginning the post-reset M1 fetch at PC=0.
-     * See docs/perfect-branch.md "prog17 silicon-behavior analysis".
-     */
-    if (!c->pins.reset_n) {
-        c->reset_release_filter = 0;
-        if (!c->in_reset_hold) {
-            if (c->reset_assert_filter < 5) {
-                c->reset_assert_filter++;
-                /* Continue normal phase below. */
-            } else {
-                reset_state(c);
-                c->in_reset_hold = true;
-                c->reset_assert_filter = 0;
-                return;
-            }
-        } else {
-            return;                  /* Stay frozen while reset_n=0 */
-        }
-    } else {
-        c->reset_assert_filter = 0;
-        if (c->in_reset_hold) {
-            if (c->reset_release_filter < 4) {
-                c->reset_release_filter++;
-                return;              /* Stay frozen during settle window */
-            }
-            c->in_reset_hold = false;
-            c->reset_release_filter = 0;
-            /* Fall through: begin normal phase from M1 T1.P0 at PC=0. */
-        }
+    /* NMI is edge-triggered: latch a falling edge on nmi_n (not while the
+       RESET idle has stopped the T-state ring, as in the RTL) */
+    if (!c->rst_idle) {
+        if (c->prev_nmi_n && !c->pins.nmi_n) c->nmi_pending = true;
+        c->prev_nmi_n = c->pins.nmi_n;
     }
-
-    /* NMI is edge-triggered: latch a falling edge on nmi_n */
-    if (c->prev_nmi_n && !c->pins.nmi_n) c->nmi_pending = true;
-    c->prev_nmi_n = c->pins.nmi_n;
 
     /* bus grant (DMA): while BUSREQ held, release the bus and idle.
        Silicon-faithful per pz80 prog15_busreq_m1: on busreq_n=1 release,
@@ -1373,13 +1424,13 @@ void z80_phase_step(z80_t *c)
        that single phase the latch falls to 0 so subsequent .N→.P advances
        run normally. This is the silicon's behavior: each Tw is decided by
        one falling-edge sample. */
-    if (is_wait_sample_phase(c))
+    if (!c->rst_idle && is_wait_sample_phase(c))
         c->wait_sampled = (c->pins.wait_n == 0);
     else
         c->wait_sampled = false;
     c->stalled = c->wait_sampled;
 
-    if (!c->stalled && is_latch_phase(c))
+    if (!c->rst_idle && !c->stalled && is_latch_phase(c))
         do_latch(c);
 
     /* NMI / INT silicon sample point: rising edge of the last T-state of
@@ -1387,7 +1438,7 @@ void z80_phase_step(z80_t *c)
        per Zilog UM0080. Sample once per M-cycle here; the last M-cycle's
        sample is the one begin_next() reads. While WAIT is asserted we hold
        the previous sample (T-state didn't advance), matching silicon. */
-    if (!c->stalled && c->t_state == c->m_len && c->phi == 0) {
+    if (!c->rst_idle && !c->stalled && c->t_state == c->m_len && c->phi == 0) {
         c->nmi_sampled = c->nmi_pending;
         c->int_sampled = !c->pins.int_n;
     }
@@ -1399,6 +1450,53 @@ void z80_phase_step(z80_t *c)
                &c->pins.rd_n, &c->pins.wr_n,   &c->pins.rfsh_n);
 
     if (hold_write_strobe) c->pins.wr_n = 0;
+
+    /* RESET (perfectz80): the idle drives nothing. `res2` -- set on the
+       previous falling edge -- makes this T-state the last before the idle:
+         - T1 cut, any cycle: the die forces the M-cycle to an opcode fetch
+           on that falling edge, so MREQ and RD fall in T1.N even in a write
+           or I/O cycle; MREQ rises on the next rising edge, RD on the
+           falling edge after it (RD stays low in the idle T.P);
+         - T2 cut: MREQ / RD release in T2.N and WR never falls; an I/O
+           cycle cut after T2 never asserts IORQ / RD / WR at all;
+         - I/O Tw cut: IORQ and RD / WR release in Tw.N; INTA Tw cut: IORQ. */
+    bool ext   = c->bus_op == BUSOP_INTERNAL && c->m_len <= 2;
+    bool int_g = c->bus_op == BUSOP_INTERNAL && !ext;
+    bool m1_t2 = !c->rst_idle && (c->bus_op == BUSOP_M1 || c->bus_op == BUSOP_INTA) && c->t_state == 2;
+    /* RES2 / the special-reset latch after this T-state's falling edge */
+    bool res2_f = (c->phi == 0) ? c->res2 : (m1_t2 ? c->res2 : c->res_s);
+    bool sres_f = (c->phi == 0) ? c->sres : (res2_f ? false : (m1_t2 ? c->res_s : c->sres));
+    if (c->rst_idle) {
+        c->pins.m1_n = c->pins.mreq_n = c->pins.iorq_n = 1;
+        c->pins.rd_n = c->pins.wr_n = c->pins.rfsh_n = 1;
+        c->pins.data_drive = false;
+        /* RD from a cut T1: low in the idle T.P, and in its T.N when the
+           restart follows at once */
+        if (c->rd_hold && (c->phi == 0 || !c->res2)) c->pins.rd_n = 0;
+    } else if (c->rd_hold && c->phi == 0) {
+        c->pins.rd_n = 0;                    /* ... and in the restarted M1's T1.P */
+    } else if (!c->res2) {
+        /* RES2 rising on a long internal M-cycle's T1.N: MREQ falls there */
+        if (int_g && c->t_state == 1 && c->phi == 1 && res2_f) c->pins.mreq_n = 0;
+    } else if (ext) {
+        /* an M1 / read extension cut: nothing to drive */
+    } else {
+        bool io = (c->bus_op == BUSOP_IORD || c->bus_op == BUSOP_IOWR);
+        if (c->phi == 0) {
+            if (io && c->t_state == 2) c->pins.iorq_n = c->pins.rd_n = c->pins.wr_n = 1;
+            if (int_g && c->t_state == 2) c->pins.mreq_n = 0;  /* ... and holds through T2.P */
+        } else if (c->t_state == 1) {
+            c->pins.mreq_n = 0; c->pins.rd_n = 0;
+            c->pins.wr_n = 1; c->pins.iorq_n = 1;
+            c->pins.data_drive = false;
+        } else if (c->t_state == 2) {
+            c->pins.mreq_n = c->pins.rd_n = c->pins.wr_n = c->pins.iorq_n = 1;
+        } else if (io && c->t_state == 3) {
+            c->pins.iorq_n = c->pins.rd_n = c->pins.wr_n = 1;
+        } else if (c->bus_op == BUSOP_INTA && (c->t_state == 3 || c->t_state == 4)) {
+            c->pins.iorq_n = 1;
+        }
+    }
 
     /* HALT pin level (perfectz80's gate-level trace: prog10_halt_nmi,
      * prog13_halt_int, event sweep int_halt / nmi_halt). It changes at
@@ -1415,5 +1513,8 @@ void z80_phase_step(z80_t *c)
                             c->t_state == 4 && c->phi == 1);
     bool halt_exit = (c->t_state == c->m_len && c->phi == 1 &&
                       (c->nmi_sampled || (c->int_sampled && c->iff1)));
-    c->pins.halt_n = ((c->halted || exec_halt_in_m1) && !halt_exit) ? 0 : 1;
+    /* RESET: HALT rises on the falling edge where RES2 or the special-reset
+       latch sets, and stays high (perfectz80) */
+    bool halt_rst = res2_f || sres_f;
+    c->pins.halt_n = ((c->halted || exec_halt_in_m1) && !halt_exit && !halt_rst) ? 0 : 1;
 }

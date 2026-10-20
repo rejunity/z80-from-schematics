@@ -113,12 +113,18 @@ int main(int argc, char **argv) {
     top->wait_n = 1; top->int_n = 1; top->nmi_n = 1; top->busreq_n = 1;
     top->data_in = 0;
 
-    // assert async reset across a couple of edges, release it with the
-    // clock low so the next edge the DUT sees is a rising edge
-    top->reset_n = 0; top->clk = 0; top->eval();
+    // power-on, then RESET held across a couple of edges and released with
+    // the clock low; the core samples RESET on rising edges and enters T1.P
+    // of the M1 fetch at PC=0 on the third one
+    // a real falling edge on por_n (Verilator starts inputs at 0, which
+    // would be no edge at all)
+    top->por_n = 1; top->reset_n = 0; top->clk = 0; top->eval();
+    top->por_n = 0; top->eval();
+    top->por_n = 1; top->eval();
     top->clk = 1; top->eval();
     top->clk = 0; top->eval();
     top->reset_n = 1; top->eval();
+    for (int k = 0; k < 2; k++) { top->clk = 1; top->eval(); top->clk = 0; top->eval(); }
 
     // line 0 = the rising edge that enters T1.P of the M1 fetch at PC=0
     top->clk = 1; top->eval();

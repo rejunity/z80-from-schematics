@@ -34,7 +34,8 @@
 
 module tb_z80;
     reg         clk = 1'b0;
-    reg         reset_n = 1'b0;
+    reg         por_n = 1'b0;           // power-on reset
+    reg         reset_n = 1'b0;         // the RESET pin
     reg         wait_n = 1'b1, int_n = 1'b1, nmi_n = 1'b1, busreq_n = 1'b1;
     reg  [7:0]  data_in;
 
@@ -51,7 +52,7 @@ module tb_z80;
     // rtl/z80_top.v (synthesis preserved the port interface; dbg_* are
     // top-level OUTPUTs, see docs/librelane-flow.md "RTL pre-flight").
     z80_top dut (
-        .clk(clk), .reset_n(reset_n),
+        .clk(clk), .por_n(por_n), .reset_n(reset_n),
         .addr(addr), .data_in(data_in), .data_out(data_out), .data_drive(data_drive),
         .m1_n(m1_n), .mreq_n(mreq_n), .iorq_n(iorq_n), .rd_n(rd_n), .wr_n(wr_n),
         .rfsh_n(rfsh_n), .halt_n(halt_n), .busack_n(busack_n),
@@ -128,13 +129,17 @@ module tb_z80;
         for (i = 0; i < 65536; i = i + 1) mem[i] = 8'h00;
         $readmemh(progf, mem);
 
-        // Same reset / phase choreography as tb_z80.v: release reset in the
-        // clock-low half, the first rising edge enters T1.P = trace line 0.
-        reset_n = 1'b0;
+        // Same reset / phase choreography as tb_z80.v: power-on, RESET
+        // released in the clock-low half, T1.P of the first M1 on the third
+        // rising edge = trace line 0.
+        por_n = 1'b0; reset_n = 1'b0;
+        @(negedge clk); #1 por_n = 1'b1;
         repeat (2) @(negedge clk);
         #1 reset_n = 1'b1;
+        @(posedge clk); @(posedge clk);
         events(0);
         @(posedge clk); #1;
+        if (m1_n !== 1'b0) $display("tb_z80_netlist: no M1 at trace line 0");
         dbg_phi = 1'b0;
         service;
         dump;                                 // line 0 = T1.P

@@ -68,7 +68,8 @@ into combinational paths, etc.
 
   - 5 files of synthesizable Verilog; top module `z80_top`
     (`rtl/z80_top.v`) wrapping the engine `z80_core`.
-  - Single clock (`clk` = the Z80 clock); single async reset (`reset_n`).
+  - Single clock (`clk` = the Z80 clock); one async reset (`por_n`, power-on);
+    RESET (`reset_n`) is a synchronous input, as on the die.
   - **No** `initial`, `$display`, `$readmem*`, `$finish`, `$random` in
     any RTL file.
   - **No** latches inferred — all `always @*` blocks are complete-case
@@ -318,9 +319,10 @@ flow.
    don't define `USE_POWER_PINS` so the cells auto-tieoff — saves
    boilerplate.
 
-4. **Reset polarity**: We use `reset_n` (async, active-low). Yosys maps
-   it to whichever sky130 cells implement async-reset DFFs (the
-   `sky130_fd_sc_hd__dfrtp` family). The testbench drives `reset_n`
+4. **Reset polarity**: `por_n` (async, active-low) is the power-on
+   reset; yosys maps it to whichever sky130 cells implement async-reset
+   DFFs (the `sky130_fd_sc_hd__dfrtp` family). RESET (`reset_n`) is a
+   data input sampled on the rising edge. The testbench drives both
    identically pre- and post-synthesis.
 
 5. **`dbg_*` survival**: Top-level output ports driven by simple

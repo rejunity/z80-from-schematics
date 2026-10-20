@@ -86,7 +86,7 @@ that half sees the pulse. The sweep therefore shows whether the chip's
 input logic can catch such a pulse; it does not test the data sheet's
 minimum widths, which depend on analog timing.
 
-## Results (rejunity `main`, 20 October 2026)
+## Results (rejunity `nmos-pins`, 20 October 2026)
 
 | group | cases | match | differ |
 |---|---|---|---|
@@ -94,59 +94,37 @@ minimum widths, which depend on analog timing.
 | nmi | 474 | 474 | 0 |
 | nmi_short | 1184 | 1184 | 0 |
 | nmi_reentry | 43 | 43 | 0 |
-| reset | 112 | 0 | 112 |
-| reset_release | 64 | 0 | 64 |
-| reset_wait | 32 | 0 | 32 |
-| reset_short | 240 | 0 | 240 |
-| combo | 96 | 0 | 96 |
+| reset | 112 | 112 | 0 |
+| reset_release | 64 | 64 | 0 |
+| reset_wait | 32 | 32 | 0 |
+| reset_short | 240 | 240 | 0 |
+| combo | 96 | 96 | 0 |
 
-1831 of 2375 cases match. When the sweep was written (main `ec3c5d2`) 809
-did. Since then `e60d06e` latches INT on the rising edge that starts the
-last T-state and catches an NMI pulse of any width, as perfectz80 does:
-that fixed the two largest groups, INT and NMI taken half a clock early
-(a pulse in the high half of the last T-state) and NMI pulses that span no
-falling edge. The HALT pin now rises in the low half of the last T4 when
-an INT or NMI ends HALT, and stays high when the interrupt is already
-pending at the end of HALT itself (24 cases). A second NMI edge during
-the NMI response, from its M1's T1 to the end of its two pushes, is now
-lost, as in perfectz80, even when NMI then stays low (20 cases). INT held
-in an NMI handler is taken one instruction after RETN: RETN copies IFF2 to
-IFF1 after its boundary's INT decision (1 case). An INT accepted at the
-end of LD A,I or LD A,R leaves P/V = 0 in the pushed F, the NMOS race
-(the LD A,I / LD A,R cases were added with the fix; an NMI there keeps
-P/V = IFF2).
+All 2375 cases match; the baseline is empty. When the sweep was written
+(main `ec3c5d2`) 809 did. Since then:
+- `e60d06e` latches INT on the rising edge that starts the last T-state and
+  catches an NMI pulse of any width, as perfectz80 does: INT and NMI were
+  taken half a clock early (a pulse in the high half of the last T-state),
+  and NMI pulses that span no falling edge were missed.
+- The HALT pin rises in the low half of the last T4 when an INT or NMI ends
+  HALT, and stays high when the interrupt is already pending at the end of
+  HALT itself (24 cases).
+- A second NMI edge during the NMI response, from its M1's T1 to the end of
+  its two pushes, is lost, as in perfectz80, even when NMI then stays low
+  (20 cases).
+- INT held in an NMI handler is taken one instruction after RETN: RETN
+  copies IFF2 to IFF1 after its boundary's INT decision (1 case).
+- An INT accepted at the end of LD A,I or LD A,R leaves P/V = 0 in the
+  pushed F, the NMOS race; an NMI there keeps P/V = IFF2 (the LD A,I /
+  LD A,R cases came with the fix).
+- RESET is the die's sampled RESET (544 cases): sampled on rising edges, a
+  full reset taken on falling edges except in an M1's T2, the T-state ring
+  stopped after one more T-state with the strobe patterns of a cut cycle,
+  registers kept, T1 at 0000 on the third rising edge after release, and
+  the special reset. docs/timing.md "RESET" has the details.
 
 `build/event_sweep/report.md` has the per-instruction grids.
 `build/event_sweep/diff/` has a side-by-side trace for every differing case.
-
-Where the RTL matches perfectz80:
-- INT and NMI are taken at the right instruction boundary from every
-  position, for every instruction tried.
-- NMI pulses of 1/16 T and 1/4 T are taken from every 1/16 T position.
-- The stacked PC and the response cycles are the same, including LDIR
-  between iterations, CALL, JR and prefixed instructions.
-- NMI held low, two pulses before acceptance, and nested NMIs all match.
-
-The differences left are all RESET.
-
-**RESET.** perfectz80 treats RESET as a sampled input. RZ80 resets
-asynchronously:
-- **Assertion.** perfectz80 samples RESET at rising edges. It finishes
-  the bus cycle in progress and goes idle 0–8 half-cycles after RESET
-  falls, and it ignores a pulse that covers no rising edge. RZ80 drops
-  every strobe at once and resets on any pulse.
-- **Restart.** The first T1 at 0000 comes 3 rising edges after release
-  in perfectz80, at every release phase. In RZ80 it comes after 1.
-- **Registers.** perfectz80 keeps SP, BC, DE and HL across reset. An SP
-  half-decremented by an interrupted PUSH or interrupt response
-  (8FFF/8FFE/8FFD) is kept too. RZ80 sets them to 5555 (known
-  difference 1).
-- **Special reset.** RESET can cover only the rising edge that starts T2
-  of an M1 cycle: low somewhere in T1, high again before T3. Then
-  perfectz80 restarts at 0000 with I kept (3F), the "special reset"
-  (`reset_short`, 36 of 240 cases). A pulse that covers only the rising
-  edge into T3 or T4 gives a normal reset, and so does any pulse covering
-  two or more rising edges. RZ80 has no special reset.
 
 ## The baseline
 
