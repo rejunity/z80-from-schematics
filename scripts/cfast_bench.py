@@ -67,8 +67,11 @@ def machine():
     cc = subprocess.run([os.environ.get("CC", "cc"), "--version"], capture_output=True, text=True).stdout.split("\n")[0]
     where = (f"GitHub Actions ({os.environ.get('ImageOS', os.environ.get('RUNNER_OS', ''))})"
              if os.environ.get("GITHUB_ACTIONS") else platform.node())
-    sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
-    return {"cpu": cpu, "cores": os.cpu_count(), "compiler": cc, "where": where, "commit": sha,
+    git = lambda *a: subprocess.run(["git", *a], capture_output=True, text=True).stdout.strip()
+    return {"cpu": cpu, "cores": os.cpu_count(), "compiler": cc, "where": where,
+            "commit": git("rev-parse", "--short", "HEAD"),
+            "ref": os.environ.get("GITHUB_REF_NAME") or git("rev-parse", "--abbrev-ref", "HEAD"),
+            "run": os.environ.get("GITHUB_RUN_ID", ""),
             "date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")}
 
 
