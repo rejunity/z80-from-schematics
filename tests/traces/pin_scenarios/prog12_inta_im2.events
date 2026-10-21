@@ -1,4 +1,5 @@
-# Pulse INT low after EI's one-instruction delay window (well past phase 50);
-# release at phase 52.
+# INT low at phase 50, in the NOP loop after EI, held until phase 80 (as in
+# prog9): INTA at phase 68 with 00 on the bus, the table read at {I, 00} =
+# 8000 / 8001, then the handler at 9000.
 50  int  0
-52  int  1
+80  int  1

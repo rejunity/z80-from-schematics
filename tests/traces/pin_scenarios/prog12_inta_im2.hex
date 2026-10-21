@@ -1,9 +1,9 @@
 # IM 2 INT acceptance. The CPU reads {I, vector} from memory to find the
-# interrupt-service-routine address, then jumps there. We set I=0x80 and
-# place the ISR pointer at 0x80FE (low byte of vector = 0xFE, set in I/O
-# scenario via the data bus during INTA — perfectz80 reads whatever's on
-# the data bus). Our model + perfectz80 disagree on exactly what byte is
-# captured during INTA; the make pin_scenarios target is informational.
+# interrupt-service-routine address, then jumps there. I = 0x80, and every
+# harness puts 00 on the bus during INTA (perfectz80_runner sets it; the
+# others drive 00 whenever nothing is read), so the table read is at
+# 0x8000 / 0x8001 and the ISR at 0x9000. The address is compared in every
+# phase, so a wrong {I, vector} shows as a difference.
 @0000
 ED 5E              # IM 2
 3E 80              # LD A,0x80

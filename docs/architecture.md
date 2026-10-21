@@ -63,7 +63,8 @@ Active-low signals carry the `_n` suffix (asserted = 0).
 | Pin                  | Dir | Meaning                                                         |
 |----------------------|-----|-----------------------------------------------------------------|
 | `pin_clk`            | in  | the Z80 clock (one period = one T-state)                        |
-| `pin_reset_n`        | in  | async-assert / sync-deassert reset (active low)                 |
+| `pin_por_n`          | in  | power-on reset, async (active low); not a Z80 pin               |
+| `pin_reset_n`        | in  | RESET: sampled on rising edges, acted on synchronously          |
 | `pin_addr[15:0]`     | out | address bus                                                     |
 | `pin_data_in[7:0]`   | in  | data bus, sampled side                                          |
 | `pin_data_out[7:0]`  | out | data bus, driven side                                           |
@@ -164,7 +165,8 @@ does the same, issuing a few micro-ops on T-states before the last one:
 
 All other register loads happen on the last T-state of an M-cycle, together
 with the start of the next bus cycle. R's 7-bit refresh increment stays a
-small incrementer of its own: it shares the opcode-latch edge with PC+1.
+small incrementer of its own, on the rising edge that ends the refresh (T4),
+after the refresh address has shown I:R.
 
 ### ALU (`alu_*`)
 Organized as a **4-bit nibble unit applied twice** (low nibble then high nibble) with
@@ -242,9 +244,13 @@ sim and diffs C↔RTL traces; `make zexdoc` / `make zexall` run the full exercis
 
 ## 6. Reset strategy
 
-Reset is active-low (`pin_reset_n`). Asynchronous assertion is allowed (for ASIC/FPGA
-reset trees) but **deassertion is synchronized**. On reset: `PC=0000`, `IR=0000`,
-`I=00`, `R=00`, `IFF1=IFF2=0`, `IM=0`, prefix cleared, sequencer to M1/T1/phi0,
-`SP` and the main registers are left undefined on real silicon but we force a known
-state (`SP=FFFF`, `AF=FFFF`) for deterministic C↔RTL comparison and document it in
-`docs/known-differences.md`.
+Two resets (`docs/timing.md` "RESET"):
+- `pin_por_n`, the power-on reset (not a Z80 pin): asynchronous, every flop to its
+  power-up value and the register file to 5555 as perfectz80 comes up. Testbenches
+  pulse it at time 0, FPGA tops drive it from their power-on logic, the ASIC chip
+  ties it off (registers come up random, as on the NMOS part).
+- `pin_reset_n`, the RESET pin, as the die handles it: sampled on rising edges; the
+  core finishes the T-state in hand and the next, then idles; it clears PC, I, R,
+  IFF1/IFF2, IM and HALT and keeps every other register, WZ and the exchange
+  flip-flops; T1 of the M1 at 0000 comes on the third rising edge after release.
+  A pulse covering only the rising edge into an M1's T2 is the special reset.

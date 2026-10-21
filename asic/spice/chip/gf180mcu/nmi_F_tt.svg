@@ -1,0 +1,66 @@
+<svg xmlns='http://www.w3.org/2000/svg' width='1180' height='514' viewBox='0 0 1180 514'>
+<rect width='1180' height='514' fill='white'/>
+<text x='150' y='22' font-size='15' font-weight='bold' font-family='Helvetica, Arial, sans-serif'>NMI case F: a second pulse while the first is being cleared</text>
+<text x='150' y='40' font-size='11.5' fill='#444' font-family='Helvetica, Arial, sans-serif'>z80_chip&#x27;s NMI pulse catcher at transistor level (GF180 tt: 5 V, 25 C).</text>
+<line x1='186.8' y1='56' x2='186.8' y2='484' stroke='#ececec'/>
+<text x='186.8' y='498' font-size='10' text-anchor='middle' fill='#555' font-family='Helvetica, Arial, sans-serif'>4250 ns</text>
+<line x1='292.0' y1='56' x2='292.0' y2='484' stroke='#ececec'/>
+<text x='292.0' y='498' font-size='10' text-anchor='middle' fill='#555' font-family='Helvetica, Arial, sans-serif'>4300 ns</text>
+<line x1='397.2' y1='56' x2='397.2' y2='484' stroke='#ececec'/>
+<text x='397.2' y='498' font-size='10' text-anchor='middle' fill='#555' font-family='Helvetica, Arial, sans-serif'>4350 ns</text>
+<line x1='502.4' y1='56' x2='502.4' y2='484' stroke='#ececec'/>
+<text x='502.4' y='498' font-size='10' text-anchor='middle' fill='#555' font-family='Helvetica, Arial, sans-serif'>4400 ns</text>
+<line x1='607.7' y1='56' x2='607.7' y2='484' stroke='#ececec'/>
+<text x='607.7' y='498' font-size='10' text-anchor='middle' fill='#555' font-family='Helvetica, Arial, sans-serif'>4450 ns</text>
+<line x1='712.9' y1='56' x2='712.9' y2='484' stroke='#ececec'/>
+<text x='712.9' y='498' font-size='10' text-anchor='middle' fill='#555' font-family='Helvetica, Arial, sans-serif'>4500 ns</text>
+<line x1='818.1' y1='56' x2='818.1' y2='484' stroke='#ececec'/>
+<text x='818.1' y='498' font-size='10' text-anchor='middle' fill='#555' font-family='Helvetica, Arial, sans-serif'>4550 ns</text>
+<line x1='923.3' y1='56' x2='923.3' y2='484' stroke='#ececec'/>
+<text x='923.3' y='498' font-size='10' text-anchor='middle' fill='#555' font-family='Helvetica, Arial, sans-serif'>4600 ns</text>
+<line x1='1028.5' y1='56' x2='1028.5' y2='484' stroke='#ececec'/>
+<text x='1028.5' y='498' font-size='10' text-anchor='middle' fill='#555' font-family='Helvetica, Arial, sans-serif'>4650 ns</text>
+<line x1='1133.7' y1='56' x2='1133.7' y2='484' stroke='#ececec'/>
+<text x='1133.7' y='498' font-size='10' text-anchor='middle' fill='#555' font-family='Helvetica, Arial, sans-serif'>4700 ns</text>
+<line x1='449.8' y1='56' x2='449.8' y2='484' stroke='#c9a227' stroke-dasharray='4 3'/>
+<text x='452.8' y='52' font-size='10' fill='#9a7b12' font-family='Helvetica, Arial, sans-serif'>CLK rises</text>
+<line x1='975.9' y1='56' x2='975.9' y2='484' stroke='#c9a227' stroke-dasharray='4 3'/>
+<text x='978.9' y='52' font-size='10' fill='#9a7b12' font-family='Helvetica, Arial, sans-serif'>CLK rises</text>
+<rect x='0' y='62' width='1180' height='44' fill='#c0392b' fill-opacity='0.08'/>
+<text x='140' y='88.0' font-size='13' text-anchor='end' font-weight='bold' fill='#c0392b' font-family='Helvetica, Arial, sans-serif'>NMI pin</text>
+<line x1='150' y1='100' x2='1160' y2='100' stroke='#f2f2f2'/>
+<polyline points='150.0,68.0 257.0,68.4 296.4,100.0 341.2,99.6 380.6,68.0 520.2,68.5 559.6,100.0 604.2,99.6 643.8,68.0 1159.5,68.0' fill='none' stroke='#c0392b' stroke-width='2.6'/>
+<text x='140' y='134.0' font-size='12' text-anchor='end' fill='#111' font-family='Helvetica, Arial, sans-serif'>NMI in the core</text>
+<line x1='150' y1='146' x2='1160' y2='146' stroke='#f2f2f2'/>
+<polyline points='150.0,114.0 285.9,114.0 286.9,121.3 287.6,142.2 288.1,147.1 288.3,145.6 356.4,145.8 356.6,140.7 356.8,130.1 357.0,120.8 357.2,116.7 357.5,114.6 357.8,114.1 549.2,114.0 550.3,124.3 550.9,143.2 551.4,146.8 551.6,145.7 619.4,145.8 619.6,140.8 619.8,130.1 620.0,120.7 620.2,116.7 620.4,115.1 620.7,114.2 1159.5,114.0' fill='none' stroke='#d35400' stroke-width='1.4'/>
+<text x='140' y='180.0' font-size='12' text-anchor='end' fill='#111' font-family='Helvetica, Arial, sans-serif'>CLK pin</text>
+<line x1='150' y1='192' x2='1160' y2='192' stroke='#f2f2f2'/>
+<polyline points='150.0,160.0 167.8,160.6 206.9,192.0 430.6,191.6 470.0,160.0 693.9,160.6 733.3,192.0 956.8,191.5 996.1,160.0 1159.5,160.0' fill='none' stroke='#111' stroke-width='1.4'/>
+<text x='140' y='226.0' font-size='12' text-anchor='end' fill='#111' font-family='Helvetica, Arial, sans-serif'>CLK at the flip-flops</text>
+<line x1='150' y1='238' x2='1160' y2='238' stroke='#f2f2f2'/>
+<polyline points='150.0,206.0 201.6,205.9 201.9,206.3 202.1,210.9 202.3,218.2 202.6,228.8 202.8,235.0 203.0,237.5 450.5,238.1 450.8,237.2 451.0,231.1 451.3,218.4 451.6,209.2 451.9,206.5 727.8,205.8 728.0,206.3 728.2,211.1 728.4,218.5 728.7,229.4 728.9,235.4 729.1,237.6 976.4,238.1 976.8,233.5 977.1,221.4 977.4,210.2 977.7,206.6 1159.5,206.0' fill='none' stroke='#555' stroke-width='1.4'/>
+<text x='140' y='272.0' font-size='12' text-anchor='end' fill='#111' font-family='Helvetica, Arial, sans-serif'>nmi_hold</text>
+<line x1='150' y1='284' x2='1160' y2='284' stroke='#f2f2f2'/>
+<polyline points='150.0,284.0 288.7,284.1 288.9,283.3 289.2,277.1 289.5,264.7 289.9,255.3 290.2,252.1 453.3,251.9 453.6,253.0 453.9,264.1 454.3,280.6 454.5,284.1 1159.5,284.0' fill='none' stroke='#1f6fb4' stroke-width='1.4'/>
+<path d='M276.3,293.0 L289.4,293.0 M285.4,290.0 L289.4,293.0 L285.4,296.0' stroke='#c0392b' fill='none' stroke-width='1'/>
+<line x1='276.3' y1='288.0' x2='276.3' y2='298.0' stroke='#c0392b'/>
+<text x='294.4' y='297.0' font-size='10.5' fill='#c0392b' font-family='Helvetica, Arial, sans-serif'>NMI pin falls -&gt; nmi_hold set: 6.3 ns</text>
+<text x='140' y='330.0' font-size='12' text-anchor='end' fill='#111' font-family='Helvetica, Arial, sans-serif'>nmi_hold_clr</text>
+<line x1='150' y1='342' x2='1160' y2='342' stroke='#f2f2f2'/>
+<polyline points='150.0,342.0 452.3,342.1 452.6,341.6 453.3,311.5 453.6,310.3 978.1,310.0 978.5,310.9 978.9,330.2 979.2,342.2 979.6,341.4 979.9,342.3 980.2,341.8 980.7,342.2 1159.5,342.0' fill='none' stroke='#8b56b8' stroke-width='1.4'/>
+<path d='M449.8,351.0 L453.0,351.0 M449.0,348.0 L453.0,351.0 L449.0,354.0' stroke='#c0392b' fill='none' stroke-width='1'/>
+<line x1='449.8' y1='346.0' x2='449.8' y2='356.0' stroke='#c0392b'/>
+<text x='458.0' y='355.0' font-size='10.5' fill='#c0392b' font-family='Helvetica, Arial, sans-serif'>CLK pin rises -&gt; clear: 1.5 ns</text>
+<text x='140' y='388.0' font-size='12' text-anchor='end' fill='#111' font-family='Helvetica, Arial, sans-serif'>nmi_n_held</text>
+<line x1='150' y1='400' x2='1160' y2='400' stroke='#f2f2f2'/>
+<polyline points='150.0,368.0 286.9,368.0 287.6,375.3 288.1,389.7 288.3,396.6 288.5,398.9 288.7,399.7 357.2,400.1 453.9,400.1 454.3,397.5 454.9,383.8 455.2,379.3 455.7,373.2 456.2,370.1 456.8,368.6 550.3,368.0 550.9,375.7 551.4,389.8 551.6,396.7 551.8,398.8 552.2,399.9 620.0,400.2 620.2,398.5 620.7,388.0 621.0,382.0 621.5,375.9 621.9,371.9 622.4,369.6 623.0,368.4 1159.5,368.0' fill='none' stroke='#2b9a3e' stroke-width='1.4'/>
+<path d='M276.3,409.0 L287.9,409.0 M283.9,406.0 L287.9,409.0 L283.9,412.0' stroke='#c0392b' fill='none' stroke-width='1'/>
+<line x1='276.3' y1='404.0' x2='276.3' y2='414.0' stroke='#c0392b'/>
+<text x='292.9' y='413.0' font-size='10.5' fill='#c0392b' font-family='Helvetica, Arial, sans-serif'>NMI pin falls -&gt; nmi_n_held low: 5.5 ns</text>
+<path d='M449.8,421.0 L454.9,421.0 M450.9,418.0 L454.9,421.0 L450.9,424.0' stroke='#c0392b' fill='none' stroke-width='1'/>
+<line x1='449.8' y1='416.0' x2='449.8' y2='426.0' stroke='#c0392b'/>
+<text x='459.9' y='425.0' font-size='10.5' fill='#c0392b' font-family='Helvetica, Arial, sans-serif'>CLK pin rises -&gt; nmi_n_held high again: 2.4 ns</text>
+<text x='140' y='458.0' font-size='12' text-anchor='end' fill='#111' font-family='Helvetica, Arial, sans-serif'>nmi_n_neg</text>
+<line x1='150' y1='470' x2='1160' y2='470' stroke='#f2f2f2'/>
+<polyline points='150.0,438.0 1159.5,438.0' fill='none' stroke='#0f766e' stroke-width='1.4'/>
+</svg>

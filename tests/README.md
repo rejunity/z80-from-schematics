@@ -28,11 +28,11 @@ stack.
 | Tang Primer header regressions (FPGA branch)    | `tests/iverilog/tb_wait_top.v`, `tb_reset_top.v` | `make bus_controls`                   | ~2 s            | `fpga/tang-primer-25k/top.v` chip build with a 1 MHz external CLK on the header: /WAIT honoured on falling edges only; RESET release swept over 200 phases, first fetch M1 at 0000 with WAIT stretching |
 | Gate-level vs perfectz80 (C model path)           | `tests/traces/`                | `make perfectz80`                        | ~10 s           | Per-half-cycle 7-pin parity + bus addr/data informational findings |
 | Gate-level vs perfectz80 (iverilog RTL path)      | `tests/traces/`                | `make perfectz80_rtl`                    | ~15 s           | Same diff but driving the iverilog RTL testbench (silicon-faithful leg) |
-| Gate-level vs perfectz80 (LibreLane synth path)   | `librelane/` + `tests/iverilog/tb_z80_netlist.v` | `make perfectz80_netlist` | ~5 min cold / ~1 min warm | yosys-synthesised sky130 gate-level netlist diffed against the Visual-Z80 gate-level netlist over all 12 trace programs (8 hand + 4 random) — the "ultimate test" |
-| Gate-level BASIC ROM (LibreLane synth path)       | `librelane/` + `tests/verilator/sim_basic.cpp`   | `make basic_netlist_tests` | ~9 min (CI)         | "Real software" — NASCOM BASIC 4.7c + Tiny BASIC running on the synthesised gates (Verilator + sky130 cells). CI runs on every push. |
-| Pin-scenario programs vs perfectz80 — C path      | `tests/traces/pin_scenarios/`  | `make pin_scenarios`                     | ~15 s           | INT / NMI / WAIT / BUSREQ / RESET event-driven scenarios (informational) |
-| Pin-scenario programs vs perfectz80 — iverilog RTL| `tests/traces/pin_scenarios/`  | `make pin_scenarios_rtl`                 | ~15 s           | Same 14 scenarios through tb_z80.v's `.events` plusarg support (informational) |
-| Pin-scenario programs vs perfectz80 — sky130 netlist | `tests/traces/pin_scenarios/` | `make pin_scenarios_netlist`           | ~30 s           | Same 14 scenarios through the LibreLane gate-level netlist (informational) |
+| Gate-level vs perfectz80 (LibreLane synth path)   | `asic/librelane/` + `tests/iverilog/tb_z80_netlist.v` | `make perfectz80_netlist` | ~5 min cold / ~1 min warm | yosys-synthesised sky130 gate-level netlist diffed against the Visual-Z80 gate-level netlist over all 12 trace programs (8 hand + 4 random) — the "ultimate test" |
+| Gate-level BASIC ROM (LibreLane synth path)       | `asic/librelane/` + `tests/verilator/sim_basic.cpp` | `make basic_netlist_tests` | ~9 min (CI)         | "Real software" — NASCOM BASIC 4.7c + Tiny BASIC running on the synthesised gates (Verilator + sky130 cells). CI runs on every push. |
+| Pin-scenario programs vs perfectz80 — C path      | `tests/traces/pin_scenarios/`  | `make pin_scenarios`                     | ~15 s           | INT / NMI / WAIT / BUSREQ / RESET event-driven scenarios; every phase's control pins and address must match |
+| Pin-scenario programs vs perfectz80 — iverilog RTL| `tests/traces/pin_scenarios/`  | `make pin_scenarios_rtl`                 | ~15 s           | Same 14 scenarios through tb_z80.v's `.events` plusarg support |
+| Pin-scenario programs vs perfectz80 — sky130 netlist | `tests/traces/pin_scenarios/` | `make pin_scenarios_netlist`           | ~30 s           | Same 14 scenarios through the LibreLane gate-level netlist |
 | Real KC85 silicon sync capture                    | `tests/sigrok/`                | `make silicon_cycles`                    | ~1 s            | Per-opcode T-state count vs a real Z80 logic-analyzer capture |
 | Real KC85 silicon 20 MHz capture                  | `tests/sigrok/`                | `make silicon_async`                     | ~3 s            | Real CPU clock + sub-T-state pin-edge offsets |
 | Lockstep 5-way oracle on ZEXDOC3                  | `scripts/lockstep_quint.c`     | (inline, see CI)                         | ~3 s            | Instruction-by-instruction regs + memory match across all 5 emulators (mine + superzazu + chips + suzukiplan + redcode). See [`docs/oracles.md`](../docs/oracles.md). |
@@ -204,16 +204,16 @@ breakdown.
 | `make compare`           | C model ↔ iverilog ↔ Verilator (all three identical, every phase) | **PASS** on all 12 programs (8 hand + 4 random) |
 | `make perfectz80`        | C model vs perfectz80 gate-level netlist (7 control pins + bus addr/data) | **PASS** on control pins, all 12 programs; **100 % `addr` match** with don't-care tolerance on 10/12, ~95-98 % on prog_rnd_02/03 (reset-register-init delta surfacing via PUSH) |
 | `make perfectz80_rtl`    | iverilog RTL vs perfectz80 (same 12 programs, RTL trace source)   | **PASS** on all 12 programs — silicon-faithful leg |
-| `make pin_scenarios`     | C model vs perfectz80 on the 12 pin-scenario programs             | **Informational**; divergences are real audit findings, not regressions |
-| `make pin_scenarios_rtl` | iverilog RTL vs perfectz80 on the 12 pin-scenarios                | **Informational**; same root causes as `make pin_scenarios` plus any RTL-only deltas |
-| `make pin_scenarios_netlist` | LibreLane sky130 gate-level netlist vs perfectz80 on the 12 pin-scenarios | **Informational**; same as above plus any synth-introduced deltas |
+| `make pin_scenarios`     | C model vs perfectz80 on the 14 pin-scenario programs             | **PASS** on all 14; gates CI |
+| `make pin_scenarios_rtl` | iverilog RTL vs perfectz80 on the 14 pin-scenarios                | **PASS** on all 14; gates CI |
+| `make pin_scenarios_netlist` | LibreLane sky130 gate-level netlist vs perfectz80 on the 14 pin-scenarios | **PASS** on all 14; gates CI |
 
 `compare_signal_timing.py` (the driver for `make perfectz80` / `_rtl` /
-`_netlist`) reports informational bus-value parity — `data_o` (where wr
-is low on both sides) and `addr` (compared with a **don't-care
-tolerance**: phases where no data transfer is in progress on either
-side — refresh windows, idle phases, T1.P setup — are treated as
-matches regardless of value). Currently `data_o` is at **100 % match**
+`_netlist`) gates on the address in every phase along with the control
+pins -- transfers, refreshes (I:R), and the internal and idle T-states,
+where the bus keeps its last address -- and reports informational
+bus-value parity: `data_o` (where wr is low on both sides) and an `addr`
+count with a don't-care tolerance outside transfers. Currently `data_o` is at **100 % match**
 wherever it's defined; `addr` matches **100 %** on 10/12 programs, with
 the residual 95-98 % on `prog_rnd_02` / `prog_rnd_03` being the
 reset-register-init delta (our 0xFFFF vs perfectz80 netlist's 0x5555)
@@ -228,7 +228,7 @@ scope) and perfectz80's pins (under `perfectz80` scope). Open with
 a single file. Set `EMIT_VCD=0` to disable.
 
 
-### 7. LibreLane gate-level — `librelane/` + `tests/iverilog/tb_z80_netlist.v`
+### 7. LibreLane gate-level — `asic/librelane/` + `tests/iverilog/tb_z80_netlist.v`
 
 The **ultimate test**. Pushes our Verilog RTL through LibreLane (Yosys
 synthesis only — no floorplan/PnR/STA) into a sky130 gate-level netlist,
@@ -379,7 +379,7 @@ together exercise everything above:
 
 Branch-push builds skip the RTL ZEXALL leg; PR-to-main + cron + manual
 dispatch include it. Both LibreLane jobs cache the synthesised netlist
-on `hashFiles('rtl/*.v', 'librelane/config.json', 'librelane/run_synth.sh')`,
+on `hashFiles('rtl/*.v', 'asic/librelane/config.json', 'asic/librelane/run_synth.sh')`,
 so most pushes skip the ~3 min synthesis step.
 
 ### Targets: FPGA boards and ASIC PDKs
@@ -391,22 +391,33 @@ job first merges its branch into main's tree.
 
 | Job (matrix) | Branch merged | Runs |
 |--------------|---------------|------|
-| `fpga`: icepi-zero, tang-primer-25k, icebreaker, pico-ice | `fpga-<board>-basic` | `make ci` in `fpga/<board>/`: sbc + chip bitstreams, the Tiny BASIC bitstream, and every board simulation (Verilator boot and Tiny BASIC at fast and real serial pacing, iverilog, gate-level where the board has one; on the iCE40 boards also both BASICs on nextpnr's routed netlist, `make sim_pnr`); timing summary; artifacts `fpga-<board>-bitstreams` (named downloads) and `fpga-<board>-logs` (`fpga-board.yml`) |
-| `asic`: sky130, ihp-sg13g2, gf180mcu | `asic-<pdk>` | signs of life on the RTL, LibreLane RTL-to-GDS, sign-off summary (fails on DRC / LVS / antenna / XOR / timing), signs of life on the routed netlist; artifacts `asic-<pdk>-gds` (the GDS and LibreLane's KLayout render of it) and `asic-<pdk>-results` (`asic-pdk.yml`) |
+| `fpga`: icepi-zero, tang-primer-25k, icebreaker, pico-ice, icesugar | `fpga-<board>-basic` | `make ci` in `fpga/<board>/`: sbc + chip bitstreams, the Tiny BASIC bitstream, and every board simulation (Verilator boot and Tiny BASIC at fast and real serial pacing, iverilog, gate-level where the board has one; on the iCE40 boards also both BASICs on nextpnr's routed netlist, `make sim_pnr`); timing summary; artifacts `fpga-<board>-bitstreams` (named downloads) and `fpga-<board>-logs` (`fpga-board.yml`) |
+| `asic`: sky130, ihp-sg13g2, gf180mcu, gf180mcu-9t (9-track cells) | `asic-<pdk>` | signs of life on the RTL, LibreLane RTL-to-GDS, sign-off summary (fails on DRC / LVS / antenna / XOR / timing), signs of life on the routed netlist; where the branch has one (IHP, GF180, GF180 9-track), the chip: `z80_top` as a hard macro in a ring of pads on the Z80's sides (`make chip`, LibreLane Chip flow), its sign-off, the signs of life through the pads, and its pins against the NMOS Z80's datasheet at 4 MHz (`make pin_timing`); artifacts `asic-<pdk>-gds` (the GDS files, pictures and cell and block maps) and `asic-<pdk>-results` (`asic-pdk.yml`) |
 
 The branches run the same jobs on their own pushes (`fpga-<board>.yml`,
 `asic-<pdk>.yml` there). A branch that no longer merges cleanly into main
 fails its job's first step: merge main into it. The FPGA tools are pip's
 latest YoWASP builds, so the nightly run also catches toolchain drift.
 
-When every board and PDK passed on main, the `pages` job publishes that
-build on GitHub Pages, <https://rejunity.github.io/z80-from-schematics/>:
-the layout renders with die size, cell count and timing, and the GDS and
-bitstream files under stable names (`rz80-<pdk>.gds`,
-`rz80-<board>-basic|tinybasic|chip.<ext>`). The renders also appear in
-that job's summary on the run page. `.github/scripts/dist.py` names the
-files and builds the page. Artifacts keep every run's files, failed runs
-included, for 14 days.
+When every board and PDK passed on main, `pages.yml` publishes that
+build on GitHub Pages, <https://rejunity.github.io/z80-from-schematics/>
+(it runs after Targets and after Transistor, the hand-run whole chip at
+transistor level, and builds the site from both their latest runs on
+main: Pages replaces the whole site on every deploy):
+three pictures of each layout with its die size, cell counts and timing,
+and the GDS and bitstream files under stable names (`rz80-<pdk>.gds`,
+`rz80-<board>-basic|tinybasic|chip.<ext>`). The pictures also appear in
+the Pages run's summary. `.github/scripts/dist.py` names the
+files, draws the pictures with gdstk and Pillow -- the cell rows and the
+metal stack as translucent layers (LibreLane's own KLayout render reads
+badly at die scale), a cell map: every standard-cell instance in the
+GDS coloured by kind, flip-flops, buffers and delays, other logic,
+fill/decap/tap, and a block map: every placed cell (final DEF) coloured
+by the RTL block it was synthesized in, ALU, register file, decoder PLA,
+execute, address, timing, the core's sequencer, pin logic. The PDK
+configs set `SYNTH_HIERARCHY_MODE: deferred_flatten` for that, so the
+cell names keep their block -- and builds the page. Artifacts keep every run's files,
+failed runs included, for 14 days.
 
 
 ## Forward-looking — what's not yet here

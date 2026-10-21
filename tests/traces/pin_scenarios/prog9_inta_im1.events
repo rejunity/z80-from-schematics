@@ -1,3 +1,7 @@
-# Pulse INT low at phase 50 (well past EI delay); release at phase 52.
+# INT low at phase 50, inside the NOP loop, and held until phase 80: the
+# CPU samples INT on the rising edge of an instruction's last T-state, so
+# a pulse that ends before one is never taken. The INTA cycle starts at
+# phase 60; the handler (HALT) runs with IFF1 clear, so the held level
+# isn't taken again.
 50  int  0
-52  int  1
+80  int  1

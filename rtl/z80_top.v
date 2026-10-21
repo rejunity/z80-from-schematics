@@ -8,10 +8,12 @@
 //
 //   1. Falling-edge input samplers. The original NMOS Z80 looks at a few
 //      inputs on the falling edge of its clock (read data at the end of
-//      T3/T4, INT/NMI at the rising edge of T_last -- i.e. during the
-//      clock-high half). Each such input gets one native negative-edge
-//      DFF here; the core consumes the sampled copy on the following
-//      rising edge (a clean half-cycle path, same clock, no CDC).
+//      T3/T4, WAIT in T2 / Tw). Each such input gets one native
+//      negative-edge DFF here; the core consumes the sampled copy on the
+//      following rising edge (a clean half-cycle path, same clock, no
+//      CDC). INT is latched on the rising edge that starts the last
+//      T-state (Zilog PS0178 Figure 8, TsINT/ThINT; perfectz80), NMI by
+//      its own falling edge, of any width (TwNMI): see below.
 //
 //   2. Dual-edge output former. Bus pins change on BOTH edges of the Z80
 //      clock (MREQ asserts on a falling edge, deasserts on a rising edge,
@@ -34,16 +36,25 @@
 // (gf180mcu_fd_sc_mcu{7,9}t5v0__dffnq / dffnrnq / dffnsnq); check the
 // mapped netlist for them. See docs/clocking.md.
 //
-// Reset: active-low async assert. While reset_n is low the former sits at
-// the idle pin pattern (strobes high, bus not driven, BUSACK high) and the
-// core holds. The first rising edge after release starts T1 of the first
-// M1 at PC=0000.
+// Two resets:
+//  - por_n, the power-on reset: active-low async assert of every flop to
+//    its power-up value (the register file to 5555, as perfectz80 comes
+//    up). Not a Z80 pin: testbenches pulse it at time 0, FPGA tops drive
+//    it from their power-on logic, the ASIC chip ties it off (registers
+//    come up random, like the NMOS part's).
+//  - reset_n, the RESET pin: sampled on every rising edge, as the die
+//    does (a master-slave flip-flop), and acted on by the core
+//    synchronously -- it finishes the T-state in hand and one more, keeps
+//    the registers, and starts T1 of an M1 at 0000 on the third rising
+//    edge after release (z80_core "RESET"; docs/timing.md). Power-on
+//    leaves the core in that reset until the pin is seen high.
 // ===========================================================================
 `include "z80_defs.vh"
 
 module z80_top (
     input  wire        clk,
-    input  wire        reset_n,
+    input  wire        por_n,           // power-on reset (not a Z80 pin)
+    input  wire        reset_n,         // the RESET pin
     // bus
     output wire [15:0] addr,
     input  wire [7:0]  data_in,
@@ -66,24 +77,67 @@ module z80_top (
     output wire [3:0]  dbg_t,
     output wire [2:0]  dbg_m
 );
-    // ---- 1. falling-edge input samplers -------------------------------
-    // Active-low control inputs reset to their INACTIVE (high) level, so
-    // they map to a negedge DFF with async *set* (GF180 dffnsnq); data
-    // resets to 0 (dffnrnq).
+    // ---- 1. input samplers ----------------------------------------------
+    // NMI pulse catcher. The NMOS Z80 takes an NMI pulse of any width
+    // (TwNMI: 80 ns at 4 MHz, under half a clock), not only one that
+    // spans a clock edge: perfectz80's NMI flip-flop is set by the pin's
+    // falling edge itself. nmi_hold is that flip-flop, clocked by the pin,
+    // and holds NMI asserted for the samplers until the next rising edge
+    // has seen it, so the core's edge detect below sees every pulse --
+    // exactly as before for any pulse that spans a clock edge.
+    reg nmi_hold, nmi_hold_clr;
+    always @(negedge nmi_n or posedge nmi_hold_clr) begin
+        if (nmi_hold_clr) nmi_hold <= 1'b0;
+        else              nmi_hold <= 1'b1;
+    end
+    always @(posedge clk or negedge por_n) begin
+        if (!por_n) nmi_hold_clr <= 1'b1;
+        else          nmi_hold_clr <= nmi_hold;
+    end
+    wire nmi_n_held = nmi_n & ~nmi_hold;
+
+    // Falling-edge samplers. Active-low control inputs reset to their
+    // INACTIVE (high) level, so they map to a negedge DFF with async *set*
+    // (GF180 dffnsnq); data resets to 0 (dffnrnq).
     reg [7:0] data_in_neg;
-    reg       int_n_neg, nmi_n_neg, wait_n_neg;
-    always @(negedge clk or negedge reset_n) begin
-        if (!reset_n) begin
+    reg       nmi_n_neg, wait_n_neg;
+    always @(negedge clk or negedge por_n) begin
+        if (!por_n) begin
             data_in_neg <= 8'h00;
-            int_n_neg   <= 1'b1;
             nmi_n_neg   <= 1'b1;
             wait_n_neg  <= 1'b1;
         end else begin
             data_in_neg <= data_in;
-            int_n_neg   <= int_n;
-            nmi_n_neg   <= nmi_n;
+            nmi_n_neg   <= nmi_n_held;
             wait_n_neg  <= wait_n;
         end
+    end
+
+    // RESET: the level at the rising edge that starts a T-state (the die's
+    // master-slave flip-flop, perfectz80 nodes 132 / 136), 1 = in reset.
+    // Power-on holds it until the pin has been seen high.
+    reg res_rise;
+    always @(posedge clk or negedge por_n) begin
+        if (!por_n) res_rise <= 1'b1;
+        else        res_rise <= ~reset_n;
+    end
+
+    // BUSREQ: the level at the rising edge that starts a T-state (PS0178
+    // TsBUSREQ / ThBUSREQ; perfectz80): in an M-cycle's last T-state it
+    // decides the grant, in a granted T-state the release.
+    reg busreq_rise;
+    always @(posedge clk or negedge por_n) begin
+        if (!por_n) busreq_rise <= 1'b1;
+        else        busreq_rise <= busreq_n;
+    end
+
+    // INT: the level at the rising edge that starts a T-state, which the
+    // core reads at the rising edge that ends it -- in the last T-state,
+    // the datasheet's sample point.
+    reg int_n_rise;
+    always @(posedge clk or negedge por_n) begin
+        if (!por_n) int_n_rise <= 1'b1;
+        else          int_n_rise <= int_n;
     end
 
     // ---- the posedge-only core -----------------------------------------
@@ -103,12 +157,12 @@ module z80_top (
     wire        busack_pos, busack_neg;
 
     z80_core u_core (
-        .clk(clk), .reset_n(reset_n),
+        .clk(clk), .por_n(por_n), .res_s(res_rise),
         // rising-edge inputs (live) + falling-edge-sampled copies
         .data_in(data_in),   .data_in_neg(data_in_neg),
-        .busreq_n(busreq_n),
-        .int_n_neg(int_n_neg), .wait_n_neg(wait_n_neg),
-        .nmi_n(nmi_n),       .nmi_n_neg(nmi_n_neg),
+        .busreq_n(busreq_rise),
+        .int_n_rise(int_n_rise), .wait_n_neg(wait_n_neg),
+        .nmi_n(nmi_n_held),  .nmi_n_neg(nmi_n_neg),
         // pin images: clock-high half of the next T-state / clock-low half
         // of the current T-state
         .addr_pos(addr_pos),       .addr_neg(addr_neg),
@@ -135,12 +189,12 @@ module z80_top (
 
     reg [PW-1:0] pin_a;     // rising-edge half of the former
     reg [PW-1:0] pin_b;     // falling-edge half of the former
-    always @(posedge clk or negedge reset_n) begin
-        if (!reset_n) pin_a <= PINS_IDLE;
+    always @(posedge clk or negedge por_n) begin
+        if (!por_n) pin_a <= PINS_IDLE;
         else          pin_a <= pins_pos ^ pin_b;
     end
-    always @(negedge clk or negedge reset_n) begin
-        if (!reset_n) pin_b <= {PW{1'b0}};
+    always @(negedge clk or negedge por_n) begin
+        if (!por_n) pin_b <= {PW{1'b0}};
         else          pin_b <= pins_neg ^ pin_a;
     end
     wire [PW-1:0] pins = pin_a ^ pin_b;
