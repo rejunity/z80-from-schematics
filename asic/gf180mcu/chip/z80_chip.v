@@ -48,19 +48,22 @@ module z80_chip (
     // core-side nets are cpu_*: the pad library's netlists are
     // case-insensitive, and LVS would merge RD_n (pin) with rd_n (core)
     wire        cpu_clk, cpu_reset_n, cpu_wait_n, cpu_int_n, cpu_nmi_n, cpu_busreq_n;
+    wire        cpu_addr_drive, cpu_ctl_drive;
     wire [15:0] addr;
     wire [7:0]  data_in, data_out;
     wire        data_drive;
     wire        cpu_m1_n, cpu_mreq_n, cpu_iorq_n, cpu_rd_n, cpu_wr_n, cpu_rfsh_n, cpu_halt_n, cpu_busack_n;
 
-    // the Z80's tri-state rules (datasheet: RESET floats the address bus,
-    // BUSAK floats the address bus and MREQ IORQ RD WR)
-    wire addr_oe = cpu_busack_n && cpu_reset_n;
+    // z80_top's addr_drive / ctl_drive are the die's pad drivers: the
+    // address floats in a bus grant and in the RESET idle, MREQ IORQ RD
+    // WR in a bus grant only, to the edge that starts the held M-cycle
+    // (docs/timing.md "Pad drivers")
+    wire addr_oe = cpu_addr_drive;
     // the data pads' input buffers are on only while the CPU does not drive
     // the bus: the pad library characterises its output with IE low (and
     // the CPU never reads its own write)
     wire data_ie = ~data_drive;
-    wire ctl_oe  = cpu_busack_n;
+    wire ctl_oe  = cpu_ctl_drive;
 
     z80_top u_top (
         // por_n tied off: registers come up random, like the NMOS part's,
@@ -70,6 +73,7 @@ module z80_chip (
         .m1_n(cpu_m1_n), .mreq_n(cpu_mreq_n), .iorq_n(cpu_iorq_n), .rd_n(cpu_rd_n), .wr_n(cpu_wr_n),
         .rfsh_n(cpu_rfsh_n), .halt_n(cpu_halt_n), .busack_n(cpu_busack_n),
         .wait_n(cpu_wait_n), .int_n(cpu_int_n), .nmi_n(cpu_nmi_n), .busreq_n(cpu_busreq_n),
+        .addr_drive(cpu_addr_drive), .ctl_drive(cpu_ctl_drive),
         .dbg_t(), .dbg_m()
     );
 
