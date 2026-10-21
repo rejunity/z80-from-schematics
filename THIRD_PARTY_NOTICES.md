@@ -1,0 +1,68 @@
+# Third-party notices
+
+Inventory reviewed against repository commit `d74d7da7383866910ecba99e6158028063b477dd` on
+2026-10-17. This records identified third-party material; it is not a claim
+that every file's provenance has been cleared. Imported material keeps its
+upstream terms, including any third-party portions inside other files.
+
+The root MIT and CERN-OHL-W-2.0 grants do not relicense these components.
+Preserve notices embedded in source files and supplied by upstream.
+
+## Reference emulators
+
+| Repository path | Copyright / upstream | License and evidence |
+| --- | --- | --- |
+| `scripts/refs/superzazu_z80.c`, `superzazu_z80.h` | 2019 Nicolas Allemand; [superzazu/z80](https://github.com/superzazu/z80) | MIT; full upstream notice in `LICENSES/third-party/superzazu-MIT.txt`. The previous local summary named the wrong author. |
+| `scripts/refs/chips_z80.h` | 2021 Andre Weissflog; [floooh/chips](https://github.com/floooh/chips) | zlib; notice embedded in the header and copied to `LICENSES/third-party/chips-zlib.txt`. |
+| `scripts/refs/suzukiplan_z80.hpp` | 2019 Yoji Suzuki; [suzukiplan/z80](https://github.com/suzukiplan/z80) | MIT; embedded notice copied to `LICENSES/third-party/suzukiplan-MIT.txt`. |
+| `scripts/refs/redcode_z80/Z80.c`, `Z80.h` | 1999–2026 Manuel Sainz de Baranda y Goñi; [redcode/Z80](https://github.com/redcode/Z80) | LGPL-3.0-or-later, explicitly stated in the vendored file headers. |
+| `scripts/refs/redcode_z80/Zeta/` | Manuel Sainz de Baranda y Goñi and other authors named in individual files, including Sofía Ortega Sosa; [Zeta](https://github.com/redcode/Zeta) | Headers state GNU LGPL v3. Preserve each file's exact grant; do not assume the enclosing Z80 project's “or later” grant applies to every Zeta file. |
+| `scripts/refs/perfectz80/netlist_sim.c` | 2010, 2014 Michael Steil, Brian Silverman, Barry Silverman; [mist64/perfect6502](https://github.com/mist64/perfect6502) | MIT notice embedded in this file, copied to `LICENSES/third-party/perfect6502-MIT.txt`. |
+| Other files in `scripts/refs/perfectz80/`, especially `netlist_z80.h` | perfect6502 / Visual6502 / v6502r lineage; individual authors and grants need tracing | Do not extrapolate the simulator's MIT notice to every netlist or adaptation. The vendored `netlist_z80.h` is byte-identical to [v6502r's copy at 1bfa22d](https://github.com/floooh/v6502r/blob/1bfa22d64a861f330bc4318755cfd91cb78c0c59/ext/perfect6502/netlist_z80.h), which does not contain a license notice. Licensing of the exact netlist remains unresolved here. |
+
+GNU GPL v3 and LGPL v3 texts are in `LICENSES/GPL-3.0-only.txt` and
+`LICENSES/LGPL-3.0-only.txt`. Their filenames identify the included text
+versions; the component's own grant determines whether later versions are
+also permitted. Including these texts does not make original project code
+GPL/LGPL, and does not by itself satisfy every obligation for a distributed
+binary linked with an LGPL reference emulator.
+
+## Test suites, ROMs, and captures
+
+| Repository path | Upstream / author | Applicable notice or remaining issue |
+| --- | --- | --- |
+| `tests/z80test/*.tap` | [raxoft/z80test](https://github.com/raxoft/z80test), Patrik Rak | MIT; preserve `tests/z80test/LICENSE.txt`, copyright 2012–2023. A copy is included in `LICENSES/third-party/z80test-MIT.txt`. |
+| `tests/zex/zexdoc.z80` and exerciser-derived binaries in `tests/zex/` | Frank D. Cringle, 1994; [ZEXALL mirror](https://github.com/agn453/ZEXALL) | The assembly source expressly grants GPL-2.0-or-later. Preserve that grant for derivatives. Verify the exact corresponding source and notices for each bundled `.com`, including modified subsets and `prelim.com`, before redistribution; one assembly file is not proof that source for every binary is present. GPL v2 text is supplied in `LICENSES/GPL-2.0-only.txt`. |
+| `tests/fuse/tests.in`, `tests/fuse/tests.expected` | Philip Kendall and FUSE contributors; [speccytools/fuse](https://github.com/speccytools/fuse/tree/master/z80/tests) | Both files are byte-identical to upstream copies checked on the review date. FUSE distributes a GPL v2 `COPYING`, supplied in `LICENSES/third-party/FUSE-COPYING.txt`. Retain upstream terms; no independent MIT grant is asserted for this corpus. |
+| `tests/basic/tinybasic_1k.hex` | Will Stevens, 2023; [WillStevens/basic1K](https://github.com/WillStevens/basic1K) | Byte-identical to upstream `basic8080.hex`. Upstream `basic8080.asm` says GPL v3, and upstream `LICENSE` is GPL v3. The old local MIT description was incorrect. Full upstream license is supplied in `LICENSES/third-party/basic1K-GPL-3.0.txt`. Supply the exact corresponding source and required build information when redistributing the binary. |
+| `tests/basic/nascom_basic_4_7_rc2014.hex` | Microsoft / NASCOM BASIC and later adaptations; [feilipu/NASCOM_BASIC_4.7](https://github.com/feilipu/NASCOM_BASIC_4.7#copyright) | Upstream identifies Microsoft copyright, Grant Searle additions restricted to noncommercial use, and Phillip Stevens changes under MPL-2.0. The exact bundled build's composition and redistribution rights have not been established. No unrestricted redistribution grant is asserted. |
+| `tests/woodmass/z80-test-suite-2008.tap` | Mark Woodmass; source URL recorded in that directory's README | A specific license grant for this binary has not been established. “Freely distributed” is not a substitute for permission. Terms of other Woodmass programs, such as HALT2INT, must not be assumed to cover this one. |
+| `tests/sigrok/*.sr` and `README.kc85` | [sigrokproject/sigrok-dumps](https://github.com/sigrokproject/sigrok-dumps/tree/master/z80/kc85) | Upstream's top-level README places dump files in the public domain unless otherwise noted. The upstream README is preserved in `LICENSES/third-party/sigrok-dumps-README.txt`; preserve the capture description and any file-specific notices. |
+
+Original runners and original test harnesses are distinct from the imported
+programs and data they execute. Giving a runner the MIT license does not
+relicense a loaded ROM or test suite. Third-party-generated output and
+adaptations remain subject to applicable upstream terms.
+
+## Core provenance to verify
+
+The comments near the block-repeat flag logic in `cmodel/z80_core.c` and
+`rtl/z80_core.v` explicitly refer to replicating redcode routines, including
+`INXR_OTXR_COMMON`. Determine whether the implementation was independently
+written from documented chip behavior, or incorporates copyrightable
+expression adapted from the LGPL source. These comments alone do not
+decide that question. If material was copied or adapted, retain the
+applicable upstream rights and obligations, obtain appropriate permission,
+or replace that material with an independently authored implementation.
+The root license does not erase any such obligations.
+
+## Design inputs and fabrication dependencies
+
+Links to Zilog documentation, reverse-engineered schematics, decap research,
+or external netlists do not grant rights to redistribute those works.
+Do not apply this project's licenses to an upstream schematic or netlist
+merely because the project uses it as a reference.
+
+PDKs, standard-cell libraries, macros, fabrication services, and external
+tools retain their own terms. This notice does not relicense those inputs
+or certify that a future fabrication release contains its Complete Source.

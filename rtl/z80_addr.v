@@ -1,4 +1,9 @@
 // ===========================================================================
+// SPDX-FileCopyrightText: 2026 Renaldas Zioma
+// SPDX-License-Identifier: CERN-OHL-W-2.0
+// Source Location: https://github.com/rejunity/z80-from-schematics
+// See HARDWARE_NOTICE.md for the section 4.1 Product notice.
+//
 // z80_addr.v - the address side: the 16-bit address-side bus (abus), the
 // incrementer/decrementer (IDU) on it, the effective-address adder next to
 // it, and the input of the address latch (z80_core's m_addr).
