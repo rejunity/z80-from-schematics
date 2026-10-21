@@ -1,4 +1,9 @@
 // ===========================================================================
+// SPDX-FileCopyrightText: 2026 ReJ aka Renaldas Zioma
+// SPDX-License-Identifier: CERN-OHL-W-2.0
+// Source Location: https://github.com/rejunity/z80-from-schematics
+// See HARDWARE_NOTICE.md for the section 4.1 Product notice.
+//
 // z80_top.v - the chip-level wrapper: one clock, one clock domain.
 //
 // Everything that *thinks* (z80_core: sequencer, PLA, ALU, register file)
@@ -68,6 +73,11 @@ module z80_top (
     output wire        rfsh_n,
     output wire        halt_n,
     output wire        busack_n,
+    // the die's pad enables: the address pads, and MREQ IORQ RD WR (both
+    // float in a bus grant, the address also in the reset idle); the data
+    // pads follow data_drive. M1 RFSH HALT BUSACK are always driven.
+    output wire        addr_drive,
+    output wire        ctl_drive,
     // control inputs
     input  wire        wait_n,
     input  wire        int_n,
@@ -141,9 +151,10 @@ module z80_top (
     end
 
     // ---- the posedge-only core -----------------------------------------
-    // Pin images, packed {addr, data_out, data_drive, m1_n, mreq_n, iorq_n,
-    // rd_n, wr_n, rfsh_n, halt_n, busack_n} -- see PIN_* below.
-    localparam PW = 16 + 8 + 1 + 8;
+    // Pin images, packed {addr_drive, ctl_drive, addr, data_out, data_drive,
+    // m1_n, mreq_n, iorq_n, rd_n, wr_n, rfsh_n, halt_n, busack_n} -- see the
+    // assigns below.
+    localparam PW = 2 + 16 + 8 + 1 + 8;
     wire [15:0] addr_pos,  addr_neg;
     wire [7:0]  dout_pos,  dout_neg;
     wire        drive_pos, drive_neg;
@@ -155,6 +166,8 @@ module z80_top (
     wire        rfsh_pos,  rfsh_neg;
     wire        halt_pos,  halt_neg;
     wire        busack_pos, busack_neg;
+    wire        aen_pos,   aen_neg;
+    wire        cen_pos,   cen_neg;
 
     z80_core u_core (
         .clk(clk), .por_n(por_n), .res_s(res_rise),
@@ -176,16 +189,19 @@ module z80_top (
         .rfsh_n_pos(rfsh_pos),     .rfsh_n_neg(rfsh_neg),
         .halt_n_pos(halt_pos),     .halt_n_neg(halt_neg),
         .busack_n_pos(busack_pos), .busack_n_neg(busack_neg),
+        .addr_drive_pos(aen_pos),  .addr_drive_neg(aen_neg),
+        .ctl_drive_pos(cen_pos),   .ctl_drive_neg(cen_neg),
         .dbg_t(dbg_t), .dbg_m(dbg_m)
     );
 
     // ---- 2. dual-edge output former -------------------------------------
-    wire [PW-1:0] pins_pos = {addr_pos, dout_pos, drive_pos, m1_pos, mreq_pos,
+    wire [PW-1:0] pins_pos = {aen_pos, cen_pos, addr_pos, dout_pos, drive_pos, m1_pos, mreq_pos,
                               iorq_pos, rd_pos, wr_pos, rfsh_pos, halt_pos, busack_pos};
-    wire [PW-1:0] pins_neg = {addr_neg, dout_neg, drive_neg, m1_neg, mreq_neg,
+    wire [PW-1:0] pins_neg = {aen_neg, cen_neg, addr_neg, dout_neg, drive_neg, m1_neg, mreq_neg,
                               iorq_neg, rd_neg, wr_neg, rfsh_neg, halt_neg, busack_neg};
-    // idle pattern: addr 0, data 0, not driving, all active-low strobes high
-    localparam [PW-1:0] PINS_IDLE = {16'h0000, 8'h00, 1'b0, 8'b1111_1111};
+    // idle pattern (power-on: the reset idle): the address floating, the
+    // strobes driven high, addr 0, data 0, the data bus not driven
+    localparam [PW-1:0] PINS_IDLE = {1'b0, 1'b1, 16'h0000, 8'h00, 1'b0, 8'b1111_1111};
 
     reg [PW-1:0] pin_a;     // rising-edge half of the former
     reg [PW-1:0] pin_b;     // falling-edge half of the former
@@ -199,6 +215,8 @@ module z80_top (
     end
     wire [PW-1:0] pins = pin_a ^ pin_b;
 
+    assign addr_drive = pins[34];
+    assign ctl_drive  = pins[33];
     assign addr       = pins[32:17];
     assign data_out   = pins[16:9];
     assign data_drive = pins[8];

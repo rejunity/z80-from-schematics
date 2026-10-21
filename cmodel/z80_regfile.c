@@ -1,4 +1,7 @@
 /* ============================================================================
+ * SPDX-FileCopyrightText: 2026 ReJ aka Renaldas Zioma
+ * SPDX-License-Identifier: MIT
+ *
  * z80_regfile.c - register-file byte accessors over the 16-bit pair storage.
  * The r[] decode table maps an 8-bit register selector to a pair + half.
  * (HL) (selector 6) is a memory operand handled by the sequencer, not here.

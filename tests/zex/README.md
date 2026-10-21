@@ -73,10 +73,13 @@ That confirms architectural correctness independent of Cringle's CRCs.
 
 ## Provenance
 
-  - ZEXDOC / ZEXALL: Copyright (C) 1994 Frank D. Cringle, freely
-    redistributable. The CRC reference values in the binaries were derived
-    from real Z80 hardware.
-  - `prelim.com`: same provenance.
+  - ZEXDOC / ZEXALL: Copyright (C) 1994 Frank D. Cringle. The vendored
+    `zexdoc.z80` grants GPL-2.0-or-later; its derivatives retain that grant.
+    Verify the exact corresponding source and notices for each bundled
+    binary, including modified subsets, before redistribution. The CRC
+    reference values in the binaries were derived from real Z80 hardware.
+  - `prelim.com`: identify and retain the notice and corresponding source
+    for this exact binary; the local README alone is not a license grant.
   - `zexdoc.z80`: vendored from the agn453 / ZEXALL mirror, lightly massaged
     by `scripts/m80_to_pyz80.py` for re-assembly with pyz80.
 
@@ -94,3 +97,7 @@ That confirms architectural correctness independent of Cringle's CRCs.
     4-way instruction-level lockstep on `zexdoc3.com`.
   - [`../../scripts/m80_to_pyz80.py`](../../scripts/m80_to_pyz80.py) — the
     M80 → pyz80 source converter used to regenerate `zexdoc.com`.
+
+License texts and the third-party inventory are in
+[LICENSES/](../../LICENSES/) and
+[THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md).
