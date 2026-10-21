@@ -135,7 +135,7 @@ def main():
 
 module tb_fuse;
     reg         clk = 0;
-    reg         reset_n = 0;
+    reg         reset_n = 0;            // power-on reset and RESET pin together
     wire [15:0] addr;
     wire [7:0]  data_out;
     reg  [7:0]  din;
@@ -145,7 +145,7 @@ module tb_fuse;
     integer     cycle_count = 0;
 
     z80_top dut (
-        .clk(clk), .reset_n(reset_n),
+        .clk(clk), .por_n(reset_n), .reset_n(reset_n),
         .addr(addr), .data_in(din), .data_out(data_out), .data_drive(),
         .mreq_n(mreq_n), .iorq_n(iorq_n),
         .rd_n(rd_n), .wr_n(wr_n), .m1_n(m1_n),
@@ -176,10 +176,12 @@ module tb_fuse;
             cycle_count = 0;
             reset_n = 0;
             repeat (3) @(posedge clk);
-            // Release in the clock-low half; the next rising edge leaves
-            // reset hold and ENTERS T1 of the M1 at the (poked) m_addr.
+            // Release in the clock-low half. The core samples RESET on rising
+            // edges: the third one after release ENTERS T1 of the first M1;
+            // the pokes land in its clock-low half (m_addr re-aims the fetch).
             @(negedge clk);
             #1 reset_n = 1;
+            repeat (3) @(posedge clk);
             @(negedge clk);
             #1;
         end

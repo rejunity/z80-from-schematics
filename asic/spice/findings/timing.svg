@@ -1,0 +1,202 @@
+<svg xmlns='http://www.w3.org/2000/svg' width='900' height='1084' viewBox='0 0 900 1084'>
+<rect width='900' height='1084' fill='white'/>
+<text x='450.0' y='20' font-size='14.5' font-weight='bold' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>The pin-timing checks: all three chips pass either way; the input holds were the libraries&#x27;</text>
+<text x='10' y='48' font-size='13' font-weight='bold' font-family='Helvetica, Arial, sans-serif'>GF180 7-track chip: its 12 tightest margins at 4 MHz (worst corner)</text>
+<line x1='227.0' y1='60' x2='227.0' y2='316' stroke='#e6e6e6'/>
+<text x='227.0' y='330' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>0</text>
+<line x1='375.1' y1='60' x2='375.1' y2='316' stroke='#e6e6e6'/>
+<text x='375.1' y='330' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>10</text>
+<line x1='523.2' y1='60' x2='523.2' y2='316' stroke='#e6e6e6'/>
+<text x='523.2' y='330' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>20</text>
+<line x1='671.2' y1='60' x2='671.2' y2='316' stroke='#e6e6e6'/>
+<text x='671.2' y='330' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>30</text>
+<line x1='819.3' y1='60' x2='819.3' y2='316' stroke='#e6e6e6'/>
+<text x='819.3' y='330' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>40</text>
+<line x1='227.0' y1='60' x2='227.0' y2='316' stroke='#888' stroke-dasharray='4 3'/>
+<text x='230.0' y='70' font-size='10' fill='#666' font-family='Helvetica, Arial, sans-serif'>the limit</text>
+<text x='535.0' y='346' font-size='11.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>ns of margin</text>
+<text x='182' y='76' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>10 TwMREQh</text>
+<line x1='591.3' y1='72' x2='798.6' y2='72' stroke='#bbb' stroke-width='2'/>
+<path d='M591.3,67 L596.3,72 L591.3,77 L586.3,72 Z' fill='#9a9a9a'/>
+<circle cx='798.6' cy='72' r='4.5' fill='#2b9a3e'/>
+<text x='182' y='97' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>11 TwMREQl</text>
+<line x1='671.2' y1='93' x2='843.0' y2='93' stroke='#bbb' stroke-width='2'/>
+<path d='M843.0,88 L848.0,93 L843.0,98 L838.0,93 Z' fill='#9a9a9a'/>
+<circle cx='671.2' cy='93' r='4.5' fill='#2b9a3e'/>
+<text x='182' y='118' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>15 TsD(Cr)</text>
+<line x1='358.8' y1='114' x2='401.7' y2='114' stroke='#bbb' stroke-width='2'/>
+<path d='M358.8,109 L363.8,114 L358.8,119 L353.8,114 Z' fill='#9a9a9a'/>
+<circle cx='401.7' cy='114' r='4.5' fill='#2b9a3e'/>
+<text x='182' y='139' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>16 ThD(RDr)</text>
+<line x1='385.4' y1='135' x2='407.6' y2='135' stroke='#bbb' stroke-width='2'/>
+<path d='M407.6,130 L412.6,135 L407.6,140 L402.6,135 Z' fill='#9a9a9a'/>
+<circle cx='385.4' cy='135' r='4.5' fill='#2b9a3e'/>
+<text x='182' y='160' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>17 TsWAIT(Cf)</text>
+<line x1='703.8' y1='156' x2='814.9' y2='156' stroke='#bbb' stroke-width='2'/>
+<path d='M703.8,151 L708.8,156 L703.8,161 L698.8,156 Z' fill='#9a9a9a'/>
+<circle cx='814.9' cy='156' r='4.5' fill='#2b9a3e'/>
+<text x='182' y='181' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>18 ThWAIT(Cf)</text>
+<line x1='247.7' y1='177' x2='338.0' y2='177' stroke='#bbb' stroke-width='2'/>
+<path d='M247.7,172 L252.7,177 L247.7,182 L242.7,177 Z' fill='#9a9a9a'/>
+<circle cx='338.0' cy='177' r='4.5' fill='#2b9a3e'/>
+<text x='182' y='202' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>31 TwWR</text>
+<line x1='523.2' y1='198' x2='694.9' y2='198' stroke='#bbb' stroke-width='2'/>
+<path d='M694.9,193 L699.9,198 L694.9,203 L689.9,198 Z' fill='#9a9a9a'/>
+<circle cx='523.2' cy='198' r='4.5' fill='#2b9a3e'/>
+<text x='182' y='223' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>34 TdCr(WRf)</text>
+<line x1='652.0' y1='219' x2='655.0' y2='219' stroke='#bbb' stroke-width='2'/>
+<path d='M655.0,214 L660.0,219 L655.0,224 L650.0,219 Z' fill='#9a9a9a'/>
+<circle cx='652.0' cy='219' r='4.5' fill='#2b9a3e'/>
+<text x='182' y='244' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>38 TsBUSREQ(Cr)</text>
+<line x1='548.3' y1='240' x2='592.8' y2='240' stroke='#bbb' stroke-width='2'/>
+<path d='M548.3,235 L553.3,240 L548.3,245 L543.3,240 Z' fill='#9a9a9a'/>
+<circle cx='592.8' cy='240' r='4.5' fill='#2b9a3e'/>
+<text x='182' y='265' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>39 ThBUSREQ(Cr)</text>
+<line x1='237.3' y1='261' x2='321.7' y2='261' stroke='#bbb' stroke-width='2'/>
+<path d='M237.3,256 L242.3,261 L237.3,266 L232.3,261 Z' fill='#9a9a9a'/>
+<circle cx='321.7' cy='261' r='4.5' fill='#2b9a3e'/>
+<text x='182' y='286' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>47 ThRESET(Cr)</text>
+<line x1='241.8' y1='282' x2='341.0' y2='282' stroke='#bbb' stroke-width='2'/>
+<path d='M241.8,277 L246.8,282 L241.8,287 L236.8,282 Z' fill='#9a9a9a'/>
+<circle cx='341.0' cy='282' r='4.5' fill='#2b9a3e'/>
+<text x='182' y='307' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>49 ThINT(Cr)</text>
+<line x1='235.8' y1='303' x2='323.2' y2='303' stroke='#bbb' stroke-width='2'/>
+<path d='M235.8,298 L240.8,303 L235.8,308 L230.8,303 Z' fill='#9a9a9a'/>
+<circle cx='323.2' cy='303' r='4.5' fill='#2b9a3e'/>
+<path d='M194.0,353 L199.0,358 L194.0,363 L189.0,358 Z' fill='#9a9a9a'/>
+<text x='204' y='362' font-size='11' font-family='Helvetica, Arial, sans-serif'>PDK pad libraries, every pin at 50 %</text>
+<circle cx='457.2' cy='358' r='4.5' fill='#2b9a3e'/>
+<text x='467.20000000000005' y='362' font-size='11' font-family='Helvetica, Arial, sans-serif'>simulated pads, at the datasheet&#x27;s levels</text>
+<text x='10' y='396' font-size='13' font-weight='bold' font-family='Helvetica, Arial, sans-serif'>GF180 9-track chip: its 12 tightest margins at 4 MHz (worst corner)</text>
+<line x1='227.0' y1='408' x2='227.0' y2='664' stroke='#e6e6e6'/>
+<text x='227.0' y='678' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>0</text>
+<line x1='375.1' y1='408' x2='375.1' y2='664' stroke='#e6e6e6'/>
+<text x='375.1' y='678' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>10</text>
+<line x1='523.2' y1='408' x2='523.2' y2='664' stroke='#e6e6e6'/>
+<text x='523.2' y='678' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>20</text>
+<line x1='671.2' y1='408' x2='671.2' y2='664' stroke='#e6e6e6'/>
+<text x='671.2' y='678' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>30</text>
+<line x1='819.3' y1='408' x2='819.3' y2='664' stroke='#e6e6e6'/>
+<text x='819.3' y='678' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>40</text>
+<line x1='227.0' y1='408' x2='227.0' y2='664' stroke='#888' stroke-dasharray='4 3'/>
+<text x='230.0' y='418' font-size='10' fill='#666' font-family='Helvetica, Arial, sans-serif'>the limit</text>
+<text x='535.0' y='694' font-size='11.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>ns of margin</text>
+<text x='182' y='424' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>10 TwMREQh</text>
+<line x1='591.3' y1='420' x2='798.6' y2='420' stroke='#bbb' stroke-width='2'/>
+<path d='M591.3,415 L596.3,420 L591.3,425 L586.3,420 Z' fill='#9a9a9a'/>
+<circle cx='798.6' cy='420' r='4.5' fill='#2b9a3e'/>
+<text x='182' y='445' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>11 TwMREQl</text>
+<line x1='671.2' y1='441' x2='843.0' y2='441' stroke='#bbb' stroke-width='2'/>
+<path d='M843.0,436 L848.0,441 L843.0,446 L838.0,441 Z' fill='#9a9a9a'/>
+<circle cx='671.2' cy='441' r='4.5' fill='#2b9a3e'/>
+<text x='182' y='466' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>15 TsD(Cr)</text>
+<line x1='332.1' y1='462' x2='375.1' y2='462' stroke='#bbb' stroke-width='2'/>
+<path d='M332.1,457 L337.1,462 L332.1,467 L327.1,462 Z' fill='#9a9a9a'/>
+<circle cx='375.1' cy='462' r='4.5' fill='#2b9a3e'/>
+<text x='182' y='487' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>16 ThD(RDr)</text>
+<line x1='383.9' y1='483' x2='404.7' y2='483' stroke='#bbb' stroke-width='2'/>
+<path d='M404.7,478 L409.7,483 L404.7,488 L399.7,483 Z' fill='#9a9a9a'/>
+<circle cx='383.9' cy='483' r='4.5' fill='#2b9a3e'/>
+<text x='182' y='508' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>17 TsWAIT(Cf)</text>
+<line x1='680.1' y1='504' x2='791.2' y2='504' stroke='#bbb' stroke-width='2'/>
+<path d='M680.1,499 L685.1,504 L680.1,509 L675.1,504 Z' fill='#9a9a9a'/>
+<circle cx='791.2' cy='504' r='4.5' fill='#2b9a3e'/>
+<text x='182' y='529' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>18 ThWAIT(Cf)</text>
+<line x1='258.1' y1='525' x2='351.4' y2='525' stroke='#bbb' stroke-width='2'/>
+<path d='M258.1,520 L263.1,525 L258.1,530 L253.1,525 Z' fill='#9a9a9a'/>
+<circle cx='351.4' cy='525' r='4.5' fill='#2b9a3e'/>
+<text x='182' y='550' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>31 TwWR</text>
+<line x1='520.2' y1='546' x2='693.5' y2='546' stroke='#bbb' stroke-width='2'/>
+<path d='M693.5,541 L698.5,546 L693.5,551 L688.5,546 Z' fill='#9a9a9a'/>
+<circle cx='520.2' cy='546' r='4.5' fill='#2b9a3e'/>
+<text x='182' y='571' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>34 TdCr(WRf)</text>
+<line x1='671.2' y1='567' x2='672.7' y2='567' stroke='#bbb' stroke-width='2'/>
+<path d='M672.7,562 L677.7,567 L672.7,572 L667.7,567 Z' fill='#9a9a9a'/>
+<circle cx='671.2' cy='567' r='4.5' fill='#2b9a3e'/>
+<text x='182' y='592' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>38 TsBUSREQ(Cr)</text>
+<line x1='554.3' y1='588' x2='600.2' y2='588' stroke='#bbb' stroke-width='2'/>
+<path d='M554.3,583 L559.3,588 L554.3,593 L549.3,588 Z' fill='#9a9a9a'/>
+<circle cx='600.2' cy='588' r='4.5' fill='#2b9a3e'/>
+<text x='182' y='613' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>39 ThBUSREQ(Cr)</text>
+<line x1='244.7' y1='609' x2='329.1' y2='609' stroke='#bbb' stroke-width='2'/>
+<path d='M244.7,604 L249.7,609 L244.7,614 L239.7,609 Z' fill='#9a9a9a'/>
+<circle cx='329.1' cy='609' r='4.5' fill='#2b9a3e'/>
+<text x='182' y='634' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>47 ThRESET(Cr)</text>
+<line x1='244.7' y1='630' x2='344.0' y2='630' stroke='#bbb' stroke-width='2'/>
+<path d='M244.7,625 L249.7,630 L244.7,635 L239.7,630 Z' fill='#9a9a9a'/>
+<circle cx='344.0' cy='630' r='4.5' fill='#2b9a3e'/>
+<text x='182' y='655' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>49 ThINT(Cr)</text>
+<line x1='235.8' y1='651' x2='321.7' y2='651' stroke='#bbb' stroke-width='2'/>
+<path d='M235.8,646 L240.8,651 L235.8,656 L230.8,651 Z' fill='#9a9a9a'/>
+<circle cx='321.7' cy='651' r='4.5' fill='#2b9a3e'/>
+<path d='M194.0,701 L199.0,706 L194.0,711 L189.0,706 Z' fill='#9a9a9a'/>
+<text x='204' y='710' font-size='11' font-family='Helvetica, Arial, sans-serif'>PDK pad libraries, every pin at 50 %</text>
+<circle cx='457.2' cy='706' r='4.5' fill='#2b9a3e'/>
+<text x='467.20000000000005' y='710' font-size='11' font-family='Helvetica, Arial, sans-serif'>simulated pads, at the datasheet&#x27;s levels</text>
+<text x='10' y='744' font-size='13' font-weight='bold' font-family='Helvetica, Arial, sans-serif'>IHP chip: its 12 tightest margins at 4 MHz (worst corner)</text>
+<line x1='227.0' y1='756' x2='227.0' y2='1012' stroke='#e6e6e6'/>
+<text x='227.0' y='1026' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>0</text>
+<line x1='359.7' y1='756' x2='359.7' y2='1012' stroke='#e6e6e6'/>
+<text x='359.7' y='1026' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>10</text>
+<line x1='492.5' y1='756' x2='492.5' y2='1012' stroke='#e6e6e6'/>
+<text x='492.5' y='1026' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>20</text>
+<line x1='625.3' y1='756' x2='625.3' y2='1012' stroke='#e6e6e6'/>
+<text x='625.3' y='1026' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>30</text>
+<line x1='758.1' y1='756' x2='758.1' y2='1012' stroke='#e6e6e6'/>
+<text x='758.1' y='1026' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>40</text>
+<line x1='227.0' y1='756' x2='227.0' y2='1012' stroke='#888' stroke-dasharray='4 3'/>
+<text x='230.0' y='766' font-size='10' fill='#666' font-family='Helvetica, Arial, sans-serif'>the limit</text>
+<text x='535.0' y='1042' font-size='11.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>ns of margin</text>
+<text x='182' y='772' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>10 TwMREQh</text>
+<line x1='545.6' y1='768' x2='545.6' y2='768' stroke='#bbb' stroke-width='2'/>
+<path d='M545.6,763 L550.6,768 L545.6,773 L540.6,768 Z' fill='#9a9a9a'/>
+<circle cx='545.6' cy='768' r='4.5' fill='#2b9a3e'/>
+<text x='182' y='793' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>11 TwMREQl</text>
+<line x1='727.5' y1='789' x2='763.4' y2='789' stroke='#bbb' stroke-width='2'/>
+<path d='M763.4,784 L768.4,789 L763.4,794 L758.4,789 Z' fill='#9a9a9a'/>
+<circle cx='727.5' cy='789' r='4.5' fill='#2b9a3e'/>
+<text x='182' y='814' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>15 TsD(Cr)</text>
+<line x1='561.6' y1='810' x2='602.7' y2='810' stroke='#bbb' stroke-width='2'/>
+<path d='M561.6,805 L566.6,810 L561.6,815 L556.6,810 Z' fill='#9a9a9a'/>
+<circle cx='602.7' cy='810' r='4.5' fill='#2b9a3e'/>
+<text x='182' y='835' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>16 ThD(RDr)</text>
+<line x1='361.1' y1='831' x2='361.1' y2='831' stroke='#bbb' stroke-width='2'/>
+<path d='M361.1,826 L366.1,831 L361.1,836 L356.1,831 Z' fill='#9a9a9a'/>
+<circle cx='361.1' cy='831' r='4.5' fill='#2b9a3e'/>
+<text x='182' y='856' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>18 ThWAIT(Cf)</text>
+<line x1='234.9' y1='852' x2='252.2' y2='852' stroke='#bbb' stroke-width='2'/>
+<path d='M234.9,847 L239.9,852 L234.9,857 L229.9,852 Z' fill='#9a9a9a'/>
+<circle cx='252.2' cy='852' r='4.5' fill='#2b9a3e'/>
+<text x='182' y='877' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>31 TwWR</text>
+<line x1='594.7' y1='873' x2='630.6' y2='873' stroke='#bbb' stroke-width='2'/>
+<path d='M630.6,868 L635.6,873 L630.6,878 L625.6,873 Z' fill='#9a9a9a'/>
+<circle cx='594.7' cy='873' r='4.5' fill='#2b9a3e'/>
+<text x='182' y='898' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>34 TdCr(WRf)</text>
+<line x1='791.3' y1='894' x2='791.3' y2='894' stroke='#bbb' stroke-width='2'/>
+<path d='M791.3,889 L796.3,894 L791.3,899 L786.3,894 Z' fill='#9a9a9a'/>
+<circle cx='791.3' cy='894' r='4.5' fill='#2b9a3e'/>
+<text x='182' y='919' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>38 TsBUSREQ(Cr)</text>
+<line x1='795.2' y1='915' x2='843.0' y2='915' stroke='#bbb' stroke-width='2'/>
+<path d='M795.2,910 L800.2,915 L795.2,920 L790.2,915 Z' fill='#9a9a9a'/>
+<circle cx='843.0' cy='915' r='4.5' fill='#2b9a3e'/>
+<text x='182' y='940' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>39 ThBUSREQ(Cr)</text>
+<line x1='233.6' y1='936' x2='250.9' y2='936' stroke='#bbb' stroke-width='2'/>
+<path d='M233.6,931 L238.6,936 L233.6,941 L228.6,936 Z' fill='#9a9a9a'/>
+<circle cx='250.9' cy='936' r='4.5' fill='#2b9a3e'/>
+<text x='182' y='961' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>45 TdCTr(A)</text>
+<line x1='811.2' y1='957' x2='819.1' y2='957' stroke='#bbb' stroke-width='2'/>
+<path d='M811.2,952 L816.2,957 L811.2,962 L806.2,957 Z' fill='#9a9a9a'/>
+<circle cx='819.1' cy='957' r='4.5' fill='#2b9a3e'/>
+<text x='182' y='982' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>47 ThRESET(Cr)</text>
+<line x1='233.6' y1='978' x2='301.3' y2='978' stroke='#bbb' stroke-width='2'/>
+<path d='M233.6,973 L238.6,978 L233.6,983 L228.6,978 Z' fill='#9a9a9a'/>
+<circle cx='301.3' cy='978' r='4.5' fill='#2b9a3e'/>
+<text x='182' y='1003' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>49 ThINT(Cr)</text>
+<line x1='234.9' y1='999' x2='252.2' y2='999' stroke='#bbb' stroke-width='2'/>
+<path d='M234.9,994 L239.9,999 L234.9,1004 L229.9,999 Z' fill='#9a9a9a'/>
+<circle cx='252.2' cy='999' r='4.5' fill='#2b9a3e'/>
+<path d='M194.0,1049 L199.0,1054 L194.0,1059 L189.0,1054 Z' fill='#9a9a9a'/>
+<text x='204' y='1058' font-size='11' font-family='Helvetica, Arial, sans-serif'>PDK pad libraries, every pin at 50 %</text>
+<circle cx='457.2' cy='1054' r='4.5' fill='#2b9a3e'/>
+<text x='467.20000000000005' y='1058' font-size='11' font-family='Helvetica, Arial, sans-serif'>simulated pads, at the datasheet&#x27;s levels</text>
+</svg>
