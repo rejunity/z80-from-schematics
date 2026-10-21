@@ -1406,15 +1406,17 @@ void z80_phase_step(z80_t *c)
        the initial T2.P (WR high). Preserve the already asserted strobe. */
     bool hold_write_strobe = c->phase_primed && c->phi == 1 && c->stalled &&
                              c->bus_op == BUSOP_MWR;
+    bool in_nmi_resp = c->nmi_resp;    /* as this edge found it */
     if (c->phase_primed)
         advance(c);
     c->phase_primed = true;
 
-    /* NMI edges during the NMI response -- its M1 and the two pushes, from
-       T1.P to the last T.N -- are lost, even when NMI then stays low: the
-       chip holds its NMI flip-flop clear (perfectz80; event sweep
-       nmir_entry). An edge from the handler's first T1.P on is kept. */
-    if (c->nmi_resp) c->nmi_pending = false;
+    /* NMI edges during the NMI response -- its M1 and the two pushes, up to
+       and including the rising edge that ends the last push -- are lost,
+       even when NMI then stays low: the chip holds its NMI flip-flop clear
+       (perfectz80; event sweep nmir_entry). The response's state as this
+       edge found it decides, as in the RTL (irq_seq). */
+    if (in_nmi_resp || c->nmi_resp) c->nmi_pending = false;
 
     /* WAIT sample + latch (UM0080). Sample only at the spec edge; outside
        that single phase the latch falls to 0 so subsequent .N→.P advances

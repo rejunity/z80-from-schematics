@@ -4,7 +4,16 @@
    half-cycle.
 
    Usage: event_sweep_pz80 [-e events] [-r run_T] [-m marker] [-i]
-                           [-a int_at] [-H hold_addr -T hold_T] prog.hex
+                           [-a int_at] [-H hold_addr -T hold_T] [-v vec]
+                           [-o ops] prog.hex
+
+   The interrupting device: -v is the byte it puts on the bus in INTA (hex,
+   FF if not given), -o more bytes (hex, first byte first, e.g. -o 3412)
+   it hands out after it, one per INTA cycle or memory read, in place of
+   memory: the rest of an IM0 instruction (the die fetches the opcode
+   after a prefix with another INTA and reads the operands at the
+   unchanged PC). An opcode fetch from memory ends the device's
+   instruction.
 
    Events are placed in sixteenths of a T-state from the rising edge that
    starts the marker fetch's T1. perfectz80 only advances whole half-cycles,
@@ -60,8 +69,9 @@ static void apply_events(void *st, int rel) {
 
 int main(int argc, char **argv) {
     const char *events = NULL;
-    int run = 100, marker = 0x0200, inta_release = 0, int_at = -1, hold = -1, hold_t = 0, opt;
-    while ((opt = getopt(argc, argv, "e:r:m:ia:H:T:")) != -1) {
+    int run = 100, marker = 0x0200, inta_release = 0, int_at = -1, hold = -1, hold_t = 0, vec = 0xff, opt;
+    uint8_t ops[8]; int n_ops = 0;
+    while ((opt = getopt(argc, argv, "e:r:m:ia:H:T:v:o:")) != -1) {
         switch (opt) {
         case 'e': events = optarg; break;
         case 'r': run = atoi(optarg); break;
@@ -70,6 +80,13 @@ int main(int argc, char **argv) {
         case 'a': int_at = (int)strtol(optarg, NULL, 16); break;
         case 'H': hold = (int)strtol(optarg, NULL, 16); break;
         case 'T': hold_t = atoi(optarg); break;
+        case 'v': vec = (int)strtol(optarg, NULL, 16) & 0xff; break;
+        case 'o':
+            for (n_ops = 0; n_ops < 8 && optarg[2 * n_ops] && optarg[2 * n_ops + 1]; n_ops++) {
+                char b[3] = {optarg[2 * n_ops], optarg[2 * n_ops + 1], 0};
+                ops[n_ops] = (uint8_t)strtol(b, NULL, 16);
+            }
+            break;
         default: fprintf(stderr, "bad option\n"); return 2;
         }
     }
@@ -84,13 +101,36 @@ int main(int argc, char **argv) {
     }
 
     void *st = cpu_initAndResetChip();
-    cpu_setIntVec(0xff);
+    cpu_setIntVec((uint8_t)vec);   /* set again at each INTA, see the device */
     int found = 0, mark = 0, hold_until = -1, in_read = 0;
     bool wait_low = false;
+    /* the device: its next byte at each INTA (perfectz80 puts int_vector on
+       the bus), and at each memory read after one until it has none left
+       (cpu_memory holds it for that read, restored when the read ends) */
+    int dev_pos = 0, was_read = 0, was_inta = 0, dev_addr = -1;
+    uint8_t dev_saved = 0;
     for (int h = 0; h < 2 * 4000; h++) {
         bool clk = cpu_readCLK(st);
         bool m1 = cpu_readM1(st), mreq = cpu_readMREQ(st), iorq = cpu_readIORQ(st), rd = cpu_readRD(st);
         unsigned a = cpu_readAddressBus(st);
+        if (!m1 && !iorq) {
+            if (!was_inta) {
+                cpu_setIntVec(dev_pos == 0 ? (uint8_t)vec : dev_pos <= n_ops ? ops[dev_pos - 1] : 0xff);
+                dev_pos++;
+            }
+            was_inta = 1;
+        } else was_inta = 0;
+        if (!mreq && !rd) {
+            if (!m1) dev_pos = 0;                         /* an opcode from memory */
+            else if (!was_read && dev_pos > 0 && dev_pos <= n_ops) {
+                dev_addr = (int)a; dev_saved = cpu_memory[a];
+                cpu_memory[a] = ops[dev_pos - 1]; dev_pos++;
+            }
+            was_read = 1;
+        } else {
+            if (dev_addr >= 0) { cpu_memory[dev_addr] = dev_saved; dev_addr = -1; }
+            was_read = 0;
+        }
         if (!found && !m1 && a == (unsigned)marker) { found = 1; mark = clk ? h : h - 1; }
         if (found) {
             int rel = h - mark;

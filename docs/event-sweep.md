@@ -2,14 +2,16 @@
 
 `make event_sweep` drives RESET, INT, NMI, BUSREQ and WAIT pulses into the
 iverilog RTL and into the perfectz80 transistor-level netlist at every
-T-state of a set of instructions. It compares the two half-cycle by
-half-cycle. CI runs it on every push.
+T-state of a set of instructions, in IM1 and IM2. It compares the two
+half-cycle by half-cycle, and runs every case through the C model too, which
+must match the RTL in every half-cycle. CI runs it on every push.
 
 Files:
 
 - `scripts/event_sweep.py`: case list, program, runner, comparison, report
 - `tests/iverilog/tb_event_sweep.v`: RTL side (1/16-T event resolution)
 - `scripts/event_sweep_pz80.c`: perfectz80 side
+- `scripts/event_sweep_c.c`: C model side (`--c-model`)
 - `tests/event_sweep/baseline.txt`: cases where the RTL differs today
 
 ## How a case works
@@ -19,10 +21,19 @@ Every case runs the same small program:
 | address | code |
 |---|---|
 | 0000 | stores SP, BC, DE, HL, I, AF and R at 7000.., then `JP 0100` |
-| 0038 | IM1 handler: counts in 6000, `EI; RETI` |
+| 0038 | INT handler: counts in 6000, `EI; RETI` |
 | 0066 | NMI handler: counts in 6001, optional NOPs, `RETN` |
 | 0100 | `DI`, SP=9000, IMn, BC=3 DE=8300 HL=8000 IX=8200 I=3F A=42, optional `EI` |
 | 0200 | marker NOP, the instruction under test, 24 NOPs, `HALT` |
+| 3800 | `JP 0038` |
+| 3F00 | IM2 table: 0038 at every even address, so an odd vector (and FF, which reads 3FFF and 4000) finds 3800 |
+
+The interrupting device puts its byte on the bus in INTA: FF unless the
+case gives one (the IM2 vector, or the opcode in IM0). In IM0 it can hand
+over more bytes, one per INTA cycle or memory read until it has none left,
+as the die takes them: the opcode after a prefix in another INTA cycle, the
+operands as memory reads at the interrupted PC. An opcode fetch from memory
+ends its instruction. I/O reads see FF.
 
 Times are counted from the rising edge that starts the marker fetch's T1.
 A pulse is placed at T-state `n` of the target (`M4` is the marker's T4, `T1`
@@ -55,11 +66,14 @@ Instructions under test:
 - ADD HL,BC and ADC HL,BC (internal M-cycles of 4 + 3 T)
 - EX (SP),HL, DJNZ (taken), RLD, INC BC
 - IN A,(n), OUT (n),A, INI
+- EI EI EI; EI DI (INT waits for the instruction after the last EI)
+- DD DD + LD IX,nn; FD DD + LD IX,nn; DD before NEG and before NOP;
+  RLC (IX+5) (no interrupt between a prefix and its opcode)
 
 | group | pulses |
 |---|---|
-| `int` | INT from every T-state of eleven instructions until INTA (IM1, EI) |
-| `nmi` | 1 T NMI pulse at every T-state of all 24 instructions |
+| `int` | INT from every T-state of eighteen instructions until INTA (IM1, EI) |
+| `nmi` | 1 T NMI pulse at every T-state of all 31 instructions |
 | `nmi_short` | 1/16 T and 1/4 T NMI pulses at every 1/16 T of INC A, LD A,(HL), LD (HL),A, INC (HL) |
 | `nmi_reentry` | NMI held low; two pulses before acceptance; a second pulse during the response; nested; RETN with INT pending |
 | `reset` | 4 T RESET at every T-state of ten instructions |
@@ -67,8 +81,10 @@ Instructions under test:
 | `reset_wait` | RESET while a read is held by WAIT |
 | `reset_short` | 1/4 to 2 T RESET around M1 (the special-reset window) |
 | `combo` | RESET during an INT or NMI response; an NMI edge while RESET is low; NMI or INT held across RESET; BUSREQ at the boundary of an INT, an NMI and HALT ending on INT |
-| `busreq` | 1 T and 4 T BUSREQ at every T-state of all 24 instructions: grant, BUSACK, resume |
-| `wait` | 1 T and 3 T WAIT at every T-state of all 24 instructions |
+| `busreq` | 1 T and 4 T BUSREQ at every T-state of all 31 instructions: grant, BUSACK, resume |
+| `wait` | 1 T and 3 T WAIT at every T-state of all 31 instructions |
+| `im2` | INT in IM2 from every T-state of INC A, LD A,(HL), LD (HL),A, INC (HL) and HALT, with vectors 40, 41 and FF |
+| `im2_combo` | IM2 response after INC A (vector 40); NMI, 1 T and 3 T WAIT, 1 T and 4 T BUSREQ, or 4 T RESET from every T-state of it, its table reads and the handler's first fetch |
 
 ### What a simulation can and can't tell
 

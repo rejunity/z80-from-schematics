@@ -346,10 +346,15 @@ pin_scenarios_netlist: iverilog_netlist $(BIN)/perfectz80_runner
 # RESET / INT / NMI timing sweep: the iverilog RTL against perfectz80, with
 # pulses placed at every T-state of a set of instructions (one position per
 # clock half; sub-T pulses at every 1/16 T). Fails on any difference not in
-# tests/event_sweep/baseline.txt; see docs/event-sweep.md.
+# tests/event_sweep/baseline.txt, and on any half-cycle where the C model
+# differs from the RTL; see docs/event-sweep.md.
 # EVENT_SWEEP_ARGS=--update-baseline regenerates the baseline.
-event_sweep: $(BUILD)/tb_event_sweep.vvp $(BIN)/event_sweep_pz80
-	@$(PYTHON) $(SCRIPTS)/event_sweep.py $(EVENT_SWEEP_ARGS)
+event_sweep: $(BUILD)/tb_event_sweep.vvp $(BIN)/event_sweep_pz80 $(BIN)/event_sweep_c
+	@$(PYTHON) $(SCRIPTS)/event_sweep.py --c-model $(EVENT_SWEEP_ARGS)
+
+$(BIN)/event_sweep_c: $(SCRIPTS)/event_sweep_c.c $(CMODEL_LIB) $(CMODEL_HDRS)
+	@mkdir -p $(BIN)
+	$(CC) $(CFLAGS) -D_POSIX_C_SOURCE=200809L $(INCLUDES) $< $(CMODEL_LIB) -o $@
 
 $(BUILD)/tb_event_sweep.vvp: $(RTL_SRCS) $(TESTS)/iverilog/tb_event_sweep.v
 	@mkdir -p $(BUILD)
