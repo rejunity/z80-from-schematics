@@ -7,6 +7,7 @@
 //
 //   vvp tb_event_sweep.vvp +prog=P.hex [+events=E.txt] +run=T
 //       [+marker=0200] [+inta_release=1] [+int_at=0066] [+hold=8000 +hold_t=N]
+//       [+inta_vec=FF] [+inta_n=N +inta_ops=HEX]
 //
 // Time: one T-state is 32 time units, so an event placed at sixteenth s
 // lands at 2*s+1 units, never on a clock edge. Sixteenth 0 is the rising
@@ -20,6 +21,13 @@
 //   +int_at=A      INT goes low during the M1 fetch of A, high again at INTA
 //   +hold=A        WAIT low at the start of each read of A (not M1) for
 //                  +hold_t T-states, or until RESET falls
+// The interrupting device: +inta_vec=V is the byte it puts on the bus in
+// INTA (M1 + IORQ), FF if not given; +inta_n=N +inta_ops=HEX are N more
+// bytes (HEX little-endian, the first one lowest) it hands out after it,
+// one per INTA cycle or memory read, in place of memory: the rest of an
+// IM0 instruction (the die fetches the opcode after a prefix with another
+// INTA and reads the operands at the unchanged PC). An opcode fetch from
+// memory ends the device's instruction. I/O reads see FF.
 // Memory writes are captured from the pins at the end of every half-cycle.
 // Output: `h clk addr data mreq iorq rd wr m1 rfsh halt busack` for halves
 // 0 .. 2*run-1 from the marker's T1, pins sampled at the end of each half.
@@ -28,7 +36,8 @@
 
 module tb_event_sweep;
     reg         clk = 1'b0;
-    reg         reset_n = 1'b0;
+    reg         por_n = 1'b0;           // power-on reset, first half only
+    reg         reset_n = 1'b0;         // the RESET pin
     reg         wait_n = 1'b1, int_n = 1'b1, nmi_n = 1'b1, busreq_n = 1'b1;
     wire [7:0]  data_in;
     wire [15:0] addr;
@@ -39,7 +48,7 @@ module tb_event_sweep;
     reg  [7:0]  mem [0:65535];
 
     z80_top dut (
-        .clk(clk), .reset_n(reset_n),
+        .clk(clk), .por_n(por_n), .reset_n(reset_n),
         .addr(addr), .data_in(data_in), .data_out(data_out), .data_drive(data_drive),
         .m1_n(m1_n), .mreq_n(mreq_n), .iorq_n(iorq_n), .rd_n(rd_n), .wr_n(wr_n),
         .rfsh_n(rfsh_n), .halt_n(halt_n), .busack_n(busack_n),
@@ -47,13 +56,20 @@ module tb_event_sweep;
         .dbg_t(dbg_t), .dbg_m(dbg_m)
     );
 
-    // Memory reads as in tb_z80.v; INTA (M1 + IORQ) and I/O reads see 0xFF.
-    assign data_in = (!mreq_n && !rd_n) ? mem[addr] :
-                     (!iorq_n && (!rd_n || !m1_n)) ? 8'hff : 8'h00;
+    // Memory reads as in tb_z80.v (or the device's byte); INTA (M1 + IORQ)
+    // sees the device's byte, I/O reads 0xFF.
+    reg  [7:0]  dev_byte;
+    reg  [71:0] dev_q;          // the device's bytes, the first one lowest
+    reg         dev_read;
+    assign data_in = (!mreq_n && !rd_n) ? (dev_read ? dev_byte : mem[addr]) :
+                     (!iorq_n && !m1_n) ? dev_byte :
+                     (!iorq_n && !rd_n) ? 8'hff : 8'h00;
 
     integer ev_pin [0:7], ev_lo [0:7], ev_hi [0:7];
-    integer n_ev, fd, r, k, e, run, marker, hold, hold_t, int_at, inta_release;
+    integer n_ev, fd, r, k, e, run, marker, hold, hold_t, int_at, inta_release, vec;
     integer t, half, mark_half, hold_until, in_read;
+    integer inta_n, dev_pos, was_read, was_inta;
+    reg [63:0] inta_ops;
     reg [8*512-1:0] progf, evf;     // paths up to 512 characters
     reg found;
 
@@ -61,6 +77,8 @@ module tb_event_sweep;
         case (pin)
             0: nmi_n   = level;
             1: int_n   = level;
+            2: wait_n  = level;
+            3: busreq_n = level;
             4: reset_n = level;
         endcase
     endtask
@@ -73,6 +91,11 @@ module tb_event_sweep;
         if (!$value$plusargs("int_at=%h", int_at)) int_at = -1;
         if (!$value$plusargs("hold=%h", hold)) hold = -1;
         if (!$value$plusargs("hold_t=%d", hold_t)) hold_t = 0;
+        if (!$value$plusargs("inta_vec=%h", vec)) vec = 'hff;
+        if (!$value$plusargs("inta_n=%d", inta_n)) inta_n = 0;
+        if (!$value$plusargs("inta_ops=%h", inta_ops)) inta_ops = 64'h0;
+        dev_q = {inta_ops, vec[7:0]};
+        dev_read = 1'b0; dev_byte = 8'h00; dev_pos = 0; was_read = 0; was_inta = 0;
         n_ev = 0;
         if ($value$plusargs("events=%s", evf)) begin
             fd = $fopen(evf, "r");
@@ -84,7 +107,8 @@ module tb_event_sweep;
         for (k = 0; k < 65536; k = k + 1) mem[k] = 8'h00;
         $readmemh(progf, mem);
 
-        // Power-on reset: 4 T low, released in a clock-low half.
+        // Power-on: por_n for the first half-cycle, RESET 4 T low, released
+        // in a clock-low half.
         found = 0; mark_half = 0; hold_until = -1; in_read = 0;
         half = 0;
         for (t = 0; t >= 0; t = t + 1) begin
@@ -93,8 +117,28 @@ module tb_event_sweep;
                 clk = (t % 32 == 0);
                 half = t / 16;
             end
+            if (t == 8) por_n = 1'b1;
             if (!found && t == 4 * 32 + 16 + 8) reset_n = 1'b1;
             if (t % 16 == 1) begin
+                // the device: its next byte at each INTA, and at each memory
+                // read after one until it has none left
+                if (!m1_n && !iorq_n) begin
+                    if (!was_inta) begin
+                        dev_byte = (dev_pos <= inta_n) ? dev_q[8 * dev_pos +: 8] : 8'hff;
+                        dev_pos = dev_pos + 1;
+                    end
+                    was_inta = 1;
+                end else was_inta = 0;
+                if (!mreq_n && !rd_n) begin
+                    if (!m1_n) dev_pos = 0;                 // an opcode from memory
+                    else if (!was_read && dev_pos > 0 && dev_pos <= inta_n) begin
+                        dev_read = 1'b1; dev_byte = dev_q[8 * dev_pos +: 8];
+                        dev_pos = dev_pos + 1;
+                    end
+                    was_read = 1;
+                end else begin
+                    dev_read = 1'b0; was_read = 0;
+                end
                 if (!found && !m1_n && addr == marker) begin
                     found = 1;
                     mark_half = half - (half % 2);   // the T1 rising edge
@@ -109,7 +153,7 @@ module tb_event_sweep;
                             hold_until = half + 2 * hold_t;
                         end
                     end else in_read = 0;
-                    if (!wait_n && (half >= hold_until || !reset_n)) wait_n = 1'b1;
+                    if (hold >= 0 && !wait_n && (half >= hold_until || !reset_n)) wait_n = 1'b1;
                 end
             end
             // Pin events at sixteenth s = (t - mark_t - 1) / 2, mark_t = mark_half*16.

@@ -309,12 +309,10 @@ basic_netlist_tests: verilator_basic_netlist
 # =============================================================================
 
 
-# Pin-scenario programs (prog9..prog20). Each drives a specific external-
-# pin event sequence via the .events sidecar (INT pulse, NMI pulse, WAIT
-# pulse, BUSREQ, RESET, ...). These currently surface real divergences
-# between our model and perfectz80 — exit 0 unconditionally so CI shows
-# the findings without flipping red; they're tracked alongside
-# docs/simplifications.md once a concrete fix lands.
+# Pin-scenario programs (prog9..prog22). Each drives a specific external-
+# pin event sequence via the .events sidecar (INT, NMI, WAIT, BUSREQ,
+# RESET, ...) and must match perfectz80 in every phase: the control pins
+# and the address. A difference fails the target.
 PIN_SCENARIOS = \
 	  $(TESTS)/traces/pin_scenarios/prog9_inta_im1.hex \
 	  $(TESTS)/traces/pin_scenarios/prog10_halt_nmi.hex \
@@ -332,29 +330,31 @@ PIN_SCENARIOS = \
 	  $(TESTS)/traces/pin_scenarios/prog22_wait_cpir.hex
 
 pin_scenarios: tracegen $(BIN)/perfectz80_runner
-	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py 200 $(PIN_SCENARIOS) \
-	  || echo "(pin_scenarios is informational; failures are expected silicon-faithfulness findings)"
+	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py 200 $(PIN_SCENARIOS)
 
-# Same pin-scenarios but driving the iverilog RTL testbench (now that
-# .events is wired into tb_z80.v via per-pin plusargs — see the
-# tests/iverilog/tb_z80.v initial block). Informational.
+# Same pin-scenarios but driving the iverilog RTL testbench (.events is
+# wired into tb_z80.v via per-pin plusargs -- see the tests/iverilog/tb_z80.v
+# initial block).
 pin_scenarios_rtl: iverilog $(BIN)/perfectz80_runner
-	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --rtl=iverilog 200 $(PIN_SCENARIOS) \
-	  || echo "(pin_scenarios_rtl is informational; failures are expected silicon-faithfulness findings)"
+	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --rtl=iverilog 200 $(PIN_SCENARIOS)
 
 # Same pin-scenarios through the LibreLane-synthesised sky130 gate-level
-# netlist (tb_z80_netlist.v consumes the same plusargs). Informational.
+# netlist (tb_z80_netlist.v consumes the same plusargs).
 pin_scenarios_netlist: iverilog_netlist $(BIN)/perfectz80_runner
-	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --rtl=netlist 200 $(PIN_SCENARIOS) \
-	  || echo "(pin_scenarios_netlist is informational; failures are expected silicon-faithfulness findings)"
+	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --rtl=netlist 200 $(PIN_SCENARIOS)
 
 # RESET / INT / NMI timing sweep: the iverilog RTL against perfectz80, with
 # pulses placed at every T-state of a set of instructions (one position per
 # clock half; sub-T pulses at every 1/16 T). Fails on any difference not in
-# tests/event_sweep/baseline.txt; see docs/event-sweep.md.
+# tests/event_sweep/baseline.txt, and on any half-cycle where the C model
+# differs from the RTL; see docs/event-sweep.md.
 # EVENT_SWEEP_ARGS=--update-baseline regenerates the baseline.
-event_sweep: $(BUILD)/tb_event_sweep.vvp $(BIN)/event_sweep_pz80
-	@$(PYTHON) $(SCRIPTS)/event_sweep.py $(EVENT_SWEEP_ARGS)
+event_sweep: $(BUILD)/tb_event_sweep.vvp $(BIN)/event_sweep_pz80 $(BIN)/event_sweep_c
+	@$(PYTHON) $(SCRIPTS)/event_sweep.py --c-model $(EVENT_SWEEP_ARGS)
+
+$(BIN)/event_sweep_c: $(SCRIPTS)/event_sweep_c.c $(CMODEL_LIB) $(CMODEL_HDRS)
+	@mkdir -p $(BIN)
+	$(CC) $(CFLAGS) -D_POSIX_C_SOURCE=200809L $(INCLUDES) $< $(CMODEL_LIB) -o $@
 
 $(BUILD)/tb_event_sweep.vvp: $(RTL_SRCS) $(TESTS)/iverilog/tb_event_sweep.v
 	@mkdir -p $(BUILD)

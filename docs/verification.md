@@ -127,19 +127,16 @@ only rebuilt the library, leaving stale runner binaries on disk).
   perfectz80's pins under `perfectz80.*` scope in the same file) as
   the `parity-vcds` + `netlist-vcds` artifacts (14-day retention).
 - **Pin-scenario programs** (`make pin_scenarios` /
-  `pin_scenarios_rtl` / `pin_scenarios_netlist`): 12 INT / NMI /
+  `pin_scenarios_rtl` / `pin_scenarios_netlist`): 14 INT / NMI /
   WAIT / BUSREQ / RESET scenarios driven through the `.events`
-  sidecar. **5 / 12 PASS cleanly** (`prog9_inta_im1`,
-  `prog12_inta_im2`, `prog16_ei_delay`, `prog18_di_then_int`,
-  `prog20_block_int`); **7 / 12 surface informational ctrl-pin
-  timing diffs** vs perfectz80 — HALT-pin sub-T-state assertion
-  (`prog10_halt_nmi`, `prog13_halt_int`), WAIT-insertion
-  (`prog11_wait_mem`, `prog14_wait_io`), BUSREQ-during-M1
-  (`prog15_busreq_m1`), post-reset M-cycle sequence (`prog17_reset`),
-  and reset-register-init via SP (`prog19_nmi_in_int`). All make
-  targets are informational gates; functional behaviour on all 12 is
-  verified by Rak + FUSE + `make halt2int` even where the per-phase
-  pin trace differs from gate-level. Full diff list in
+  sidecar. All 14 match perfectz80 in every phase (control pins and
+  address) on the C model, the iverilog RTL and the gate-level
+  netlist, and the targets gate CI. Until 2026-10-21 the INT
+  scenarios (`prog9`, `prog12`, `prog16`, `prog19`, `prog20`) pulsed
+  INT for 1-3 T-states between the CPU's sampling edges, so no
+  interrupt was ever taken and they passed without testing it; they
+  now hold INT across an instruction's end. The earlier HALT-pin,
+  WAIT, BUSREQ, RESET and SP-init differences are listed in
   `docs/known-differences.md` row 14.
 - **HALT-to-INT timing probe** (`make halt2int`): focused regression
   inspired by Mark Woodmass's HALT2INT v3 (2021). Sweeps INT-pulse

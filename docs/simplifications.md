@@ -33,8 +33,8 @@ address-side bus for every 16-bit +/-1 (PC+1, SP+/-1, rp+/-1, block pointer
 steps, MEMPTR +1 rules) and, next to it, one effective-address adder for
 PC+e / IX+d. Block instructions use the IDU on T-states where the address
 latch holds, like the die (table in `docs/architecture.md` section 3). R's
-7-bit refresh increment keeps its own small incrementer (it shares the
-opcode-latch edge with PC+1). C model: still inline arithmetic.
+7-bit refresh increment keeps its own small incrementer (on the edge that
+ends the refresh). C model: still inline arithmetic.
 
 ### A2. Inline 8-bit ALU ops outside `z80_alu`
 
