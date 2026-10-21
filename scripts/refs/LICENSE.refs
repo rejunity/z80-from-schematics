@@ -1,12 +1,24 @@
-Vendored Z80 reference emulators used for cross-oracle verification.
-Originals retain their upstream licenses.
+Third-party reference emulators
+==============================
 
-  superzazu_z80.{h,c}    MIT     Anthony Beaucamp ("superzazu") - github.com/superzazu/z80
-  chips_z80.h            zlib    Andre Weissflog ("floooh")     - github.com/floooh/chips
-  suzukiplan_z80.hpp     MIT     Yoji Suzuki ("suzukiplan")     - github.com/suzukiplan/z80
-  perfectz80/*           MIT     Michael Steil, Brian Silverman,
-                                 Barry Silverman                - github.com/mist64/perfect6502
-                                 (vendored via github.com/rofl0r/visualz80)
+These files retain their upstream terms; the project's MIT and
+CERN-OHL-W-2.0 grants do not relicense them.
 
-All four are integrated only for testing; the project's own emulator
-is the work of this repository.
+superzazu_z80.{c,h}: MIT, Copyright (c) 2019 Nicolas Allemand.
+chips_z80.h: zlib, Copyright (c) 2021 Andre Weissflog.
+suzukiplan_z80.hpp: MIT, Copyright (c) 2019 Yoji Suzuki.
+redcode_z80/Z80.{c,h}: LGPL-3.0-or-later, Copyright (C) 1999-2026
+    Manuel Sainz de Baranda y Goñi.
+redcode_z80/Zeta/: LGPL v3 as stated in individual file headers;
+    preserve all per-file authors and grants.
+perfectz80/netlist_sim.c: MIT, Copyright (c) 2010,2014 Michael Steil,
+    Brian Silverman, Barry Silverman.
+Other perfectz80 files, particularly the generated netlist: retain
+    upstream terms; exact licensing needs verification. Do not infer
+    that the simulator's MIT notice licenses the entire directory.
+
+See ../../THIRD_PARTY_NOTICES.md for upstream links, the full inventory,
+and provenance questions. Applicable license texts and copied notices
+are in ../../LICENSES/ and ../../LICENSES/third-party/.
+
+Preserve the license and copyright notices embedded in each source file.

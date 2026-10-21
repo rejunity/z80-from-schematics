@@ -1,0 +1,68 @@
+z80-from-schematics — component licensing
+=======================================
+
+Copyright (c) 2026 Renaldas Zioma
+
+Project: https://github.com/rejunity/z80-from-schematics
+
+This repository uses different licenses for different components. It is
+not offered as a repository-wide choice between MIT and CERN-OHL-W-2.0.
+
+1. Original software and documentation — MIT
+
+   The project's original C implementation in cmodel/ is licensed under
+   the MIT License in LICENSES/MIT.txt.
+
+   The project's original support software, test harnesses, test programs,
+   build tools, and documentation outside the hardware scope below are
+   also licensed under MIT, unless a file carries a different applicable
+   license notice. This includes original material in scripts/, tests/,
+   docs/, Makefile, README.md, and .github/.
+
+   The third-party exceptions in section 3 apply throughout these paths.
+
+2. Original hardware design sources — CERN-OHL-W-2.0
+
+   The project's original RTL and hardware implementation sources in rtl/
+   and librelane/ are licensed under the CERN Open Hardware Licence
+   Version 2 — Weakly Reciprocal, SPDX identifier CERN-OHL-W-2.0.
+
+   The full, unmodified license is in LICENSES/CERN-OHL-W-2.0.txt.
+   HARDWARE_NOTICE.md contains the associated copyright and Source
+   Location notices, including the section 4.1 Source Location display
+   requirement for Products.
+
+   Files do not change license merely because they are moved, renamed,
+   translated, synthesized, or placed in a build/output directory.
+   Applicable license obligations for derivatives and Products continue
+   to apply. Future hardware design files outside these directories
+   should carry explicit license notices.
+
+3. Third-party material and existing notices
+
+   Third-party code, ROMs, test suites, test data, netlists, and other
+   imported material retain their upstream licenses and copyright
+   notices. They are not relicensed by sections 1 or 2, including where
+   third-party material is embedded in a project-authored file.
+
+   In particular, scripts/refs/ and the imported fixtures identified in
+   THIRD_PARTY_NOTICES.md are excluded from the project's MIT and
+   CERN-OHL-W-2.0 grants. Existing per-file and upstream notices retain
+   their effect. An absent or unresolved upstream license is not a grant
+   of permission under either project license.
+
+   This license grants only rights that the relevant licensors hold.
+   Preserve additional contributors' and third parties' notices.
+
+4. Commercial use and contributions
+
+   Both project licenses permit commercial use, subject to their terms.
+   Compliant hardware manufacture and sale do not require a royalty or
+   a separate commercial license from this project's author.
+
+   Contributions follow the license of the component being changed;
+   see CONTRIBUTING.md. Publishing changes does not require submitting
+   a pull request to this repository.
+
+The license texts control. This file identifies their scope and does not
+replace or modify their terms.

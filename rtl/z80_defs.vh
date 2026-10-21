@@ -1,4 +1,9 @@
 // ===========================================================================
+// SPDX-FileCopyrightText: 2026 ReJ aka Renaldas Zioma
+// SPDX-License-Identifier: CERN-OHL-W-2.0
+// Source Location: https://github.com/rejunity/z80-from-schematics
+// See HARDWARE_NOTICE.md for the section 4.1 Product notice.
+//
 // z80_defs.vh - shared constants for the RTL, mirroring the C model enums
 // (cmodel/z80.h). Included by all modules so C and Verilog stay aligned.
 // Verilog-2001: localparams via `include guard.

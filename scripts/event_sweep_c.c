@@ -5,7 +5,7 @@
 
    Usage: event_sweep_c [-e events] [-r run_T] [-m marker] [-i]
                         [-a int_at] [-H hold_addr -T hold_T] [-v vec]
-                        [-o ops] prog.hex
+                        [-o ops] [-B] [-W] prog.hex
 
    The model advances whole half-cycles: every pin transition inside a
    half-cycle is applied, in time order, before the step into the next
@@ -71,8 +71,9 @@ static void apply_events(z80_pins_t *p, int rel) {
 int main(int argc, char **argv) {
     const char *events = NULL;
     int run = 100, marker = 0x0200, inta_release = 0, int_at = -1, hold = -1, hold_t = 0, vec = 0xff, opt;
+    int busreq_walk = 0, wait_walk = 0;   /* -B, -W: as in event_sweep_pz80.c */
     uint8_t ops[8]; int n_ops = 0;
-    while ((opt = getopt(argc, argv, "e:r:m:ia:H:T:v:o:")) != -1) {
+    while ((opt = getopt(argc, argv, "e:r:m:ia:H:T:v:o:BW")) != -1) {
         switch (opt) {
         case 'e': events = optarg; break;
         case 'r': run = atoi(optarg); break;
@@ -82,6 +83,8 @@ int main(int argc, char **argv) {
         case 'H': hold = (int)strtol(optarg, NULL, 16); break;
         case 'T': hold_t = atoi(optarg); break;
         case 'v': vec = (int)strtol(optarg, NULL, 16) & 0xff; break;
+        case 'B': busreq_walk = 1; break;
+        case 'W': wait_walk = 1; break;
         case 'o':
             for (n_ops = 0; n_ops < 8 && optarg[2 * n_ops] && optarg[2 * n_ops + 1]; n_ops++) {
                 char b[3] = {optarg[2 * n_ops], optarg[2 * n_ops + 1], 0};
@@ -106,6 +109,7 @@ int main(int argc, char **argv) {
     z80_pins_t *p = &s.cpu.pins;
     int found = 0, mark = 0, hold_until = -1, in_read = 0;
     bool wait_low = false;
+    int walk_up = 0, walk_wait_until = -1, prev_strobe = 0;
     int dev_pos = 0, was_read = 0, was_inta = 0;  /* the device, as in event_sweep_pz80.c */
     uint8_t dev_byte = (uint8_t)vec;
     z80_sys_phase(&s);                    /* into the first half: T1 of the fetch at 0000 */
@@ -139,10 +143,21 @@ int main(int argc, char **argv) {
                 if (!in_read) { wait_low = true; in_read = 1; hold_until = h + 2 * hold_t; p->wait_n = false; }
             } else in_read = 0;
             if (wait_low && (h >= hold_until || !p->reset_n)) { wait_low = false; p->wait_n = true; }
+            if (busreq_walk) {
+                if (!p->busack_n && !walk_up) { p->busreq_n = true; walk_up = 1; }
+                else if (walk_up && p->busack_n) { p->busreq_n = false; walk_up = 0; }
+            }
+            if (wait_walk) {
+                int strobe = (!p->mreq_n && p->rfsh_n) || !p->iorq_n;
+                if (strobe && !prev_strobe) { p->wait_n = false; walk_wait_until = rel + 3; }
+                else if (walk_wait_until >= 0 && rel >= walk_wait_until) { p->wait_n = true; walk_wait_until = -1; }
+                prev_strobe = strobe;
+            }
             apply_events(p, rel);
             if (!p->reset_n && !p->wait_n) { wait_low = false; p->wait_n = true; }
-            printf("%d %d %04x %02x %d %d %d %d %d %d %d %d\n", rel, clk, p->addr, p->data_out,
-                   p->mreq_n, p->iorq_n, p->rd_n, p->wr_n, p->m1_n, p->rfsh_n, p->halt_n, p->busack_n);
+            printf("%d %d %04x %02x %d %d %d %d %d %d %d %d %04x %02x %02x\n", rel, clk, p->addr, p->data_out,
+                   p->mreq_n, p->iorq_n, p->rd_n, p->wr_n, p->m1_n, p->rfsh_n, p->halt_n, p->busack_n,
+                   p->addr_drive ? 0xffff : 0, p->data_drive ? 0xff : 0, p->ctl_drive ? 0xff : 0xf0);
             if (rel >= 2 * run - 1) break;
         }
         z80_sys_phase(&s);

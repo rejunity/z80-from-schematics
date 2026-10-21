@@ -209,11 +209,19 @@ jobs:
           retention-days: 14
 
   event-sweep:
-    name: RESET / INT / NMI timing sweep (iverilog RTL vs perfectz80)
+    name: Pin sweep, every opcode and timing class (RTL + C vs perfectz80) ${{ matrix.shard }}/4
     runs-on: ubuntu-latest
-    # ~2300 cases, each run once through the RTL and (deduplicated per
-    # half-cycle) through perfectz80: ~2 min on a 4-core runner.
-    timeout-minutes: 20
+    # ~33,000 cases in four shards (docs/event-sweep.md): RESET / INT / NMI
+    # / BUSREQ / WAIT at every T-state of the targets and of one opcode of
+    # every timing class, and every opcode with BUSREQ and WAIT walked
+    # through it. Each runs through the RTL and the C model; perfectz80's
+    # side comes from its recorded traces (tests/event_sweep/pz80/), and
+    # runs only for a case they don't have.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v5
       - name: Install C + iverilog
@@ -226,12 +234,12 @@ jobs:
         # tests/event_sweep/baseline.txt, or that changed. After an
         # intended RTL change: make event_sweep EVENT_SWEEP_ARGS=--update-baseline
         # and review the baseline diff (docs/event-sweep.md).
-        run: make event_sweep
+        run: make event_sweep EVENT_SWEEP_ARGS="--shard ${{ matrix.shard }}/4"
       - name: Upload report and per-case side-by-side traces
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: event-sweep
+          name: event-sweep-${{ matrix.shard }}
           path: |
             build/event_sweep/report.md
             build/event_sweep/diff/

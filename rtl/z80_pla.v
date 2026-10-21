@@ -1,4 +1,9 @@
 // ===========================================================================
+// SPDX-FileCopyrightText: 2026 ReJ aka Renaldas Zioma
+// SPDX-License-Identifier: CERN-OHL-W-2.0
+// Source Location: https://github.com/rejunity/z80-from-schematics
+// See HARDWARE_NOTICE.md for the section 4.1 Product notice.
+//
 // z80_pla.v - combinational instruction decode (mirrors cmodel/z80_pla.c).
 // Maps (prefix, opcode) -> control word using the x/y/z/p/q decomposition.
 // Unprefixed space complete; CB/ED/DD/FD decoded in a later stage.
