@@ -1,0 +1,56 @@
+ihp-sg13g2 typ (typ_1p2V_3p3V_25C): 25 C, core 1.2 V, I/O 3.3 V
+  InOut16mA  out rise 100 pF:  12.24 ns at 50 % (PDK lib  12.53),  11.19 ns at 1.5 V; slew  22.44 ns (PDK lib  22.58)
+  InOut16mA  out fall 100 pF:  11.75 ns at 50 % (PDK lib  11.97),  12.79 ns at 1.5 V; slew  20.73 ns (PDK lib  20.75)
+  InOut16mA  turn-on 100 pF: Z->1 12.23 / Z->0 11.68 ns at 50 %; float: driver off 1.19 / 1.84 ns, pin moved 0.5 V 34.98 / 35.67 ns (2 kohm)
+  InOut16mA  DC: sinks 6.7 mA at 0.4 V (NMOS Z80: 2.0), sources 10.5 mA at 2.4 V (0.25)
+  InOut16mA  in  rise 15 ns edge:   0.67 ns pin 50 % -> core 50 % (PDK lib extrapolated   0.94); switches at 1.77 V
+  InOut16mA  in  fall 15 ns edge:   0.74 ns pin 50 % -> core 50 % (PDK lib extrapolated   1.09); switches at 1.52 V
+  InOut16mA  DC input: switches up at 1.66 V, down at 1.65 V (TTL: high from 2.0 V, low to 0.8 V)
+  TriOut16mA out rise 100 pF:  12.24 ns at 50 % (PDK lib  12.54),  11.19 ns at 1.5 V; slew  22.44 ns (PDK lib  22.57)
+  TriOut16mA out fall 100 pF:  11.75 ns at 50 % (PDK lib  11.97),  12.79 ns at 1.5 V; slew  20.73 ns (PDK lib  20.72)
+  TriOut16mA turn-on 100 pF: Z->1 12.23 / Z->0 11.68 ns at 50 %; float: driver off 1.19 / 1.84 ns, pin moved 0.5 V 34.97 / 35.67 ns (2 kohm)
+  TriOut16mA DC: sinks 6.7 mA at 0.4 V (NMOS Z80: 2.0), sources 10.5 mA at 2.4 V (0.25)
+  Out16mA    out rise 100 pF:  12.35 ns at 50 % (PDK lib  12.63),  11.30 ns at 1.5 V; slew  22.44 ns (PDK lib  22.51)
+  Out16mA    out fall 100 pF:  11.61 ns at 50 % (PDK lib  11.75),  12.65 ns at 1.5 V; slew  20.73 ns (PDK lib  20.64)
+  Out16mA    DC: sinks 6.7 mA at 0.4 V (NMOS Z80: 2.0), sources 10.5 mA at 2.4 V (0.25)
+  In         in  rise 15 ns edge:   0.67 ns pin 50 % -> core 50 % (PDK lib extrapolated   0.93); switches at 1.77 V
+  In         in  fall 15 ns edge:   0.74 ns pin 50 % -> core 50 % (PDK lib extrapolated   1.09); switches at 1.52 V
+  In         DC input: switches up at 1.66 V, down at 1.65 V (TTL: high from 2.0 V, low to 0.8 V)
+
+ihp-sg13g2 slow (slow_1p08V_3p0V_125C): 125 C, core 1.08 V, I/O 3 V
+  InOut16mA  out rise 100 pF:  19.07 ns at 50 % (PDK lib  19.53),  19.07 ns at 1.5 V; slew  34.69 ns (PDK lib  34.79)
+  InOut16mA  out fall 100 pF:  18.66 ns at 50 % (PDK lib  19.05),  18.66 ns at 1.5 V; slew  32.64 ns (PDK lib  32.66)
+  InOut16mA  turn-on 100 pF: Z->1 19.00 / Z->0 18.50 ns at 50 %; float: driver off 2.02 / 3.15 ns, pin moved 0.5 V 40.14 / 41.35 ns (2 kohm)
+  InOut16mA  DC: sinks 4.1 mA at 0.4 V (NMOS Z80: 2.0), sources 4.9 mA at 2.4 V (0.25)
+  InOut16mA  in  rise 15 ns edge:   1.12 ns pin 50 % -> core 50 % (PDK lib extrapolated   1.48); switches at 1.68 V
+  InOut16mA  in  fall 15 ns edge:   0.74 ns pin 50 % -> core 50 % (PDK lib extrapolated   1.16); switches at 1.38 V
+  InOut16mA  DC input: switches up at 1.54 V, down at 1.54 V (TTL: high from 2.0 V, low to 0.8 V)
+  TriOut16mA out rise 100 pF:  19.07 ns at 50 % (PDK lib  19.54),  19.07 ns at 1.5 V; slew  34.68 ns (PDK lib  34.78)
+  TriOut16mA out fall 100 pF:  18.66 ns at 50 % (PDK lib  19.08),  18.66 ns at 1.5 V; slew  32.64 ns (PDK lib  32.62)
+  TriOut16mA turn-on 100 pF: Z->1 19.00 / Z->0 18.52 ns at 50 %; float: driver off 2.02 / 3.15 ns, pin moved 0.5 V 40.14 / 41.35 ns (2 kohm)
+  TriOut16mA DC: sinks 4.1 mA at 0.4 V (NMOS Z80: 2.0), sources 4.9 mA at 2.4 V (0.25)
+  Out16mA    out rise 100 pF:  19.12 ns at 50 % (PDK lib  19.53),  19.12 ns at 1.5 V; slew  34.68 ns (PDK lib  34.67)
+  Out16mA    out fall 100 pF:  18.40 ns at 50 % (PDK lib  18.71),  18.40 ns at 1.5 V; slew  32.64 ns (PDK lib  32.49)
+  Out16mA    DC: sinks 4.1 mA at 0.4 V (NMOS Z80: 2.0), sources 4.9 mA at 2.4 V (0.25)
+  In         in  rise 15 ns edge:   1.12 ns pin 50 % -> core 50 % (PDK lib extrapolated   1.47); switches at 1.68 V
+  In         in  fall 15 ns edge:   0.74 ns pin 50 % -> core 50 % (PDK lib extrapolated   1.16); switches at 1.38 V
+  In         DC input: switches up at 1.54 V, down at 1.54 V (TTL: high from 2.0 V, low to 0.8 V)
+
+ihp-sg13g2 fast (fast_1p32V_3p6V_m40C): -40 C, core 1.32 V, I/O 3.6 V
+  InOut16mA  out rise 100 pF:   8.52 ns at 50 % (PDK lib   8.75),   7.19 ns at 1.5 V; slew  15.67 ns (PDK lib  15.81)
+  InOut16mA  out fall 100 pF:   8.32 ns at 50 % (PDK lib   8.44),   9.69 ns at 1.5 V; slew  14.66 ns (PDK lib  14.70)
+  InOut16mA  turn-on 100 pF: Z->1 8.51 / Z->0 8.24 ns at 50 %; float: driver off 0.86 / 1.26 ns, pin moved 0.5 V 31.37 / 31.81 ns (2 kohm)
+  InOut16mA  DC: sinks 9.8 mA at 0.4 V (NMOS Z80: 2.0), sources 18.5 mA at 2.4 V (0.25)
+  InOut16mA  in  rise 15 ns edge:   0.53 ns pin 50 % -> core 50 % (PDK lib extrapolated   0.75); switches at 1.91 V
+  InOut16mA  in  fall 15 ns edge:   0.62 ns pin 50 % -> core 50 % (PDK lib extrapolated   0.93); switches at 1.68 V
+  InOut16mA  DC input: switches up at 1.80 V, down at 1.80 V (TTL: high from 2.0 V, low to 0.8 V)
+  TriOut16mA out rise 100 pF:   8.52 ns at 50 % (PDK lib   8.75),   7.19 ns at 1.5 V; slew  15.66 ns (PDK lib  15.83)
+  TriOut16mA out fall 100 pF:   8.32 ns at 50 % (PDK lib   8.45),   9.69 ns at 1.5 V; slew  14.66 ns (PDK lib  14.66)
+  TriOut16mA turn-on 100 pF: Z->1 8.51 / Z->0 8.24 ns at 50 %; float: driver off 0.86 / 1.26 ns, pin moved 0.5 V 31.36 / 31.80 ns (2 kohm)
+  TriOut16mA DC: sinks 9.8 mA at 0.4 V (NMOS Z80: 2.0), sources 18.5 mA at 2.4 V (0.25)
+  Out16mA    out rise 100 pF:   8.65 ns at 50 % (PDK lib   8.87),   7.32 ns at 1.5 V; slew  15.66 ns (PDK lib  15.77)
+  Out16mA    out fall 100 pF:   8.19 ns at 50 % (PDK lib   8.28),   9.56 ns at 1.5 V; slew  14.66 ns (PDK lib  14.61)
+  Out16mA    DC: sinks 9.8 mA at 0.4 V (NMOS Z80: 2.0), sources 18.5 mA at 2.4 V (0.25)
+  In         in  rise 15 ns edge:   0.53 ns pin 50 % -> core 50 % (PDK lib extrapolated   0.74); switches at 1.91 V
+  In         in  fall 15 ns edge:   0.62 ns pin 50 % -> core 50 % (PDK lib extrapolated   0.91); switches at 1.68 V
+  In         DC input: switches up at 1.80 V, down at 1.80 V (TTL: high from 2.0 V, low to 0.8 V)

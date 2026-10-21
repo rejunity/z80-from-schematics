@@ -39,10 +39,17 @@ int main(int argc, char** argv) {
     t->busreq_n = 1; t->int_n = 1; t->nmi_n = 1; t->wait_n = 1; t->data_in = 0;
 
     // reset
-    t->reset_n = 0; t->clk = 0; t->eval();
+    // a real falling edge on por_n (Verilator starts inputs at 0, which
+    // would be no edge at all)
+    t->por_n = 1; t->reset_n = 0; t->clk = 0; t->eval();
+    t->por_n = 0; t->eval();
+    t->por_n = 1; t->eval();
     t->clk = 1; t->eval();
     t->clk = 0; t->eval();
     t->reset_n = 1;
+    // RESET is sampled on rising edges: the third one after release enters
+    // T1 of the first M1 at PC, so the start state is poked after two
+    for (int k = 0; k < 2; k++) { t->clk = 1; t->eval(); t->clk = 0; t->eval(); }
 
     // poke PC=0x100, SP=0xFFFE (RFP_PC=11, RFP_SP=10)
     R->z80_top__DOT__u_core__DOT__u_regs__DOT__rf[11]   = 0x0100;

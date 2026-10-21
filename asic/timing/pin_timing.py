@@ -21,17 +21,28 @@ a clock edge (address at T1 rise, MREQ at T1 fall, ...); this measures the
 analog timing of those edges. That the replica's events fall on those
 edges is the cycle-level tests' job (perfectz80 pin comparisons).
 
+The pads: the PDKs' pad libraries stop at 20-33 pF and 1-5 ns input
+edges, where STA extrapolates. Where ../spice/pads/<pdk>/ holds the pads
+simulated at transistor level (../spice/pads.py), it reads those
+libraries instead and measures at the datasheet's levels (PS0178's AC
+test conditions): outputs where they cross 1.5 V (VOH = VOL; the pads'
+own offset from the libraries' 50 % at this load, from the same
+simulations), inputs where they cross 2.0 V rising and 0.8 V falling
+(VIH / VIL) on the given edge. The CLK pin stays referenced at its 50 %.
+
 usage: pin_timing.py RUN [--grade 4|6|8] [--load PF] [--edge NS]
                          [--corners tt,ss,...] [--sta PATH] [--keep DIR]
+                         [--pads auto|none|DIR]
          (default: every process corner of the run, nominal parasitics)
        pin_timing.py --write-sdc FILE [--grade ...] [--load ...]
          (the same contract as the chip flows' SDC)
 exit: 0 every check passes at every corner, 1 a check fails, 2 no run.
 """
-import argparse, fnmatch, glob, json, os, re, shlex, subprocess, sys, tempfile
+import argparse, bisect, fnmatch, glob, json, os, re, shlex, subprocess, sys, tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SPEC = os.path.join(HERE, "z8400_nmos.json")
+SPICE_PADS = os.path.join(HERE, "..", "spice", "pads")
 
 ADDR = [f"A[{i}]" for i in range(16)]
 DATA = [f"D[{i}]" for i in range(8)]
@@ -45,13 +56,16 @@ OE_PADS.update({p: "pad_" + p for p in ["MREQ_n", "IORQ_n", "RD_n", "WR_n"]})
 
 
 # --------------------------------------------------------------- the run
-def corner_files(run, cfg, corner):
-    """Liberty files and the parasitics of one STA corner (nom_tt_025C_5v00)."""
+def corner_files(run, cfg, corner, pads=None):
+    """Liberty files and the parasitics of one STA corner (nom_tt_025C_5v00);
+    the pad libraries from `pads` where it has them."""
     libs = []
     for key in ("LIB", "CELL_LIBS", "PAD_LIBS"):
         for pat, files in (cfg.get(key) or {}).items():
             if fnmatch.fnmatch(corner, pat):
-                libs += files
+                for f in files:
+                    sub = os.path.join(pads, os.path.basename(f)) if pads and key == "PAD_LIBS" else None
+                    libs.append(sub if sub and os.path.isfile(sub) else f)
     for m in (cfg.get("MACROS") or {}).values():
         for pat, files in (m.get("lib") or {}).items():
             if fnmatch.fnmatch(corner, pat):
@@ -124,10 +138,12 @@ def sta_script(cfg, run, libs, spef, clk, load, edge):
             continue
         en = " ".join(f"{OE_PADS[p]}/{e}" for _, e, _ in PAD_ARCS)
         for e in ("rise", "fall"):
-            for kind, thr in (("off", "fall"), ("on", "rise")):
-                for m in ("max", "min"):
-                    L.append(f"q {{{kind} {p} {e} {m}}} {m} arr -{e}_from [get_clocks CLK] "
-                             f"-{thr}_through [get_pins -quiet {{{en}}}] -to [get_ports {{{p}}}]")
+            for m in ("max", "min"):
+                L.append(f"q {{off {p} {e} {m}}} {m} arr -{e}_from [get_clocks CLK] "
+                         f"-fall_through [get_pins -quiet {{{en}}}] -to [get_ports {{{p}}}]")
+                for d in ("rise", "fall"):
+                    L.append(f"q {{on {p} {e} {d} {m}}} {m} arr -{e}_from [get_clocks CLK] "
+                             f"-rise_through [get_pins -quiet {{{en}}}] -{d}_to [get_ports {{{p}}}]")
     L.append("pad_arcs unset_disable_timing data")
     # inputs, once against each CLK edge: input delay 0 at that PIN edge,
     # paths captured on the same CLK edge a period later (setup) or at the
@@ -136,16 +152,17 @@ def sta_script(cfg, run, libs, spef, clk, load, edge):
         cf = " -clock_fall" if e == "fall" else ""
         L.append(f"set_input_delay 0 -clock PIN{cf} [get_ports {q(INS)}]")
         for p in INS:
-            L.append(f"q {{in {p} {e} setup}} max slack -from [get_ports {{{p}}}] -{e}_to [get_clocks CLK]")
-            L.append(f"q {{in {p} {e} hold}} min slack -from [get_ports {{{p}}}] -{e}_to [get_clocks CLK]")
+            for d in ("rise", "fall"):
+                L.append(f"q {{in {p} {e} {d} setup}} max slack -{d}_from [get_ports {{{p}}}] -{e}_to [get_clocks CLK]")
+                L.append(f"q {{in {p} {e} {d} hold}} min slack -{d}_from [get_ports {{{p}}}] -{e}_to [get_clocks CLK]")
     return "\n".join(L) + "\n"
 
 
 def parse(text, clk):
     """{('out', port, launch, trans, max|min): delay from the CLK pin edge,
-        ('off' | 'on', port, launch, max|min): same, the pad floating /
-                                               turning on (its enable),
-        ('in', port, edge, setup|hold): requirement at the pin, ns}"""
+        ('off', port, launch, max|min): same, the pad floating (its enable),
+        ('on', port, launch, trans, max|min): the pad turning on,
+        ('in', port, edge, trans, setup|hold): requirement at the pin, ns}"""
     T, TH = clk["period"], clk["th"]
     res = {}
     for line in text.splitlines():
@@ -162,8 +179,71 @@ def parse(text, clk):
         if key[0] in ("out", "off", "on"):
             res[key] = v - (TH if key[2] == "fall" else 0.0)
         elif key[0] == "in":
-            res[key] = (T - v) if key[3] == "setup" else -v
+            res[key] = (T - v) if key[-1] == "setup" else -v
     return res
+
+
+# ------------------------------------------------------------- the pads
+def pad_dir(cfg, want):
+    """The SPICE-characterised pad libraries for the run's PDK (pads.py),
+    or None: the PDK's own."""
+    if want == "none":
+        return None
+    if want != "auto":
+        return want
+    pdk = cfg.get("PDK", "")
+    d = os.path.join(SPICE_PADS, "gf180mcu" if pdk.startswith("gf180mcu") else pdk)
+    return d if os.path.isfile(os.path.join(d, "pads.json")) else None
+
+
+class Levels:
+    """The datasheet's measuring levels against STA's 50 %, at one corner:
+    outputs at 1.5 V, from the pads' simulated waveforms at this load;
+    inputs at 2.0 V rising / 0.8 V falling, on a linear edge of `edge` ns
+    (10-90 %) at the pads' supply."""
+
+    def __init__(self, pads, run, cfg, corner, load, edge):
+        doc = json.load(open(os.path.join(pads, "pads.json")))
+        self.c, cond = doc["corners"][corner], doc["conditions"]
+        self.vil, self.vih, self.load, self.loads = cond["vil_V"], cond["vih_V"], load, cond["loads_pF"]
+        self.slope = 0.8 * self.c["vio"] / edge
+        nl = open(os.path.join(run, "final", "nl", cfg["DESIGN_NAME"] + ".nl.v")).read()
+        self.cell = {inst: cell for cell, inst in re.findall(r"^\s*(\w+)\s+(pad_\w+)\s*\(", nl, re.M)}
+
+    def out(self, port, arc, trans):
+        """ns from the pin's 50 % to its 1.5 V crossing (data / enable arc)"""
+        cell = self.cell.get("pad_" + port.replace("[", "").replace("]", ""))
+        D = self.c["cells"].get(cell, {}).get(arc)
+        if D is None:
+            return 0.0
+        a = min(range(len(D["slews"])), key=lambda i: abs(D["slews"][i] - 0.5))
+        row = D[trans][a] if arc == "data" else D["1" if trans == "rise" else "0"][a]
+        off = [r["dlev"] - r["d50"] for r in row]
+        k = min(max(bisect.bisect_left(self.loads, self.load), 1), len(self.loads) - 1)
+        f = (self.load - self.loads[k - 1]) / (self.loads[k] - self.loads[k - 1])
+        return off[k - 1] + f * (off[k] - off[k - 1])
+
+    def need(self, trans, kind):
+        """ns to add to a setup / hold requirement at the pin's 50 % to have
+        it at VIH / VIL: rising data is valid from VIH, falling from VIL;
+        old data stops being valid when it leaves VIH (falling) / VIL
+        (rising)"""
+        half = self.c["vio"] / 2
+        if kind == "setup":
+            return -(self.vih - half) / self.slope if trans == "rise" else -(half - self.vil) / self.slope
+        return -(half - self.vil) / self.slope if trans == "rise" else (half - self.vih) / self.slope
+
+    def apply(self, res):
+        out = {}
+        for key, v in res.items():
+            if key[0] == "out":
+                v += self.out(key[1], "data", key[3])
+            elif key[0] == "on":
+                v += self.out(key[1], "enable", key[3])
+            elif key[0] == "in":
+                v += self.need(key[3], key[4])
+            out[key] = v
+        return out
 
 
 # ------------------------------------------------------------ the checks
@@ -210,12 +290,13 @@ class Contract:
         dmin = lambda x, l, t: d(min, x, l, t, "min")
 
         def oe(kind, x, launch, mm):          # kind: off (float) / on
-            vals = [m.get((kind, p, launch, mm)) for p in ports(x)]
+            vals = [m.get((kind, p, launch, mm) if kind == "off" else (kind, p, launch, t, mm))
+                    for p in ports(x) for t in ((None,) if kind == "off" else ("rise", "fall"))]
             vals = [v for v in vals if v is not None]
             return (max if mm == "max" else min)(vals) if vals else None
 
         def need(x, edge, kind):
-            vals = [m.get(("in", p, edge, kind)) for p in ports(x)]
+            vals = [m.get(("in", p, edge, t, kind)) for p in ports(x) for t in ("rise", "fall")]
             vals = [v for v in vals if v is not None]
             return max(vals) if vals else None
 
@@ -389,8 +470,8 @@ def write_sdc(con, path, load, edge):
     open(path, "w").write("\n".join(L) + "\n")
 
 
-def run_corner(sta, cfg, run, corner, contract, edge, keep):
-    libs, spef = corner_files(run, cfg, corner)
+def run_corner(sta, cfg, run, corner, contract, edge, keep, pads=None, levels=False):
+    libs, spef = corner_files(run, cfg, corner, pads)
     script = sta_script(cfg, run, libs, spef, contract.clk, contract.load, edge)
     with tempfile.TemporaryDirectory() as tmp:
         d = keep or tmp
@@ -402,7 +483,10 @@ def run_corner(sta, cfg, run, corner, contract, edge, keep):
             open(os.path.join(d, f"pin_timing_{corner}.log"), "w").write(p.stdout + p.stderr)
     if p.returncode != 0 or "## " not in p.stdout:
         sys.exit(f"pin_timing: OpenSTA failed for {corner}:\n" + (p.stderr or p.stdout)[-2000:])
-    return parse(p.stdout, contract.clk)
+    res = parse(p.stdout, contract.clk)
+    if levels:
+        res = Levels(pads, run, cfg, corner.split("_")[1], contract.load, edge).apply(res)
+    return res
 
 
 def main():
@@ -414,6 +498,8 @@ def main():
     ap.add_argument("--corners", default="", help="process corners to check, e.g. tt,ss (default: all of the run's)")
     ap.add_argument("--sta", default=os.environ.get("STA", "sta"))
     ap.add_argument("--keep", help="keep the OpenSTA scripts and logs in this directory")
+    ap.add_argument("--pads", default="auto", help="SPICE-characterised pad libraries: auto (../spice/pads/<pdk>/ "
+                    "if there), none (the PDK's), or a directory")
     ap.add_argument("--write-sdc", metavar="FILE", help="write the flow's SDC for this grade instead (RUN is ignored)")
     a = ap.parse_args()
     if a.write_sdc:
@@ -430,11 +516,20 @@ def main():
     corners.sort(key=lambda c: CORNER_ORDER.index(c.split("_")[1]) if c.split("_")[1] in CORNER_ORDER else len(CORNER_ORDER))
     if not corners:
         print(f"pin_timing: no corner of {a.run} matches {a.corners!r}"); return 2
+    pads = pad_dir(cfg, a.pads)
+    if pads:
+        have = json.load(open(os.path.join(pads, "pads.json")))["corners"]
+        missing = [k for k in corners if k.split("_")[1] not in have]
+        if missing:
+            print(f"pin_timing: {pads} has no corner {', '.join(missing)}"); return 2
     c = con.clk
     print(f"{cfg['DESIGN_NAME']} ({os.path.basename(os.path.normpath(a.run))}) vs Zilog Z8400 NMOS, "
           f"{a.grade} MHz: clock {c['period']:g} ns, {c['twch']:g}/{c['twcl']:g} ns high/low, "
           f"{c['tr']:g} ns edges; {a.load:g} pF loads")
-    results = {k: run_corner(a.sta, cfg, a.run, k, con, edge, a.keep) for k in corners}
+    print("pads: " + (f"simulated at transistor level ({os.path.relpath(pads, os.path.join(HERE, '..', '..'))}); outputs at 1.5 V, "
+                      f"inputs at 2.0 / 0.8 V, CLK at 50 %" if pads else
+                      "the PDK's Liberty (extrapolated beyond its range); every pin at 50 %"))
+    results = {k: run_corner(a.sta, cfg, a.run, k, con, edge, a.keep, pads, bool(pads)) for k in corners}
     rows = {k: con.checks(m) for k, m in results.items()}
     ok_all = True
     first = rows[corners[0]]

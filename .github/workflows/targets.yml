@@ -6,9 +6,9 @@
 # (fpga-<board>.yml, asic-<pdk>.yml).
 #
 # Every push to main, nightly -- the FPGA tools are pip's latest, so this
-# also catches toolchain drift -- and on demand. When every target passed,
-# the pages job publishes the downloads and the layout renders on GitHub
-# Pages: https://rejunity.github.io/z80-from-schematics/
+# also catches toolchain drift -- and on demand. When every target passed
+# on main, pages.yml publishes the downloads and the layout renders on
+# GitHub Pages: https://rejunity.github.io/z80-from-schematics/
 name: Targets
 
 on:
@@ -37,59 +37,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pdk: [sky130, ihp-sg13g2, gf180mcu]
+        pdk: [sky130, ihp-sg13g2, gf180mcu, gf180mcu-9t]
     uses: ./.github/workflows/asic-pdk.yml
     with:
       pdk: ${{ matrix.pdk }}
 
-  # The latest run where every board and PDK passed: the bitstreams, GDS
-  # files and layout renders from the jobs' artifacts, and an index page
-  # (.github/scripts/dist.py site). The renders also go into this job's
-  # summary. Deploys only from main (the github-pages environment's rule).
-  pages:
-    name: GitHub Pages
-    needs: [fpga, asic]
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
-    concurrency:
-      group: pages
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Download the bitstreams
-        uses: actions/download-artifact@v8
-        with:
-          pattern: fpga-*-bitstreams
-          path: dist
-          merge-multiple: true
-
-      - name: Download the GDS files and renders
-        uses: actions/download-artifact@v8
-        with:
-          pattern: asic-*-gds
-          path: dist
-          merge-multiple: true
-
-      - name: Build the site
-        run: python3 .github/scripts/dist.py site dist site
-
-      - uses: actions/upload-pages-artifact@v5
-        with:
-          path: site
-
-      - name: Deploy
-        id: deploy
-        uses: actions/deploy-pages@v5
-
-      - name: Layout renders in the summary
-        env:
-          PAGE_URL: ${{ steps.deploy.outputs.page_url }}
-        run: python3 .github/scripts/dist.py summary site "$PAGE_URL" >> "$GITHUB_STEP_SUMMARY"
+  # The I/O pads at transistor level, every pad cell the chips use, in
+  # ngspice against the committed results (spice-pads.yml; ~10 min)
+  spice:
+    strategy:
+      fail-fast: false
+      matrix:
+        pdk: [gf180mcu, ihp-sg13g2]
+    uses: ./.github/workflows/spice-pads.yml
+    with:
+      pdk: ${{ matrix.pdk }}
