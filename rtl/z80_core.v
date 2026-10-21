@@ -135,6 +135,7 @@ module z80_core (
     // special-reset latch, taken from res_s in that low half; srst_m1
     // marks the opcode fetch it replaces.
     reg        res2, sres, rst_idle, srst_m1;
+    reg        in_tw;    // this T-state is a Tw (WAIT held the last): not T2
     reg        rd_hold;        // RD still low from a T1 cut (one idle T-state)
     reg [15:0] addr_hold;      // the address the last T-state's low half drove
 
@@ -157,7 +158,7 @@ module z80_core (
     reg [1:0]  irq_seq_n;
     reg        im0_ins_n;
     reg        allow_int;
-    reg        res2_n, sres_n, rst_idle_n, srst_m1_n;
+    reg        res2_n, sres_n, rst_idle_n, srst_m1_n, in_tw_n;
 
     // =======================================================================
     // decode PLA
@@ -240,14 +241,16 @@ module z80_core (
     //    there and holds through T2.P;
     //  - a T1 cut followed by a restart at once keeps RD low into the
     //    restarted M1 (rd_hold): it releases only in an idle T.N.
-    wire m1_t2    = ((bus_op == `BUSOP_M1) || (bus_op == `BUSOP_INTA)) && (t_state == 4'd2) && !rst_idle;
+    // the M1's T2 itself: RES2 doesn't hold in a Tw after it (perfectz80)
+    wire m1_t2    = ((bus_op == `BUSOP_M1) || (bus_op == `BUSOP_INTA)) && (t_state == 4'd2) && !rst_idle && !in_tw;
     wire ext      = (bus_op == `BUSOP_INTERNAL) && (m_len <= 4'd2);
     wire int_g    = (bus_op == `BUSOP_INTERNAL) && !ext;
     wire int_g_n  = (bus_op_n == `BUSOP_INTERNAL) && (m_len_n > 4'd2);
-    wire cut      = res2 && !rst_idle;
+    // no cut in a bus grant: the bus is the DMA master's (perfectz80)
+    wire cut      = res2 && !rst_idle && !bus_granted;
     wire cut_t1   = cut && !ext && (t_state == 4'd1);
     wire cut_t2   = cut && !ext && (t_state == 4'd2);
-    wire int_mreq_neg = int_g && (t_state == 4'd1) && !res2 && res2_n && !rst_idle;
+    wire int_mreq_neg = int_g && (t_state == 4'd1) && !res2 && res2_n && !rst_idle && !bus_granted;
     wire int_mreq_pos = int_g_n && (t_n == 4'd2) && res2_n && !rst_idle_n;
     wire rd_hold_neg  = rst_idle && rd_hold && !res2;          // restart follows this idle T
     wire rd_hold_pos  = cut_t1 || (rst_idle && rd_hold && !res2);
@@ -317,7 +320,9 @@ module z80_core (
     // A granted T-state whose rising edge saw BUSREQ high is the last one:
     // BUSACK rises on its falling edge, the held M-cycle starts after it.
     assign busack_n_pos = bus_granted_n ? 1'b0 : 1'b1;
-    assign busack_n_neg = (bus_granted && !busreq_n) ? 1'b0 : 1'b1;
+    // RES2 set in a granted T-state releases it the same way (perfectz80):
+    // BUSACK rises in its low half, the reset idle follows
+    assign busack_n_neg = (bus_granted && !busreq_n && !res2) ? 1'b0 : 1'b1;
     // The die's pad drivers (perfectz80's pull-up / pull-down gates,
     // scripts/pz80_pads.c): the address floats in a bus grant and in the
     // reset idle, MREQ IORQ RD WR in a bus grant only -- from the first
@@ -901,6 +906,7 @@ module z80_core (
         allow_int = 1'b0;
         nmi_pending_mid = nmi_pending;
         res2_n = res2; sres_n = sres; rst_idle_n = rst_idle; srst_m1_n = srst_m1;
+        in_tw_n = stall && !bus_granted;    // the T-state the next edge starts is a Tw
 
         // ===== RESET (perfectz80; docs/timing.md "RESET") =====
         // RES2 takes the pin sample (res_s, from this T-state's rising edge)
@@ -909,6 +915,17 @@ module z80_core (
         // takes it instead. RES2 clears that latch.
         res2_n = m1_t2 ? res2 : res_s;
         sres_n = res2_n ? 1'b0 : (m1_t2 ? res_s : sres);
+
+        // NMI is edge-triggered: a falling edge seen between the previous
+        // rising edge and this T-state's falling edge (mid), or between that
+        // and now. Not while the full reset RES2 is set -- such an edge is
+        // lost -- but the pin is still followed, so once RES2 clears an edge
+        // in the last idle T-state before the restart is taken (perfectz80;
+        // cmodel). res2 is RES2 in this T-state's high half, res2_n from its
+        // falling edge on.
+        nmi_pending_mid = nmi_pending | (prev_nmi_n & ~nmi_n_neg & ~res2);
+        prev_nmi_n_n    = nmi_n;
+        nmi_pending_n   = nmi_pending_mid | (nmi_n_neg & ~nmi_n & ~res2_n);
 
         if (rst_idle) begin
             // the T-state ring has stopped: T1 of an M1 at PC (0000) follows
@@ -926,10 +943,6 @@ module z80_core (
         // ===== clock-low-half work: what the chip did on the FALLING edge
         // of this T-state. Inputs are the *_neg copies z80_top captured on
         // that edge. =====
-        // NMI is edge-triggered: falling edge seen between the previous
-        // rising edge and this T-state's falling edge.
-        nmi_pending_mid = nmi_pending | (prev_nmi_n & ~nmi_n_neg);
-
         // NMI/INT silicon sample point: the rising edge that starts the
         // last T-state of the current M-cycle (Zilog PS0178 Figure 8,
         // TsINT/ThINT; perfectz80): the INT level z80_top latched on that
@@ -946,10 +959,6 @@ module z80_core (
 
         // ===== clock-high-half work: what the chip does on THIS rising
         // edge. Inputs are the live pins. =====
-        // NMI edge detect, second half: falling edge between this T-state's
-        // falling edge and now.
-        prev_nmi_n_n  = nmi_n;
-        nmi_pending_n = nmi_pending_mid | (nmi_n_neg & ~nmi_n);
         // During the NMI response (its M1 and the two pushes) the chip
         // holds its NMI flip-flop clear: an NMI edge there is lost, even
         // when NMI then stays low (perfectz80; event sweep nmir_entry).
@@ -1057,7 +1066,10 @@ module z80_core (
                         // Woodmass HALT2INT): PC is ALREADY past the HALT
                         // byte. Just clear halted_n; no PC bump.
                         halted_n = 1'b0;
-                        iff2_n = iff1_n; iff1_n = 1'b0;
+                        // IFF1 off, IFF2 as EI / DI / RETN left it
+                        // (perfectz80): a nested NMI keeps the enable the
+                        // RETNs bring back (cmodel)
+                        iff1_n = 1'b0;
                         irq_seq_n = 2'd1;
                         bus_op_n = `BUSOP_M1; m_addr_n = pc_next; m_wdata_n = 8'h0;
                         m_len_n = 4'd5; t_n = 4'd1; m_cycle_n = 3'd1;
@@ -1113,7 +1125,7 @@ module z80_core (
             prefix_n = `PFX_NONE; irq_seq_n = 2'd0; suppress_decode_n = 1'b0; im0_ins_n = 1'b0;
             ei_delay_n = 1'b0; nmi_sampled_n = 1'b0; int_sampled_n = 1'b0;
             nmi_pending_n = 1'b0; bus_granted_n = 1'b0; srst_m1_n = 1'b0;
-            f_modified_n = 1'b0;
+            f_modified_n = 1'b0; in_tw_n = 1'b0;
         end
     end
 
@@ -1137,10 +1149,12 @@ module z80_core (
             suppress_decode <= 1'b0; bus_granted <= 1'b0; irq_seq <= 2'd0; im0_ins <= 1'b0;
             reg_q <= 8'h00; f_modified <= 1'b0;
             res2 <= 1'b1; sres <= 1'b0; rst_idle <= 1'b1; srst_m1 <= 1'b0; rd_hold <= 1'b0;
+            in_tw <= 1'b0;
             addr_hold <= 16'h0000;
         end else begin
             addr_hold <= addr_neg;
             res2 <= res2_n; sres <= sres_n; rst_idle <= rst_idle_n; srst_m1 <= srst_m1_n;
+            in_tw <= in_tw_n;
             rd_hold <= cut_t1;
             reg_i <= reg_i_n; reg_r <= reg_r_n; ir <= ir_n;
             t_state <= t_n; m_cycle <= m_cycle_n;

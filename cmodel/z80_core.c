@@ -1184,7 +1184,11 @@ static void begin_next(z80_t *c)
          * (set when HALT's M1 committed; see EXEC_HALT). Just clear the
          * halted flag and start the NMI ack sequence -- no PC bump. */
         if (c->halted) c->halted = false;
-        c->iff2 = c->iff1; c->iff1 = false;        /* IFF1->IFF2, disable */
+        /* IFF1 off; IFF2 keeps what EI / DI / RETN last set (perfectz80):
+           it holds IFF1's value from before the NMI because the two only
+           part here -- and a nested NMI leaves IFF2 alone, so the RETNs
+           bring back the enable from before the first NMI */
+        c->iff1 = false;
         c->nmi_resp = true;
         start_seq_m1(c, EXEC_NMI, 5, true);        /* 5T ack, opcode discarded */
         return;
@@ -1245,6 +1249,7 @@ static void end_tstate(z80_t *c)
 static void enter_reset_idle(z80_t *c)
 {
     c->rst_idle = true;
+    c->in_tw = false;
     c->rf[RFP_PC] = 0x0000;
     c->reg_i = 0; c->reg_r = 0;
     c->iff1 = c->iff2 = false;
@@ -1275,10 +1280,12 @@ static void advance(z80_t *c)
        of an M1's (INTA's) T2, where it holds and the special-reset latch sres
        takes the sample instead; RES2 clears that latch. Then the pin is
        sampled for the next T-state. */
-    bool m1_t2 = !c->rst_idle && (c->bus_op == BUSOP_M1 || c->bus_op == BUSOP_INTA) && c->t_state == 2;
+    bool m1_t2 = !c->rst_idle && (c->bus_op == BUSOP_M1 || c->bus_op == BUSOP_INTA) && c->t_state == 2 &&
+                 !c->in_tw;               /* T2 itself: RES2 doesn't hold in a Tw (perfectz80) */
     bool res2  = c->res2;                    /* set on the previous falling edge */
     bool ext   = c->bus_op == BUSOP_INTERNAL && c->m_len <= 2;   /* M1 / read extension */
-    bool cut_t1 = res2 && !c->rst_idle && !ext && c->t_state == 1;
+    /* no cut in a bus grant: the bus is the DMA master's (perfectz80) */
+    bool cut_t1 = res2 && !c->rst_idle && !c->bus_granted && !ext && c->t_state == 1;
     bool hold  = c->rst_idle && c->rd_hold && !res2;   /* restart right after a T1 cut */
     c->res2 = m1_t2 ? c->res2 : c->res_s;
     c->sres = c->res2 ? false : (m1_t2 ? c->res_s : c->sres);
@@ -1316,6 +1323,8 @@ static void advance(z80_t *c)
         bool ext_next = c->bus_op == BUSOP_INTERNAL && c->m_len <= 2 && c->t_state == 1;
         if (last && breq && !ext_next) c->bus_granted = true;
     }
+    /* the T-state this edge starts is a Tw: WAIT held the last one */
+    c->in_tw = !c->bus_granted && c->stalled;
     if (res2) {                              /* this T-state was the last */
         /* the SP-1 of a push's first byte belongs, on the die, to the falling
            edge that ends the M-cycle before it (M1 T5, the NMI / INT response,
@@ -1355,6 +1364,7 @@ static void reset_state(z80_t *c)
     c->phase_primed = false; c->stalled = false; c->wait_sampled = false;
     c->q = 0; c->f_modified = false;
     c->res_s = c->res2 = c->sres = c->rst_idle = c->srst_m1 = c->rd_hold = false;
+    c->in_tw = false;
     c->busreq_s = false;
 
     c->pins.m1_n = c->pins.mreq_n = c->pins.iorq_n = 1;
@@ -1411,12 +1421,12 @@ void z80_phase_step(z80_t *c)
 {
     c->cycle++;
 
-    /* NMI is edge-triggered: latch a falling edge on nmi_n (not while the
-       RESET idle has stopped the T-state ring, as in the RTL) */
-    if (!c->rst_idle) {
-        if (c->prev_nmi_n && !c->pins.nmi_n) c->nmi_pending = true;
-        c->prev_nmi_n = c->pins.nmi_n;
-    }
+    /* NMI is edge-triggered: latch a falling edge on nmi_n -- not while the
+       full reset (RES2) is set, which still follows the pin, so an edge
+       then is lost; once RES2 clears, the last idle T-state before the
+       restart takes one (perfectz80) */
+    if (c->prev_nmi_n && !c->pins.nmi_n && !c->res2) c->nmi_pending = true;
+    c->prev_nmi_n = c->pins.nmi_n;
 
     /* Tw repeats T2 in memory writes, but its .P half must not regenerate
        the initial T2.P (WR high). Preserve the already asserted strobe. */
@@ -1491,13 +1501,16 @@ void z80_phase_step(z80_t *c)
          - I/O Tw cut: IORQ and RD / WR release in Tw.N; INTA Tw cut: IORQ. */
     bool ext   = c->bus_op == BUSOP_INTERNAL && c->m_len <= 2;
     bool int_g = c->bus_op == BUSOP_INTERNAL && !ext;
-    bool m1_t2 = !c->rst_idle && (c->bus_op == BUSOP_M1 || c->bus_op == BUSOP_INTA) && c->t_state == 2;
+    bool m1_t2 = !c->rst_idle && (c->bus_op == BUSOP_M1 || c->bus_op == BUSOP_INTA) && c->t_state == 2 &&
+                 !c->in_tw;               /* T2 itself: RES2 doesn't hold in a Tw (perfectz80) */
     /* RES2 / the special-reset latch after this T-state's falling edge */
     bool res2_f = (c->phi == 0) ? c->res2 : (m1_t2 ? c->res2 : c->res_s);
     bool sres_f = (c->phi == 0) ? c->sres : (res2_f ? false : (m1_t2 ? c->res_s : c->sres));
     /* bus grant: strobes idle, the address held; BUSACK low, rising in the
        low half of the granted T-state whose rising edge saw BUSREQ high */
-    c->pins.busack_n = c->bus_granted ? ((c->phi == 1 && !c->busreq_s) ? 1 : 0) : 1;
+    /* ... and RES2 set in a granted T-state releases it the same way
+       (perfectz80): BUSACK rises in its low half, the reset idle follows */
+    c->pins.busack_n = c->bus_granted ? ((c->phi == 1 && (!c->busreq_s || c->res2)) ? 1 : 0) : 1;
     if (c->bus_granted) {
         c->pins.m1_n = c->pins.mreq_n = c->pins.iorq_n = 1;
         c->pins.rd_n = c->pins.wr_n = c->pins.rfsh_n = 1;
@@ -1517,6 +1530,8 @@ void z80_phase_step(z80_t *c)
         /* RD from a cut T1: low in the idle T.P, and in its T.N when the
            restart follows at once */
         if (c->rd_hold && (c->phi == 0 || !c->res2)) c->pins.rd_n = 0;
+    } else if (c->bus_granted) {
+        /* a grant: RESET drives no cut pattern on the DMA master's bus */
     } else if (c->rd_hold && c->phi == 0) {
         c->pins.rd_n = 0;                    /* ... and in the restarted M1's T1.P */
     } else if (!c->res2) {
