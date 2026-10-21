@@ -178,6 +178,13 @@ def prepare_netlist(src, dst):
     return dropped, n_caps
 
 
+# The core clock's root crosses 50 % this long after the CLK pin crosses the
+# pad's threshold, rising / falling (ns; probed in the fine runs; the leaves
+# follow 0.4-1.1 ns later).
+ROOT = {"tt": (2.9, 2.1), "ss": (4.3, 3.5), "ff": (2.1, 1.4)}
+TMAX = 10.0       # ns: the longest step, where the chip has settled
+
+
 def clock_breaks(corner, edges, vdd):
     """[times]: corners for a source that only makes breakpoints, over the
     core clock's edges. ngspice's step control (on the devices' charges,
@@ -188,14 +195,19 @@ def clock_breaks(corner, edges, vdd):
     clocks still (both seen, at tt and at ff). After a breakpoint ngspice
     restarts with a tenth of the gap to the next, so corners every 0.5 ns,
     from just before the pin's ramp crosses the pad's threshold (pads.json)
-    to 7 ns after it, keep those steps at 0.2 ns or less."""
+    until 1 ns after the clock's root has crossed 50 % (ROOT), keep those
+    steps at 0.2 ns or less. From there the switching chip keeps its own
+    steps short (0.03-0.1 ns), and more corners would only restart them.
+    The edge that releases RESET keeps them to 7 ns after the threshold."""
     dc = json.load(open(os.path.join(HERE, "pads", "gf180mcu", "pads.json")))["corners"][corner]["cells"][
         "gf180mcu_fd_io__in_s"]["dc"]
     r = EDGE / 0.8
+    trst = next(t0 for t0, c, rst, kv in edges if rst == 1)
     out = []
     for t0, clk, rst, kv in edges:
         t_sw = t0 - r / 2 + r * (dc["vt_rise"] / vdd if clk else 1 - dc["vt_fall"] / vdd)
-        out += [t_sw - 0.5 + 0.5 * k for k in range(16)]
+        lead = 7.0 if t0 == trst else ROOT[corner][0 if clk else 1] + 1.0
+        out += [t_sw - 0.5 + 0.5 * k for k in range(int(lead / 0.5) + 2)]
     assert all(b > a for a, b in zip(out, out[1:])) and out[0] > 0
     return out
 
@@ -301,7 +313,7 @@ def deck(work, corner, edges, threads, tstop, t_from=0.0):
         if t_from > 0:
             L.append(f".include {state_file(work, corner, t_from)}")
     L += [".control", f"set num_threads={threads}", "set wr_singlescale", "set wr_vecnames", "option numdgt=7",
-          f"save {save}", f"tran 0.1n {tstop - t_from:.3f}n 0 2n uic", f"wrdata {dat} {save}"] + end + [
+          f"save {save}", f"tran 0.1n {tstop - t_from:.3f}n 0 {TMAX:g}n uic", f"wrdata {dat} {save}"] + end + [
           "rusage all", "quit", ".endc", ".end"]
     open(sp, "w").write("\n".join(L) + "\n")
     print(f"chip: {sp}: {dropped} fill cells dropped, {n_caps} lumped capacitors, {len(win)} read windows, "
