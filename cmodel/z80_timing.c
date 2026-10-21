@@ -77,10 +77,12 @@ void z80_timing(uint8_t   bus_op,     /* z80_busop_t                          */
         bool active = !(t_state == 1 && phi == 0) &&
                       !(t_state == 3 && phi == 1) && t_state <= 3;
         *mreq_n = active ? 0 : 1;
-        /* Data from T1.N through T3.N: it stays driven past WR's rise at
-           T3.N and floats at the next rising edge (Zilog PS0178 Figure 6,
-           TdWRr(D) / TdCr(Dz); perfectz80's data bus floats at T1.P). */
-        *data_drive = !(t_state == 1 && phi == 0) && t_state <= 3;
+        /* Data from T1.N to the end of the M-cycle: it stays driven past
+           WR's rise at T3.N and floats at the next rising edge (Zilog PS0178
+           Figure 6, TdWRr(D) / TdCr(Dz); perfectz80's data bus floats at
+           T1.P) -- through T4 / T5 of a long write too (EX (SP),HL's last,
+           LDI's: perfectz80's data pads stay driven to the next T1). */
+        *data_drive = !(t_state == 1 && phi == 0);
         *data_out = m_wdata;
         *wr_n = ((t_state == 2 && phi == 1) || (t_state == 3 && phi == 0)) ? 0 : 1;
         break;
