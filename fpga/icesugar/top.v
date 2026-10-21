@@ -231,6 +231,13 @@ module top #(
     end
     wire cpu_reset_n = rst_sync[1];
 
+    // z80_top's power-on reset (not a Z80 pin): low from configuration until
+    // the first release of the reset above, so the registers come up 5555
+    // like perfectz80's. After that the button is the RESET pin alone, which
+    // keeps the registers, as on the die.
+    reg cpu_por_n = 1'b0;
+    always @(posedge clk_z80) if (cpu_reset_n) cpu_por_n <= 1'b1;
+
     // ---- Z80 ----
     wire [15:0] addr;
     wire [7:0]  data_out;
@@ -250,6 +257,7 @@ module top #(
 
     z80_top cpu (
         .clk        (clk_z80),
+        .por_n      (cpu_por_n),
         .reset_n    (cpu_reset_n),
         .addr       (addr),
         .data_in    (data_in),
