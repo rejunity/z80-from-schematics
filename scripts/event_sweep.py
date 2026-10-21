@@ -103,9 +103,8 @@ GROUPS = ["int", "nmi", "nmi_short", "nmi_reentry", "reset", "reset_release",
           "reset_wait", "reset_short", "combo", "busreq", "wait", "im2", "im2_combo",
           "im0", "im0_combo", "opcodes", "classes", "classes_reset", "opcodes_reset", "fuzz",
           "fuzz_reset", "reset_m1wait", "reset_busreq", "reset_nmi"]
-# run only when named (--groups): RESET at every T-state of every opcode, the
-# fuzz with RESET, and NMI after RESET's release
-EXPLICIT = {"opcodes_reset", "fuzz_reset", "reset_nmi"}
+# run only when named (--groups): RESET at every T-state of every opcode
+EXPLICIT = {"opcodes_reset"}
 FUZZ_N, FUZZ_SEED = 2000, 1     # the recorded fuzz cases; --fuzz-seed / --fuzz-n for others
 
 # ---- every opcode (the `opcodes` group) ------------------------------------

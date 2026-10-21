@@ -395,7 +395,7 @@ module z80_core (
     // T2's too -- on this edge, as the cut's last (docs/timing.md "Register
     // write-back")
     wire stall_cut = res2 && !rst_idle && !bus_granted && stall && (t_state == 4'd2);
-    wire tw_cut    = stall_cut && in_tw;
+    wire tw_cut    = res2 && !rst_idle && !bus_granted && in_tw && (t_state == 4'd2);
 
     // =======================================================================
     // register file: read side

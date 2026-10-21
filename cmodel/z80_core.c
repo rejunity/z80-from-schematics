@@ -1529,8 +1529,9 @@ static void advance(z80_t *c)
     /* no cut in a bus grant: the bus is the DMA master's (perfectz80) */
     bool cut_t1 = res2 && !c->rst_idle && !c->bus_granted && !ext && c->t_state == 1;
     bool hold  = c->rst_idle && c->rd_hold && !res2;   /* restart right after a T1 cut */
-    /* this T-state is an M1's (INTA's) T2 -- or a Tw after it */
+    /* this T-state is an M1's (INTA's) T2, not a Tw after it; a Tw after a T2 */
     bool t2    = (c->bus_op == BUSOP_M1 || c->bus_op == BUSOP_INTA) && c->t_state == 2 && !c->in_tw;
+    bool tw    = c->in_tw && c->t_state == 2 && !c->bus_granted;
     c->res2 = m1_t2 ? c->res2 : c->res_s;
     c->sres = c->res2 ? false : (m1_t2 ? c->res_s : c->sres);
     c->res_s = !c->pins.reset_n;
@@ -1569,10 +1570,10 @@ static void advance(z80_t *c)
         if (last && breq && !ext_next) c->bus_granted = true;
     } else if (res2 && c->t_state == 2) {
         /* the cut ends on a T2 that WAIT held, or on a Tw after it: the die's
-           writes of T1's low half stand, and from a Tw on those of T2's */
+           writes of T1's low half stand (below: and from a Tw on, T2's) */
         wb_edge(c, 2); wb_hooks(c, 2);
-        if (c->in_tw) { wb_edge(c, 3); wb_hooks(c, 3); }
     }
+    if (res2 && tw) { wb_edge(c, 3); wb_hooks(c, 3); }
     /* the T-state this edge starts is a Tw: WAIT held the last one */
     c->in_tw = !c->bus_granted && c->stalled;
     if (res2) {                              /* this T-state was the last */

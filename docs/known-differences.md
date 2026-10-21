@@ -264,24 +264,39 @@ Notes for each row:
        the pins now hold instead.
 
  19. **RESET between an instruction and its write-back — resolved
-     2026-10-21.** The die writes results into the register file on its own
+     2026-10-22.** The die writes results into the register file on its own
      schedule, often in the next instruction's M1 (docs/timing.md "Register
      write-back"), so a RESET that stops an instruction part-way leaves the
      registers it hadn't written yet; the models wrote results on M-cycle
      ends and kept them, and the C model and the RTL each on their own edges
      (the event sweep's `classes_reset`: 170 of 2,210 cases differed from
-     perfectz80, 84 between the models). Measured on perfectz80 with the
-     whole register file read in the reset idle after RESET at every T-state
-     of every opcode (and of each followed by an INT or NMI response): a
-     write in a T-state's low half is kept by a cut ending on the next
-     T-state or later. Both models now keep a write-back log -- each byte
-     written before the die's edge, its old value and that edge -- and a
-     RESET cut puts back what the die hadn't written; the few writes the die
-     makes before the models' M-cycle ends are made on its edges. The
-     sweep's RESET cases store every register after the reset (A and F, IX,
-     IY, the alternates), `classes_reset` runs by default, and
-     `opcodes_reset` (RESET at every T-state of every opcode) by name.
-     Nothing changes at an instruction boundary.
+     perfectz80, 84 between the models). Measured on perfectz80 -- the
+     register file after RESET at every T-state of every opcode, also
+     followed by an INT or NMI response, and with WAIT and BUSREQ: a write in
+     a T-state's low half is kept by a cut ending on the next T-state or
+     later (a Tw after T2 is that T-state for T2's writes). Both models now
+     keep a write-back log -- each byte written before the die's edge, its
+     old value and that edge -- and a RESET cut puts back what the die
+     hadn't written; the writes the die makes before the models' M-cycle
+     ends are made on its edges, and a cut on a WAIT-held T2 or a Tw after
+     it makes T2's then. F after a cut on the next M1's T2 (RESET in an
+     instruction's last T-state) is neither the old flags nor the new: the
+     die writes its flag latches into F in the restart's first M1 as the cut
+     left them -- S old, Z preset to 1, P/V the parity of the result's bits
+     0-2, X and Y from the internal bus, per instruction class (cmodel
+     `f_cut()`, rtl `f_cut`), found on every opcode under twelve register
+     setups (21,708 cuts). The RESET sweeps showed three more: a cut in a
+     long internal M-cycle's T1 drives the die's address latch (WZ in JR,
+     DJNZ, (IX+d), CPI, RLD / RRD; WZ = HL+1 in ADD / ADC / SBC HL's second
+     internal cycle; PC from before a block repeat's -2), where the models
+     drove the cycle's IDU / EA work; an INTA's F stands from a cut on its
+     second wait state; and the RTL set Q after DD CB RES / SET, so a SCF /
+     CCF after them took X / Y from F (`fuzz_reset`, a case without RESET).
+     The sweep's RESET cases store every register after the reset (A and F,
+     IX, IY, the alternates); `classes_reset`, `fuzz_reset` and `reset_nmi`
+     run by default, `opcodes_reset` (RESET at every T-state of every
+     opcode) by name, and none of them differs. Nothing changes at an
+     instruction boundary.
  20. **IM0: the instruction from the interrupting device — resolved
      2026-10-21.** Found by the event sweep's `im0` group (twenty
      instructions handed over in INTA, perfectz80). On the die PC doesn't
@@ -354,7 +369,7 @@ Notes for each row:
      while RES2 is set (the pin still followed), and taken once RES2 clears
      -- in the last idle T-state before the restart too. The models ignored
      NMI through the whole reset idle and lost an edge there. `reset_nmi`
-     (120 cases; run by name until row 19, which 72 of them show).
+     (120 cases).
 
 Add rows as new differences are discovered. Each "watching" row should gain a
 test that pins the chosen behaviour or escalates it.
