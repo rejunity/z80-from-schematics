@@ -349,7 +349,14 @@ hours each.
 
 A window starts from the node voltages the one before ended with
 (ngspice's `wrnodev`, as `.ic`), with every source shifted to its start.
-The cuts sit 15 ns before a clock edge, where the chip has settled: over
-the first two windows at tt every pin edge lands where the unbroken run
-has it (0.0 ps). ngspice's own snapshots (`snsave` / `snload`) would keep
-the integrator's history too, but `snload` crashes on a KLU circuit.
+The cuts sit 15 ns before a clock edge, where the chip has settled.
+`wrnodev` leaves out every node whose name has a `#` -- ngspice keeps those
+for devices' own internal nodes -- and Magic names every node inside a
+standard cell that way, so the first run on GitHub restarted each window
+with the latches inside every flip-flop at 0 V: its pins left the RTL's at
+the first clock edge after the first cut. `chip.py` renames them
+(`a_<x>_<y>_h`); a flip-flop restarted while its clock is high keeps its
+state. A run whose pins differ from the RTL's or that fails an AC
+parameter fails, and `pages.yml` publishes no such run. ngspice's own
+snapshots (`snsave` / `snload`) would keep the integrator's history too,
+but `snload` crashes on a KLU circuit.

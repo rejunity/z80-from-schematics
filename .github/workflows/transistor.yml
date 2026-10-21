@@ -356,6 +356,7 @@ jobs:
           exit $rc
 
       - uses: actions/upload-artifact@v6
+        if: always()      # a failed check's results too, to look at (pages.yml publishes only a passed run)
         with:
           name: transistor-gf180mcu
           path: spice/

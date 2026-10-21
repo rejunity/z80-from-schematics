@@ -151,7 +151,11 @@ def prepare_netlist(src, dst):
     lumped per node to ground. Magic's hierarchical extraction leaves
     coupling between nets and, at the top level, negative corrections
     aimed at nodes inside subcells (by names a SPICE netlist cannot reach);
-    the lumped version keeps each net's total."""
+    the lumped version keeps each net's total. Magic names a subcell's own
+    nodes a_<x>_<y>#, and ngspice keeps '#' for devices' internal nodes:
+    wrnodev leaves such names out of a window's end state, and the window
+    after it would start every latch inside a flip-flop at 0 V. They are
+    renamed a_<x>_<y>_h (no name in the netlist ends in _h)."""
     keep, caps, n_caps, dropped = [], None, 0, 0
     for line in open(src).read().replace("\n+", " ").splitlines():
         t = line.split()
@@ -174,7 +178,7 @@ def prepare_netlist(src, dst):
             dropped += 1
             continue
         keep.append(line)
-    open(dst, "w").write("\n".join(keep) + "\n")
+    open(dst, "w").write("\n".join(keep).replace("#", "_h") + "\n")
     return dropped, n_caps
 
 
@@ -237,9 +241,9 @@ def segment_file(work, corner, t):
 def deck(work, corner, edges, threads, tstop, t_from=0.0):
     """the deck, from t_from on: every source as the time from t_from
     sees it, the chip starting from the node voltages the window before
-    ended with -- the chip has settled there (windows()), so they are its
-    whole state up to ngspice's tolerances (pins within 0.02 ns of an
-    unbroken run)"""
+    ended with -- the chip has settled there (windows()), and they are
+    every node's, the latches inside the flip-flops' included
+    (prepare_netlist's renaming)"""
     mc, temp, vdd = CORNERS[corner]
     d = os.path.join(work, corner)
     os.makedirs(d, exist_ok=True)
@@ -888,7 +892,11 @@ def main():
     if "stitch" in steps:
         stitch(work, a.corner, edges, seg[1] if seg else 1)
     if "figures" in steps:
-        figures(work, a.corner, edges, out, a.sta)
+        res = figures(work, a.corner, edges, out, a.sta)
+        failed = [p["symbol"] for p in res["parameters"] if not p["pass"]]
+        if res["functional_mismatches"] or failed:
+            print(f"chip: {len(res['functional_mismatches'])} pin mismatches, {len(failed)} AC parameters failed")
+            return 1
     return 0
 
 
