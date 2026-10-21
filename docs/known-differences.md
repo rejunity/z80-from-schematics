@@ -38,6 +38,7 @@ Status legend:
 | 21 | HALT pin when an NMI response fetches a HALT byte | timing / interrupt      | resolved |
 | 22 | Pad drivers: when the bus floats              | bus                       | resolved |
 | 23 | INTA right after IM n                         | interrupt                 | resolved |
+| 24 | Nested NMI: IFF2                              | interrupt                 | resolved |
 
 Notes for each row:
 
@@ -328,6 +329,14 @@ Notes for each row:
      the INTA from the mode before the instruction (7 T, IM1's) and then
      added the RST's own T-state: the push came a T-state late. It now
      takes the mode the ending instruction sets.
+ 24. **Nested NMI: IFF2 — resolved 2026-10-21.** Found by the event sweep's
+     `fuzz` group (five cases: an NMI taken in the NMI handler, INT held,
+     two RETNs): perfectz80 takes the INT one instruction after the last
+     RETN, both models never did. An accepted NMI clears IFF1 and leaves
+     IFF2 alone on the die; the models did `IFF2 = IFF1; IFF1 = 0`, the
+     usual emulator rule, which is the same until an NMI comes while IFF1
+     is already off -- the nested NMI then cleared IFF2 too, and the RETNs
+     had no enable to bring back. Both models now clear IFF1 only.
 
 Add rows as new differences are discovered. Each "watching" row should gain a
 test that pins the chosen behaviour or escalates it.

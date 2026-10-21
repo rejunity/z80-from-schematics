@@ -160,7 +160,10 @@ FF, and twenty instructions handed over in IM0, with perfectz80, pins and
 address in every half-cycle (docs/event-sweep.md).
 
 NMI: similar to M1 but no data fetch used for vector; pushes PC and jumps to `0066h`;
-copies `IFF1→IFF2`, clears `IFF1`. The NMI edge latch is held clear for the whole
+clears `IFF1` and leaves `IFF2` as EI / DI / RETN set it (perfectz80) -- it holds
+IFF1's value from before the NMI, since only an NMI parts the two, and a nested NMI
+keeps it, so the RETNs bring back the enable from before the first NMI (the usual
+`IFF2 = IFF1` on every NMI would lose it). The NMI edge latch is held clear for the whole
 response, from its M1's T1 to the last T-state of the second push: an NMI falling
 edge there is lost, even when NMI then stays low (perfectz80). An edge from the
 handler's first T-state on starts a nested NMI. An NMI edge during an INT response

@@ -1184,7 +1184,11 @@ static void begin_next(z80_t *c)
          * (set when HALT's M1 committed; see EXEC_HALT). Just clear the
          * halted flag and start the NMI ack sequence -- no PC bump. */
         if (c->halted) c->halted = false;
-        c->iff2 = c->iff1; c->iff1 = false;        /* IFF1->IFF2, disable */
+        /* IFF1 off; IFF2 keeps what EI / DI / RETN last set (perfectz80):
+           it holds IFF1's value from before the NMI because the two only
+           part here -- and a nested NMI leaves IFF2 alone, so the RETNs
+           bring back the enable from before the first NMI */
+        c->iff1 = false;
         c->nmi_resp = true;
         start_seq_m1(c, EXEC_NMI, 5, true);        /* 5T ack, opcode discarded */
         return;

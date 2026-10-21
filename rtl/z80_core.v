@@ -1057,7 +1057,10 @@ module z80_core (
                         // Woodmass HALT2INT): PC is ALREADY past the HALT
                         // byte. Just clear halted_n; no PC bump.
                         halted_n = 1'b0;
-                        iff2_n = iff1_n; iff1_n = 1'b0;
+                        // IFF1 off, IFF2 as EI / DI / RETN left it
+                        // (perfectz80): a nested NMI keeps the enable the
+                        // RETNs bring back (cmodel)
+                        iff1_n = 1'b0;
                         irq_seq_n = 2'd1;
                         bus_op_n = `BUSOP_M1; m_addr_n = pc_next; m_wdata_n = 8'h0;
                         m_len_n = 4'd5; t_n = 4'd1; m_cycle_n = 3'd1;
