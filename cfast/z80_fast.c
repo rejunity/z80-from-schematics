@@ -52,9 +52,12 @@ static bool fast_ok(const z80_t *c)
 /* the step that produces the phase after (t_state, phi) */
 static void resume(z80f_t *f)
 {
-    const z80_t *c = f->cpu;
+    z80_t *c = f->cpu;
     f->fast = fast_ok(c);
     if (f->fast) {
+        /* the pads are driven in every phase fast mode runs (never a bus
+           grant or the reset idle): the steps leave the drivers as set */
+        c->pins.addr_drive = c->pins.ctl_drive = true;
         f->step = (uint16_t)(zf_template[(c->bus_op & 7) << 4 | c->m_len] +
                              2 * (c->t_state - 1) + c->phi + 1);
         /* the address of the phases to come: the M-cycle's, or the one on

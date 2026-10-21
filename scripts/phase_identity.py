@@ -39,13 +39,19 @@ def sh(cmd, **kw):
     return p.stdout
 
 
+def has_drives(src_dir):
+    """The model's pins carry the die's pad drivers (addr_drive, ctl_drive)."""
+    return "addr_drive" in open(os.path.join(src_dir, "z80.h")).read()
+
+
 def build(src_dir, out_dir):
     """Compile src_dir/*.c (the model) + scripts/pinhash.c into out_dir/pinhash."""
     os.makedirs(out_dir, exist_ok=True)
     srcs = sorted(glob.glob(os.path.join(src_dir, "*.c")))
     srcs = [s for s in srcs if not s.endswith("z80_main.c")]
     exe = os.path.join(out_dir, "pinhash")
-    sh([CC] + CFLAGS + ["-I" + src_dir, os.path.join(ROOT, "scripts", "pinhash.c")]
+    drives = ["-DPINHASH_DRIVES"] if has_drives(src_dir) else []
+    sh([CC] + CFLAGS + drives + ["-I" + src_dir, os.path.join(ROOT, "scripts", "pinhash.c")]
        + srcs + ["-o", exe])
     return exe
 
@@ -114,14 +120,19 @@ def main():
     new_exe = a.new_exe or build(os.path.join(ROOT, "cmodel"),
                                  os.path.join(ROOT, "build", "phase_new"))
     has_tick = "Z80_PIN_M1" in open(os.path.join(ROOT, "cmodel", "z80.h")).read()
+    # the pad drivers count when both models have them; else -x leaves them
+    # out of every run's hash
+    drives = has_drives(src) and has_drives(os.path.join(ROOT, "cmodel"))
     print(f"phase identity: work tree vs {a.ref} ({rev}); front ends: "
           f"{'sys/own, tick' if has_tick else 'sys/own'}{', cfast tick' if a.fast_exe else ''}"
-          f"{', cfast run' if a.run_exe else ''}")
+          f"{', cfast run' if a.run_exe else ''}; pins{' and pad drivers' if drives else ''}")
 
     jobs = []
     for name, args, own in scenarios(a.long):
         if a.only and a.only not in name:
             continue
+        if not drives:
+            args = args + ["-x"]
         base = "own" if own else "sys"
         jobs.append((name, args, [("ref", ref_exe, base), ("new", new_exe, base)]
                      + ([("tick", new_exe, "tick")] if has_tick else [])

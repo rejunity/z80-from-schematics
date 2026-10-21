@@ -35,11 +35,15 @@
  *              run:  the same inlined in cfast's z80f_run (-DZ80_FAST_RUN;
  *                    with -DZ80_SINGLE from the one-header build)
  *   -d A:B     dump the trace lines (tracegen format) of phases [A, B)
+ *   -x         leave the pad drivers out of the hash (a reference without)
  *   -q         don't print the program's console output
  *
  * A phase's hash word holds the 14 trace columns compare_traces.py checks
  * against the RTL (t phi m addr data_o data_i mreq iorq rd wr m1 rfsh halt
- * busack) plus data_drive.
+ * busack) plus data_drive, and -- in a build against a model that has them,
+ * -DPINHASH_DRIVES (the Makefile and phase_identity.py set it from
+ * cmodel/z80.h) -- the die's other pad drivers, addr_drive and ctl_drive,
+ * read from the model's pins in every front end.
  * ==========================================================================*/
 #include <stdio.h>
 #include <stdlib.h>
@@ -184,7 +188,22 @@ typedef struct {
     uint8_t t, phi, m, data_o, data_i;
     uint16_t addr;
     uint8_t mreq, iorq, rd, wr, m1, rfsh, halt, busack, drive;
+    uint8_t addr_drive, ctl_drive;
 } cols_t;
+
+static int no_drives;   /* -x */
+
+/* the pad drivers, from the model's pins (cfast leaves them driven in its
+   fast mode, which never runs in a bus grant or the reset idle) */
+static void cols_drives(cols_t *k)
+{
+#ifdef PINHASH_DRIVES
+    k->addr_drive = S->cpu.pins.addr_drive; k->ctl_drive = S->cpu.pins.ctl_drive;
+#else
+    k->addr_drive = k->ctl_drive = 0;
+#endif
+    if (no_drives) k->addr_drive = k->ctl_drive = 0;
+}
 
 static void cols_from_struct(cols_t *k)
 {
@@ -194,6 +213,7 @@ static void cols_from_struct(cols_t *k)
     k->mreq = c->pins.mreq_n; k->iorq = c->pins.iorq_n; k->rd = c->pins.rd_n;
     k->wr = c->pins.wr_n; k->m1 = c->pins.m1_n; k->rfsh = c->pins.rfsh_n;
     k->halt = c->pins.halt_n; k->busack = c->pins.busack_n; k->drive = c->pins.data_drive;
+    cols_drives(k);
 }
 
 #ifdef Z80_PIN_M1
@@ -222,6 +242,7 @@ static void tick_bus(uint64_t ph, uint64_t *pp, cols_t *k)
     k->mreq = !(p & Z80_MREQ); k->iorq = !(p & Z80_IORQ); k->rd = !(p & Z80_RD);
     k->wr = !(p & Z80_WR); k->m1 = !(p & Z80_M1); k->rfsh = !(p & Z80_RFSH);
     k->halt = !(p & Z80_HALT); k->busack = !(p & Z80_BUSACK); k->drive = (p & Z80_DOE) != 0;
+    cols_drives(k);
     uint8_t d;
     if ((p & (Z80_MREQ | Z80_WR)) == (Z80_MREQ | Z80_WR))
         S->mem[a] = Z80_GET_DATA(p);
@@ -262,14 +283,19 @@ static uint64_t hash_word(const cols_t *k)
          | (uint64_t)(k->rd & 1) << 50   | (uint64_t)(k->wr & 1) << 51
          | (uint64_t)(k->m1 & 1) << 52   | (uint64_t)(k->rfsh & 1) << 53
          | (uint64_t)(k->halt & 1) << 54 | (uint64_t)(k->busack & 1) << 55
-         | (uint64_t)(k->drive & 1) << 56 | (uint64_t)(k->t >> 4) << 57;
+         | (uint64_t)(k->drive & 1) << 56 | (uint64_t)(k->t >> 4) << 57
+         | (uint64_t)(k->addr_drive & 1) << 58 | (uint64_t)(k->ctl_drive & 1) << 59;
 }
 
 static void dump_line(const cols_t *k)
 {
-    printf("%u %u %u %04x %02x %02x %u %u %u %u %u %u %u %u %u\n",
+    printf("%u %u %u %04x %02x %02x %u %u %u %u %u %u %u %u %u",
            k->t, k->phi, k->m, k->addr, k->data_o, k->data_i,
            k->mreq, k->iorq, k->rd, k->wr, k->m1, k->rfsh, k->halt, k->busack, k->drive);
+#ifdef PINHASH_DRIVES
+    if (!no_drives) printf(" %u %u", k->addr_drive, k->ctl_drive);   /* pad drivers */
+#endif
+    printf("\n");
 }
 
 static void checkpoint(char tag, uint64_t ph, uint64_t h)
@@ -433,6 +459,7 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "-v")) inta_rand = 1;
         else if (!strcmp(a, "-b")) rand_bus = 1;
         else if (!strcmp(a, "-q")) quiet = 1;
+        else if (!strcmp(a, "-x")) no_drives = 1;
         else if (!strcmp(a, "-m")) {
             if      (!strcmp(v, "sys"))  mode = MODE_SYS;
             else if (!strcmp(v, "own"))  mode = MODE_OWN;

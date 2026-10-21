@@ -599,10 +599,14 @@ zexall: zexrunner
 # PHASE_ARGS=--long runs ZEXDOC and z80test to the end.
 PHASE_REF  ?= HEAD
 PHASE_ARGS ?=
+# pinhash also hashes the die's pad drivers when the model has them
+# (z80_pins_t addr_drive / ctl_drive); phase_identity.py decides it the same
+# way for the reference
+PINHASH_DEFS := $(if $(shell grep -l addr_drive $(CMODEL)/z80.h 2>/dev/null),-DPINHASH_DRIVES)
 pinhash: cmodel $(BIN)/pinhash
 $(BIN)/pinhash: $(SCRIPTS)/pinhash.c $(CMODEL_LIB) $(CMODEL_HDRS)
 	@mkdir -p $(BIN)
-	$(CC) $(CFLAGS) $(INCLUDES) $< $(CMODEL_LIB) -o $@
+	$(CC) $(CFLAGS) $(PINHASH_DEFS) $(INCLUDES) $< $(CMODEL_LIB) -o $@
 
 phase_identity: pinhash
 	@$(PYTHON) $(SCRIPTS)/phase_identity.py --ref $(PHASE_REF) --new-exe $(BIN)/pinhash $(PHASE_ARGS)
@@ -641,7 +645,7 @@ $(BIN)/zexrunner_fast: $(SCRIPTS)/zexrunner.c $(CFAST_DEP)
 
 $(BIN)/pinhash_fast: $(SCRIPTS)/pinhash.c $(CFAST_DEP)
 	@mkdir -p $(BIN)
-	$(CC) $(CFLAGS) -DZ80_FAST $(CFAST_INC) $< $(CFAST)/z80_fast.c $(CMODEL)/z80_sim.c -o $@
+	$(CC) $(CFLAGS) $(PINHASH_DEFS) -DZ80_FAST $(CFAST_INC) $< $(CFAST)/z80_fast.c $(CMODEL)/z80_sim.c -o $@
 
 # the run frame: cfast/zexfast.c, and pinhash compiled around z80f_run
 $(BIN)/zexfast: $(CFAST)/zexfast.c $(CFAST)/z80_fast_run.h $(CFAST_DEP)
@@ -650,7 +654,7 @@ $(BIN)/zexfast: $(CFAST)/zexfast.c $(CFAST)/z80_fast_run.h $(CFAST_DEP)
 
 $(BIN)/pinhash_run: $(SCRIPTS)/pinhash.c $(CFAST)/z80_fast_run.h $(CFAST_DEP)
 	@mkdir -p $(BIN)
-	$(CC) $(CFLAGS) -DZ80_FAST_RUN $(CFAST_INC) $< $(CMODEL)/z80_sim.c -o $@
+	$(CC) $(CFLAGS) $(PINHASH_DEFS) -DZ80_FAST_RUN $(CFAST_INC) $< $(CMODEL)/z80_sim.c -o $@
 
 cfast_identity: cfast pinhash
 	@$(PYTHON) $(SCRIPTS)/phase_identity.py --ref $(PHASE_REF) --new-exe $(BIN)/pinhash \
@@ -671,7 +675,7 @@ $(BIN)/zexfast_single: $(CFAST)/zexfast.c $(CFAST_SINGLE)
 
 $(BIN)/pinhash_single: $(SCRIPTS)/pinhash.c $(CFAST_SINGLE)
 	@mkdir -p $(BIN)
-	$(CC) $(CFLAGS) -DZ80_FAST_RUN -DZ80_SINGLE -I$(CMODEL) -I$(CFAST_GEN) $< $(CMODEL)/z80_sim.c -o $@
+	$(CC) $(CFLAGS) $(PINHASH_DEFS) -DZ80_FAST_RUN -DZ80_SINGLE -I$(CMODEL) -I$(CFAST_GEN) $< $(CMODEL)/z80_sim.c -o $@
 
 cfast_single_identity: cfast_single pinhash
 	@$(PYTHON) $(SCRIPTS)/phase_identity.py --ref $(PHASE_REF) --new-exe $(BIN)/pinhash \
