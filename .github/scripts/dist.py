@@ -889,6 +889,16 @@ def ci_page(src, out):
     s = os.path.join(src, 'transistor', 'spice')
     if not os.path.isdir(os.path.join(s, 'chip')):
         return False
+    # a run whose pins differ from the RTL's or that fails an AC parameter fails (chip.py), and is not
+    # shown -- nor are the runs from before that check
+    bad = []
+    for p in sorted(glob.glob(os.path.join(s, 'chip', '**', 'results.json'), recursive=True)):
+        r = json.load(open(p))
+        if r.get('functional_mismatches') or not all(q['pass'] for q in r.get('parameters') or []):
+            bad.append(os.path.relpath(p, s))
+    if bad:
+        print(f'{s}: not published: its pins or AC parameters failed ({", ".join(bad)})')
+        return False
     page_dir = os.path.join(out, 'transistor')
     base = os.path.join(page_dir, 'spice')
     shutil.copytree(s, base, dirs_exist_ok=True)
