@@ -358,6 +358,15 @@ Notes for each row:
      -- in the last idle T-state before the restart too. The models ignored
      NMI through the whole reset idle and lost an edge there. `reset_nmi`
      (120 cases; run by name until row 19, which 72 of them show).
+ 28. **The data latch — resolved 2026-10-22** (C model only). The die takes
+     an opcode or INTA byte from the bus in the low half before the rising
+     edge that starts T3 (T2.N, the last Tw.N, an INTA's second automatic
+     Tw.N), and read data from T3's high half at its falling edge. The C
+     model took each half a clock earlier -- an opcode from T2.P, read data
+     from T2.N -- unseen while every harness held the byte through the
+     whole read. Found by the event sweep's `latch` group (the byte in one
+     half-cycle only, 268 cases); the RTL already took the die's edges.
+     docs/timing.md "The data latch".
 
 Add rows as new differences are discovered. Each "watching" row should gain a
 test that pins the chosen behaviour or escalates it.
