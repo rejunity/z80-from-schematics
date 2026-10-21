@@ -50,6 +50,8 @@ typedef struct {
     bool     rfsh_n;      /* refresh address valid                          */
     bool     halt_n;      /* 0 => halted                                    */
     bool     busack_n;    /* 0 => bus acknowledged                          */
+    bool     addr_drive;  /* the die drives the address pads                */
+    bool     ctl_drive;   /* ... and MREQ IORQ RD WR (data: data_drive)     */
 } z80_pins_t;
 
 /* ---------------------------------------------------------------------------
