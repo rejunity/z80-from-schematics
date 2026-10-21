@@ -339,3 +339,16 @@ hours each.
   held for the core and cleared.
 - The GitHub Pages job puts the pads, the NMI catcher and the committed
   whole-chip run under "At transistor level".
+- `transistor.yml`, by hand (Actions, "Transistor", Run workflow): the
+  whole chip at the three corners. It extracts the GDS of main's latest
+  Targets run, runs the program in four windows of about 3.3 µs, one job
+  each (a job stops at 6 hours; `chip.py --segment K/4`), and puts the
+  stitched run's figures and `results.json` in the artifact
+  `transistor-gf180mcu`, laid out as `chip/gf180mcu/`.
+
+A window starts from the node voltages the one before ended with
+(ngspice's `wrnodev`, as `.ic`), with every source shifted to its start.
+The cuts sit 15 ns before a clock edge, where the chip has settled: over
+the first two windows at tt every pin edge lands where the unbroken run
+has it (0.0 ps). ngspice's own snapshots (`snsave` / `snload`) would keep
+the integrator's history too, but `snload` crashes on a KLU circuit.

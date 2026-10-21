@@ -11,16 +11,22 @@ Z80's datasheet draws its timing diagrams (Zilog PS0178, Figures 5-7).
   simulate   ngspice: power-up, 4 clocks of RESET, then LD A,5Ah /
              LD (8000h),A / OUT (42h),A / IN A,(43h) / HALT at 4 MHz,
              15 ns clock edges, 100 pF on every pin, a memory that drives
-             D in the RTL's read windows (hours)
+             D in the RTL's read windows (hours); with --segment K/N only
+             the K-th of N windows, from the node voltages the window
+             before it ended with (CI jobs have 6 hours each)
+  stitch     the windows' pins into the one run figures reads
   figures    the pins checked against the RTL, every output parameter of
              the datasheet measured on every cycle that has it (CLK at
              50 %, outputs at 1.5 V) against its limit and STA's number;
              Figures 5-7 as SVG
 
-usage: chip.py RUN [--work DIR] [--corner tt] [--threads N]
-               [--steps extract,reference,simulate,figures] [--sta FILE]
-  RUN    a LibreLane chip run of asic-gf180mcu (chip/runs/<tag>)
-  --sta  pin_timing.py's output for the run, for STA's numbers
+usage: chip.py RUN [--work DIR] [--corner tt] [--threads N] [--segment K/N]
+               [--steps extract,reference,simulate,stitch,figures] [--sta FILE]
+  RUN        a LibreLane chip run of asic-gf180mcu (chip/runs/<tag>), or
+             with --gds, only a name for the work directory's default
+  --gds      the chip's GDS, for extract (default RUN/final/gds/z80_chip.gds)
+  --sta      pin_timing.py's output for the run, for STA's numbers
+  --segment  simulate the K-th of N windows (1-based)
 """
 import argparse, bisect, json, os, re, shutil, subprocess, sys
 
@@ -75,9 +81,9 @@ quit -noprompt
 """
 
 
-def extract(run, work):
+def extract(run, work, gds=None):
     out = os.path.join(work, "z80_chip.spice")
-    gds = os.path.join(run, "final", "gds", "z80_chip.gds")
+    gds = os.path.abspath(gds or os.path.join(run, "final", "gds", "z80_chip.gds"))
     ext = os.path.join(work, "ext")
     os.makedirs(ext, exist_ok=True)
     tcl = os.path.join(work, "extract.tcl")
@@ -194,10 +200,51 @@ def clock_breaks(corner, edges, vdd):
     return out
 
 
-def deck(work, corner, edges, threads, tstop):
+def windows(edges, n):
+    """[(from, to)] ns: the run cut into n windows of about equal length,
+    each cut 15 ns before a clock edge's 50 % (5.6 ns before its ramp),
+    where the chip has settled since the edge before"""
+    tstop = edges[-1][0] + 100
+    cuts = []
+    for k in range(1, n):
+        t0 = next(t for t, *_ in edges if t >= tstop * k / n)
+        cuts.append(t0 - 15.0)
+    b = [0.0] + cuts + [tstop]
+    return list(zip(b, b[1:]))
+
+
+def state_file(work, corner, t):
+    """the node voltages at t ns (ngspice's wrnodev: .ic lines)"""
+    return os.path.join(work, corner, "seg", f"state_{t:.0f}.ic")
+
+
+def segment_file(work, corner, t):
+    return os.path.join(work, corner, "seg", f"chip_{t:.0f}.dat")
+
+
+def deck(work, corner, edges, threads, tstop, t_from=0.0):
+    """the deck, from t_from on: every source as the time from t_from
+    sees it, the chip starting from the node voltages the window before
+    ended with -- the chip has settled there (windows()), so they are its
+    whole state up to ngspice's tolerances (pins within 0.02 ns of an
+    unbroken run)"""
     mc, temp, vdd = CORNERS[corner]
     d = os.path.join(work, corner)
     os.makedirs(d, exist_ok=True)
+
+    def at(pts, t):
+        for (ta, va), (tb, vb) in zip(pts, pts[1:]):
+            if ta <= t <= tb:
+                return va if tb == ta else va + (vb - va) * (t - ta) / (tb - ta)
+        return pts[-1][1] if t > pts[-1][0] else pts[0][1]
+
+    def seen(pts):   # [(ns, V)] from t_from on
+        if t_from <= 0:
+            return [(a, b) for a, b in pts if a >= 0]
+        return [(0.0, at(pts, t_from))] + [(a - t_from, b) for a, b in pts if a > t_from]
+
+    def pwl(pts):
+        return "PWL(" + " ".join(f"{a:.3f}n {b:g}" for a, b in seen(pts)) + ")"
     net = os.path.join(d, "chip.net")
     dropped, n_caps = prepare_netlist(os.path.join(work, "z80_chip.spice"), net)
     t = f"{PDK_ROOT}/libs.tech/ngspice"
@@ -207,7 +254,7 @@ def deck(work, corner, edges, threads, tstop):
     # rshunt: 1 Tohm from every node to ground -- at power-up (uic) some
     # transistor-internal nodes have no path anywhere
     L += [f".include {net}", f".temp {temp}", ".options klu rshunt=1e12",
-          f"V_vdd {node('VDD')} 0 PWL(0 0 20n {vdd})", f"V_vss {node('VSS')} 0 0"]
+          f"V_vdd {node('VDD')} 0 {pwl([(0, 0), (20, vdd)])}", f"V_vss {node('VSS')} 0 0"]
 
     def ramp(t0, a, b):
         r = EDGE / 0.8
@@ -215,12 +262,12 @@ def deck(work, corner, edges, threads, tstop):
     pts = [(0, 0)]
     for t0, clk, rst, kv in edges:
         pts += ramp(t0, vdd * (1 - clk), vdd * clk)
-    L.append(f"V_clk {node('CLK')} 0 PWL(" + " ".join(f"{a:.3f}n {b:g}" for a, b in pts if a >= 0) + ")")
+    L.append(f"V_clk {node('CLK')} 0 {pwl(pts)}")
     trst = next(t0 for t0, c, r, kv in edges if r == 1)
-    L.append(f"V_rst {node('RESET_n')} 0 PWL(0 0 " + " ".join(f"{a:.3f}n {b:g}" for a, b in ramp(trst, 0, vdd)) + ")")
+    L.append(f"V_rst {node('RESET_n')} 0 {pwl([(0, 0)] + ramp(trst, 0, vdd))}")
     for p in ("WAIT_n", "INT_n", "NMI_n", "BUSRQ_n"):
-        L.append(f"V_{p.lower()} {node(p)} 0 PWL(0 0 20n {vdd})")
-    brk = clock_breaks(corner, edges, vdd)
+        L.append(f"V_{p.lower()} {node(p)} 0 {pwl([(0, 0), (20, vdd)])}")
+    brk = [a for a, _ in seen([(0, 0)] + [(b, 0) for b in clock_breaks(corner, edges, vdd)])][1:]
     L.append("V_brk brk 0 PWL(0 0")
     for k in range(0, len(brk), 16):
         L.append("+ " + " ".join(f"{b:.3f}n 0" for b in brk[k:k + 16]))
@@ -232,40 +279,72 @@ def deck(work, corner, edges, threads, tstop):
     win = read_windows(edges)
     for a, b, _ in win:
         en += [(a + 40, 0), (a + 41, vdd), (b + 60, vdd), (b + 61, 0)]
-    L += ["V_men men 0 PWL(" + " ".join(f"{a:.3f}n {b:g}" for a, b in en) + ")",
+    L += [f"V_men men 0 {pwl(en)}",
           ".model swbus sw vt=2.5 vh=0.2 ron=50 roff=1e10"]
     for k in range(8):
         vals = [(0, 0)]
         for a, b, byte in win:
             vals += [(a + 20, vals[-1][1]), (a + 25, vdd * ((byte >> k) & 1))]
-        L += [f"V_mem{k} mem{k} 0 PWL(" + " ".join(f"{a:.3f}n {b:g}" for a, b in vals) + ")",
+        L += [f"V_mem{k} mem{k} 0 {pwl(vals)}",
               f"S_mem{k} mem{k} {node(f'D[{k}]')} men 0 swbus", f"R_pull{k} {node(f'D[{k}]')} {node('VDD')} 100k"]
     for p in PINS:
         if p not in INPUTS and p not in ("VDD", "VSS"):
             L.append(f"C_{node(p)} {node(p)} 0 {LOAD}p")
     L.append("Xchip " + " ".join(node(p) for p in PINS) + " z80_chip")
     save = " ".join(f"v({node(p)})" for p in PINS if p not in ("VDD", "VSS")) + " v(men)"
-    dat = os.path.join(d, "chip.dat")
+    if t_from <= 0 and tstop == edges[-1][0] + 100:      # the whole run
+        dat, end, sp = os.path.join(d, "chip.dat"), [], os.path.join(d, "chip.sp")
+    else:                                                # a window of it
+        os.makedirs(os.path.join(d, "seg"), exist_ok=True)
+        dat, sp = segment_file(work, corner, t_from), os.path.join(d, "seg", f"chip_{t_from:.0f}.sp")
+        end = [f"wrnodev {state_file(work, corner, tstop)}"]
+        if t_from > 0:
+            L.append(f".include {state_file(work, corner, t_from)}")
     L += [".control", f"set num_threads={threads}", "set wr_singlescale", "set wr_vecnames", "option numdgt=7",
-          f"save {save}", f"tran 0.1n {tstop:.0f}n 0 2n uic", f"wrdata {dat} {save}", "rusage all", "quit",
-          ".endc", ".end"]
-    sp = os.path.join(d, "chip.sp")
+          f"save {save}", f"tran 0.1n {tstop - t_from:.3f}n 0 2n uic", f"wrdata {dat} {save}"] + end + [
+          "rusage all", "quit", ".endc", ".end"]
     open(sp, "w").write("\n".join(L) + "\n")
     print(f"chip: {sp}: {dropped} fill cells dropped, {n_caps} lumped capacitors, {len(win)} read windows, "
           f"{len(brk)} breakpoints over the clock's edges", flush=True)
     return sp
 
 
-def simulate(work, corner, edges, threads):
-    tstop = edges[-1][0] + 100
-    sp = deck(work, corner, edges, threads, tstop)
+def simulate(work, corner, edges, threads, segment=None):
+    """the whole run, or the window segment = (k, n) of windows(edges, n):
+    its pins in seg/chip_<from>.dat (in the run's time), its end state in
+    seg/state_<to>.ic for the window after it"""
+    t_from, tstop = (0.0, edges[-1][0] + 100) if not segment else windows(edges, segment[1])[segment[0] - 1]
+    if t_from > 0 and not os.path.exists(state_file(work, corner, t_from)):
+        sys.exit(f"chip: no state to start the window at {t_from:.0f} ns from ({state_file(work, corner, t_from)})")
+    sp = deck(work, corner, edges, threads, tstop, t_from)
     ngspice = tool("ngspice")
-    print(f"chip: ngspice, {tstop / 1000:.1f} us simulated (hours)", flush=True)
+    print(f"chip: ngspice, {t_from / 1000:.2f} .. {tstop / 1000:.2f} us (hours)", flush=True)
     d = os.path.dirname(sp)
+    log = os.path.join(d, "chip.log" if not segment else f"chip_{t_from:.0f}.log")
     p = subprocess.run([ngspice, "-b", sp], cwd=d, capture_output=True, text=True)
-    open(os.path.join(d, "chip.log"), "w").write(p.stdout + p.stderr)
-    if not os.path.exists(os.path.join(d, "chip.dat")):
-        sys.exit(f"chip: ngspice failed ({d}/chip.log)")
+    open(log, "w").write(p.stdout + p.stderr)
+    dat = os.path.join(d, "chip.dat") if not segment else segment_file(work, corner, t_from)
+    if not os.path.exists(dat):
+        sys.exit(f"chip: ngspice failed ({log})")
+    if t_from > 0:  # back to the run's time
+        lines = open(dat).read().splitlines()
+        out = [lines[0]] + [" ".join([f"{float(r.split()[0]) + t_from * 1e-9:.9e}"] + r.split()[1:])
+                            for r in lines[1:] if r.strip()]
+        open(dat, "w").write("\n".join(out) + "\n")
+
+
+def stitch(work, corner, edges, n):
+    """chip.dat from the n windows' pins (each window's first point is the
+    one before it ended with)"""
+    rows = []
+    for k, (t_from, _) in enumerate(windows(edges, n)):
+        f = segment_file(work, corner, t_from)
+        if not os.path.exists(f):
+            sys.exit(f"chip: window {k + 1} of {n} has not run ({f})")
+        lines = [l for l in open(f).read().splitlines() if l.strip()]
+        rows += lines[2:] if rows else lines     # header, first point: the window before's last
+    open(os.path.join(work, corner, "chip.dat"), "w").write("\n".join(rows) + "\n")
+    print(f"chip: {n} windows stitched, {len(rows) - 1} points", flush=True)
 
 
 # ------------------------------------------------------------- measure
@@ -776,6 +855,8 @@ def main():
     ap.add_argument("--corner", default="tt", choices=sorted(CORNERS))
     ap.add_argument("--threads", type=int, default=os.cpu_count() or 4)
     ap.add_argument("--steps", default="extract,reference,simulate,figures")
+    ap.add_argument("--segment", help="K/N: simulate the K-th of N windows; stitch takes N")
+    ap.add_argument("--gds", help="the chip's GDS for extract (default <run>/final/gds/z80_chip.gds)")
     ap.add_argument("--sta", help="pin_timing.py's output for the run (STA's numbers beside SPICE's)")
     ap.add_argument("--out", help="figures and results.json (default: chip/gf180mcu/, other corners "
                                   "in chip/gf180mcu/<corner>/)")
@@ -785,12 +866,15 @@ def main():
     os.makedirs(work, exist_ok=True)
     steps = a.steps.split(",")
     if "extract" in steps and not os.path.exists(os.path.join(work, "z80_chip.spice")):
-        extract(a.run, work)
+        extract(a.run, work, a.gds)
     ref = reference(work) if "reference" in steps or not os.path.exists(os.path.join(work, "ref.txt")) \
         else open(os.path.join(work, "ref.txt")).read()
     edges = edges_of(ref)
+    seg = tuple(int(x) for x in a.segment.split("/")) if a.segment else None
     if "simulate" in steps:
-        simulate(work, a.corner, edges, a.threads)
+        simulate(work, a.corner, edges, a.threads, seg)
+    if "stitch" in steps:
+        stitch(work, a.corner, edges, seg[1] if seg else 1)
     if "figures" in steps:
         figures(work, a.corner, edges, out, a.sta)
     return 0
