@@ -15,11 +15,16 @@
 # per phase it produces, T1.P .. Tlast.N, and one for its M-cycle end. A
 # step is straight-line code with the phase's constants folded in: the pins
 # (the timing ROM, z80_timing), whether it latches data (the bus cycle's
-# latch_*(), as do_latch() picks it), samples
-# INT (Tlast.P) or ends the refresh (R steps). Steps of a template follow
-# each other in the text, so a frame that does not return between phases
-# falls through them; an M-cycle end runs the model's sequencer
-# (end_mcycle) and jumps to the T1.P of the template it set up.
+# latch_*(), as do_latch() picks it), samples INT (Tlast.P) or ends the
+# refresh (R steps), and the address: the M-cycle's, I:R in a refresh, or
+# in the phases the model holds it (its internal T-states, an M1's T5 / T6)
+# the one the phase before drove. A phase a held one may follow -- an
+# M-cycle's last, an M1's T4.N -- stores its address in c->pins.addr, where
+# the held phases (and the reference engine, should it take the next
+# phase) find it. Steps of a template follow each other in the text, so a
+# frame that does not return between phases falls through them; an M-cycle
+# end runs the model's sequencer (end_mcycle) and jumps to the T1.P of the
+# template it set up.
 #
 # A step's phase bookkeeping goes through the frame's macros:
 #   ZF_CLOCK(t, phi)     the step produces phase (t, phi) of its M-cycle
@@ -42,8 +47,9 @@
 #                        (end_mcycle() returns it)
 #
 # Fast mode never sees WAIT, BUSREQ, RESET or NMI asserted, a halt, an
-# interrupt acknowledge or the NMI response: the frames run those phases
-# through the reference z80_phase_step, which shares the state.
+# interrupt acknowledge, the instruction an interrupting device hands over
+# in IM0, or the NMI response: the frames run those phases through the
+# reference z80_phase_step, which shares the state.
 # ===========================================================================
 import json, os, sys
 
@@ -51,6 +57,7 @@ PINS = [("m1", "Z80_M1"), ("mreq", "Z80_MREQ"), ("iorq", "Z80_IORQ"),
         ("rd", "Z80_RD"), ("wr", "Z80_WR"), ("rfsh", "Z80_RFSH"), ("doe", "Z80_DOE")]
 FAST_OPS = ["M1", "MRD", "MWR", "IORD", "IOWR", "INTERNAL"]
 R_STEP = "c->reg_r = (uint8_t)((c->reg_r & 0x80u) | ((c->reg_r + 1u) & 0x7Fu));"
+HELD_IR = "(uint16_t)(c->reg_i << 8 | c->reg_r)"    # a refresh's address, before R steps
 
 
 def main():
@@ -79,10 +86,17 @@ def main():
             p = ph[(op, t, phi)]
             body = []
             if (t, phi) == (1, 0):
-                # entered from an M-cycle end: start_mcycle set t_state / phi
-                body.append("bus = c->m_addr | (uint64_t)c->m_wdata << Z80_PIN_D0; ZF_SAVE_BUS();")
+                # entered from an M-cycle end: start_mcycle set t_state / phi;
+                # a held cycle keeps the address the last one drove
+                a = "c->pins.addr" if p["held"] else "c->m_addr"
+                body.append(f"bus = {a} | (uint64_t)c->m_wdata << Z80_PIN_D0; ZF_SAVE_BUS();")
             else:
                 body.append(f"ZF_CLOCK({t}, {phi});")
+                pp = ph[(op, t, 0)] if phi else ph[(op, t - 1, 1)]   # the phase before
+                assert p["held"] or not pp["held"], (name, n, t, phi)
+                if p["held"] and not pp["held"]:
+                    # the first held phase: what the phase before drove stays
+                    body.append("bus = (bus & ~0xFFFFull) | c->pins.addr; ZF_SAVE_BUS();")
                 if phi == 0 and ph[(op, t - 1, 1)]["refresh_end"]:
                     body.append(R_STEP)
             chk = False
@@ -99,6 +113,10 @@ def main():
                 busw = "(bus & ~0xFFFFull) | (uint16_t)(c->reg_i << 8 | c->reg_r)"
             else:
                 busw = "bus"
+            nxt = seq[i + 1] if i + 1 < len(seq) else None
+            if not p["held"] and (nxt is None or ph[(op, *nxt)]["held"]):
+                # a held phase may follow: its address stays on the bus
+                body.append(f"c->pins.addr = {HELD_IR if p['refresh'] else '(uint16_t)bus'};")
             body.append(f"pins = (pins & ~Z80_OUT_PIN_MASK) | {bits} | {busw};")
             mac = "ZF_PHASE_T1P" if (t, phi) == (1, 0) else "ZF_PHASE_CHK" if chk else "ZF_PHASE"
             body.append(f"{mac}({ids[i + 1]});")
@@ -109,8 +127,7 @@ def main():
                 f"ZF_MEND({n});"]
         if ph[(op, n, 1)]["refresh_end"]:
             body.append(R_STEP)
-        body += ["c->pins.busreq_n = 1;   /* this phase's level, for begin_next */",
-                 "ZF_GOTO_T1P(end_mcycle(c));"]
+        body.append("ZF_GOTO_T1P(end_mcycle(c));")
         code.append(f"ZF_LABEL({ids[-1]}): /* {name} m_len {n}: M-cycle end */\n    "
                     + "\n    ".join(body))
 

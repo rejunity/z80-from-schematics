@@ -22,7 +22,7 @@ module tb_chip_ref;
     wire [7:0]  data_in = (!rd_n && !mreq_n) ? mem[addr] : (!rd_n && !iorq_n) ? 8'hA5 : 8'hFF;
 
     z80_top dut (
-        .clk(clk), .reset_n(reset_n),
+        .clk(clk), .por_n(reset_n), .reset_n(reset_n),   // power-on with the first RESET
         .addr(addr), .data_in(data_in), .data_out(data_out), .data_drive(data_drive),
         .m1_n(m1_n), .mreq_n(mreq_n), .iorq_n(iorq_n), .rd_n(rd_n), .wr_n(wr_n),
         .rfsh_n(rfsh_n), .halt_n(halt_n), .busack_n(busack_n),

@@ -12,9 +12,9 @@
 # dump the pins for every half-cycle from the marker fetch's T1.
 #
 # A case matches when the control pins (mreq iorq rd wr m1 rfsh halt busack)
-# agree in every half-cycle, the address agrees wherever both sides transfer
-# data (MREQ or IORQ with RD or WR) or refresh (RFSH low: I:R; idle addresses
-# are don't-care), and the data agrees wherever both drive WR. Differences are checked
+# and the address agree in every half-cycle -- transfers, refreshes, and the
+# internal and idle T-states, where the bus keeps its last address -- and the
+# data agrees wherever both drive WR. Differences are checked
 # against tests/event_sweep/baseline.txt: a difference that is not in the
 # baseline, or that changed, fails the run. Cases in the baseline that now
 # match are reported as a warning so the baseline can be trimmed.
@@ -24,9 +24,13 @@
 # to the RTL's behaviour in one of those cases also fails until the baseline
 # is regenerated with --update-baseline and the diff reviewed.
 #
+# --c-model also runs every case through the C model (scripts/event_sweep_c.c)
+# and fails on any half-cycle where it differs from the RTL: the two are
+# phase-identical, so the baseline covers both.
+#
 # Usage:
 #   scripts/event_sweep.py [--groups int,nmi,...] [--match STR] [--phases N]
-#                          [--jobs N] [--update-baseline]
+#                          [--jobs N] [--c-model] [--update-baseline]
 # Output: build/event_sweep/report.md, one side-by-side trace per differing
 # case in build/event_sweep/diff/.
 import argparse, collections, hashlib, os, subprocess, sys
@@ -35,11 +39,12 @@ from concurrent.futures import ThreadPoolExecutor
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TB_VVP = os.path.join(ROOT, "build", "tb_event_sweep.vvp")
 PZ80 = os.path.join(ROOT, "build", "bin", "event_sweep_pz80")
+CMODEL = os.path.join(ROOT, "build", "bin", "event_sweep_c")
 OUT = os.path.join(ROOT, "build", "event_sweep")
 BASELINE = os.path.join(ROOT, "tests", "event_sweep", "baseline.txt")
 
-NMI, INT, RESET = 0, 1, 4
-PIN_NAMES = {NMI: "nmi", INT: "int", RESET: "reset"}
+NMI, INT, WAIT, BUSREQ, RESET = 0, 1, 2, 3, 4
+PIN_NAMES = {NMI: "nmi", INT: "int", WAIT: "wait", BUSREQ: "busreq", RESET: "reset"}
 
 # name: (bytes, T-states on a Z80, note)
 TARGETS = {
@@ -56,10 +61,45 @@ TARGETS = {
     "rlc_hl":   ([0xcb, 0x06], 15, "CB prefix, read + write"),
     "ldir":     ([0xed, 0xb0], 58, "repeating block move, BC=3"),
     "halt":     ([0x76], 4, "HALT"),
+    "ld_a_i":   ([0xed, 0x57], 9, "LD A,I: P/V from IFF2"),
+    "ld_a_r":   ([0xed, 0x5f], 9, "LD A,R: P/V from IFF2"),
+    "add_hl_bc": ([0x09], 11, "internal M-cycles of 4 + 3 T"),
+    "adc_hl_bc": ([0xed, 0x4a], 15, "ED prefix, internal M-cycles of 4 + 3 T"),
+    "ex_sp_hl": ([0xe3], 19, "read, read+1, write, write+2"),
+    "djnz":     ([0x10, 0x02, 0x00, 0x00], 13, "taken (B=0 -> FF), M1 + 1, internal 5 T"),
+    "rld":      ([0xed, 0x6f], 18, "read, internal 4 T, write"),
+    "inc_bc":   ([0x03], 6, "M1 of 6 T"),
+    "in_a_n":   ([0xdb, 0x10], 11, "I/O read"),
+    "out_n_a":  ([0xd3, 0x10], 11, "I/O write"),
+    "ini":      ([0xed, 0xa2], 16, "I/O read, memory write"),
+    "ei_run":   ([0xfb, 0xfb, 0xfb], 12, "three EIs: INT waits for the instruction after the last"),
+    "ei_di":    ([0xfb, 0xf3], 8, "EI then DI: INT never taken"),
+    "dd_run":   ([0xdd, 0xdd, 0xdd, 0x21, 0x00, 0x82], 22, "DD DD + LD IX,8200: prefixes are not instructions"),
+    "fd_dd":    ([0xfd, 0xdd, 0x21, 0x00, 0x82], 18, "FD then DD + LD IX,8200: the last prefix counts"),
+    "dd_ed":    ([0xdd, 0xed, 0x44], 12, "DD before an ED opcode (NEG)"),
+    "dd_nop":   ([0xdd, 0x00], 8, "DD before an opcode without an index form (NOP)"),
+    "dd_cb":    ([0xdd, 0xcb, 0x05, 0x06], 23, "DD CB d op: RLC (IX+5)"),
+}
+# the INT sweep's targets; the NMI, BUSREQ and WAIT sweeps take all of TARGETS
+INT_TARGETS = ["inc_a", "ld_a_hl", "ld_hl_a", "inc_hl", "halt", "ld_a_i", "ld_a_r", "add_hl_bc",
+               "ex_sp_hl", "djnz", "in_a_n", "ei_run", "ei_di", "dd_run", "fd_dd", "dd_ed",
+               "dd_nop", "dd_cb"]
+# bytes on the bus during INTA in the IM2 sweep: even, odd, and FF (an idle bus)
+IM2_VECS = (0x40, 0x41, 0xff)
+# IM0: the instructions an interrupting device hands the CPU (its INTA byte,
+# then one byte per INTA cycle or memory read until it has none left)
+IM0_SEQS = {
+    "rst38": [0xff], "rst00": [0xc7], "rst08": [0xcf], "call": [0xcd, 0x34, 0x12],
+    "jp": [0xc3, 0x34, 0x12], "ld_a_n": [0x3e, 0x99], "jr": [0x18, 0x10], "inc_bc": [0x03],
+    "halt": [0x76], "ei": [0xfb], "reti": [0xed, 0x4d], "ld_ix_nn": [0xdd, 0x21, 0x34, 0x12],
+    "rlc_a": [0xcb, 0x07], "jp_ix": [0xdd, 0xe9], "ld_ixd_n": [0xdd, 0x36, 0x05, 0x99],
+    "rlc_ixd": [0xdd, 0xcb, 0x05, 0x06], "ex_sp_hl": [0xe3], "ldir": [0xed, 0xb0],
+    "push_bc": [0xc5], "ld_a_nn": [0x3a, 0x00, 0x80],
 }
 BASIC = ["inc_a", "ld_a_hl", "ld_hl_a", "inc_hl"]
 GROUPS = ["int", "nmi", "nmi_short", "nmi_reentry", "reset", "reset_release",
-          "reset_wait", "reset_short", "combo"]
+          "reset_wait", "reset_short", "combo", "busreq", "wait", "im2", "im2_combo",
+          "im0", "im0_combo"]
 
 
 def program(target, im=1, ei=False, nmi_nops=0):
@@ -95,6 +135,10 @@ def program(target, im=1, ei=False, nmi_nops=0):
     put(0x0400, [0xc9])                           # CALL target: RET
     for i in range(0, 256, 2):                    # IM2 table at I=3F
         ram[0x3f00 + i], ram[0x3f01 + i] = 0x38, 0x00
+    # an odd vector reads 0038's bytes the other way round, 3800, and FF
+    # reads 3FFF (00) and 4000: 3800 too, where a JP leads to the handler
+    ram[0x4000] = 0x38
+    put(0x3800, [0xc3, 0x38, 0x00])               # JP 0038
     return ram
 
 
@@ -118,7 +162,7 @@ def case(name, group, target, pulses, run=None, **kw):
     c = {"name": name, "group": group, "target": target, "pulses": pulses,
          "run": run or (140 if target == "ldir" else 60 + length),
          "im": 1, "ei": False, "nmi_nops": 0, "inta_release": False,
-         "int_at": None, "hold": None, "meta": {}}
+         "int_at": None, "hold": None, "vec": 0xff, "ops": (), "meta": {}}
     c.update(kw)
     return c
 
@@ -132,7 +176,7 @@ def cases(groups, phases):
     out = []
     want = lambda g: "all" in groups or g in groups
     if want("int"):          # IM1, EI, INT held until INTA
-        for t in BASIC + ["halt"]:
+        for t in INT_TARGETS:
             for n in range(TARGETS[t][1] + 2):
                 for j in ph:
                     out.append(case(f"int_{t}_T{n}_p{j:02d}", "int", t, [(INT, at(n, j), -1)],
@@ -173,7 +217,7 @@ def cases(groups, phases):
                             [(NMI, at(2, 4), at(3, 4))], run=300, ei=ei, int_at=0x0066,
                             meta={"kind": "retn_int"}))
     if want("reset"):        # 4 T pulse at every T-state
-        for t in BASIC + ["halt", "push_bc"]:
+        for t in BASIC + ["halt", "push_bc", "add_hl_bc", "inc_bc", "in_a_n", "out_n_a"]:
             for n in range(TARGETS[t][1] + 2):
                 for j in ph:
                     out.append(case(f"reset_{t}_T{n}_p{j:02d}", "reset", t,
@@ -218,10 +262,75 @@ def cases(groups, phases):
             out.append(case(f"combo_nmi_held_reset_p{j:02d}", "combo", "inc_a",
                             [(NMI, at(1, j), at(31, j)), (RESET, at(3, 0), at(7, 0))],
                             run=300, meta={"kind": "nmi_held_across_reset"}))
+        for n in range(0, 6):      # INT / NMI / HALT+INT with BUSREQ at the same boundary
+            for j in ph:
+                out.append(case(f"combo_int_busreq_T{n}_p{j:02d}", "combo", "inc_a",
+                                [(INT, at(2, 4), -1), (BUSREQ, at(n, j), at(n, j) + 32)],
+                                ei=True, inta_release=True, meta={"kind": "int_busreq"}))
+                out.append(case(f"combo_nmi_busreq_T{n}_p{j:02d}", "combo", "inc_a",
+                                [(NMI, at(2, 4), at(3, 4)), (BUSREQ, at(n, j), at(n, j) + 32)],
+                                meta={"kind": "nmi_busreq"}))
+                out.append(case(f"combo_halt_busreq_T{n}_p{j:02d}", "combo", "halt",
+                                [(INT, at(6, 4), -1), (BUSREQ, at(n + 4, j), at(n + 4, j) + 32)],
+                                ei=True, inta_release=True, meta={"kind": "halt_int_busreq"}))
         for j in range(0, 16, 4):  # INT held across RESET: IFF clear until EI
             out.append(case(f"combo_int_held_reset_p{j:02d}", "combo", "inc_a",
                             [(INT, at(1, j), -1), (RESET, at(1, 8), at(5, 8))], run=300,
                             ei=True, inta_release=True, meta={"kind": "int_held_across_reset"}))
+    if want("busreq"):       # BUSREQ low 1 T and 4 T from every T-state: grant, BUSACK, resume
+        for t in TARGETS:
+            for n in range(TARGETS[t][1] + 2):
+                for j in ph:
+                    for w in (1, 4):
+                        out.append(case(f"busreq{w}_{t}_T{n}_p{j:02d}", "busreq", t,
+                                        [(BUSREQ, at(n, j), at(n, j) + 16 * w)],
+                                        meta={"n": n, "phase": j, "width": w}))
+    if want("wait"):         # WAIT low 1 T and 3 T from every T-state
+        for t in TARGETS:
+            for n in range(TARGETS[t][1] + 2):
+                for j in ph:
+                    for w in (1, 3):
+                        out.append(case(f"wait{w}_{t}_T{n}_p{j:02d}", "wait", t,
+                                        [(WAIT, at(n, j), at(n, j) + 16 * w)],
+                                        meta={"n": n, "phase": j, "width": w}))
+    if want("im2"):          # IM2, EI, INT held until INTA, with an even, odd and FF vector
+        for v in IM2_VECS:
+            for t in BASIC + ["halt"]:
+                for n in range(TARGETS[t][1] + 2):
+                    for j in ph:
+                        out.append(case(f"im2_{v:02x}_{t}_T{n}_p{j:02d}", "im2", t, [(INT, at(n, j), -1)],
+                                        im=2, ei=True, inta_release=True, vec=v,
+                                        meta={"n": n, "phase": j, "vec": v}))
+    if want("im2_combo"):    # INT taken after INC A in IM2 (INTA at T5, pushes at T12 and T15,
+        # table reads at T18 and T21, the handler from T24); a second pin from every T-state
+        for n in range(4, 29):
+            for j in ph:
+                for name, pin, w in (("nmi", NMI, 16), ("wait1", WAIT, 16), ("wait3", WAIT, 48),
+                                     ("busreq1", BUSREQ, 16), ("busreq4", BUSREQ, 64),
+                                     ("reset", RESET, 64)):
+                    out.append(case(f"im2c_{name}_T{n}_p{j:02d}", "im2_combo", "inc_a",
+                                    [(INT, at(2, 4), -1), (pin, at(n, j), at(n, j) + w)],
+                                    run=300 if pin == RESET else None, im=2, ei=True,
+                                    inta_release=True, vec=0x40,
+                                    meta={"kind": name, "n": n, "phase": j}))
+    if want("im0"):          # IM0, EI, INT taken after INC A; the device hands over an instruction
+        for name, seq in IM0_SEQS.items():
+            for j in (4, 12):
+                out.append(case(f"im0_{name}_p{j:02d}", "im0", "inc_a", [(INT, at(2, j), -1)],
+                                run=160, im=0, ei=True, inta_release=True, vec=seq[0],
+                                ops=tuple(seq[1:]), meta={"seq": name, "phase": j}))
+    if want("im0_combo"):    # IM0 CALL 1234 after INC A (INTA at T5, operand reads at T11 and
+        # T14, pushes at T18 and T21, the fetch at 1234 from T24); a second pin from every T-state
+        for n in range(4, 29):
+            for j in ph:
+                for name, pin, w in (("nmi", NMI, 16), ("wait1", WAIT, 16), ("wait3", WAIT, 48),
+                                     ("busreq1", BUSREQ, 16), ("busreq4", BUSREQ, 64),
+                                     ("reset", RESET, 64)):
+                    out.append(case(f"im0c_{name}_T{n}_p{j:02d}", "im0_combo", "inc_a",
+                                    [(INT, at(2, 4), -1), (pin, at(n, j), at(n, j) + w)],
+                                    run=300 if pin == RESET else None, im=0, ei=True,
+                                    inta_release=True, vec=0xcd, ops=(0x34, 0x12),
+                                    meta={"kind": name, "n": n, "phase": j}))
     return out
 
 
@@ -234,13 +343,13 @@ def pz80_key(c):
     pulses = tuple(sorted((p, half(lo), half(hi), lo // 8 == hi // 8 and hi >= 0)
                           for p, lo, hi in c["pulses"]))
     return (c["target"], c["im"], c["ei"], c["nmi_nops"], c["inta_release"], c["int_at"],
-            c["hold"], c["run"], pulses)
+            c["hold"], c["run"], c["vec"], c["ops"], pulses)
 
 
 def run_case(c, workdir, side):
     key = f"{c['target']}_{c['im']}{int(c['ei'])}{c['nmi_nops']}"
     prog = os.path.join(workdir, f"prog_{key}.hex")
-    ev = os.path.join(workdir, f"{c['name']}.events")
+    ev = os.path.join(workdir, f"{c['name']}.{side}.events")    # the sides run in parallel
     with open(ev, "w") as f:
         for p, lo, hi in c["pulses"]:
             f.write(f"{p} {lo} {hi}\n")
@@ -249,11 +358,17 @@ def run_case(c, workdir, side):
         if c["inta_release"]: cmd.append("+inta_release=1")
         if c["int_at"] is not None: cmd.append(f"+int_at={c['int_at']:04x}")
         if c["hold"]: cmd += [f"+hold={c['hold'][0]:04x}", f"+hold_t={c['hold'][1]}"]
-    else:
-        cmd = [PZ80, "-e", ev, "-r", str(c["run"])]
+        if c["vec"] != 0xff: cmd.append(f"+inta_vec={c['vec']:02x}")
+        if c["ops"]:
+            cmd += [f"+inta_n={len(c['ops'])}",
+                    "+inta_ops=" + "".join(f"{b:02x}" for b in reversed(c["ops"]))]
+    else:                    # perfectz80, or the C model: the same options
+        cmd = [PZ80 if side == "pz80" else CMODEL, "-e", ev, "-r", str(c["run"])]
         if c["inta_release"]: cmd.append("-i")
         if c["int_at"] is not None: cmd += ["-a", f"{c['int_at']:04x}"]
         if c["hold"]: cmd += ["-H", f"{c['hold'][0]:04x}", "-T", str(c["hold"][1])]
+        if c["vec"] != 0xff: cmd += ["-v", f"{c['vec']:02x}"]
+        if c["ops"]: cmd += ["-o", "".join(f"{b:02x}" for b in c["ops"])]
         cmd.append(prog)
     out = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
     rows = []
@@ -273,9 +388,10 @@ CONTROL = [("mreq", MREQ), ("iorq", IORQ), ("rd", RD), ("wr", WR), ("m1", M1),
 
 
 def addressed(r):
-    """The address means something: a transfer (MREQ or IORQ with RD or
-    WR) or a refresh (RFSH low: I:R). Idle addresses are don't-care."""
-    return ((not r[MREQ] or not r[IORQ]) and (not r[RD] or not r[WR])) or not r[RFSH]
+    """The address is compared in every half-cycle: transfers, refreshes,
+    and the internal and idle T-states, where the bus keeps its last
+    address."""
+    return True
 
 
 def first_difference(a, b):
@@ -469,6 +585,13 @@ def report(results, baseline, new, changed, fixed, path):
             rows = [r for r in full[g] if r[0]["target"] == t]
             if rows:
                 out += [f"### `{t}` ({TARGETS[t][2]}, {TARGETS[t][1]} T)\n"] + grid(rows) + [""]
+    if full.get("im2"):
+        out.append(f"\n## INT in IM2 (EI, held until INTA; I = 3F)\n\n{GRID_LEGEND}\n")
+        for v in IM2_VECS:
+            for t in TARGETS:
+                rows = [r for r in full["im2"] if r[0]["target"] == t and r[0]["vec"] == v]
+                if rows:
+                    out += [f"### vector {v:02X}, `{t}` ({TARGETS[t][1]} T)\n"] + grid(rows) + [""]
     if full.get("nmi_short"):
         out.append(f"\n## NMI pulses shorter than T\n\n{GRID_LEGEND}\n")
         for w in (1, 4):
@@ -505,9 +628,11 @@ def main():
     ap.add_argument("--match", default="")
     ap.add_argument("--phases", type=int, default=2, choices=(2, 4, 8, 16))
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 2)
+    ap.add_argument("--c-model", action="store_true",
+                    help="also run the C model and require it to match the RTL in every half-cycle")
     ap.add_argument("--update-baseline", action="store_true")
     a = ap.parse_args()
-    for exe in (TB_VVP, PZ80):
+    for exe in (TB_VVP, PZ80) + ((CMODEL,) if a.c_model else ()):
         if not os.path.exists(exe):
             sys.exit(f"missing {exe}: run `make event_sweep`")
     todo = [c for c in cases(a.groups.split(","), a.phases) if a.match in c["name"]]
@@ -529,13 +654,20 @@ def main():
     print(f"{len(todo)} cases ({len(pz_cases)} distinct for perfectz80), {a.jobs} jobs", flush=True)
     with ThreadPoolExecutor(a.jobs) as pool:
         pz_runs = {k: pool.submit(run_case, c, work, "pz80") for k, c in pz_cases.items()}
-        rtl_runs = [(c, pool.submit(run_case, c, work, "rtl")) for c in todo]
-        results = []
-        for i, (c, fut) in enumerate(rtl_runs, 1):
+        rtl_runs = [(c, pool.submit(run_case, c, work, "rtl"),
+                     pool.submit(run_case, c, work, "c") if a.c_model else None) for c in todo]
+        results, c_differs = [], []
+        for i, (c, fut, cfut) in enumerate(rtl_runs, 1):
             rtl, pz = fut.result(), pz_runs[pz80_key(c)].result()
             s = summarize(c, rtl, pz)
             if s:
                 write_diff(c, rtl, pz, os.path.join(diff_dir, f"{c['name']}.txt"))
+            if cfut:
+                cm = cfut.result()
+                d = first_difference(cm, rtl)
+                if d:
+                    c_differs.append((c["name"], d))
+                    write_diff(c, cm, rtl, os.path.join(diff_dir, f"{c['name']}.c_vs_rtl.txt"))
             results.append((c, s, facts(c, rtl), facts(c, pz)))
             if i % 250 == 0 or i == len(rtl_runs):
                 print(f"  {i}/{len(rtl_runs)}", flush=True)
@@ -557,6 +689,11 @@ def main():
     print(f"{len(results) - differing} match, {differing} differ "
           f"({len(new)} new, {len(changed)} changed, {len(fixed)} known now match); "
           f"report: {os.path.relpath(os.path.join(OUT, 'report.md'), ROOT)}")
+    if a.c_model:
+        print(f"C model: {len(results) - len(c_differs)} cases identical to the RTL, {len(c_differs)} differ")
+        for n, (half, what) in sorted(c_differs)[:50]:
+            print(f"::error::{n}: the C model differs from the RTL at half {half} ({', '.join(what)}; "
+                  f"build/event_sweep/diff/{n}.c_vs_rtl.txt, C left)")
 
     if a.update_baseline:
         kept = {n: k for n, k in baseline.items() if n not in ran}
@@ -574,7 +711,7 @@ def main():
     for n in sorted(new | changed)[:50]:
         print(f"::error::{n}: {'new' if n in new else 'changed'} difference from perfectz80 "
               f"(build/event_sweep/diff/{n}.txt)")
-    return 1 if new or changed else 0
+    return 1 if new or changed or c_differs else 0
 
 
 if __name__ == "__main__":

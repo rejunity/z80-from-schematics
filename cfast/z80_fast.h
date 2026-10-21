@@ -5,7 +5,8 @@
  * same pins in every phase -- run by straight-line code generated from the
  * model's timing tables (cfast/gen_fast.py) for the common case, and by the
  * reference z80_phase_step for the rest (WAIT, BUSREQ, RESET, NMI, interrupt
- * acknowledge, HALT). Both work on the same z80_t.
+ * acknowledge and an IM0 device's instruction, HALT). Both work on the same
+ * z80_t.
  * ==========================================================================*/
 #ifndef Z80_FAST_H
 #define Z80_FAST_H

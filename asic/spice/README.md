@@ -13,8 +13,8 @@ with ngspice and each PDK's own netlists and SPICE models:
   a pin clocks a flip-flop, cut out of the GF180 chip from the NMI and CLK
   pins to its flip-flops, and run at three corners.
 - **The whole chip** (`chip.py`): the extracted layout of the GF180 chip
-  running reset and a short program, its pins drawn the way the Z80's
-  datasheet draws its timing diagrams.
+  running reset and a short program at three corners, its pins drawn the
+  way the Z80's datasheet draws its timing diagrams.
 
 The pads and the NMI catcher run in CI, and their figures are on the
 project's GitHub Pages site, under "At transistor level" (see [CI](#ci)).
@@ -302,9 +302,32 @@ analyser shows it.
 
     asic/spice/chip.py <asic-gf180mcu chip run> --corner tt --sta <pin_timing.py output>
 
+`--corner ss` and `--corner ff` run the slow (4.5 V, 125 °C) and the fast
+(5.5 V, -40 °C) corner. tt's figures and `results.json` are committed in
+`chip/gf180mcu/`, ss's and ff's in `chip/gf180mcu/ss/` and
+`chip/gf180mcu/ff/`:
+
+| Corner | Pins against the RTL | AC parameters met | Closest to its limit |
+|---|---|---|---|
+| tt, 5.0 V, 25 °C | 0 mismatches | 25 of 25 | TwWR, 21.8 ns over |
+| ss, 4.5 V, 125 °C | 0 mismatches | 25 of 25 | TwWR, 18.3 ns over |
+| ff, 5.5 V, -40 °C | 0 mismatches | 25 of 25 | TwWR, 23.7 ns over |
+
+The clock's edges need short steps. Left to its step control (on the
+devices' charges), ngspice took each edge -- the CLK pad's Schmitt
+trigger, the clock tree and every flip-flop behind it -- in one 1-2 ns
+step, which collapses the delays inside it: at tt a flip-flop settled in
+its old state (the OUT cycle's IORQ fell half a clock late), at ff
+latches elsewhere flipped with their clocks still. A source that only
+makes breakpoints, every 0.5 ns from just before the CLK pin crosses the
+pad's threshold to 7 ns after (`clock_breaks()`), keeps those steps at
+0.2 ns or less; with it no probed flip-flop changes state without an
+active edge of its clock, at any corner.
+
 KLU's sparse factorisation dominates: ngspice simulates about 40 ns a
-minute, some six hours for the program. The figures and `results.json`
-are committed in `chip/gf180mcu/`.
+minute, some six hours for the program at tt alone; with the clock's
+breakpoints and the three corners side by side on four cores, about 13
+hours each.
 
 ## CI
 
@@ -314,5 +337,26 @@ are committed in `chip/gf180mcu/`.
 - `asic-pdk.yml`, GF180 7-track: after the chip's pin timing, `nmi.py`
   at three corners (~2 min), failing when a case's pulse is not caught,
   held for the core and cleared.
-- The GitHub Pages job puts the pads, the NMI catcher and the committed
-  whole-chip run under "At transistor level".
+- `pages.yml` puts the pads, the NMI catcher and the committed whole-chip
+  runs under "At transistor level" on the project's site, and the latest
+  `transistor.yml` run on its own page, `transistor/`, linked from there.
+- `transistor.yml`, by hand (Actions, "Transistor", Run workflow): the
+  whole chip at the three corners. It extracts the GDS of main's latest
+  Targets run, runs the program in four windows of about 3.3 µs, one job
+  each (a job stops at 6 hours; `chip.py --segment K/4`), and puts the
+  stitched run's figures and `results.json` in the artifact
+  `transistor-gf180mcu`, laid out as `chip/gf180mcu/`.
+
+A window starts from the node voltages the one before ended with
+(ngspice's `wrnodev`, as `.ic`), with every source shifted to its start.
+The cuts sit 15 ns before a clock edge, where the chip has settled.
+`wrnodev` leaves out every node whose name has a `#` -- ngspice keeps those
+for devices' own internal nodes -- and Magic names every node inside a
+standard cell that way, so the first run on GitHub restarted each window
+with the latches inside every flip-flop at 0 V: its pins left the RTL's at
+the first clock edge after the first cut. `chip.py` renames them
+(`a_<x>_<y>_h`); a flip-flop restarted while its clock is high keeps its
+state. A run whose pins differ from the RTL's or that fails an AC
+parameter fails, and `pages.yml` publishes no such run. ngspice's own
+snapshots (`snsave` / `snload`) would keep the integrator's history too,
+but `snload` crashes on a KLU circuit.

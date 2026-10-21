@@ -35,11 +35,13 @@
 #endif
 
 /* The state the generated steps assume: nothing pending that only
-   z80_phase_step handles, and a bus cycle with a template. */
+   z80_phase_step handles -- RESET's samples and idle, a bus grant or its
+   request seen, an IM0 instruction from the interrupting device, a halt,
+   an NMI -- and a bus cycle with a template. */
 static bool fast_ok(const z80_t *c)
 {
-    return c->phase_primed && !c->in_reset_hold && !c->reset_assert_filter &&
-           !c->reset_release_filter && !c->bus_granted && !c->busreq_release_filter &&
+    return c->phase_primed && !c->res_s && !c->res2 && !c->sres && !c->rst_idle &&
+           !c->srst_m1 && !c->rd_hold && !c->bus_granted && !c->busreq_s && !c->im0_ins &&
            !c->halted && !c->nmi_resp && !c->nmi_pending && !c->nmi_sampled &&
            c->prev_nmi_n && !c->stalled && !c->wait_sampled && !c->suppress_decode &&
            !(c->ctl.exec == EXEC_HALT && c->bus_op == BUSOP_M1) &&
@@ -55,7 +57,12 @@ static void resume(z80f_t *f)
     if (f->fast) {
         f->step = (uint16_t)(zf_template[(c->bus_op & 7) << 4 | c->m_len] +
                              2 * (c->t_state - 1) + c->phi + 1);
-        f->bus = c->m_addr | (uint64_t)c->m_wdata << Z80_PIN_D0;
+        /* the address of the phases to come: the M-cycle's, or the one on
+           the bus where the model holds it (is_addr_held) */
+        unsigned t = c->t_state + c->phi, phi = !c->phi;
+        bool held = t <= c->m_len &&
+                    (tpoint_rom[Z80_TIMING_ROM_INDEX(c->bus_op, t, phi)] & TP_ADDR_HELD);
+        f->bus = (held ? c->pins.addr : c->m_addr) | (uint64_t)c->m_wdata << Z80_PIN_D0;
     }
 }
 

@@ -1,6 +1,7 @@
-# IM 1 + EI: 4T+4T = 16 phases. The first post-EI NOP runs phases 16..23
-# (4T). Pulse INT inside that NOP's window — the INT sample at the rising
-# edge of the LAST T-state of the post-EI NOP should accept it, NOT the
-# rising edge inside EI's own M-cycle.
+# IM 1 runs phases 0..15 (two M1s), EI 16..23, the first NOP 24..31. INT
+# goes low at phase 18, inside EI, and stays low: the sample at the end of
+# EI is masked (EI's one-instruction delay), the one at the end of the
+# first NOP takes it, so the INTA cycle follows that NOP (phase 36), not
+# EI.
 18  int  0
-22  int  1
+60  int  1

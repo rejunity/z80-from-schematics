@@ -1,5 +1,7 @@
-# LDIR begins around phase 60 (after IM1/EI/LDs). Pulse INT mid-LDIR
-# (around phase 110, several iterations in). Expect the current iteration
-# to finish, PC to be rewound to the LDIR opcode, then INTA + RST 38h.
+# LDIR starts at phase 84 (after IM 1, EI and three LD rr,nn); an
+# iteration is 21 T (42 phases). INT goes low at phase 110, inside the
+# first iteration, and stays low until 170: the iteration finishes, PC is
+# rewound to the LDIR opcode (000C), and the INTA cycle follows (phase
+# 130), then RST 38h.
 110 int  0
-116 int  1
+170 int  1

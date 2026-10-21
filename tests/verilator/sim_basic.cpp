@@ -99,10 +99,17 @@ int main(int argc, char** argv) {
 
     // reset (3 phases of !reset_n is enough for our model to latch the
     // synchronous reset block exactly like sim_zex does it).
-    t->reset_n = 0; t->clk = 0; t->eval();
+    // a real falling edge on por_n (Verilator starts inputs at 0, which
+    // would be no edge at all)
+    t->por_n = 1; t->reset_n = 0; t->clk = 0; t->eval();
+    t->por_n = 0; t->eval();
+    t->por_n = 1; t->eval();
     t->clk = 1; t->eval();
     t->clk = 0; t->eval();
     t->reset_n = 1;
+    // RESET is sampled on rising edges: the third one after release enters
+    // T1 of the first M1 at PC, so the start state is poked after two
+    for (int k = 0; k < 2; k++) { t->clk = 1; t->eval(); t->clk = 0; t->eval(); }
 
     // PC=0 (the ROM's reset vector); SP=0xFFFE (typical BASIC ROM init).
     //
