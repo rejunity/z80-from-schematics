@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run LibreLane's Classic flow, stopping after Yosys.Synthesis. Produces
 # a synthesized gate-level netlist (z80_top.nl.v) under
-# librelane/runs/<timestamp>/final/nl/.
+# asic/librelane/runs/<timestamp>/final/nl/.
 #
 # Side effects (consumed by the Makefile):
 #   build/synth/z80_top.nl.v       — symlink to the latest run's netlist
@@ -14,8 +14,8 @@
 # PATH (Nix profile install — see docs/librelane-flow.md "Tooling").
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$ROOT/librelane"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+cd "$ROOT/asic/librelane"
 
 if ! command -v librelane >/dev/null 2>&1; then
   cat >&2 <<'EOF'
@@ -55,10 +55,10 @@ mkdir -p "$ROOT/build/synth"
 
 latest=$(ls -dt runs/*/final/nl/z80_top.nl.v 2>/dev/null | head -1 || true)
 if [ -z "$latest" ]; then
-  echo "synth: no netlist produced — check librelane/runs/*/" >&2
+  echo "synth: no netlist produced — check asic/librelane/runs/*/" >&2
   exit 1
 fi
-ln -sf "$ROOT/librelane/$latest" "$ROOT/build/synth/z80_top.nl.v"
+ln -sf "$ROOT/asic/librelane/$latest" "$ROOT/build/synth/z80_top.nl.v"
 echo "synth: produced $latest"
 
 # Resolve PDK_ROOT — try in order:

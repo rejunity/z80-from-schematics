@@ -8,9 +8,10 @@
 // Clocking: `clk` IS the Z80 clock (one period = one T-state). A "phase"
 // is one half-period: even phases are the clock-high half (after a rising
 // edge), odd phases the clock-low half (after a falling edge). Pin events
-// scheduled for phase i are applied just after the edge that starts phase
-// i, so the DUT sees them on its next edge -- the same "value present
-// during phase i" semantics the C tracegen uses. Memory writes are captured
+// scheduled for phase i are applied just before the edge that starts phase
+// i, so the DUT samples them on that edge -- the same "value present
+// during phase i" semantics the C tracegen uses, and perfectz80_runner's
+// (inputs set before each half-cycle step). Memory writes are captured
 // from the settled pins at every phase, exactly like cmodel/z80_sim.c.
 //
 // Simulation-only constructs (initial, $readmemh, $display) live here, never
@@ -20,7 +21,8 @@
 
 module tb_z80;
     reg         clk = 1'b0;
-    reg         reset_n = 1'b0;
+    reg         por_n = 1'b0;           // power-on reset
+    reg         reset_n = 1'b0;         // the RESET pin
     reg         wait_n = 1'b1, int_n = 1'b1, nmi_n = 1'b1, busreq_n = 1'b1;
     wire [7:0]  data_in;
 
@@ -34,7 +36,7 @@ module tb_z80;
     reg  [7:0]  mem [0:65535];
 
     z80_top dut (
-        .clk(clk), .reset_n(reset_n),
+        .clk(clk), .por_n(por_n), .reset_n(reset_n),
         .addr(addr), .data_in(data_in), .data_out(data_out), .data_drive(data_drive),
         .m1_n(m1_n), .mreq_n(mreq_n), .iorq_n(iorq_n), .rd_n(rd_n), .wr_n(wr_n),
         .rfsh_n(rfsh_n), .halt_n(halt_n), .busack_n(busack_n),
@@ -67,7 +69,7 @@ module tb_z80;
     // scenario programs that the C tracegen + perfectz80_runner consume.
     integer nmi_lo, nmi_hi, int_lo, int_hi, wait_lo, wait_hi;
     integer busreq_lo, busreq_hi, reset_lo, reset_hi;
-    reg [1023:0] progf;
+    reg [8*512-1:0] progf;          // paths up to 512 characters
 
     task dump;
         $display("%0d %0d %0d %04X %02X %02X %0d %0d %0d %0d %0d %0d %0d %0d",
@@ -79,6 +81,27 @@ module tb_z80;
     // is driving this half-cycle (matches cmodel/z80_sim.c z80_sys_phase)
     task service;
         if (!mreq_n && !wr_n) mem[addr] = data_out;
+    endtask
+
+    // pin events of phase k, applied just before the edge that enters
+    // phase k -- the way perfectz80_runner and the C tracegen apply them:
+    // the DUT samples them on that edge, as a pin meeting its setup time,
+    // and they hold until a later event
+    task events(input integer k);
+        begin
+            if (k == nmi_hi)    nmi_n    = 1'b1;
+            if (k == nmiph || k == nmi_lo) nmi_n = 1'b0;
+            if (k == int_hi)    int_n    = 1'b1;
+            if (k == int_lo)    int_n    = 1'b0;
+            if (k == wait_hi)   wait_n   = 1'b1;
+            if (k == wait_lo)   wait_n   = 1'b0;
+            if (k == busreq_hi) busreq_n = 1'b1;
+            if (k == busreq_lo) busreq_n = 1'b0;
+            if (k == reset_hi)  reset_n  = 1'b1;
+            if (k == reset_lo)  reset_n  = 1'b0;
+            // legacy single-phase NMI shorthand: high outside that phase
+            if (nmiph >= 0 && k != nmiph && nmi_lo < 0 && nmi_hi < 0) nmi_n = 1'b1;
+        end
     endtask
 
     initial begin
@@ -98,52 +121,28 @@ module tb_z80;
         for (i = 0; i < 65536; i = i + 1) mem[i] = 8'h00;
         $readmemh(progf, mem);
 
-        // Hold reset across a couple of T-states, release it in the
-        // clock-low half (so the next edge the DUT sees is a rising edge),
-        // then the first rising edge ENTERS T1.P of the M1 fetch at PC=0 --
+        // Power-on: por_n, then RESET held across a couple of T-states and
+        // released in a clock-low half. The core samples RESET on rising
+        // edges and enters T1.P of the M1 fetch at PC=0 on the third one --
         // that is trace line 0, matching the C model's z80_init() state.
-        reset_n = 1'b0;
+        por_n = 1'b0; reset_n = 1'b0;
+        @(negedge clk); #1 por_n = 1'b1;
         repeat (2) @(negedge clk);
         #1 reset_n = 1'b1;
+        @(posedge clk); @(posedge clk);
+        events(0);
         @(posedge clk); #1;
-
-        // Drive pins for phase 0 (legacy nmi shorthand kept side-by-side
-        // with the new per-pin lo/hi plusargs).
-        nmi_n    = (0 == nmiph || 0 == nmi_lo) ? 1'b0 : 1'b1;
-        int_n    = (0 == int_lo)    ? 1'b0 : 1'b1;
-        wait_n   = (0 == wait_lo)   ? 1'b0 : 1'b1;
-        busreq_n = (0 == busreq_lo) ? 1'b0 : 1'b1;
-        // reset_n stays released (1) here. A `reset_lo` event would
-        // re-assert it (drive 0).
-        if (0 == reset_lo) reset_n = 1'b0;
+        if (m1_n !== 1'b0) $display("tb_z80: no M1 at trace line 0");
         dbg_phi = 1'b0;
         service;
         dump;                                 // line 0 = T1.P
         for (i = 1; i < phases; i = i + 1) begin
+            events(i);
             // odd phase: falling edge; even phase: rising edge. Settle #1
-            // past the edge before touching inputs or sampling outputs.
+            // past the edge before sampling outputs.
             if (i[0]) @(negedge clk); else @(posedge clk);
             #1;
             dbg_phi = i[0];
-            // Each pin holds its previous value unless an event fires
-            // at this phase (lo overrides hi if both happen at same phase).
-            if (i == nmi_hi)    nmi_n    = 1'b1;
-            if (i == nmiph || i == nmi_lo) nmi_n = 1'b0;
-            if (i == int_hi)    int_n    = 1'b1;
-            if (i == int_lo)    int_n    = 1'b0;
-            if (i == wait_hi)   wait_n   = 1'b1;
-            if (i == wait_lo)   wait_n   = 1'b0;
-            if (i == busreq_hi) busreq_n = 1'b1;
-            if (i == busreq_lo) busreq_n = 1'b0;
-            if (i == reset_hi)  reset_n  = 1'b1;
-            if (i == reset_lo)  reset_n  = 1'b0;
-            // Pulse-on-same-phase: if neither lo nor hi event fired but
-            // the legacy nmi shorthand says "single-phase nmi at i", keep
-            // the old behaviour of high outside that one phase. Otherwise
-            // honor the new lo/hi events.
-            if (nmiph >= 0 && i != nmiph && nmi_lo < 0 && nmi_hi < 0) begin
-                nmi_n = 1'b1;
-            end
             service;
             dump;
         end

@@ -39,9 +39,10 @@ Concretely, in `rtl/z80_core.v` the combinational next-state block now runs
 once per T-state and reads, in order:
 
 1. **clock-low-half work** (what the chip did on the falling edge of this
-   T-state): NMI edge detect against `nmi_n_neg`; the T_last.P INT/NMI
-   sample from `int_n_neg` / the NMI edge state; the MRD/IORD read-data
-   latch from `data_in_neg`;
+   T-state): NMI edge detect against `nmi_n_neg`; the INT/NMI sample of
+   the last T-state -- `int_n_rise`, the INT level its rising edge
+   latched, and the NMI edges seen up to that edge; the MRD/IORD
+   read-data latch from `data_in_neg`;
 2. **clock-high-half work** (this rising edge): NMI edge detect against the
    live `nmi_n`; the M1/INTA latch from the live `data_in`; the WAIT
    decision from `wait_n_neg` (the falling-edge sample of T2 / Tw, UM0080);
@@ -80,7 +81,8 @@ every pin makes exactly one transition per edge — there is no clock-as-data
 mux (which would glitch WR# at the rising edge of T3 when the high-half
 value of T2 differs from the low-half value), no inverted clock net, and the
 outputs are flop-driven rather than decoded from state. Reset forces
-`a = idle pattern, b = 0`, so pins sit idle while `reset_n` is low.
+`a = idle pattern, b = 0`, so pins sit idle while `por_n` is low (the
+RESET pin is an ordinary sampled input; the core idles its strobes itself).
 
 Why can't the P half come straight from a core-registered copy? Because at
 the rising edge the output must flip from `neg(k-1)` to `pos(k)` in a single
@@ -95,14 +97,28 @@ the edge. That is why `*_pos` is a next-state function.
 | `data_in` | M1 opcode / INTA vector at the rising edge ending T2 | live, in the core |
 | `data_in` | MRD data at the falling edge of T3, IORD data at the falling edge of T4 | `data_in_neg` (wrapper negedge flop) |
 | `wait_n` | falling edge of T2 (memory), of the automatic Tw (I/O), of the second automatic Tw (INTA) | `wait_n_neg` |
-| `int_n` | level during T_last.P (UM0080: rising edge of the last T-state) | `int_n_neg` |
-| `nmi_n` | falling-edge detect, both halves | live **and** `nmi_n_neg` |
+| `int_n` | the rising edge that starts T_last (PS0178 Figure 8; perfectz80) | `int_n_rise` (wrapper posedge flop) |
+| `nmi_n` | falling-edge detect, both halves; a pulse of any width (TwNMI) | live **and** `nmi_n_neg`, through the wrapper's NMI pulse catcher |
 | `busreq_n` | instruction boundary; every rising edge while granted | live |
-| `reset_n` | async assert, sync release | — |
+| `reset_n` | every rising edge (the die's master-slave flip-flop) | `res_rise` (wrapper posedge flop) |
 
-Ten falling-edge flops in total (8 data + INT + NMI). Active-low control
-inputs reset to their *inactive* (high) level, so they want a negedge DFF
-with async **set**, not reset.
+Ten falling-edge flops in total (8 data + NMI + WAIT), two rising-edge
+flops (INT, RESET). Active-low control inputs reset to their *inactive* (high)
+level, so they want a DFF with async **set**, not reset.
+
+The half-cycle model says "INT sampled at T_last.P": the level an input
+has as T_last.P begins, i.e. across the rising edge, which is also where
+perfectz80 latches it and where the datasheet puts TsINT / ThINT. (An
+earlier RTL latched it on the falling edge that ends T_last.P, which only
+agreed with the C model because the RTL testbench applied input events
+after the edge rather than before it; `tests/iverilog/tb_z80.v` now
+applies them before, as perfectz80_runner does.)
+
+NMI is the NMOS Z80's edge-triggered flip-flop: a falling edge of any
+width sets it (TwNMI is 80 ns at 4 MHz, under half a clock). The wrapper's
+`nmi_hold` flop, clocked by the pin, holds such a pulse for the samplers
+until the next rising edge has seen it; a pulse that spans a clock edge
+reaches the core exactly as before.
 
 ## 5. What synthesis should produce (GF180 target, sky130 today)
 
@@ -122,8 +138,9 @@ with async **set**, not reset.
   picks the native cell when the liberty offers one; if a flow has put the
   negedge cells on a don't-use list it will instead insert an inverter on
   the clock pin — **check the mapped netlist**. Expected count here:
-  `PW + 11 = 44` negedge flops (33 former `b` bits + 11 input samplers:
-  `data_in[7:0]`, `int_n`, `nmi_n`, `wait_n`).
+  `PW + 10 = 43` negedge flops (33 former `b` bits + 10 input samplers:
+  `data_in[7:0]`, `nmi_n`, `wait_n`), plus the NMI pulse catcher, which
+  is clocked by `nmi_n` itself.
 - The negedge→posedge paths (`*_neg` sampler → core, former `a`↔`b`) are
   ordinary half-cycle paths in one clock domain. Time them; do not mark
   them false or asynchronous.
@@ -132,8 +149,8 @@ with async **set**, not reset.
 
   ```
   create_clock -name clk -period 100.0 -waveform {0.0 50.0} [get_ports clk]
-  set_input_delay -clock clk -clock_fall -max <d> [get_ports {data_in[*] int_n nmi_n wait_n}]
-  set_input_delay -clock clk -clock_fall -min <d> [get_ports {data_in[*] int_n nmi_n wait_n}]
+  set_input_delay -clock clk -clock_fall -max <d> [get_ports {data_in[*] nmi_n wait_n}]
+  set_input_delay -clock clk -clock_fall -min <d> [get_ports {data_in[*] nmi_n wait_n}]
   ```
 
 - Scan: GF180's documented scan flops are rising-edge only. The 44 negedge

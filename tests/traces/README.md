@@ -116,10 +116,13 @@ the 7 control pins gate `make perfectz80`'s exit code; the bus diff is
 visible but doesn't gate. Set `BUS_STRICT=1` in the environment to
 promote bus mismatches to gating too.
 
-`make pin_scenarios` is **informational** today (the make target exits 0 even
-on divergence) — every divergence between our model and perfectz80 surfaces
-a real silicon-faithfulness audit item rather than a regression. See
-[docs/simplifications.md](../../docs/simplifications.md) for the running list.
+`make pin_scenarios` (and `pin_scenarios_rtl` / `pin_scenarios_netlist`)
+fails on any control-pin or address difference from perfectz80, like
+`make perfectz80`. The INT scenarios hold INT low across an instruction's
+last T-state, where the CPU samples it, and release it after the INTA
+cycle; a pulse that ends before a sampling edge is never taken. Every
+harness puts 00 on the bus during INTA, so prog12's IM2 table read is at
+{I, 00}.
 
 
 ## How they were assembled
