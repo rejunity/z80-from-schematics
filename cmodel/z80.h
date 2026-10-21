@@ -341,6 +341,7 @@ typedef struct {
        the idle T.P, and into a restart that follows at once). z80_reset()
        is the power-on reset. */
     bool         res_s, res2, sres, rst_idle, srst_m1, rd_hold;
+    bool         in_tw;       /* this T-state is a Tw (WAIT held the last): not T2 */
 
     /* Register write-back as the die does it (docs/timing.md "Register
        write-back"): the die writes a result in the low half of a T-state,

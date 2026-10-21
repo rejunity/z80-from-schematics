@@ -33,7 +33,7 @@
 #                          [--jobs N] [--c-model] [--update-baseline]
 # Output: build/event_sweep/report.md, one side-by-side trace per differing
 # case in build/event_sweep/diff/.
-import argparse, collections, hashlib, lzma, os, subprocess, sys
+import argparse, collections, hashlib, lzma, os, random, subprocess, sys
 from concurrent.futures import Future, ThreadPoolExecutor
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -101,9 +101,12 @@ IM0_SEQS = {
 BASIC = ["inc_a", "ld_a_hl", "ld_hl_a", "inc_hl"]
 GROUPS = ["int", "nmi", "nmi_short", "nmi_reentry", "reset", "reset_release",
           "reset_wait", "reset_short", "combo", "busreq", "wait", "im2", "im2_combo",
-          "im0", "im0_combo", "opcodes", "classes", "classes_reset", "opcodes_reset"]
-# run only when named (--groups): RESET at every T-state of every opcode
-EXPLICIT = {"opcodes_reset"}
+          "im0", "im0_combo", "opcodes", "classes", "classes_reset", "opcodes_reset", "fuzz",
+          "fuzz_reset", "reset_m1wait", "reset_busreq", "reset_nmi"]
+# run only when named (--groups): RESET at every T-state of every opcode, the
+# fuzz with RESET, and NMI after RESET's release
+EXPLICIT = {"opcodes_reset", "fuzz_reset", "reset_nmi"}
+FUZZ_N, FUZZ_SEED = 2000, 1     # the recorded fuzz cases; --fuzz-seed / --fuzz-n for others
 
 # ---- every opcode (the `opcodes` group) ------------------------------------
 # Operands: d = 05 (IX+5 / IY+5), n = 99, nn = 0300 (zeros: a NOP run, safe
@@ -150,6 +153,39 @@ CLASS_REPS = [   # (opcode program, T-states, class size): scripts/event_sweep.p
     ("dddb", 15, 2), ("dddf", 15, 2), ("dde3", 23, 2), ("dde7", 15, 2), ("dde9", 8, 2),
     ("ddef", 15, 2), ("ddf7", 15, 2), ("ddff", 15, 2), ("ddcb40", 20, 128),
 ]
+
+
+def fuzz_cases(group, n, seed):
+    """n random cases: 3-10 instructions drawn from every opcode program, a
+    random F and BC (1-4), interrupt mode (IM0 with an RST byte, IM1, IM2
+    with an even, odd or FF vector), EI or not, and one to three pulses of
+    NMI, INT (held until INTA), WAIT, BUSREQ -- and RESET in `fuzz_reset` --
+    anywhere in the first 40 T-states, of random widths. Case i of a seed is
+    always the same."""
+    ops = all_opcodes()
+    pins = (NMI, INT, WAIT, BUSREQ) + ((RESET,) if group == "fuzz_reset" else ())
+    out = []
+    for i in range(n):
+        r = random.Random(f"{group} {seed} {i}")
+        code = []
+        for _ in range(r.randint(3, 10)):
+            code += r.choice(ops)[1]
+        im = r.choice((0, 1, 2))
+        vec = (r.choice((0xc7, 0xcf, 0xd7, 0xdf, 0xe7, 0xef, 0xf7, 0xff)) if im == 0 else
+               r.choice((0x40, 0x41, 0xff)) if im == 2 else 0xff)
+        pulses = []
+        for _ in range(r.randint(1, 3)):
+            pin = r.choice(pins)
+            lo = at(r.randint(0, 40), r.randrange(16))
+            width = {NMI: r.choice((1, 4, 16, 48)), INT: -1, WAIT: r.choice((16, 32, 48)),
+                     BUSREQ: r.choice((16, 32, 64)), RESET: r.choice((48, 64, 96))}[pin]
+            pulses.append((pin, lo, -1 if width < 0 else lo + width))
+        out.append(case(f"{group}_s{seed}_{i:05d}", group, f"{group}{i}", pulses, run=200,
+                        code=code, setup=(0x01, r.randrange(256), 0x42, 0xc5, 0xf1, 0x01, r.randint(1, 4), 0x00),
+                        im=im, ei=r.random() < 0.7, vec=vec,
+                        inta_release=any(p == INT for p, _, _ in pulses),
+                        meta={"pins": sorted({PIN_NAMES[p] for p, _, _ in pulses})}))
+    return out
 
 
 def all_opcodes():
@@ -279,7 +315,7 @@ def prog_id(c):
     return (c["code"], c["setup"], c["im"], c["ei"], c["nmi_nops"], c["full_dump"])
 
 
-def cases(groups, phases):
+def cases(groups, phases, fuzz=(FUZZ_N, FUZZ_SEED)):
     """phases: positions per T-state for 1 T and longer pulses (16 = every
     1/16 T as on hardware; 2 = one in each half, which is all a zero-delay
     simulation can tell apart). Sub-T pulses always sweep all 16."""
@@ -469,6 +505,33 @@ def cases(groups, phases):
                         out.append(case(f"cls_{rep}_wait{w}_T{n}_p{j:02d}", "classes", rep,
                                         [(WAIT, at(n, j), at(n, j) + 16 * w)], run=60 + length,
                                         meta=dict(m, kind=f"wait{w}"), **kw))
+    if want("reset_m1wait"):   # RESET while WAIT stretches an M1 (Tw after T2)
+        for t in ("inc_a", "ld_a_hl"):
+            for w in (1, 2, 4):                 # WAIT low from the target's T2.P, w T
+                for n in range(1, 12):
+                    for j in (0, 4, 8, 12):
+                        out.append(case(f"resetm1w_{t}_w{w}_T{n}_p{j:02d}", "reset_m1wait", t,
+                                        [(WAIT, at(2, 0), at(2, 0) + 16 * w), (RESET, at(n, j), at(n, j) + 64)],
+                                        run=300, meta={"n": n, "phase": j, "width": w}))
+    if want("reset_busreq"):   # RESET before, in and after a bus grant
+        for t in ("inc_a", "ld_a_hl", "push_bc"):
+            for w in (2, 6):                    # BUSREQ low from the target's T1, w T
+                for n in range(1, 14):
+                    for j in (0, 4, 8, 12):
+                        out.append(case(f"resetbr_{t}_w{w}_T{n}_p{j:02d}", "reset_busreq", t,
+                                        [(BUSREQ, at(1, 4), at(1, 4) + 16 * w), (RESET, at(n, j), at(n, j) + 64)],
+                                        run=300, meta={"n": n, "phase": j, "width": w}))
+    if want("reset_nmi"):      # an NMI edge from RESET's release through the restart
+        for rw in (3, 4, 6):                    # RESET from the target's T1, rw T
+            for d in range(-2, 8):              # NMI falls d T after the release, j/16 more
+                for j in (0, 4, 8, 12):
+                    lo = at(1, 0) + 16 * rw + 16 * d + j
+                    out.append(case(f"resetnmi_r{rw}_d{d}_p{j:02d}", "reset_nmi", "inc_a",
+                                    [(RESET, at(1, 0), at(1, 0) + 16 * rw), (NMI, lo, lo + 16)],
+                                    run=300, meta={"rw": rw, "d": d, "phase": j}))
+    for g in ("fuzz", "fuzz_reset"):    # random code, modes and pin events
+        if want(g):
+            out += fuzz_cases(g, *fuzz)
     if want("opcodes_reset"):  # RESET at every T-state of every opcode, one position per T-state
         lengths = opcode_lengths()
         for name, code, setup in all_opcodes():
@@ -909,6 +972,7 @@ def timing_classes(cache, hid):
 
 
 def main():
+    global OUT
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--groups", default="all")
     ap.add_argument("--match", default="")
@@ -922,9 +986,14 @@ def main():
     ap.add_argument("--no-cache", action="store_true", help="run perfectz80 for every case")
     ap.add_argument("--shard", default="", metavar="K/N",
                     help="run every Nth case from the Kth (0-based): CI splits the sweep over N jobs")
+    ap.add_argument("--fuzz-seed", type=int, default=FUZZ_SEED,
+                    help=f"the fuzz groups' seed ({FUZZ_SEED}: the recorded cases)")
+    ap.add_argument("--fuzz-n", type=int, default=FUZZ_N, help="cases per fuzz group")
+    ap.add_argument("--out", default=OUT, help="report and work directory (build/event_sweep)")
     ap.add_argument("--classes", action="store_true",
                     help="print the opcodes' timing classes from the recorded traces and exit")
     a = ap.parse_args()
+    OUT = os.path.abspath(a.out)
     if a.classes:
         timing_classes(load_cache(), harness_id())
         return 0
@@ -932,7 +1001,7 @@ def main():
         if not os.path.exists(exe):
             sys.exit(f"missing {exe}: run `make event_sweep`")
     k, n = (int(x) for x in a.shard.split("/")) if a.shard else (0, 1)
-    todo = [c for i, c in enumerate(cases(a.groups.split(","), a.phases))
+    todo = [c for i, c in enumerate(cases(a.groups.split(","), a.phases, (a.fuzz_n, a.fuzz_seed)))
             if a.match in c["name"] and i % n == k]
     if a.shard and a.update_baseline:
         sys.exit("--update-baseline needs every case: run it without --shard")

@@ -235,6 +235,16 @@ jobs:
         # intended RTL change: make event_sweep EVENT_SWEEP_ARGS=--update-baseline
         # and review the baseline diff (docs/event-sweep.md).
         run: make event_sweep EVENT_SWEEP_ARGS="--shard ${{ matrix.shard }}/4"
+      - name: Fuzz with fresh seeds (the nightly run)
+        # 500 cases nobody has run before -- random code, interrupt modes and
+        # pin events (docs/event-sweep.md), perfectz80 live -- in the
+        # scheduled run only, in shard 0. A difference fails the job; its
+        # seed is the run id, so the case can be run again locally with
+        # --groups fuzz --fuzz-seed <run id> --fuzz-n 500 --match <case>.
+        if: github.event_name == 'schedule' && matrix.shard == 0
+        run: >-
+          python3 scripts/event_sweep.py --groups fuzz --fuzz-seed ${{ github.run_id }}
+          --fuzz-n 500 --c-model --jobs 4 --out build/event_sweep_fuzz
       - name: Upload report and per-case side-by-side traces
         if: always()
         uses: actions/upload-artifact@v6
@@ -243,6 +253,8 @@ jobs:
           path: |
             build/event_sweep/report.md
             build/event_sweep/diff/
+            build/event_sweep_fuzz/report.md
+            build/event_sweep_fuzz/diff/
           if-no-files-found: warn
           retention-days: 14
 
