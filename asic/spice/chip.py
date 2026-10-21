@@ -181,7 +181,7 @@ def prepare_netlist(src, dst):
 # The core clock's root crosses 50 % this long after the CLK pin crosses the
 # pad's threshold, rising / falling (ns; probed in the fine runs; the leaves
 # follow 0.4-1.1 ns later).
-ROOT = {"tt": (2.9, 2.1), "ss": (4.3, 3.5), "ff": (2.1, 1.4)}
+CLK_ROOT = {"tt": (2.9, 2.1), "ss": (4.3, 3.5), "ff": (2.1, 1.4)}
 TMAX = 10.0       # ns: the longest step, where the chip has settled
 
 
@@ -195,7 +195,7 @@ def clock_breaks(corner, edges, vdd):
     clocks still (both seen, at tt and at ff). After a breakpoint ngspice
     restarts with a tenth of the gap to the next, so corners every 0.5 ns,
     from just before the pin's ramp crosses the pad's threshold (pads.json)
-    until 1 ns after the clock's root has crossed 50 % (ROOT), keep those
+    until 1 ns after the clock's root has crossed 50 % (CLK_ROOT), keep those
     steps at 0.2 ns or less. From there the switching chip keeps its own
     steps short (0.03-0.1 ns), and more corners would only restart them.
     The edge that releases RESET keeps them to 7 ns after the threshold."""
@@ -206,7 +206,7 @@ def clock_breaks(corner, edges, vdd):
     out = []
     for t0, clk, rst, kv in edges:
         t_sw = t0 - r / 2 + r * (dc["vt_rise"] / vdd if clk else 1 - dc["vt_fall"] / vdd)
-        lead = 7.0 if t0 == trst else ROOT[corner][0 if clk else 1] + 1.0
+        lead = 7.0 if t0 == trst else CLK_ROOT[corner][0 if clk else 1] + 1.0
         out += [t_sw - 0.5 + 0.5 * k for k in range(int(lead / 0.5) + 2)]
     assert all(b > a for a, b in zip(out, out[1:])) and out[0] > 0
     return out
