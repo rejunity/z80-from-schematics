@@ -39,6 +39,8 @@ jobs:
     name: the chip extracted, and the RTL's reference
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    outputs:
+      targets_run: ${{ steps.gds.outputs.run }}
     steps:
       - uses: actions/checkout@v5
 
@@ -65,12 +67,14 @@ jobs:
               --pdk-family $(cut -d/ -f1 <<< "$root") $(cut -d/ -f3 <<< "$root")
 
       - name: The chip's GDS, from main's latest Targets run
+        id: gds
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           id=$(gh run list -R "$GITHUB_REPOSITORY" --workflow targets.yml --branch main --status success \
                  --limit 1 --json databaseId -q '.[0].databaseId')
           gh run download "$id" -R "$GITHUB_REPOSITORY" -n asic-gf180mcu-gds -D gds
+          echo "run=$id" >> "$GITHUB_OUTPUT"
           echo "Targets run $id: $(ls -l gds/rz80-gf180mcu-chip.gds)" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: iverilog (the RTL's reference)
@@ -315,7 +319,7 @@ jobs:
 
   figures:
     name: the pins, the AC parameters and the figures
-    needs: window4
+    needs: [netlist, window4]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -345,6 +349,10 @@ jobs:
               --sta asic/spice/findings/pin_timing/rz80-gf180mcu-chip-pin_timing.txt --out $out | tee $c.txt || rc=1
             { echo "### $c"; echo '```'; cat $c.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           done
+          # the run, for the site's page (pages.yml, dist.py ci_page)
+          printf '{"run_id": "%s", "sha": "%s", "ref": "%s", "date": "%s", "targets_run": "%s"}\n' \
+            "$GITHUB_RUN_ID" "$GITHUB_SHA" "$GITHUB_REF_NAME" "$(date -u '+%Y-%m-%d %H:%M UTC')" \
+            "${{ needs.netlist.outputs.targets_run }}" > spice/run.json
           exit $rc
 
       - uses: actions/upload-artifact@v6

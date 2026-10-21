@@ -1,0 +1,80 @@
+# The GitHub Pages site, https://rejunity.github.io/z80-from-schematics/,
+# from the latest runs on main: Targets' bitstreams, GDS, layout renders and
+# pads at transistor level (targets.yml), and the whole chip at transistor
+# level when transistor.yml has run (its own page, transistor/). Pages
+# replaces the whole site on every deploy, so one job builds it from both,
+# after either finishes on main, and by hand.
+name: Pages
+
+on:
+  workflow_run:
+    workflows: [Targets, Transistor]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  actions: read           # the runs' artifacts
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  pages:
+    name: GitHub Pages
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: The latest Targets run's downloads
+        run: |
+          read -r id sha < <(gh run list -R "$GITHUB_REPOSITORY" --workflow targets.yml --branch main \
+                               --status success --limit 1 --json databaseId,headSha -q '.[0] | "\(.databaseId) \(.headSha)"')
+          echo "SITE_RUN_ID=$id" >> "$GITHUB_ENV"
+          echo "SITE_SHA=$sha" >> "$GITHUB_ENV"
+          gh run download "$id" -R "$GITHUB_REPOSITORY" -p 'fpga-*-bitstreams' -p 'asic-*-gds' -D dl/targets
+          gh run download "$id" -R "$GITHUB_REPOSITORY" -p 'spice-pads-*' -D dl/spice
+          mkdir -p dist/spice
+          for d in dl/targets/*/; do cp -r "$d". dist/; done
+          for d in dl/spice/*/; do cp -r "$d". dist/spice/; done
+          echo "Targets run $id (main @ ${sha:0:7})" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: The latest transistor-level run, if there is one
+        run: |
+          id=$(gh run list -R "$GITHUB_REPOSITORY" --workflow transistor.yml --branch main --status success \
+                 --limit 1 --json databaseId -q '.[0].databaseId // empty' || true)
+          if [ -n "$id" ]; then
+            gh run download "$id" -R "$GITHUB_REPOSITORY" -n transistor-gf180mcu -D dist/transistor/spice
+            echo "transistor.yml run $id" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "no transistor.yml run on main yet" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Build the site
+        run: python3 .github/scripts/dist.py site dist site
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+      - name: Deploy
+        id: deploy
+        uses: actions/deploy-pages@v5
+
+      - name: Layout renders in the summary
+        env:
+          PAGE_URL: ${{ steps.deploy.outputs.page_url }}
+        run: python3 .github/scripts/dist.py summary site "$PAGE_URL" >> "$GITHUB_STEP_SUMMARY"
