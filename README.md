@@ -4,7 +4,8 @@
 [![Targets](https://github.com/rejunity/z80-from-schematics/actions/workflows/targets.yml/badge.svg)](https://github.com/rejunity/z80-from-schematics/actions/workflows/targets.yml)
 
 **Latest build:** [ASIC layouts, GDS and FPGA bitstreams](https://rejunity.github.io/z80-from-schematics/)
-(sky130, IHP SG13G2, GF180MCU; IcePi Zero, Tang Primer 25K, iCEBreaker, pico-ice).
+(sky130, IHP SG13G2, GF180MCU with 7- and 9-track cells, and the IHP and GF180 chips with a Z80 pad ring;
+IcePi Zero, Tang Primer 25K, iCEBreaker, pico-ice, iCESugar).
 
 A reverse-engineered, schematic-faithful Z80-compatible CPU core, implemented in
 parallel as a **C99 hardware-like model** and a **Verilog-2001 RTL core**.
@@ -91,6 +92,7 @@ interactive controls (Enter, Backspace, Ctrl-C / Ctrl-Space = BREAK, Ctrl-\\ = e
     make pin_scenarios          # INT/NMI/WAIT/BUSREQ/RESET scenarios — C tracegen path
     make pin_scenarios_rtl      # same scenarios — iverilog RTL path
     make pin_scenarios_netlist  # same scenarios — LibreLane gate-level netlist path
+    make event_sweep            # RESET / INT / NMI / BUSREQ / WAIT at every T-state of 31 instructions, IM0/1/2, vs perfectz80
     make all-tests           # every gate above in sequence
     make clean
 
@@ -130,10 +132,11 @@ fossi-foundation substituter configured (see [docs/librelane-flow.md](docs/libre
 | ✅  | Real KC85 silicon — sync   capture (`make silicon_cycles`)      | 50 / 50 OK,  0 emu mismatches       |
 | ✅  | Real KC85 silicon — 20 MHz capture (`make silicon_async`)       | CPU ≈ 1.767 MHz, pins ✓             |
 | ✅  | HALT-to-INT T-state timing (`make halt2int`)                    | 10/10 sweep samples in silicon range (Brewer 2014 / Woodmass HALT2INT 2021) |
-| ✅  | Gate-level vs perfectz80 — **C model** path                     | 12/12 PASS; ctrl pins 100 %; `addr` 100 % on 10/12 (reset-init informational on 2); `data_o` informational on `prog_rnd_04` |
+| ✅  | Gate-level vs perfectz80 — **C model** path                     | 13/13 PASS: control pins and the address in every half-cycle (transfers, refresh, internal T-states); `data_o` 100 % |
 | ✅  | Gate-level vs perfectz80 — **iverilog RTL** path                | 12/12 PASS, same 12 programs        |
 | ✅  | Gate-level vs perfectz80 — **LibreLane sky130 netlist** path    | 12/12 PASS, same 12 programs ("ultimate test") |
-| 🚧  | Pin-scenario programs vs perfectz80 (12 INT/NMI/WAIT/BUSREQ/RESET scenarios) | 5/12 PASS clean (`prog9, 12, 16, 18, 20`); 7/12 have HALT-pin / WAIT-insertion / BUSREQ / RESET timing diffs vs gate-level (informational; functional behavior verified by Rak + FUSE + HALT2INT probe) |
+| ✅  | Pin-scenario programs vs perfectz80 (14 INT/NMI/WAIT/BUSREQ/RESET scenarios) | 14/14 in the C model and the RTL, the address included in every phase |
+| ✅  | RESET / INT / NMI / BUSREQ / WAIT timing sweep vs perfectz80 (`make event_sweep`, [docs/event-sweep.md](docs/event-sweep.md)) | 8181 / 8207 cases pin-identical in every half-cycle (address and BUSACK included), the C model identical to the RTL in all; the 26 others are RESET in ADD HL,BC / INC BC's write-back (known difference 19) |
 
 Legend: ✅ pass / 100 % &nbsp; 🟡 ≥ 95 % (close, known artifacts) &nbsp; 🚧 < 95 % (work in progress).
 

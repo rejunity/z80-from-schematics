@@ -1,0 +1,52 @@
+{
+ "source": "spef",
+ "corner": "ff",
+ "volts": 5.5,
+ "temp_c": -40,
+ "cases": {
+  "A": {
+   "pulse_ns": 80.0,
+   "set_ns": 5.412,
+   "held_low_ns": 97.819,
+   "clear_after_clk_ns": -0.334
+  },
+  "B": {
+   "pulse_ns": 20.0,
+   "set_ns": 5.522,
+   "held_low_ns": 67.679,
+   "clear_after_clk_ns": -0.362
+  },
+  "C": {
+   "pulse_ns": 200.0,
+   "set_ns": 5.959,
+   "held_low_ns": 249.794,
+   "clear_after_clk_ns": -0.274
+  },
+  "D": {
+   "pulse_ns": 200.0,
+   "set_ns": 5.935,
+   "held_low_ns": 239.791,
+   "clear_after_clk_ns": -0.294
+  },
+  "E": {
+   "pulse_ns": 25.0,
+   "set_ns": 5.6,
+   "held_low_ns": 97.668,
+   "clear_after_clk_ns": -0.305
+  },
+  "F": {
+   "pulse_ns": 40.0,
+   "set_ns": 5.262,
+   "held_low_ns": 77.986,
+   "clear_after_clk_ns": -0.305
+  }
+ },
+ "about": {
+  "A": "an 80 ns NMI pulse (TwNMI) in the low half of the clock",
+  "B": "a 20 ns pulse, a quarter of TwNMI",
+  "C": "NMI falling 5 ns before a rising CLK edge",
+  "D": "NMI falling 5 ns after a rising CLK edge",
+  "E": "two short pulses before one rising edge",
+  "F": "a second pulse while the first is being cleared"
+ }
+}
