@@ -241,7 +241,8 @@ sweep's 544 RESET cases match.
   `z80_top.res_rise`.)
 - **Full reset (RES2; 95 / 197).** It takes the sample on the falling edge in
   the middle of each T-state, except in the low half of an M1's T2 (INTA's
-  too), where it holds.
+  too), where it holds -- that T2 only: in the wait states WAIT adds after
+  it RES2 takes the sample again.
 - **Stop.** While RES2 was set on the previous falling edge, no T-state
   follows the current one: the CPU finishes the T-state in hand and the one
   after it, then idles with every strobe high. A cycle cut short releases its
@@ -255,7 +256,13 @@ sweep's 544 RESET cases match.
   - cut after an I/O cycle's Tw: IORQ and RD / WR release in Tw.N;
   - the 1- and 2-T internal cycles are extensions of an M1 or a read on the
     die (ring states T5 / T6) and drive nothing; when RES2 rises on the T1.N
-    of a longer internal cycle, MREQ falls there and holds through T2.P.
+    of a longer internal cycle, MREQ falls there and holds through T2.P;
+  - in a bus grant nothing: the bus is the DMA master's. RES2 set in a
+    granted T-state releases it as BUSREQ would -- BUSACK rises in that
+    T-state's low half -- and the reset idle follows.
+- **NMI.** An NMI edge while RES2 is set is lost; the pin is still followed,
+  so an NMI that falls then and stays low isn't an edge later. Once RES2
+  clears, the last idle T-state before the restart takes an edge.
 - **Clears.** PC, I, R, IFF1 / IFF2, IM and the HALT state; the HALT pin
   rises on the falling edge where RES2 or the special-reset latch sets. Every
   other register (AF, BC, DE, HL, IX, IY, SP and the alternates), WZ and the
@@ -278,8 +285,7 @@ Not modelled: the die finishes some results in the next M1's T1-T3 (A and F
 after INC A, A after LD A,(HL), DE after POP DE, the EX DE,HL swap), which a
 RESET that stops that M1 early loses and RZ80 keeps; RZ80 runs some long
 internal M-cycles as one where the die has two (ADD HL,rr's 4 + 3 T), so a cut
-inside them is approximate; RESET during WAIT or a bus grant is untested
-(docs/known-differences.md).
+inside them is approximate (docs/known-differences.md row 19).
 
 ## Pad drivers (bus float)
 
