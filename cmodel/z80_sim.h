@@ -1,4 +1,7 @@
 /* ============================================================================
+ * SPDX-FileCopyrightText: 2026 ReJ aka Renaldas Zioma
+ * SPDX-License-Identifier: MIT
+ *
  * z80_sim.h - simple system model (Z80 + 64K memory + 64K I/O space) used by
  * tests, trace generation, and the ZEX harness. Mirrors how the RTL testbench
  * wires external memory to the core's bus.

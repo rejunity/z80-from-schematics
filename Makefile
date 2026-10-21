@@ -360,9 +360,10 @@ $(BUILD)/tb_event_sweep.vvp: $(RTL_SRCS) $(TESTS)/iverilog/tb_event_sweep.v
 	@mkdir -p $(BUILD)
 	$(IVERILOG) -g2001 -I$(RTL) -s tb_event_sweep -o $@ $(RTL_SRCS) $(TESTS)/iverilog/tb_event_sweep.v
 
-$(BIN)/event_sweep_pz80: $(SCRIPTS)/event_sweep_pz80.c $(SCRIPTS)/refs/perfectz80/perfectz80.c $(SCRIPTS)/refs/perfectz80/netlist_sim.c
+$(BIN)/event_sweep_pz80: $(SCRIPTS)/event_sweep_pz80.c $(SCRIPTS)/pz80_pads.c $(SCRIPTS)/pz80_pads.h \
+                         $(SCRIPTS)/refs/perfectz80/perfectz80.c $(SCRIPTS)/refs/perfectz80/netlist_sim.c
 	@mkdir -p $(BIN)
-	$(CC) -std=c99 -O2 -I$(SCRIPTS) $^ -o $@
+	$(CC) -std=c99 -O2 -I$(SCRIPTS) $(filter %.c,$^) -o $@
 
 $(BIN)/perfectz80_runner: $(SCRIPTS)/perfectz80_runner.c $(SCRIPTS)/refs/perfectz80/perfectz80.c $(SCRIPTS)/refs/perfectz80/netlist_sim.c
 	@mkdir -p $(BIN)
