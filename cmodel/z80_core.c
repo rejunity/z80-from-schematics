@@ -36,10 +36,11 @@ static inline uint16_t z80_SP(const z80_t *c){ return c->rf[RFP_SP]; }
 static inline void z80_setPC(z80_t *c, uint16_t v){ c->rf[RFP_PC] = v; }
 static inline void z80_setSP(z80_t *c, uint16_t v){ c->rf[RFP_SP] = v; }
 
-/* fetch byte at PC and post-increment PC */
+/* fetch byte at PC and post-increment PC (in IM0 the device supplies the
+   operands at PC, which stays: perfectz80) */
 static inline uint16_t z80_pc_inc(z80_t *c){
     uint16_t a = c->rf[RFP_PC];
-    c->rf[RFP_PC] = (uint16_t)(a + 1);
+    if (!c->im0_ins) c->rf[RFP_PC] = (uint16_t)(a + 1);
     return a;
 }
 
@@ -152,7 +153,7 @@ static void setri(z80_t *c, uint8_t r, uint8_t v)
     setr(c, r, v);
 }
 
-static void finish(z80_t *c) { c->instr_done = true; }
+static void finish(z80_t *c) { c->instr_done = true; c->im0_ins = false; }
 
 static void do_add16(z80_t *c)
 {
@@ -350,6 +351,12 @@ static void z80_exec_step(z80_t *c)
             c->ctl.exec = EXEC_DDCB;
             c->ctl.idx  = (c->prefix == PFX_DDCB) ? 1u : 2u;
             z80_start_mcycle(c, BUSOP_MRD, z80_pc_inc(c), 0, 0);  /* read d */
+        } else if (c->im0_ins) {
+            /* IM0: the device hands over the opcode after a prefix, in
+               another INTA cycle (perfectz80) */
+            z80_start_m1(c);
+            c->bus_op = BUSOP_INTA;
+            c->m_len  = 6;
         } else {
             z80_start_m1(c);        /* continue: fetch the real opcode */
         }
@@ -1121,9 +1128,12 @@ static void do_latch(z80_t *c)
     case BUSOP_INTA:                          /* interrupt-ack: latch bus byte, refresh */
         c->tmp8 = c->pins.data_in;
         if (c->im == 0) {
+            /* IM0: the device supplies the opcode, decoded without a fetch
+               / PC++; until it ends, PC stays (z80_pc_inc, EXEC_PREFIX) */
             c->ir = c->pins.data_in;
             c->ctl = z80_pla(c->prefix, c->ir);
             c->decoded = true; /* supplied opcode consumes no memory byte */
+            c->im0_ins = true;
         }
         break;
     case BUSOP_MRD:
@@ -1243,6 +1253,7 @@ static void enter_reset_idle(z80_t *c)
     c->nmi_sampled = c->int_sampled = false;
     c->ei_delay = false;
     c->suppress_decode = false;
+    c->im0_ins = false;
     c->bus_granted = false;
     c->pins.busack_n = 1;
     c->srst_m1 = false;
@@ -1332,6 +1343,7 @@ static void reset_state(z80_t *c)
     c->int_sampled = false;
     c->ei_delay = false;
     c->suppress_decode = false;
+    c->im0_ins = false;
     c->bus_granted = false;
 
     c->t_state = 1; c->phi = 0; c->m_cycle = 1;
@@ -1531,8 +1543,9 @@ void z80_phase_step(z80_t *c)
      *     or INT (the T4.P sample decided it), so an interrupt pending
      *     at the end of HALT itself never lowers it. */
     bool exec_halt_in_m1 = (c->ctl.exec == EXEC_HALT &&
-                            c->bus_op == BUSOP_M1 &&
-                            c->t_state == 4 && c->phi == 1);
+                            ((c->bus_op == BUSOP_M1 && c->t_state == 4) ||
+                             (c->bus_op == BUSOP_INTA && c->t_state == 6)) &&  /* IM0 */
+                            c->phi == 1);
     bool halt_exit = (c->t_state == c->m_len && c->phi == 1 &&
                       (c->nmi_sampled || (c->int_sampled && c->iff1)));
     /* RESET: HALT rises on the falling edge where RES2 or the special-reset

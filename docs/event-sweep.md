@@ -2,7 +2,7 @@
 
 `make event_sweep` drives RESET, INT, NMI, BUSREQ and WAIT pulses into the
 iverilog RTL and into the perfectz80 transistor-level netlist at every
-T-state of a set of instructions, in IM1 and IM2. It compares the two
+T-state of a set of instructions, in IM1, IM2 and IM0. It compares the two
 half-cycle by half-cycle, and runs every case through the C model too, which
 must match the RTL in every half-cycle. CI runs it on every push.
 
@@ -85,6 +85,8 @@ Instructions under test:
 | `wait` | 1 T and 3 T WAIT at every T-state of all 31 instructions |
 | `im2` | INT in IM2 from every T-state of INC A, LD A,(HL), LD (HL),A, INC (HL) and HALT, with vectors 40, 41 and FF |
 | `im2_combo` | IM2 response after INC A (vector 40); NMI, 1 T and 3 T WAIT, 1 T and 4 T BUSREQ, or 4 T RESET from every T-state of it, its table reads and the handler's first fetch |
+| `im0` | twenty instructions handed over in IM0: RST 38 / 00 / 08, CALL, JP, LD A,n, LD A,(nn), JR, INC BC, PUSH BC, HALT, EI, EX (SP),HL, RETI, LD IX,nn, LD (IX+d),n, RLC A, RLC (IX+d), JP (IX), LDIR |
+| `im0_combo` | IM0 CALL 1234 after INC A; NMI, WAIT, BUSREQ or RESET (as in `im2_combo`) from every T-state of it |
 
 ### What a simulation can and can't tell
 
@@ -105,12 +107,12 @@ that half sees the pulse. The sweep therefore shows whether the chip's
 input logic can catch such a pulse; it does not test the data sheet's
 minimum widths, which depend on analog timing.
 
-## Results (rejunity `nmos-pins`, 20 October 2026)
+## Results (rejunity `nmos-im`, 21 October 2026)
 
 | group | cases | match | differ |
 |---|---|---|---|
-| int | 254 | 254 | 0 |
-| nmi | 750 | 750 | 0 |
+| int | 488 | 488 | 0 |
+| nmi | 984 | 984 | 0 |
 | nmi_short | 1184 | 1184 | 0 |
 | nmi_reentry | 43 | 43 | 0 |
 | reset | 206 | 180 | 26 |
@@ -118,10 +120,15 @@ minimum widths, which depend on analog timing.
 | reset_wait | 32 | 32 | 0 |
 | reset_short | 240 | 240 | 0 |
 | combo | 132 | 132 | 0 |
-| busreq | 1500 | 1500 | 0 |
-| wait | 1500 | 1500 | 0 |
+| busreq | 1968 | 1968 | 0 |
+| wait | 1968 | 1968 | 0 |
+| im2 | 258 | 258 | 0 |
+| im2_combo | 300 | 300 | 0 |
+| im0 | 40 | 40 | 0 |
+| im0_combo | 300 | 300 | 0 |
 
-5879 of 5905 cases match. The 26 in the baseline are RESET stopping ADD HL,BC
+8181 of 8207 cases match, and the C model matches the RTL in every
+half-cycle of all 8207. The 26 in the baseline are RESET stopping ADD HL,BC
 or INC BC in the T-states where the die still writes their result
 (docs/known-differences.md row 19): the register dump after reset differs,
 the pins do not. When the sweep was written (main `ec3c5d2`, 2287 cases) 809
@@ -153,6 +160,17 @@ did. Since then:
   BUSACK falling on the next rising edge and rising on the falling edge of
   the T-state that sees the release, the die's internal M-cycle boundaries
   (ADD / ADC HL,rr: 4 + 3 T). docs/timing.md "BUSREQ / BUSACK".
+- IM2 (vectors 40, 41, FF, with NMI, WAIT, BUSREQ and RESET through the
+  response and its table reads) and the EI and prefix runs matched when
+  they were added.
+- IM0 is the die's (`im0`, 26 cases): PC doesn't move until the
+  instruction the device hands over ends, its operands are reads at that
+  PC, and the opcode after a prefix comes in another INTA cycle
+  (docs/timing.md "Interrupt acknowledge").
+- With the C model beside the RTL, one case differed: an NMI edge caught by
+  the rising edge that ends the NMI response's second push, which the die
+  and the RTL lose and the C model kept (`nmir_entry_gap12_p12`); it loses
+  it now.
 
 `build/event_sweep/report.md` has the per-instruction grids.
 `build/event_sweep/diff/` has a side-by-side trace for every differing case.

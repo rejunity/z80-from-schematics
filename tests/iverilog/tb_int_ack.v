@@ -1,15 +1,19 @@
-// Interrupt devices drive data only during M1+IORQ, never during RD.
+// Interrupt devices drive data during M1+IORQ, and in IM0 also during the
+// memory reads of the instruction they hand over: the die reads a CALL's or
+// JP's operands at the interrupted PC, which doesn't move, so the device
+// supplies them (perfectz80).
 // Single Z80-rate clock: clock-high = ".P", clock-low = ".N".
 `timescale 1ns/1ps
 `include "z80_defs.vh"
 module tb_int_ack;
     reg clk=0, reset_n=1, wait_n=1, int_n=1;
     reg [7:0] mem [0:65535];
-    reg [7:0] vector;
+    reg [7:0] vector, op_byte;
+    reg dev_op;          // the device drives this read (an IM0 operand)
     wire [15:0] addr;
     wire [7:0] dout;
     wire m1, mr, io, rd, wr, refresh, halt;
-    wire [7:0] din = !m1 && !io ? vector : (!mr && !rd ? mem[addr] : 8'h00);
+    wire [7:0] din = !m1 && !io ? vector : (!mr && !rd ? (dev_op ? op_byte : mem[addr]) : 8'h00);
     z80_top dut (
         .clk(clk), .por_n(reset_n), .reset_n(reset_n), .wait_n(wait_n),
         .int_n(int_n), .nmi_n(1'b1), .busreq_n(1'b1),
@@ -24,7 +28,8 @@ module tb_int_ack;
             if (!mr && !wr) mem[addr]=dout;
         end
     endtask
-    integer i, mode, n, waits, overlaps, refreshes;
+    integer i, mode, n, waits, overlaps, refreshes, ops_left, op_k;
+    reg in_read;
     reg seen_ack, reached;
     reg [7:0] ack_r;
     reg [15:0] return_pc, target, expected_sp;
@@ -46,15 +51,14 @@ module tb_int_ack;
             target=(imode==1 || (imode==0 && opcode==8'hff))?16'h0038:16'h0200;
             mem[target]=8'h76;
             vector=opcode; waits=0; overlaps=0; refreshes=0; seen_ack=0; reached=0;
+            dev_op=0; op_byte=0; in_read=0; op_k=0;
+            ops_left=(imode==0 && (opcode==8'hcd || opcode==8'hc3)) ? 2 : 0;
             reset_n=1;
             for(n=0;n<1200 && !reached;n=n+1) begin
                 if(dut.u_core.iff1 && (!from_halt || dut.u_core.halted)) int_n=0;
                 if(dut.u_core.bus_op==`BUSOP_INTA) begin
                     if(!seen_ack) begin
                         seen_ack=1; return_pc=addr; ack_r=dut.u_core.reg_r;
-                        if(imode==0 && (opcode==8'hcd || opcode==8'hc3)) begin
-                            mem[return_pc]=0; mem[return_pc+1]=8'h02;
-                        end
                         if(imode==0 && opcode==0) begin target=return_pc; mem[target]=8'h76; end
                     end
                     if(dut.u_core.t_state<=4 && addr!==return_pc) $fatal(1,"ack address changed");
@@ -74,6 +78,15 @@ module tb_int_ack;
                         wait_n=1;
                     end
                 end
+                // the device's operand bytes (0200) on the reads after the
+                // IM0 acknowledge, all at the interrupted PC
+                if(seen_ack && !mr && !rd && m1) begin
+                    if(!in_read && ops_left>0) begin
+                        if(addr!==return_pc) $fatal(1,"IM0 operand read moved off the interrupted PC");
+                        dev_op=1; op_byte=(op_k==0)?8'h00:8'h02; op_k=op_k+1; ops_left=ops_left-1;
+                    end
+                    in_read=1;
+                end else begin in_read=0; dev_op=0; end
                 if(seen_ack && dut.u_core.bus_op==`BUSOP_M1 && !rd && addr==target) reached=1;
                 step;
             end
@@ -82,8 +95,10 @@ module tb_int_ack;
             if(dut.u_core.reg_r !== ack_r+8'd1) $fatal(1,"ack must increment R once");
             expected_sp=(imode==0 && (opcode==8'hc3 || opcode==0))?16'h9000:16'h8ffe;
             if(dut.u_core.rfl[`RFP_SP]!==expected_sp) $fatal(1,"wrong interrupt stack depth");
+            if(ops_left!=0) $fatal(1,"IM0 operands not read");
             if(expected_sp==16'h8ffe) begin
-                if(imode==0 && opcode==8'hcd) return_pc=return_pc+2;
+                // IM0 CALL pushes the interrupted PC: the operands came from
+                // the device, PC never moved
                 if({mem[16'h8fff],mem[16'h8ffe]}!==return_pc) $fatal(1,"wrong return PC");
             end
         end

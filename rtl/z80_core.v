@@ -118,6 +118,7 @@ module z80_core (
     reg        nmi_pending, prev_nmi_n, ei_delay, suppress_decode, bus_granted;
     reg        nmi_sampled, int_sampled;  // latched at T_last.P per UM0080
     reg [1:0]  irq_seq;        // 0 none, 1 NMI, 2 INT, 3 HALT-nop
+    reg        im0_ins;        // the instruction came from the interrupting device (IM0)
     // RESET (perfectz80): res2 is the die's full reset, taken from res_s on
     // each falling edge except in the low half of an M1's T2, where it
     // holds; while it was set on the previous falling edge no T-state
@@ -145,6 +146,7 @@ module z80_core (
     reg        nmi_sampled_n, int_sampled_n;
     reg        nmi_pending_mid;   // nmi_pending after the clock-high-half edge detect
     reg [1:0]  irq_seq_n;
+    reg        im0_ins_n;
     reg        allow_int;
     reg        res2_n, sres_n, rst_idle_n, srst_m1_n;
 
@@ -291,10 +293,11 @@ module z80_core (
     // driving. Being a clock-low-half event it only appears in the *_neg
     // image. The instruction is the one that runs (eff_exec): the fetch of
     // an NMI response (or of HALT's NOPs) discards its opcode, so a HALT
-    // byte read there doesn't lower the pin (perfectz80).
+    // byte read there doesn't lower the pin (perfectz80). In IM0 a HALT
+    // handed over in INTA lowers it in the INTA's last T-state.
     wire exec_halt_in_m1 = (eff_exec == `EXEC_HALT)
-                        && (bus_op == `BUSOP_M1)
-                        && (t_state == 4'd4);
+                        && (((bus_op == `BUSOP_M1) && (t_state == 4'd4)) ||
+                            ((bus_op == `BUSOP_INTA) && (t_state == 4'd6)));
     wire halt_exit = (t_state == m_len) && (nmi_pending | (~int_n_rise & iff1));
     // RESET: HALT rises on the falling edge where RES2 or the special-reset
     // latch sets, and stays high (perfectz80)
@@ -631,7 +634,7 @@ module z80_core (
         .irq_seq(irq_seq), .eff_exec(eff_exec), .exec_w(exec_w),
         .alu_op_w(alu_op_w), .cb_kind_w(cb_kind_w), .idx_w(idx_w),
         .use_disp_w(use_disp_w), .aux_w(aux_w), .prefix(prefix), .ir(ir),
-        .ddcb_kind(tmph[7:6]), .im(im),
+        .ddcb_kind(tmph[7:6]), .im(im), .im0_ins(im0_ins),
         .cc_taken(cc_taken), .zf(F_cur[6]), .bc_nz(r_bc != 16'd0),
         .b_nz(r_bc[15:8] != 8'd0), .b_dec_nz(b_dec != 8'd0),
         .ctl_mstart(ctl_mstart), .ctl_m1(ctl_m1), .ctl_fin(ctl_fin),
@@ -873,7 +876,7 @@ module z80_core (
         // (Sean Young 4.1; z80full 007 SCF+CCF, 102/103 INIR/INDR->NOP').
         f_modified_n = f_modified | (alu_md != `FLAG_NONE);
         ei_delay_n = ei_delay; suppress_decode_n = suppress_decode;
-        bus_granted_n = bus_granted; irq_seq_n = irq_seq;
+        bus_granted_n = bus_granted; irq_seq_n = irq_seq; im0_ins_n = im0_ins;
         nmi_sampled_n = nmi_sampled; int_sampled_n = int_sampled;
         nmi_pending_n = nmi_pending; prev_nmi_n_n = prev_nmi_n;
         allow_int = 1'b0;
@@ -948,9 +951,11 @@ module z80_core (
                 // 0000; I, R, the IFFs and IM are kept
                 if (srst_m1) begin ir_n = 8'h00; srst_m1_n = 1'b0; end
             end else if (im == 2'd0) begin                         // INTA
-                // IM0: the device supplies the opcode; PC still points at
-                // its operands, so decode it without a fetch / PC++.
-                ir_n = data_in; irq_seq_n = 2'd0;
+                // IM0: the device supplies the opcode, decoded without a
+                // fetch / PC++. Until the instruction ends, PC stays where
+                // it is: the operands are read at PC, and the opcode after
+                // a prefix comes in another INTA cycle (perfectz80).
+                ir_n = data_in; irq_seq_n = 2'd0; im0_ins_n = 1'b1;
             end
         end
 
@@ -1008,10 +1013,12 @@ module z80_core (
             if (ctl_m1) begin
                 bus_op_n = `BUSOP_M1; m_addr_n = r_pc; m_wdata_n = 8'h0;
                 m_len_n = 4'd4; t_n = 4'd1; m_cycle_n = 3'd1;
+                // IM0: the device hands over the opcode after a prefix
+                if (im0_ins) begin bus_op_n = `BUSOP_INTA; m_len_n = 4'd6; end
             end
 
             if (ctl_fin) begin
-                prefix_n = `PFX_NONE;
+                prefix_n = `PFX_NONE; im0_ins_n = 1'b0;
                 // Commit Q: F if THIS instruction wrote F, else 0 (Sean Young
                 // 4.1 + ZEXALL <daa,cpl,scf,ccf>).
                 reg_q_n = f_modified_n ? f_next : 8'h00;
@@ -1082,7 +1089,7 @@ module z80_core (
             rst_idle_n = 1'b1;
             reg_i_n = 8'h00; reg_r_n = 8'h00;
             iff1_n = 1'b0; iff2_n = 1'b0; im_n = 2'd0; halted_n = 1'b0;
-            prefix_n = `PFX_NONE; irq_seq_n = 2'd0; suppress_decode_n = 1'b0;
+            prefix_n = `PFX_NONE; irq_seq_n = 2'd0; suppress_decode_n = 1'b0; im0_ins_n = 1'b0;
             ei_delay_n = 1'b0; nmi_sampled_n = 1'b0; int_sampled_n = 1'b0;
             nmi_pending_n = 1'b0; bus_granted_n = 1'b0; srst_m1_n = 1'b0;
             f_modified_n = 1'b0;
@@ -1106,7 +1113,7 @@ module z80_core (
             tmp8 <= 8'h00; tmph <= 8'h00;
             nmi_pending <= 1'b0; prev_nmi_n <= 1'b1; ei_delay <= 1'b0;
             nmi_sampled <= 1'b0; int_sampled <= 1'b0;
-            suppress_decode <= 1'b0; bus_granted <= 1'b0; irq_seq <= 2'd0;
+            suppress_decode <= 1'b0; bus_granted <= 1'b0; irq_seq <= 2'd0; im0_ins <= 1'b0;
             reg_q <= 8'h00; f_modified <= 1'b0;
             res2 <= 1'b1; sres <= 1'b0; rst_idle <= 1'b1; srst_m1 <= 1'b0; rd_hold <= 1'b0;
             addr_hold <= 16'h0000;
@@ -1122,6 +1129,7 @@ module z80_core (
             nmi_pending <= nmi_pending_n; prev_nmi_n <= prev_nmi_n_n; ei_delay <= ei_delay_n;
             nmi_sampled <= nmi_sampled_n; int_sampled <= int_sampled_n;
             suppress_decode <= suppress_decode_n; bus_granted <= bus_granted_n; irq_seq <= irq_seq_n;
+            im0_ins <= im0_ins_n;
             reg_q <= reg_q_n; f_modified <= f_modified_n;
         end
     end

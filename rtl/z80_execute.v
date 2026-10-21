@@ -37,6 +37,7 @@ module z80_execute (
     input  wire [7:0]  ir,
     input  wire [1:0]  ddcb_kind,       // DDCB opcode class (tmph[7:6])
     input  wire [1:0]  im,
+    input  wire        im0_ins,         // IM0: the device's instruction; PC doesn't move
     // conditions from the datapath
     input  wire        cc_taken,        // cc[y] holds in F
     input  wire        zf,              // F.Z
@@ -107,10 +108,11 @@ module z80_execute (
     task mstart; input [2:0] bop; input [2:0] al; input [3:0] extra;
         begin ctl_mstart = 1'b1; ctl_bop = bop; ctl_al = al; ctl_mx = extra; end
     endtask
-    // read the next operand byte: MRD (PC), PC <- PC+1
+    // read the next operand byte: MRD (PC), PC <- PC+1 (in IM0 the device
+    // supplies it at PC, which stays: perfectz80)
     task op_fetch; input [3:0] extra;
         begin
-            ctl_ab = AB_REG; ctl_ri = RI_PC; ctl_inc = INC_P1; ctl_pc = PC_IDU;
+            ctl_ab = AB_REG; ctl_ri = RI_PC; ctl_inc = INC_P1; ctl_pc = im0_ins ? PC_HOLD : PC_IDU;
             mstart(`BUSOP_MRD, AL_ABUS, extra);
         end
     endtask

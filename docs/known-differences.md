@@ -34,6 +34,7 @@ Status legend:
 | 17 | RESET / INT / NMI sweep vs perfectz80         | timing / interrupt        | resolved |
 | 18 | Refresh and idle address bus                  | timing / bus              | resolved |
 | 19 | RESET between an instruction and its write-back | timing / reset          | watching |
+| 20 | IM0: the instruction from the interrupting device | interrupt               | resolved |
 | 21 | HALT pin when an NMI response fetches a HALT byte | timing / interrupt      | resolved |
 
 Notes for each row:
@@ -271,6 +272,22 @@ Notes for each row:
      The sweep's `reset_add_hl_bc` (20) and `reset_inc_bc` (6) cases are
      these, in the baseline; RESET with WAIT is untested. Modelling it means
      holding each class's writes until the T-state the die does them in.
+ 20. **IM0: the instruction from the interrupting device — resolved
+     2026-10-21.** Found by the event sweep's `im0` group (twenty
+     instructions handed over in INTA, perfectz80). On the die PC doesn't
+     move until that instruction ends: its operands are memory reads at the
+     interrupted PC (a CALL's two operand reads show the same address, and
+     the device answers them), the opcode after a prefix comes in another
+     6 T acknowledge cycle, CALL and RST push the interrupted PC, JR jumps
+     relative to it, and a HALT handed over drops the HALT pin in the
+     acknowledge's last T-state. Both models read the operands at PC, PC+1
+     and moved PC past them (a CALL pushed PC+2), fetched the opcode after a
+     prefix from memory, and kept HALT high in the acknowledge; single-byte
+     instructions (RST, INC rr, PUSH, EI, EX (SP),HL) already matched.
+     `make bus_controls` (`tb_int_ack.v`, `test_int_ack.c`) had the old
+     reading built in -- operands from memory at PC, PC+1 and a return
+     address two higher; its device now supplies the operands. docs/timing.md
+     "Interrupt acknowledge".
  21. **HALT pin when an NMI response fetches a HALT byte — resolved
      2026-10-21** (RTL only). The NMI response's M1 fetches the byte at PC
      and discards it; when that byte was a HALT opcode -- an NMI taken at the

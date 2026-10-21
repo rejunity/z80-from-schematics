@@ -286,6 +286,8 @@ typedef struct {
     bool         int_sampled;
     bool         ei_delay;      /* suppress INT for one instruction after EI  */
     bool         suppress_decode;/* ack-cycle M1: latch but don't decode/PC++ */
+    bool         im0_ins;       /* IM0: the instruction came from the interrupting
+                                   device; PC doesn't move until it ends   */
     bool         bus_granted;   /* BUSACK active (DMA owns the bus)           */
 
     /* micro-step bookkeeping (filled by control sequencer) */

@@ -133,15 +133,28 @@ M1-like cycle with **two automatic wait states** ([Zilog UM0080, Figure 9](https
 - The implementation counts T1, T2, Tw, Tw, T3, T4 as states 1–6. Thus WAIT
   capture is state 4.N, data is consumed before advancing to state 5.P, and
   refresh uses states 5/6. IM1/IM2 append one internal state (7) before pushing PC.
-- IM0 decodes the supplied opcode without incrementing PC: RST pushes the
-  interrupted PC; CALL/JP read their operands from memory at that PC. The 6T
-  acknowledge replaces the normal 4T opcode fetch. IM1 ignores the byte and
-  enters `0038h`; IM2 reads the handler pointer from `{I, vector}`.
+- IM0 (perfectz80): the device's byte is the opcode, decoded without a
+  fetch, and PC doesn't move until that instruction ends. The 6T acknowledge
+  replaces the opcode fetch; the instruction's own extra M1 T-states follow
+  (RST and PUSH one, INC rr two). Its operands are memory reads at the
+  interrupted PC -- a CALL's two operand reads show the same address, so the
+  device, not memory, has to answer them -- and the opcode after a prefix
+  (CB, DD, ED, FD) comes in another 6T acknowledge cycle; a DD CB
+  instruction reads d and the opcode as operands. So RST and CALL push the
+  interrupted PC, JR jumps relative to it, LD A,n carries on at it, and a
+  HALT handed over halts there, the HALT pin falling in the acknowledge's
+  last T-state.
+- IM1 ignores the byte and enters `0038h`. IM2 reads the handler pointer at
+  `{I, vector}` and `{I, vector}+1` with all eight bits of the vector: an odd
+  vector reads it at an odd address (perfectz80).
 
 `make bus_controls` exercises IM0 RST/CALL/JP/NOP, IM1, and IM2 with a nonzero
-vector, with and without WAIT and on HALT exit. The
-interrupt device drives data only during acknowledge. `test_int_ack.c` checks
-the same cases against the C model.
+vector, with and without WAIT and on HALT exit; the device drives the
+acknowledge byte and, for IM0 CALL / JP, the operand reads. `test_int_ack.c`
+checks the same cases against the C model. The event sweep's `im2`,
+`im2_combo`, `im0` and `im0_combo` groups compare IM2 with vectors 40, 41 and
+FF, and twenty instructions handed over in IM0, with perfectz80, pins and
+address in every half-cycle (docs/event-sweep.md).
 
 NMI: similar to M1 but no data fetch used for vector; pushes PC and jumps to `0066h`;
 copies `IFF1→IFF2`, clears `IFF1`. The NMI edge latch is held clear for the whole

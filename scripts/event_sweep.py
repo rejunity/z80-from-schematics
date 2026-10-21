@@ -86,9 +86,20 @@ INT_TARGETS = ["inc_a", "ld_a_hl", "ld_hl_a", "inc_hl", "halt", "ld_a_i", "ld_a_
                "dd_nop", "dd_cb"]
 # bytes on the bus during INTA in the IM2 sweep: even, odd, and FF (an idle bus)
 IM2_VECS = (0x40, 0x41, 0xff)
+# IM0: the instructions an interrupting device hands the CPU (its INTA byte,
+# then one byte per INTA cycle or memory read until it has none left)
+IM0_SEQS = {
+    "rst38": [0xff], "rst00": [0xc7], "rst08": [0xcf], "call": [0xcd, 0x34, 0x12],
+    "jp": [0xc3, 0x34, 0x12], "ld_a_n": [0x3e, 0x99], "jr": [0x18, 0x10], "inc_bc": [0x03],
+    "halt": [0x76], "ei": [0xfb], "reti": [0xed, 0x4d], "ld_ix_nn": [0xdd, 0x21, 0x34, 0x12],
+    "rlc_a": [0xcb, 0x07], "jp_ix": [0xdd, 0xe9], "ld_ixd_n": [0xdd, 0x36, 0x05, 0x99],
+    "rlc_ixd": [0xdd, 0xcb, 0x05, 0x06], "ex_sp_hl": [0xe3], "ldir": [0xed, 0xb0],
+    "push_bc": [0xc5], "ld_a_nn": [0x3a, 0x00, 0x80],
+}
 BASIC = ["inc_a", "ld_a_hl", "ld_hl_a", "inc_hl"]
 GROUPS = ["int", "nmi", "nmi_short", "nmi_reentry", "reset", "reset_release",
-          "reset_wait", "reset_short", "combo", "busreq", "wait", "im2", "im2_combo"]
+          "reset_wait", "reset_short", "combo", "busreq", "wait", "im2", "im2_combo",
+          "im0", "im0_combo"]
 
 
 def program(target, im=1, ei=False, nmi_nops=0):
@@ -301,6 +312,24 @@ def cases(groups, phases):
                                     [(INT, at(2, 4), -1), (pin, at(n, j), at(n, j) + w)],
                                     run=300 if pin == RESET else None, im=2, ei=True,
                                     inta_release=True, vec=0x40,
+                                    meta={"kind": name, "n": n, "phase": j}))
+    if want("im0"):          # IM0, EI, INT taken after INC A; the device hands over an instruction
+        for name, seq in IM0_SEQS.items():
+            for j in (4, 12):
+                out.append(case(f"im0_{name}_p{j:02d}", "im0", "inc_a", [(INT, at(2, j), -1)],
+                                run=160, im=0, ei=True, inta_release=True, vec=seq[0],
+                                ops=tuple(seq[1:]), meta={"seq": name, "phase": j}))
+    if want("im0_combo"):    # IM0 CALL 1234 after INC A (INTA at T5, operand reads at T11 and
+        # T14, pushes at T18 and T21, the fetch at 1234 from T24); a second pin from every T-state
+        for n in range(4, 29):
+            for j in ph:
+                for name, pin, w in (("nmi", NMI, 16), ("wait1", WAIT, 16), ("wait3", WAIT, 48),
+                                     ("busreq1", BUSREQ, 16), ("busreq4", BUSREQ, 64),
+                                     ("reset", RESET, 64)):
+                    out.append(case(f"im0c_{name}_T{n}_p{j:02d}", "im0_combo", "inc_a",
+                                    [(INT, at(2, 4), -1), (pin, at(n, j), at(n, j) + w)],
+                                    run=300 if pin == RESET else None, im=0, ei=True,
+                                    inta_release=True, vec=0xcd, ops=(0x34, 0x12),
                                     meta={"kind": name, "n": n, "phase": j}))
     return out
 
