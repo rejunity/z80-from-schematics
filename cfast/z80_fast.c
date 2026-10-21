@@ -36,12 +36,14 @@
 
 /* The state the generated steps assume: nothing pending that only
    z80_phase_step handles -- RESET's samples and idle, a bus grant or its
-   request seen, an IM0 instruction from the interrupting device, a halt,
-   an NMI -- and a bus cycle with a template. */
+   request seen, a wait state (the steps don't update in_tw, which holds
+   false while no WAIT is sampled), an IM0 instruction from the interrupting
+   device, a halt, an NMI -- and a bus cycle with a template. */
 static bool fast_ok(const z80_t *c)
 {
     return c->phase_primed && !c->res_s && !c->res2 && !c->sres && !c->rst_idle &&
-           !c->srst_m1 && !c->rd_hold && !c->bus_granted && !c->busreq_s && !c->im0_ins &&
+           !c->srst_m1 && !c->rd_hold && !c->bus_granted && !c->busreq_s && !c->in_tw &&
+           !c->im0_ins &&
            !c->halted && !c->nmi_resp && !c->nmi_pending && !c->nmi_sampled &&
            c->prev_nmi_n && !c->stalled && !c->wait_sampled && !c->suppress_decode &&
            !(c->ctl.exec == EXEC_HALT && c->bus_op == BUSOP_M1) &&
