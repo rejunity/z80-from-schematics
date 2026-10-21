@@ -54,7 +54,28 @@ module z80_regfile (
     output wire [15:0] ix, iy, sp, pc, wz,
     // after this edge
     output wire [15:0] pc_next,         // PC (the next M1 address at an instruction boundary)
-    output wire [7:0]  f_next           // F (EX AF,AF' renames AF on the same edge)
+    output wire [7:0]  f_next,          // F (EX AF,AF' renames AF on the same edge)
+    // Register write-back as the die does it (docs/timing.md "Register
+    // write-back"): the die writes a result in the low half of a T-state,
+    // which a RESET cut ending on that T-state blocks. The core writes
+    // most results earlier; each byte written before the die's edge is
+    // logged here with its old value and the edge it becomes permanent
+    // on -- due = {next, m, t}: T-state t of M-cycle m, or (next) of the
+    // next M1 / INTA cycle -- and a cut before that edge puts it back.
+    input  wire        wb_adv,          // the sequencer advances on this edge (commits)
+    input  wire        wb_fin,          // ... and the instruction ends on it
+    input  wire        wb_cut,          // a RESET cut ends on this edge
+    input  wire [2:0]  wb_m,            // the T-state this edge ends
+    input  wire [3:0]  wb_t,
+    input  wire        wb_m1,           // ... in an M1 or INTA cycle
+    input  wire        wb_inta,         // ... in an INTA cycle (F: its T5)
+    input  wire        pw_log_lo, pw_log_hi,
+    input  wire [7:0]  pw_due_lo, pw_due_hi,
+    input  wire        bw_log,
+    input  wire [7:0]  bw_due,
+    input  wire        f_log,           // F waits for the next M1's T4 (INTA: T5)
+    input  wire        sp_log,
+    input  wire [7:0]  sp_due
 );
     integer i, ri;
 
@@ -130,6 +151,102 @@ module z80_regfile (
     assign pc_next = rf_n[`RFP_PC];
     assign f_next  = xaf_n ? rf_n[7][7:0] : rf_n[3][7:0];
 
+    // ---- write-back log: two pair slots, a due per byte; the exchanges ----
+    reg        s_vl [0:1], s_vh [0:1];       // byte waiting
+    reg  [3:0] s_p  [0:1];                    // its physical pair
+    reg [15:0] s_old[0:1];
+    reg  [7:0] s_dl [0:1], s_dh [0:1];        // due {next, m, t}
+    reg        x_af, x_bank;                  // EX AF / EXX waiting (next M1's T2 / T3)
+    reg  [1:0] x_dh;                          // EX DE,HL waiting (T3), per bank
+    reg        s_vl_n [0:1], s_vh_n [0:1];
+    reg  [3:0] s_p_n  [0:1];
+    reg [15:0] s_old_n[0:1];
+    reg  [7:0] s_dl_n [0:1], s_dh_n [0:1];
+    reg        x_af_n, x_bank_n; reg [1:0] x_dh_n;
+    reg [15:0] rf_w   [0:12];                 // rf_n with a cut's restores
+    reg        xbank_w, xaf_w; reg [1:0] xdh_w;
+    integer    k, q;
+
+    function due_now;                          // does due d fall on this edge?
+        input [7:0] d; input [2:0] m; input [3:0] t; input m1; input inta;
+        reg [3:0] dt;
+        begin
+            dt = (d[7] && d[3:0] == 4'd4 && inta) ? 4'd5 : d[3:0];
+            due_now = (dt == t) && (d[7] ? m1 : (d[6:4] == m));
+        end
+    endfunction
+
+    // log one byte of physical pair p (old byte o, due d) into the slots
+    task log_byte; input [3:0] p; input hi; input [7:0] o; input [7:0] d;
+        reg done;
+        begin
+            done = 1'b0;
+            for (q = 0; q < 2; q = q + 1)
+                if (!done && (s_vl_n[q] || s_vh_n[q]) && s_p_n[q] == p) begin
+                    if (hi) begin if (!s_vh_n[q]) s_old_n[q][15:8] = o; s_vh_n[q] = 1'b1; s_dh_n[q] = d; end
+                    else    begin if (!s_vl_n[q]) s_old_n[q][7:0]  = o; s_vl_n[q] = 1'b1; s_dl_n[q] = d; end
+                    done = 1'b1;
+                end
+            for (q = 0; q < 2; q = q + 1)
+                if (!done && !s_vl_n[q] && !s_vh_n[q]) begin
+                    s_p_n[q] = p;
+                    if (hi) begin s_old_n[q][15:8] = o; s_vh_n[q] = 1'b1; s_dh_n[q] = d; end
+                    else    begin s_old_n[q][7:0]  = o; s_vl_n[q] = 1'b1; s_dl_n[q] = d; end
+                    done = 1'b1;
+                end
+        end
+    endtask
+
+    always @* begin
+        for (k = 0; k < 2; k = k + 1) begin
+            s_vl_n[k] = s_vl[k]; s_vh_n[k] = s_vh[k]; s_p_n[k] = s_p[k];
+            s_old_n[k] = s_old[k]; s_dl_n[k] = s_dl[k]; s_dh_n[k] = s_dh[k];
+        end
+        x_af_n = x_af; x_bank_n = x_bank; x_dh_n = x_dh;
+        // 1. what the die makes permanent on this edge; an instruction's end
+        //    also ends what it writes within itself
+        if (wb_adv) begin
+            for (k = 0; k < 2; k = k + 1) begin
+                if (s_vl_n[k] && (due_now(s_dl_n[k], wb_m, wb_t, wb_m1, wb_inta) || (wb_fin && !s_dl_n[k][7])))
+                    s_vl_n[k] = 1'b0;
+                if (s_vh_n[k] && (due_now(s_dh_n[k], wb_m, wb_t, wb_m1, wb_inta) || (wb_fin && !s_dh_n[k][7])))
+                    s_vh_n[k] = 1'b0;
+            end
+            if (wb_m1 && wb_t == 4'd2) x_af_n = 1'b0;
+            if (wb_m1 && wb_t == 4'd3) begin x_bank_n = 1'b0; x_dh_n = 2'b00; end
+        end
+        // 2. this edge's writes that the die makes later
+        if (we) begin
+            if (pw_we && pw_log_lo) log_byte(pw_phys, 1'b0, rf[pw_phys][7:0],  pw_due_lo);
+            if (pw_we && pw_log_hi) log_byte(pw_phys, 1'b1, rf[pw_phys][15:8], pw_due_hi);
+            if (bw_we && bw_log)    log_byte(bw_phys, bw_hi, bw_hi ? rf[bw_phys][15:8] : rf[bw_phys][7:0], bw_due);
+            if (f_we && f_log)      log_byte(af_phys, 1'b0, rf[af_phys][7:0], 8'h84);
+            if (sp_we && sp_log) begin
+                log_byte(`RFP_SP, 1'b0, rf[`RFP_SP][7:0],  sp_due);
+                log_byte(`RFP_SP, 1'b1, rf[`RFP_SP][15:8], sp_due);
+            end
+        end
+        if (ex_en) begin
+            if (ex_af)   x_af_n   = ~x_af_n;
+            if (exx)     x_bank_n = ~x_bank_n;
+            if (ex_dehl) x_dh_n   = x_dh_n ^ (xbank ? 2'b10 : 2'b01);
+        end
+        // 3. a RESET cut: put back what the die hadn't written
+        for (k = 0; k < 13; k = k + 1) rf_w[k] = rf_n[k];
+        xbank_w = xbank_n; xaf_w = xaf_n; xdh_w = xdh_n;
+        if (wb_cut) begin
+            for (k = 0; k < 13; k = k + 1)
+                for (q = 0; q < 2; q = q + 1)
+                    if (s_p_n[q] == k) begin
+                        if (s_vl_n[q]) rf_w[k][7:0]  = s_old_n[q][7:0];
+                        if (s_vh_n[q]) rf_w[k][15:8] = s_old_n[q][15:8];
+                    end
+            xbank_w = xbank_n ^ x_bank_n; xaf_w = xaf_n ^ x_af_n; xdh_w = xdh_n ^ x_dh_n;
+            for (k = 0; k < 2; k = k + 1) begin s_vl_n[k] = 1'b0; s_vh_n[k] = 1'b0; end
+            x_af_n = 1'b0; x_bank_n = 1'b0; x_dh_n = 2'b00;
+        end
+    end
+
     // 0x5555 matches perfectz80's gate-level Visual-Z80 netlist boot
     // pattern (see cmodel/z80_core.c z80_reset()); PC resets to 0.
     always @(posedge clk or negedge por_n) begin
@@ -137,9 +254,19 @@ module z80_regfile (
             for (ri = 0; ri < 13; ri = ri + 1) rf[ri] <= 16'h5555;
             rf[`RFP_PC] <= 16'h0000;
             xbank <= 1'b0; xaf <= 1'b0; xdh <= 2'b00;
+            for (ri = 0; ri < 2; ri = ri + 1) begin
+                s_vl[ri] <= 1'b0; s_vh[ri] <= 1'b0; s_p[ri] <= 4'd0;
+                s_old[ri] <= 16'h0000; s_dl[ri] <= 8'h00; s_dh[ri] <= 8'h00;
+            end
+            x_af <= 1'b0; x_bank <= 1'b0; x_dh <= 2'b00;
         end else begin
-            for (ri = 0; ri < 13; ri = ri + 1) rf[ri] <= rf_n[ri];
-            xbank <= xbank_n; xaf <= xaf_n; xdh <= xdh_n;
+            for (ri = 0; ri < 13; ri = ri + 1) rf[ri] <= rf_w[ri];
+            xbank <= xbank_w; xaf <= xaf_w; xdh <= xdh_w;
+            for (ri = 0; ri < 2; ri = ri + 1) begin
+                s_vl[ri] <= s_vl_n[ri]; s_vh[ri] <= s_vh_n[ri]; s_p[ri] <= s_p_n[ri];
+                s_old[ri] <= s_old_n[ri]; s_dl[ri] <= s_dl_n[ri]; s_dh[ri] <= s_dh_n[ri];
+            end
+            x_af <= x_af_n; x_bank <= x_bank_n; x_dh <= x_dh_n;
         end
     end
 endmodule

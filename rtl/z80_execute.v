@@ -220,6 +220,16 @@ module z80_execute (
                 ctl_ri = RI_BC; ctl_inc = INC_M1;
                 ctl_pw = 1'b1; ctl_pwi = RI_BC; ctl_pws = PW_IDU;
             end
+            // the register writes the die makes inside an M-cycle (docs/timing.md
+            // "Register write-back"): B-1 of INx / OUTx in the I/O or memory
+            // read's T2 and of DJNZ in the offset read's T2; EX (SP),HL steps SP
+            // up while (SP+1) is written and back at that write's end
+            else if (((eff_exec == `EXEC_BLOCK && aux_w[2]) || eff_exec == `EXEC_DJNZ) &&
+                     m_cycle == 3'd3 && t_state == 4'd2)
+                wr_byte(BW_B, BS_BD);
+            else if (eff_exec == `EXEC_EX_SP_HL && m_cycle == 3'd4 && t_state == 4'd1) begin
+                ctl_ab = AB_REG; ctl_ri = RI_SP; ctl_inc = INC_P1; ctl_sp = SP_IDU;
+            end
         end
         // (IX+d) / (IY+d) displacement preamble: read d, then 5 internal
         // T-states while WZ = IX+d is formed (not during interrupt/HALT
@@ -385,9 +395,8 @@ module z80_execute (
             `EXEC_DJNZ: begin
                 if (m_cycle == 3'd1) at_pair(`BUSOP_INTERNAL, RI_PC, 4'd1);
                 else if (m_cycle == 3'd2) op_fetch(4'd0);
-                else if (m_cycle == 3'd3) begin
-                    wr_byte(BW_B, BS_BD);                 // B <- B-1
-                    if (b_dec_nz) begin
+                else if (m_cycle == 3'd3) begin       // B-1 came in this read's T2
+                    if (b_nz) begin
                         ctl_ea_pc = 1'b1; ctl_ea_d = EA_RB; ctl_pc = PC_EA; ctl_wz = WZ_EA;
                         mstart(`BUSOP_INTERNAL, AL_EA, 4'd5);
                     end else ctl_fin = 1'b1;
@@ -530,8 +539,10 @@ module z80_execute (
                     ctl_db = DB_REG; ctl_bi = BI_HLP; ctl_bhi = 1'b1;
                     mstart(`BUSOP_MWR, AL_IDU, 4'd0);
                 end else if (m_cycle == 3'd4) begin
+                    // SP back from the +1 of this write's T1; the last write at it
+                    ctl_ab = AB_REG; ctl_ri = RI_SP; ctl_inc = INC_M1; ctl_sp = SP_IDU;
                     ctl_db = DB_REG; ctl_bi = BI_HLP; ctl_bhi = 1'b0;
-                    at_pair(`BUSOP_MWR, RI_SP, 4'd2);
+                    mstart(`BUSOP_MWR, AL_IDU, 4'd2);
                 end else begin
                     ctl_pw = 1'b1; ctl_pwi = RI_HLP; ctl_pws = PW_WZ;    // HL <- WZ (= MEMPTR)
                     ctl_fin = 1'b1;
@@ -554,14 +565,14 @@ module z80_execute (
             end
 
             // ---------- ED page (non-block) ----------
-            `EXEC_ADC16, `EXEC_SBC16: begin                   // internal 4 + 3 T, as ADD
-                if (m_cycle == 3'd1) at_pair(`BUSOP_INTERNAL, RI_HL, 4'd4);
-                else if (m_cycle == 3'd2) at_pair(`BUSOP_INTERNAL, RI_HL, 4'd3);
-                else begin
-                    ctl_ab = AB_REG; ctl_ri = RI_HL; ctl_inc = INC_P1; ctl_wz = WZ_IDU;  // WZ = HL+1
-                    ctl_pw = 1'b1; ctl_pwi = RI_HL; ctl_pws = PW_A16;
-                    wr_flags(FS_A16); ctl_fin = 1'b1;
-                end
+            `EXEC_ADC16, `EXEC_SBC16: begin                   // internal 4 + 3 T, as ADD; the
+                if (m_cycle == 3'd1) at_pair(`BUSOP_INTERNAL, RI_HL, 4'd4);   // sum at the first
+                else if (m_cycle == 3'd2) begin                               // one's end, where
+                    ctl_inc = INC_P1; ctl_wz = WZ_IDU;                        // the die has L
+                    ctl_pw = 1'b1; ctl_pwi = RI_HL; ctl_pws = PW_A16;         // WZ = HL+1
+                    wr_flags(FS_A16);
+                    at_pair(`BUSOP_INTERNAL, RI_HL, 4'd3);
+                end else ctl_fin = 1'b1;
             end
             `EXEC_NEG: begin wr_byte(BW_A, BS_ALU); wr_flags(FS_ALU); ctl_fin = 1'b1; end
             `EXEC_IM:  begin ctl_im = 1'b1; ctl_fin = 1'b1; end
@@ -642,18 +653,16 @@ module z80_execute (
                         ctl_db = DB_RB;                       // data stays in tmp8 for the flags
                         at_pair(`BUSOP_MWR, RI_HL, 4'd0);
                     end else if (m_cycle == 3'd4) begin
-                        wr_byte(BW_B, BS_BD);                 // B-1 (HL stepped at M4 T1)
-                        wr_flags(FS_ALU);
-                        if (aux_w[3] && b_dec_nz) blk_repeat(FS_BIO);
+                        wr_flags(FS_ALU);                     // B-1 came at M3 T2, HL at M4 T1
+                        if (aux_w[3] && b_nz) blk_repeat(FS_BIO);
                         else ctl_fin = 1'b1;
                     end else ctl_fin = 1'b1;
                 end
                 default: begin                                // OUTI OUTD OTIR OTDR
                     if (m_cycle == 3'd1) at_pair(`BUSOP_INTERNAL, RI_PC, 4'd1);
                     else if (m_cycle == 3'd2) at_pair(`BUSOP_MRD, RI_HL, 4'd0);
-                    else if (m_cycle == 3'd3) begin
-                        wr_byte(BW_B, BS_BD);                 // B-1, then out to {B-1, C}
-                        ctl_ab = AB_NBC; ctl_inc = aux_w[0] ? INC_M1 : INC_P1; ctl_wz = WZ_IDU;
+                    else if (m_cycle == 3'd3) begin       // B-1 came at M3 T2: out to BC
+                        ctl_ab = AB_REG; ctl_ri = RI_BC; ctl_inc = aux_w[0] ? INC_M1 : INC_P1; ctl_wz = WZ_IDU;
                         ctl_db = DB_RB;
                         mstart(`BUSOP_IOWR, AL_ABUS, 4'd0);
                     end else if (m_cycle == 3'd4) begin

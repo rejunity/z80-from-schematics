@@ -592,7 +592,7 @@ module z80_core (
                     2'd2: if (m_cycle == 3'd4) begin
                         alu_md = `FLAG_BLOCK_IO;
                         alu_a = tmp8;                      // data
-                        alu_b = r_bc[15:8] - 8'd1;         // newB
+                        alu_b = r_bc[15:8];                // newB (B-1 came at M3 T2)
                         alu_xy = {4'b0, bk_ini[8], bk_ini[2:0]};
                     end
                     default: if (m_cycle == 3'd4) begin   // 2'd3 = OUT
@@ -819,7 +819,7 @@ module z80_core (
             FS_BCP:  f_data = (F_cur & ~(`Z80_YF | `Z80_XF)) | (r_pc[15:8] & (`Z80_YF | `Z80_XF));
             // ... INIR/INDR/OTIR/OTDR repeat: full recompute (idu = PC-2)
             default: f_data = banks_io_rep_f(tmp8,
-                                  (aux_w[2:1] == 2'd2) ? b_dec : r_bc[15:8],
+                                  r_bc[15:8],          // B-1 came at M3 T2
                                   (aux_w[2:1] == 2'd2) ? bk_ini : bk_out,
                                   idu[15:8]);
         endcase
@@ -862,6 +862,50 @@ module z80_core (
         endcase
     end
 
+    // Register write-back on the die's edges (docs/timing.md "Register
+    // write-back"; cmodel wb_rule): which of this edge's writes the die makes
+    // on a later edge, and on which -- due {next, m, t}: T-state t of
+    // M-cycle m, or (next) of the next M1 / INTA cycle. Every F write waits
+    // for the next M1's T4 (z80_regfile); a push's first SP-1 is push_cut.
+    reg        pw_log_lo, pw_log_hi, bw_log, sp_log;
+    reg  [7:0] pw_due_lo, pw_due_hi, bw_due, sp_due;
+    always @* begin
+        pw_log_lo = 1'b0; pw_log_hi = 1'b0; bw_log = 1'b0; sp_log = 1'b0;
+        pw_due_lo = 8'h00; pw_due_hi = 8'h00; bw_due = 8'h00; sp_due = 8'h00;
+        case (eff_exec)
+            // results the die writes in the next M1's T2.N
+            `EXEC_LD_R_R, `EXEC_LD_R_N, `EXEC_LD_R_M, `EXEC_ALU_R, `EXEC_ALU_N, `EXEC_ALU_M,
+            `EXEC_INC_R, `EXEC_DEC_R, `EXEC_ROT_A, `EXEC_DAA, `EXEC_CPL, `EXEC_NEG,
+            `EXEC_CB_R, `EXEC_DDCB, `EXEC_IN_C, `EXEC_RRD, `EXEC_RLD, `EXEC_LD_A_IR:
+                begin bw_log = 1'b1; bw_due = 8'h83; end
+            // a read straight into its register, in that read's last T.N
+            `EXEC_LD_A_NN, `EXEC_LD_A_RP, `EXEC_IN_A_N:
+                begin bw_log = 1'b1; bw_due = 8'h81; end
+            `EXEC_LD_RP_NN, `EXEC_POP, `EXEC_LD_RP_NNA, `EXEC_LD_HL_NN:
+                begin bw_log = 1'b1; bw_due = bw_hi ? 8'h81 : {1'b0, m_cycle + 3'd1, 4'd1}; end
+            // INC / DEC rr, LD SP,HL: M1's T5.N
+            `EXEC_INC_RP, `EXEC_DEC_RP:
+                begin pw_log_lo = 1'b1; pw_log_hi = 1'b1; pw_due_lo = 8'h22; pw_due_hi = 8'h22; end
+            `EXEC_LD_SP_HL: begin sp_log = 1'b1; sp_due = 8'h22; end
+            // ADD HL,rr: L in the first internal M-cycle's T3.N, H in the second's
+            `EXEC_ADD_HL_RP:
+                begin pw_log_lo = 1'b1; pw_log_hi = 1'b1; pw_due_lo = 8'h24; pw_due_hi = 8'h81; end
+            `EXEC_ADC16, `EXEC_SBC16: begin pw_log_hi = 1'b1; pw_due_hi = 8'h81; end
+            // the block pointer and counter steps, issued on early T-states
+            `EXEC_BLOCK: begin
+                pw_log_lo = 1'b1; pw_log_hi = 1'b1;
+                case (aux_w[2:1])
+                    2'd0:    pw_due_lo = (m_cycle == 3'd2) ? 8'h23 : (t_state == 4'd1) ? 8'h33 : 8'h35;
+                    2'd1:    pw_due_lo = (t_state == 4'd1) ? 8'h23 : 8'h35;      // HL / BC
+                    2'd2:    pw_due_lo = 8'h43;                                   // HL
+                    default: pw_due_lo = 8'h33;                                   // HL
+                endcase
+                pw_due_hi = pw_due_lo;
+            end
+            default: ;
+        endcase
+    end
+
     wire [15:0] pc_next;        // PC after this edge (next M1 address)
     wire [7:0]  f_next;         // F after this edge (Q commit)
     z80_regfile u_regs (
@@ -875,7 +919,12 @@ module z80_core (
         .bc(r_bc), .de(r_de), .hl(r_hl), .af(r_af),
         .bc2(r_bc2), .de2(r_de2), .hl2(r_hl2), .af2(r_af2),
         .ix(r_ix), .iy(r_iy), .sp(r_sp), .pc(r_pc), .wz(r_wz),
-        .pc_next(pc_next), .f_next(f_next)
+        .pc_next(pc_next), .f_next(f_next),
+        .wb_adv(wr_edge), .wb_fin(ex_edge && ctl_fin), .wb_cut(res2 && !rst_idle),
+        .wb_m(m_cycle), .wb_t(t_state),
+        .wb_m1((bus_op == `BUSOP_M1) || (bus_op == `BUSOP_INTA)), .wb_inta(bus_op == `BUSOP_INTA),
+        .pw_log_lo(pw_log_lo), .pw_log_hi(pw_log_hi), .pw_due_lo(pw_due_lo), .pw_due_hi(pw_due_hi),
+        .bw_log(bw_log), .bw_due(bw_due), .f_log(1'b1), .sp_log(sp_log), .sp_due(sp_due)
     );
 
     // =======================================================================

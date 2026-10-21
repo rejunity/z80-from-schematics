@@ -33,7 +33,7 @@ Status legend:
 | 16 | BUSREQ / BUSACK vs the NMOS Z80               | timing / bus              | resolved |
 | 17 | RESET / INT / NMI sweep vs perfectz80         | timing / interrupt        | resolved |
 | 18 | Refresh and idle address bus                  | timing / bus              | resolved |
-| 19 | RESET between an instruction and its write-back | timing / reset          | watching |
+| 19 | RESET between an instruction and its write-back | timing / reset          | resolved |
 | 20 | IM0: the instruction from the interrupting device | interrupt               | resolved |
 | 21 | HALT pin when an NMI response fetches a HALT byte | timing / interrupt      | resolved |
 | 22 | Pad drivers: when the bus floats              | bus                       | resolved |
@@ -259,28 +259,25 @@ Notes for each row:
        IDU / EA work of those T-states (468 of 2,215 phases differed);
        the pins now hold instead.
 
- 19. **RESET between an instruction and its write-back** — the die
-     finishes some results in the next M1, which a RESET that stops that
-     M1 early loses (perfectz80, RESET at every T-state; the register
-     dump after reset shows it):
-     - INC A: H and N in the next M1's T2, A and the other flags in T3;
-     - LD A,(HL): A in the next M1's T2; POP DE: DE in its T1; EX DE,HL:
-       the swap in its T3;
-     - ADD HL,rr: L as the die's M2 ends, H in the next M1's T1, the flags
-       in its T2 / T3; INC rr: the pair late in the M1's T5 / T6.
-     RZ80 writes every result on the instruction's last edge (ADD HL,rr
-     and INC rr theirs earlier still) and keeps them. The push SP-1, which
-     the die does on the edge that ends the previous cycle, is modelled.
-     The sweep's `reset_add_hl_bc` (20) and `reset_inc_bc` (6) cases are
-     these, in the baseline; RESET with WAIT is untested. Modelling it means
-     holding each class's writes until the T-state the die does them in.
-     The event sweep's `classes_reset` group (RESET at every T-state of one
-     opcode of every timing class, run by name) measures the rest: 170 of
-     2,210 cases in 27 classes differ the same way -- e.g. LD BC,nn: with
-     RESET from T5 the die hasn't written C yet and the RTL has, from T6
-     the die and the RTL have and the C model hasn't, from T8 both models
-     have written B and the die hasn't -- and in 84 of them the C model and
-     the RTL differ from each other.
+ 19. **RESET between an instruction and its write-back — resolved
+     2026-10-21.** The die writes results into the register file on its own
+     schedule, often in the next instruction's M1 (docs/timing.md "Register
+     write-back"), so a RESET that stops an instruction part-way leaves the
+     registers it hadn't written yet; the models wrote results on M-cycle
+     ends and kept them, and the C model and the RTL each on their own edges
+     (the event sweep's `classes_reset`: 170 of 2,210 cases differed from
+     perfectz80, 84 between the models). Measured on perfectz80 with the
+     whole register file read in the reset idle after RESET at every T-state
+     of every opcode (and of each followed by an INT or NMI response): a
+     write in a T-state's low half is kept by a cut ending on the next
+     T-state or later. Both models now keep a write-back log -- each byte
+     written before the die's edge, its old value and that edge -- and a
+     RESET cut puts back what the die hadn't written; the few writes the die
+     makes before the models' M-cycle ends are made on its edges. The
+     sweep's RESET cases store every register after the reset (A and F, IX,
+     IY, the alternates), `classes_reset` runs by default, and
+     `opcodes_reset` (RESET at every T-state of every opcode) by name.
+     Nothing changes at an instruction boundary.
  20. **IM0: the instruction from the interrupting device — resolved
      2026-10-21.** Found by the event sweep's `im0` group (twenty
      instructions handed over in INTA, perfectz80). On the die PC doesn't

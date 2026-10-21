@@ -278,6 +278,48 @@ internal M-cycles as one where the die has two (ADD HL,rr's 4 + 3 T), so a cut
 inside them is approximate; RESET during WAIT or a bus grant is untested
 (docs/known-differences.md).
 
+## Register write-back
+
+When the die writes a result into the register file only matters if RESET
+stops an instruction part-way: a register the die hadn't written yet keeps
+its old value through the reset (RESET keeps every register but PC, I, R),
+and the code after it sees that. perfectz80 shows the die's schedule --
+the register file read in the reset idle after RESET at every T-state of
+every opcode (and of each followed by an INT or NMI response):
+
+- The die writes a result in the low half of a T-state, and RES2 rising on
+  that same falling edge -- the cut that makes this T-state the last --
+  blocks it. So a write in T_k's low half is kept by a cut that ends on
+  T_k+1 or later.
+- **The next M1** (or INTA, or the NMI response's M1): ALU and load
+  results -- ALU ops, INC / DEC r, LD r,r' / r,n / r,(HL) / r,(IX+d),
+  CB and DD CB ops (the register copy), IN r,(C), RLD / RRD, LD A,I / R,
+  NEG / DAA / CPL / RLCA.. -- go into their register in its T2 low half and
+  F in its T3 (an INTA's T5: after its two wait states). EX AF,AF' flips in
+  its T1, EXX and EX DE,HL in its T2.
+- **A read's last T-state**: LD A,(nn), LD A,(BC) / (DE), IN A,(n), and each
+  byte of POP, LD rr,nn, LD rr,(nn), LD HL,(nn) -- the low byte at the end
+  of its own read, before the high byte is read.
+- **Inside the instruction**: INC / DEC rr and LD SP,HL in M1's T5; ADD /
+  ADC / SBC HL,rr: L in the first internal M-cycle's T3, H in the second's;
+  DJNZ's B-1 in the offset read's T1; a push's first SP-1 in the T-state
+  before its first write (M1's T5, the extra T), the second in that write's
+  T2; POP's and RET's SP+1 in each read's T2; LDI: HL in the read's T2, DE in the write's T2, BC in its
+  T4; CPI: HL in the read's T2, BC in the internal M-cycle's T4; INI: B in
+  the I/O read's T1, HL in the write's T2; OUTI: B in the memory read's T1,
+  HL in its T2; EX (SP),HL: SP+1 in the second read's T4, back in the first
+  write's T2, HL in the last write's T4.
+
+Both models compute most results earlier, on an M-cycle's last edge, and
+keep a write-back log: each byte written before the die's edge, its old
+value and the edge it becomes permanent on; a RESET cut before that edge
+puts it back (cmodel `wb_rule` / `wb_note`, rtl `z80_regfile`'s two slots
+and the pending exchanges). The writes the die makes before the models'
+M-cycle ends are made on the die's edge (DJNZ's, INI's and OUTI's B-1, EX
+(SP),HL's SP steps, ADC / SBC HL's sum at the first internal M-cycle's end).
+Nothing changes at an instruction boundary: only what a RESET part-way
+through leaves.
+
 ## Pad drivers (bus float)
 
 Which pins the die drives in each half-cycle, from perfectz80: every

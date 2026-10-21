@@ -342,6 +342,18 @@ typedef struct {
        is the power-on reset. */
     bool         res_s, res2, sres, rst_idle, srst_m1, rd_hold;
 
+    /* Register write-back as the die does it (docs/timing.md "Register
+       write-back"): the die writes a result in the low half of a T-state,
+       which a RESET cut ending on that T-state blocks, so a write is kept
+       by a cut that ends on the edge after that T-state or later. This
+       model writes most results earlier, on an M-cycle's last edge: each
+       byte written before the die's edge is logged here, its old value
+       and the edge it becomes permanent on -- T-state t of M-cycle m of
+       this instruction, or (m = 0) of the next M1 or INTA cycle -- and a
+       RESET cut before that edge puts it back. */
+    struct { uint8_t pair, hi, old, m, t; } wb[16];
+    uint8_t      wb_n;
+
     /* BUSREQ, as sampled on the rising edge that started this T-state (true
        = requested): in an M-cycle's last T-state it decides the grant, in a
        granted T-state the release (perfectz80; PS0178 Figure 10). */
