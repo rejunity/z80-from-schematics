@@ -7,7 +7,7 @@
 //
 //   vvp tb_event_sweep.vvp +prog=P.hex [+events=E.txt] +run=T
 //       [+marker=0200] [+inta_release=1] [+int_at=0066] [+hold=8000 +hold_t=N]
-//       [+inta_vec=FF] [+inta_n=N +inta_ops=HEX]
+//       [+inta_vec=FF] [+inta_n=N +inta_ops=HEX] [+busreq_walk=1] [+wait_walk=1]
 //
 // Time: one T-state is 32 time units, so an event placed at sixteenth s
 // lands at 2*s+1 units, never on a clock edge. Sixteenth 0 is the rising
@@ -21,6 +21,11 @@
 //   +int_at=A      INT goes low during the M1 fetch of A, high again at INTA
 //   +hold=A        WAIT low at the start of each read of A (not M1) for
 //                  +hold_t T-states, or until RESET falls
+//   +busreq_walk   with BUSREQ low from the events file: each grant is
+//                  released for one T-state -- BUSREQ high when BUSACK is
+//                  seen low, low again once BUSACK is high
+//   +wait_walk     WAIT low for the three half-cycles from each fall of
+//                  MREQ (not a refresh) or IORQ
 // The interrupting device: +inta_vec=V is the byte it puts on the bus in
 // INTA (M1 + IORQ), FF if not given; +inta_n=N +inta_ops=HEX are N more
 // bytes (HEX little-endian, the first one lowest) it hands out after it,
@@ -29,8 +34,11 @@
 // INTA and reads the operands at the unchanged PC). An opcode fetch from
 // memory ends the device's instruction. I/O reads see FF.
 // Memory writes are captured from the pins at the end of every half-cycle.
-// Output: `h clk addr data mreq iorq rd wr m1 rfsh halt busack` for halves
-// 0 .. 2*run-1 from the marker's T1, pins sampled at the end of each half.
+// Output: `h clk addr data mreq iorq rd wr m1 rfsh halt busack aen den cen`
+// for halves 0 .. 2*run-1 from the marker's T1, pins sampled at the end of
+// each half; aen den cen are the pads driven (hex masks: A0-A15, D0-D7,
+// MREQ IORQ RD WR M1 RFSH HALT BUSACK bit 0 first): addr_drive, data_drive,
+// ctl_drive (M1 RFSH HALT BUSACK always).
 // ===========================================================================
 `timescale 1ns/1ns
 
@@ -43,6 +51,7 @@ module tb_event_sweep;
     wire [15:0] addr;
     wire [7:0]  data_out;
     wire        data_drive, m1_n, mreq_n, iorq_n, rd_n, wr_n, rfsh_n, halt_n, busack_n;
+    wire        addr_drive, ctl_drive;
     wire [3:0]  dbg_t;
     wire [2:0]  dbg_m;
     reg  [7:0]  mem [0:65535];
@@ -52,6 +61,7 @@ module tb_event_sweep;
         .addr(addr), .data_in(data_in), .data_out(data_out), .data_drive(data_drive),
         .m1_n(m1_n), .mreq_n(mreq_n), .iorq_n(iorq_n), .rd_n(rd_n), .wr_n(wr_n),
         .rfsh_n(rfsh_n), .halt_n(halt_n), .busack_n(busack_n),
+        .addr_drive(addr_drive), .ctl_drive(ctl_drive),
         .wait_n(wait_n), .int_n(int_n), .nmi_n(nmi_n), .busreq_n(busreq_n),
         .dbg_t(dbg_t), .dbg_m(dbg_m)
     );
@@ -69,6 +79,7 @@ module tb_event_sweep;
     integer n_ev, fd, r, k, e, run, marker, hold, hold_t, int_at, inta_release, vec;
     integer t, half, mark_half, hold_until, in_read;
     integer inta_n, dev_pos, was_read, was_inta;
+    integer busreq_walk, wait_walk, walk_up, walk_wait_until, strobe, prev_strobe;
     reg [63:0] inta_ops;
     reg [8*512-1:0] progf, evf;     // paths up to 512 characters
     reg found;
@@ -94,6 +105,9 @@ module tb_event_sweep;
         if (!$value$plusargs("inta_vec=%h", vec)) vec = 'hff;
         if (!$value$plusargs("inta_n=%d", inta_n)) inta_n = 0;
         if (!$value$plusargs("inta_ops=%h", inta_ops)) inta_ops = 64'h0;
+        if (!$value$plusargs("busreq_walk=%d", busreq_walk)) busreq_walk = 0;
+        if (!$value$plusargs("wait_walk=%d", wait_walk)) wait_walk = 0;
+        walk_up = 0; walk_wait_until = -1; prev_strobe = 0;
         dev_q = {inta_ops, vec[7:0]};
         dev_read = 1'b0; dev_byte = 8'h00; dev_pos = 0; was_read = 0; was_inta = 0;
         n_ev = 0;
@@ -154,6 +168,19 @@ module tb_event_sweep;
                         end
                     end else in_read = 0;
                     if (hold >= 0 && !wait_n && (half >= hold_until || !reset_n)) wait_n = 1'b1;
+                    if (busreq_walk) begin
+                        if (!busack_n && !walk_up) begin busreq_n = 1'b1; walk_up = 1; end
+                        else if (walk_up && busack_n) begin busreq_n = 1'b0; walk_up = 0; end
+                    end
+                    if (wait_walk) begin
+                        strobe = ((!mreq_n && rfsh_n) || !iorq_n) ? 1 : 0;
+                        if (strobe && !prev_strobe) begin
+                            wait_n = 1'b0; walk_wait_until = half - mark_half + 3;
+                        end else if (walk_wait_until >= 0 && half - mark_half >= walk_wait_until) begin
+                            wait_n = 1'b1; walk_wait_until = -1;
+                        end
+                        prev_strobe = strobe;
+                    end
                 end
             end
             // Pin events at sixteenth s = (t - mark_t - 1) / 2, mark_t = mark_half*16.
@@ -167,9 +194,11 @@ module tb_event_sweep;
             #1;
             if (t % 16 == 15 && !mreq_n && !wr_n) mem[addr] = data_out;
             if (found && t % 16 == 15) begin
-                $display("%0d %0d %04x %02x %0d %0d %0d %0d %0d %0d %0d %0d",
+                $display("%0d %0d %04x %02x %0d %0d %0d %0d %0d %0d %0d %0d %04x %02x %02x",
                          half - mark_half, clk, addr, data_out,
-                         mreq_n, iorq_n, rd_n, wr_n, m1_n, rfsh_n, halt_n, busack_n);
+                         mreq_n, iorq_n, rd_n, wr_n, m1_n, rfsh_n, halt_n, busack_n,
+                         addr_drive ? 16'hffff : 16'h0000, data_drive ? 8'hff : 8'h00,
+                         {4'hf, {4{ctl_drive}}});
                 if (half - mark_half >= 2 * run - 1) $finish(0);
             end
             if (!found && t > 32 * 4000) begin $display("marker not reached"); $finish(0); end

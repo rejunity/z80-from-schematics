@@ -203,3 +203,20 @@ and perfectz80's pins (`perfectz80.*` scope) — open with GTKWave /
 Surfer to inspect side-by-side from one file. Disable with `EMIT_VCD=0`.
 
 The brief that this project follows: [z80_core_project_BRIEF.md](z80_core_project_BRIEF.md).
+
+
+## License
+
+The project's original **C model, support software, and documentation are
+MIT-licensed**. Its original **RTL and hardware implementation sources in
+`rtl/` and `librelane/` use CERN-OHL-W-2.0**. These are licenses for separate
+components, not a choice of either license for every file.
+
+Commercial use is welcome under the applicable terms. Hardware manufacturers
+may sell compliant products without paying a royalty to the project author;
+retain the required notices and make the required source available. See
+[LICENSE](LICENSE) and [HARDWARE_NOTICE.md](HARDWARE_NOTICE.md).
+
+Third-party reference emulators, ROMs, tests, and netlists keep their upstream
+terms. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), including its
+unresolved provenance items, and [CONTRIBUTING.md](CONTRIBUTING.md).
