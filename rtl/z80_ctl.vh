@@ -13,7 +13,7 @@
 localparam [2:0] AL_ABUS = 3'd0,   // the address-side bus
                  AL_IDU  = 3'd1,   // abus +1 / -1 / -2
                  AL_EA   = 3'd2,   // effective-address adder
-                 AL_A16  = 3'd3;   // 16-bit ALU sum (ADD HL,rp internal cycle)
+                 AL_WZ   = 3'd3;   // WZ (internal M-cycles: JR, DJNZ, (IX+d), CPI, RLD, ...)
 // address-side bus source
 localparam [2:0] AB_REG  = 3'd0,   // register pair, see RI_*
                  AB_NN   = 3'd1,   // {rbyte, Z}: the operand word nn as W arrives

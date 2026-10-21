@@ -68,12 +68,12 @@ module z80_regfile (
     input  wire [2:0]  wb_m,            // the T-state this edge ends
     input  wire [3:0]  wb_t,
     input  wire        wb_m1,           // ... in an M1 or INTA cycle
-    input  wire        wb_inta,         // ... in an INTA cycle (F: its T5)
     input  wire        pw_log_lo, pw_log_hi,
     input  wire [7:0]  pw_due_lo, pw_due_hi,
     input  wire        bw_log,
     input  wire [7:0]  bw_due,
-    input  wire        f_log,           // F waits for the next M1's T4 (INTA: T5)
+    input  wire        f_log,           // F waits ...
+    input  wire [7:0]  f_due,           // ... for the next M1's T4 (or T2)
     input  wire        sp_log,
     input  wire [7:0]  sp_due
 );
@@ -168,12 +168,8 @@ module z80_regfile (
     integer    k, q;
 
     function due_now;                          // does due d fall on this edge?
-        input [7:0] d; input [2:0] m; input [3:0] t; input m1; input inta;
-        reg [3:0] dt;
-        begin
-            dt = (d[7] && d[3:0] == 4'd4 && inta) ? 4'd5 : d[3:0];
-            due_now = (dt == t) && (d[7] ? m1 : (d[6:4] == m));
-        end
+        input [7:0] d; input [2:0] m; input [3:0] t; input m1;
+        due_now = (d[3:0] == t) && (d[7] ? m1 : (d[6:4] == m));
     endfunction
 
     // log one byte of physical pair p (old byte o, due d) into the slots
@@ -207,9 +203,9 @@ module z80_regfile (
         //    also ends what it writes within itself
         if (wb_adv) begin
             for (k = 0; k < 2; k = k + 1) begin
-                if (s_vl_n[k] && (due_now(s_dl_n[k], wb_m, wb_t, wb_m1, wb_inta) || (wb_fin && !s_dl_n[k][7])))
+                if (s_vl_n[k] && (due_now(s_dl_n[k], wb_m, wb_t, wb_m1) || (wb_fin && !s_dl_n[k][7])))
                     s_vl_n[k] = 1'b0;
-                if (s_vh_n[k] && (due_now(s_dh_n[k], wb_m, wb_t, wb_m1, wb_inta) || (wb_fin && !s_dh_n[k][7])))
+                if (s_vh_n[k] && (due_now(s_dh_n[k], wb_m, wb_t, wb_m1) || (wb_fin && !s_dh_n[k][7])))
                     s_vh_n[k] = 1'b0;
             end
             if (wb_m1 && wb_t == 4'd2) x_af_n = 1'b0;
@@ -220,7 +216,7 @@ module z80_regfile (
             if (pw_we && pw_log_lo) log_byte(pw_phys, 1'b0, rf[pw_phys][7:0],  pw_due_lo);
             if (pw_we && pw_log_hi) log_byte(pw_phys, 1'b1, rf[pw_phys][15:8], pw_due_hi);
             if (bw_we && bw_log)    log_byte(bw_phys, bw_hi, bw_hi ? rf[bw_phys][15:8] : rf[bw_phys][7:0], bw_due);
-            if (f_we && f_log)      log_byte(af_phys, 1'b0, rf[af_phys][7:0], 8'h84);
+            if (f_we && f_log)      log_byte(af_phys, 1'b0, rf[af_phys][7:0], f_due);
             if (sp_we && sp_log) begin
                 log_byte(`RFP_SP, 1'b0, rf[`RFP_SP][7:0],  sp_due);
                 log_byte(`RFP_SP, 1'b1, rf[`RFP_SP][15:8], sp_due);

@@ -205,10 +205,13 @@ static void wb_rule(const z80_t *c, uint8_t ex, uint8_t mc, uint8_t pair, bool h
     case EXEC_PUSH: case EXEC_RST: if (pair == RFP_SP && mc == 2) { *m = 3; *t = 1; } break;
     case EXEC_CALL: case EXEC_CALL_CC: if (pair == RFP_SP && mc == 4) { *m = 5; *t = 1; } break;
     case EXEC_NMI: case EXEC_INT: if (pair == RFP_SP && mc == 1) { *m = 2; *t = 1; } break;
-    case EXEC_BLOCK:
-        if (f) { *m = WB_NEXT; *t = 4; }
-        else if (((c->ctl.aux >> 1) & 3) == 1 && pair == RFP_BC) { *m = 3; *t = 5; }  /* CPI's BC */
-        break;
+    case EXEC_BLOCK: {
+        uint8_t cat = (uint8_t)((c->ctl.aux >> 1) & 3);
+        /* F: the compares, and the I/O ones that repeat, have every flag
+           latched before the next M1 -- its T2 then writes them all */
+        if (f) { *m = WB_NEXT; *t = (cat == 1 || (cat >= 2 && !c->instr_done)) ? 2 : 4; }
+        else if (cat == 1 && pair == RFP_BC) { *m = 3; *t = 5; }  /* CPI's BC */
+    } break;
     default: break;
     }
 }
@@ -243,10 +246,7 @@ static void wb_edge(z80_t *c)
     bool m1 = c->bus_op == BUSOP_M1 || c->bus_op == BUSOP_INTA;
     uint8_t k = 0;
     for (uint8_t i = 0; i < c->wb_n; i++) {
-        uint8_t t = c->wb[i].t;
-        /* F after an INTA's two wait states: the die's T3 there is our T5 */
-        if (c->wb[i].m == WB_NEXT && t == 4 && c->bus_op == BUSOP_INTA) t = 5;
-        bool due = t == c->t_state && (c->wb[i].m == WB_NEXT ? m1 : c->wb[i].m == c->m_cycle);
+        bool due = c->wb[i].t == c->t_state && (c->wb[i].m == WB_NEXT ? m1 : c->wb[i].m == c->m_cycle);
         if (!due) c->wb[k++] = c->wb[i];
     }
     c->wb_n = k;
@@ -363,6 +363,7 @@ static void z80_exec_step(z80_t *c)
     uint16_t memaddr = c->rf[hlp];
     if (ctl->idx && ctl->use_disp) {
         if (m == 1) { z80_start_mcycle(c, BUSOP_MRD, z80_pc_inc(c), 0, 0); return; }
+        uint16_t wz0 = c->rf[RFP_WZ];
         if (m == 2) {
             int8_t d = (int8_t)c->tmp8;
             c->rf[RFP_WZ] = (uint16_t)(c->rf[hlp] + d);
@@ -371,8 +372,8 @@ static void z80_exec_step(z80_t *c)
             mm = (uint8_t)(m - 1);          /* no separate internal cycle */
             memaddr = c->rf[RFP_WZ];
         } else {
-            if (m == 2) {
-                z80_start_mcycle(c, BUSOP_INTERNAL, c->rf[RFP_WZ], 0, 5);
+            if (m == 2) {                   /* the address latch holds WZ from before */
+                z80_start_mcycle(c, BUSOP_INTERNAL, wz0, 0, 5);
                 return;
             }
             mm = (uint8_t)(m - 2);
@@ -602,7 +603,7 @@ static void z80_exec_step(z80_t *c)
             do_add16(c);
             z80_start_mcycle(c, BUSOP_INTERNAL, hl0, 0, 4);
         }
-        else if (m == 2) z80_start_mcycle(c, BUSOP_INTERNAL, c->rf[hlp], 0, 3);
+        else if (m == 2) z80_start_mcycle(c, BUSOP_INTERNAL, c->rf[RFP_WZ], 0, 3);   /* the latch: WZ = HL+1 */
         else finish(c);
         break;
 
@@ -737,18 +738,20 @@ static void z80_exec_step(z80_t *c)
     /* ---------- relative jumps ---------- */
     case EXEC_JR:
         if (m == 1) z80_start_mcycle(c, BUSOP_MRD, z80_pc_inc(c), 0, 0);
-        else if (m == 2) { int8_t e = (int8_t)RB; z80_setPC(c, (uint16_t)(z80_PC(c) + e));
+        else if (m == 2) { int8_t e = (int8_t)RB; uint16_t wz0 = c->rf[RFP_WZ];
+                           z80_setPC(c, (uint16_t)(z80_PC(c) + e));
                            c->rf[RFP_WZ] = z80_PC(c);
-                           z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 5); }
+                           z80_start_mcycle(c, BUSOP_INTERNAL, wz0, 0, 5); }   /* the latch: WZ from before */
         else finish(c);
         break;
     case EXEC_JR_CC:
         if (m == 1) z80_start_mcycle(c, BUSOP_MRD, z80_pc_inc(c), 0, 0);
         else if (m == 2) {
             if (z80_cc_true(z80_F(c), ctl->cc)) {
-                int8_t e = (int8_t)RB; z80_setPC(c, (uint16_t)(z80_PC(c) + e));
+                int8_t e = (int8_t)RB; uint16_t wz0 = c->rf[RFP_WZ];
+                z80_setPC(c, (uint16_t)(z80_PC(c) + e));
                 c->rf[RFP_WZ] = z80_PC(c);
-                z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 5);
+                z80_start_mcycle(c, BUSOP_INTERNAL, wz0, 0, 5);   /* the latch: WZ from before */
             } else finish(c);
         } else finish(c);
         break;
@@ -757,9 +760,10 @@ static void z80_exec_step(z80_t *c)
         else if (m == 2) z80_start_mcycle(c, BUSOP_MRD, z80_pc_inc(c), 0, 0);
         else if (m == 3) {
             uint8_t b = getr(c, REG_B);         /* B-1 came in this read's T2 (wb_hooks) */
-            if (b != 0) { int8_t e = (int8_t)RB; z80_setPC(c, (uint16_t)(z80_PC(c) + e));
+            if (b != 0) { int8_t e = (int8_t)RB; uint16_t wz0 = c->rf[RFP_WZ];
+                          z80_setPC(c, (uint16_t)(z80_PC(c) + e));
                           c->rf[RFP_WZ] = z80_PC(c);
-                          z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 5); }
+                          z80_start_mcycle(c, BUSOP_INTERNAL, wz0, 0, 5); }   /* the latch: WZ from before */
             else finish(c);
         } else finish(c);
         break;
@@ -884,9 +888,8 @@ static void z80_exec_step(z80_t *c)
     case EXEC_ADC16:                          /* internal M-cycles of 4 and 3 T, as ADD; the */
     case EXEC_SBC16:                          /* sum at the first one's end, where the die has L */
         if (m == 1) z80_start_mcycle(c, BUSOP_INTERNAL, c->rf[RFP_HL], 0, 4);
-        else if (m == 2) { uint16_t hl0 = c->rf[RFP_HL];
-                           do_adc16(c, ctl->exec == EXEC_SBC16);
-                           z80_start_mcycle(c, BUSOP_INTERNAL, hl0, 0, 3); }
+        else if (m == 2) { do_adc16(c, ctl->exec == EXEC_SBC16);   /* the latch: WZ = HL+1 */
+                           z80_start_mcycle(c, BUSOP_INTERNAL, c->rf[RFP_WZ], 0, 3); }
         else finish(c);
         break;
     case EXEC_NEG:
@@ -964,9 +967,10 @@ static void z80_exec_step(z80_t *c)
             uint8_t newMem = (ctl->exec == EXEC_RRD)
                 ? (uint8_t)((mem >> 4) | ((a & 0x0F) << 4))
                 : (uint8_t)(((mem << 4) & 0xF0) | (a & 0x0F));
+            uint16_t wz0 = c->rf[RFP_WZ];    /* the internal cycle's address latch */
             c->rf[RFP_WZ] = (uint16_t)(c->rf[RFP_HL] + 1);
             c->tmpl = newMem;
-            z80_start_mcycle(c, BUSOP_INTERNAL, c->rf[RFP_HL], 0, 4);
+            z80_start_mcycle(c, BUSOP_INTERNAL, wz0, 0, 4);
         }
         else if (m == 3) z80_start_mcycle(c, BUSOP_MWR, c->rf[RFP_HL], c->tmpl, 0);
         else finish(c);
@@ -1004,7 +1008,7 @@ static void z80_exec_step(z80_t *c)
                                           & (uint8_t)(Z80_YF | Z80_XF)));
                         z80_setF(c, f);
                     }
-                    z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 5); }
+                    z80_start_mcycle(c, BUSOP_INTERNAL, (uint16_t)(z80_PC(c) + 2), 0, 5); }
                 else finish(c);
             }
             else finish(c);
@@ -1013,10 +1017,11 @@ static void z80_exec_step(z80_t *c)
             if (m == 1) z80_start_mcycle(c, BUSOP_MRD, c->rf[RFP_HL], 0, 0);
             else if (m == 2) {
                 uint16_t bc = (uint16_t)(c->rf[RFP_BC] - 1); c->rf[RFP_BC] = bc;
-                c->rf[RFP_WZ] = (uint16_t)(c->rf[RFP_WZ] + (dec ? -1 : 1));
+                uint16_t wz0 = c->rf[RFP_WZ];   /* the internal cycle's address latch */
+                c->rf[RFP_WZ] = (uint16_t)(wz0 + (dec ? -1 : 1));
                 c->rf[RFP_HL] = (uint16_t)(c->rf[RFP_HL] + (dec ? -1 : 1));
                 z80_setF(c, alu_fout);
-                z80_start_mcycle(c, BUSOP_INTERNAL, c->rf[RFP_HL], 0, 5);
+                z80_start_mcycle(c, BUSOP_INTERNAL, wz0, 0, 5);
             }
             else if (m == 3) {
                 if (rep && (c->rf[RFP_BC] != 0) && !(z80_F(c) & Z80_ZF)) {
@@ -1032,7 +1037,7 @@ static void z80_exec_step(z80_t *c)
                                           & (uint8_t)(Z80_YF | Z80_XF)));
                         z80_setF(c, f);
                     }
-                    z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 5);
+                    z80_start_mcycle(c, BUSOP_INTERNAL, (uint16_t)(z80_PC(c) + 2), 0, 5);
                 } else finish(c);
             }
             else finish(c);
@@ -1087,7 +1092,7 @@ static void z80_exec_step(z80_t *c)
                         }
                         z80_setF(c, f);
                     }
-                    z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 5); }
+                    z80_start_mcycle(c, BUSOP_INTERNAL, (uint16_t)(z80_PC(c) + 2), 0, 5); }
                 else finish(c);
             }
             else finish(c);
@@ -1141,7 +1146,7 @@ static void z80_exec_step(z80_t *c)
                         }
                         z80_setF(c, f);
                     }
-                    z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 5); }
+                    z80_start_mcycle(c, BUSOP_INTERNAL, (uint16_t)(z80_PC(c) + 2), 0, 5); }
                 else finish(c);
             }
             else finish(c);
@@ -1609,8 +1614,11 @@ void z80_phase_step(z80_t *c)
     if (hold_write_strobe) c->pins.wr_n = 0;
     /* ... except that a RESET cut in a long internal cycle's T1, with RES2
        already set as the T1 starts, forces it into an opcode-fetch-like read
-       and the bus drives the address latch (perfectz80: HL in ADD HL,rr's
-       M2) */
+       and the bus drives the address latch, m_addr there: what the die
+       loads at that T1 (perfectz80) -- HL in ADD / ADC / SBC HL,rr's first
+       internal cycle, WZ (HL+1) in their second, and WZ from before the
+       instruction changes it in JR's, DJNZ's, (IX+d)'s, CPI's and RLD's;
+       PC before the -2 in a block repeat */
     bool int_cut = c->bus_op == BUSOP_INTERNAL && c->m_len > 2 && c->t_state == 1 && c->res2;
     if ((c->bus_op == BUSOP_INTERNAL && !int_cut) || c->rst_idle ||
         (c->bus_op == BUSOP_M1 && c->t_state >= 5) || (c->bus_op == BUSOP_INTA && c->t_state >= 7))

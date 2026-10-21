@@ -170,14 +170,23 @@ module z80_execute (
             ctl_pw = 1'b1; ctl_pwi = rsel; ctl_pws = PW_IDU;
         end
     endtask
-    // repeat of a block instruction: PC <- PC-2, WZ <- PC-1, 5 internal T
+    // repeat of a block instruction: PC <- PC-2, WZ <- PC-1, 5 internal T;
+    // the address latch holds PC from before (perfectz80: a RESET cut in
+    // the T1 drives it)
     task blk_repeat; input [2:0] fsrc;
         begin
             ctl_ab = AB_REG; ctl_ri = RI_PC; ctl_inc = INC_M2; ctl_pc = PC_IDU;
             ctl_ea_pc = 1'b1; ctl_ea_d = EA_M1; ctl_wz = WZ_EA;
             wr_flags(fsrc);
-            mstart(`BUSOP_INTERNAL, AL_IDU, 4'd5);
+            mstart(`BUSOP_INTERNAL, AL_ABUS, 4'd5);
         end
+    endtask
+    // an internal M-cycle whose address latch holds WZ as it is (from
+    // before the instruction's own WZ write in JR, DJNZ, (IX+d), CPI, RLD /
+    // RRD; HL+1 in ADD HL's second) -- a RESET cut in its T1 drives it
+    // (perfectz80)
+    task int_wz; input [3:0] extra;
+        mstart(`BUSOP_INTERNAL, AL_WZ, extra);
     endtask
 
     always @* begin
@@ -239,7 +248,7 @@ module z80_execute (
         end else if (irq_seq == 2'd0 && idx_w != 2'd0 && use_disp_w && m_cycle == 3'd2
                      && eff_exec != `EXEC_LD_M_N) begin
             ctl_ea_pc = 1'b0; ctl_ea_d = EA_RB; ctl_wz = WZ_EA;
-            mstart(`BUSOP_INTERNAL, AL_EA, 4'd5);
+            int_wz(4'd5);
         end else begin
             // LD (IX+d),n: WZ = IX+d while n is read (no internal cycle; the
             // n read is 2 T longer), then the operation runs one M-cycle in
@@ -332,7 +341,7 @@ module z80_execute (
                 end
                 // the die's M2 and M3: internal M-cycles of 4 and 3 T (BUSREQ
                 // can take the bus between them; perfectz80)
-                else if (m_cycle == 3'd2) at_pair(`BUSOP_INTERNAL, RI_HLP, 4'd3);
+                else if (m_cycle == 3'd2) int_wz(4'd3);
                 else ctl_fin = 1'b1;
             end
 
@@ -388,7 +397,7 @@ module z80_execute (
                 else if (m_cycle == 3'd2) begin
                     if (eff_exec == `EXEC_JR || cc_taken) begin
                         ctl_ea_pc = 1'b1; ctl_ea_d = EA_RB; ctl_pc = PC_EA; ctl_wz = WZ_EA;
-                        mstart(`BUSOP_INTERNAL, AL_EA, 4'd5);
+                        int_wz(4'd5);
                     end else ctl_fin = 1'b1;
                 end else ctl_fin = 1'b1;
             end
@@ -398,7 +407,7 @@ module z80_execute (
                 else if (m_cycle == 3'd3) begin       // B-1 came in this read's T2
                     if (b_nz) begin
                         ctl_ea_pc = 1'b1; ctl_ea_d = EA_RB; ctl_pc = PC_EA; ctl_wz = WZ_EA;
-                        mstart(`BUSOP_INTERNAL, AL_EA, 4'd5);
+                        int_wz(4'd5);
                     end else ctl_fin = 1'b1;
                 end else ctl_fin = 1'b1;
             end
@@ -569,9 +578,9 @@ module z80_execute (
                 if (m_cycle == 3'd1) at_pair(`BUSOP_INTERNAL, RI_HL, 4'd4);   // sum at the first
                 else if (m_cycle == 3'd2) begin                               // one's end, where
                     ctl_inc = INC_P1; ctl_wz = WZ_IDU;                        // the die has L
-                    ctl_pw = 1'b1; ctl_pwi = RI_HL; ctl_pws = PW_A16;         // WZ = HL+1
-                    wr_flags(FS_A16);
-                    at_pair(`BUSOP_INTERNAL, RI_HL, 4'd3);
+                    ctl_pw = 1'b1; ctl_pwi = RI_HL; ctl_pws = PW_A16;         // WZ = HL+1,
+                    wr_flags(FS_A16);                                         // the latch's
+                    ctl_ab = AB_REG; ctl_ri = RI_HL; mstart(`BUSOP_INTERNAL, AL_IDU, 4'd3);
                 end else ctl_fin = 1'b1;
             end
             `EXEC_NEG: begin wr_byte(BW_A, BS_ALU); wr_flags(FS_ALU); ctl_fin = 1'b1; end
@@ -607,7 +616,7 @@ module z80_execute (
                 if (m_cycle == 3'd1) at_pair(`BUSOP_MRD, RI_HL, 4'd0);
                 else if (m_cycle == 3'd2) begin
                     ctl_ab = AB_REG; ctl_ri = RI_HL; ctl_inc = INC_P1; ctl_wz = WZ_IDU;  // WZ = HL+1
-                    mstart(`BUSOP_INTERNAL, AL_ABUS, 4'd4);
+                    int_wz(4'd4);
                 end else if (m_cycle == 3'd3) begin
                     // the (HL) byte is still in tmp8 and A is untouched: the
                     // ALU forms A and the flags (FLAG_RRD / FLAG_RLD), the new
@@ -638,7 +647,7 @@ module z80_execute (
                     else if (m_cycle == 3'd2) begin
                         // HL and BC stepped at M2 T1 / T2; WZ steps at M3 T1
                         wr_flags(FS_ALU);
-                        at_pair(`BUSOP_INTERNAL, RI_HL, 4'd5);
+                        int_wz(4'd5);
                     end else if (m_cycle == 3'd3) begin
                         if (aux_w[3] && bc_nz && !zf) blk_repeat(FS_BCP);
                         else ctl_fin = 1'b1;

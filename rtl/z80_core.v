@@ -679,7 +679,7 @@ module z80_core (
     z80_addr u_addr (
         .pc(r_pc), .sp(r_sp), .wz(r_wz), .hl(r_hl), .de(r_de), .bc(r_bc),
         .hlp(rf_hlp), .rp(rf_rp), .rbyte(rbyte), .a(A_cur), .i_reg(reg_i),
-        .tmp8(tmp8), .b_dec(b_dec), .a16(a16),
+        .tmp8(tmp8), .b_dec(b_dec),
         .ctl_ab(ctl_ab), .ctl_ri(ctl_ri), .ctl_inc(ctl_inc),
         .ctl_ea_pc(ctl_ea_pc), .ctl_ea_d(ctl_ea_d), .ctl_al(ctl_al),
         .abus(abus), .idu(idu), .ea(ea), .al_in(al_in)
@@ -866,9 +866,13 @@ module z80_core (
     // write-back"; cmodel wb_rule): which of this edge's writes the die makes
     // on a later edge, and on which -- due {next, m, t}: T-state t of
     // M-cycle m, or (next) of the next M1 / INTA cycle. Every F write waits
-    // for the next M1's T4 (z80_regfile); a push's first SP-1 is push_cut.
+    // for the next M1's T4 -- the block compares' and the I/O repeats' for
+    // its T2: they latch every flag before it; a push's first SP-1 is
+    // push_cut.
     reg        pw_log_lo, pw_log_hi, bw_log, sp_log;
     reg  [7:0] pw_due_lo, pw_due_hi, bw_due, sp_due;
+    wire [7:0] f_due = (eff_exec == `EXEC_BLOCK && (aux_w[2:1] == 2'd1 ||
+                        (aux_w[2] && ctl_mstart && ctl_bop == `BUSOP_INTERNAL))) ? 8'h82 : 8'h84;
     always @* begin
         pw_log_lo = 1'b0; pw_log_hi = 1'b0; bw_log = 1'b0; sp_log = 1'b0;
         pw_due_lo = 8'h00; pw_due_hi = 8'h00; bw_due = 8'h00; sp_due = 8'h00;
@@ -922,9 +926,9 @@ module z80_core (
         .pc_next(pc_next), .f_next(f_next),
         .wb_adv(wr_edge), .wb_fin(ex_edge && ctl_fin), .wb_cut(res2 && !rst_idle),
         .wb_m(m_cycle), .wb_t(t_state),
-        .wb_m1((bus_op == `BUSOP_M1) || (bus_op == `BUSOP_INTA)), .wb_inta(bus_op == `BUSOP_INTA),
+        .wb_m1((bus_op == `BUSOP_M1) || (bus_op == `BUSOP_INTA)),
         .pw_log_lo(pw_log_lo), .pw_log_hi(pw_log_hi), .pw_due_lo(pw_due_lo), .pw_due_hi(pw_due_hi),
-        .bw_log(bw_log), .bw_due(bw_due), .f_log(1'b1), .sp_log(sp_log), .sp_due(sp_due)
+        .bw_log(bw_log), .bw_due(bw_due), .f_log(1'b1), .f_due(f_due), .sp_log(sp_log), .sp_due(sp_due)
     );
 
     // =======================================================================
