@@ -627,6 +627,9 @@ PAD_SETS = {  # spice/pads/<pdk>/ (spice-pads.yml): (name, its pads)
     'ihp-sg13g2': ('IHP SG13G2', "sg13g2_io's 3.3 V pads"),
 }
 CHIP_CORNERS = ('tt', 'ss', 'ff')
+# the corner switch over the transistor-level figures, in its order (chip.py's and nmi.py's corners)
+SWITCH_CORNERS = (('ss', 'Slow', '4.5 V, 125 °C'), ('tt', 'Typical', '5.0 V, 25 °C'),
+                  ('ff', 'Fast', '5.5 V, −40 °C'))
 CHIP_FIGURES = (('fetch', 'opcode fetch (M1)'), ('mread', 'memory read'), ('mwrite', 'memory write'),
                 ('iowrite', 'I/O write'), ('ioread', 'I/O read'))
 
@@ -655,10 +658,43 @@ def spice_helpers(base):
     return there, fig, grid, links
 
 
-def whole_chip(base, pdk, all_corners=False, how='hours, so run now and then and committed'):
+def switched(there, slots, default='tt'):
+    """Figures that change corner in place: a switch (slow, typical, fast) over a grid whose every image
+    holds each corner's figure (data-<corner>, spice/...); SWITCH_JS swaps them, every switch on the page
+    together. slots: [(caption, wide, {corner: path under spice/})]. One corner: no switch."""
+    e = html.escape
+    have = [c for c, *_ in SWITCH_CORNERS if any(there(ps.get(c, '')) for _, _, ps in slots)]
+    if not have:
+        return ''
+    default = default if default in have else have[0]
+    figs = []
+    for caption, wide, ps in slots:
+        ok = {c: p for c, p in ps.items() if c in have and there(p)}
+        if not ok:
+            continue
+        first = ok.get(default) or next(iter(ok.values()))
+        data = ''.join(f' data-{c}="spice/{p}"' for c, p in ok.items())
+        attrs = (' class="wide"' if wide else '') + ('' if default in ok else ' hidden')
+        figs.append(f'<figure{attrs}><a href="spice/{first}"><img class="sw" src="spice/{first}"{data} '
+                    f'alt="{e(caption)}" loading="lazy"></a><figcaption>{caption}, '
+                    f'<span class="cname">{default}</span></figcaption></figure>')
+    grid = f'<div class="figs">{"".join(figs)}</div>'
+    if len(have) < 2:
+        return grid
+    buttons = []
+    for c, name, cond in SWITCH_CORNERS:
+        if c in have:
+            on = c == default
+            buttons.append(f'<button type="button" role="radio" data-corner="{c}" aria-checked="{"true" if on else "false"}"'
+                           f'{"" if on else " tabindex=-1"}>{name}<span class="cv">{c} · {cond}</span></button>')
+    return (f'<div class="cornerset"><div class="cornersw" role="radiogroup" aria-label="Corner">'
+            f'{"".join(buttons)}</div>{grid}</div>')
+
+
+def whole_chip(base, pdk, how='hours, so run now and then and committed'):
     """A chip's runs at transistor level (chip.py's results.json and figures, in base/chip/<pdk>/: tt's,
     the other corners' in <corner>/): its pins against the RTL and the AC parameters at every corner, and
-    tt's figures -- every corner's with all_corners. how: where the runs come from."""
+    the figures, under a switch between the corners. how: where the runs come from."""
     e = html.escape
     there, fig, grid, links = spice_helpers(base)
     code = CODE_SPICE
@@ -698,7 +734,7 @@ def whole_chip(base, pdk, all_corners=False, how='hours, so run now and then and
     for r, rd in runs:
         ps = r.get('parameters') or []
         figs = links([(f'{rd}/program.svg', 'program')] + [(f'{rd}/{k}.svg', label) for k, label in CHIP_FIGURES])
-        rows.append(f"<tr><td class=\"nw\"><strong>{e(r.get('corner', ''))}</strong></td><td>{mismatches(r)}</td>"
+        rows.append(f"<tr data-col=\"{e(r.get('corner', ''))}\"><td class=\"nw\"><strong>{e(r.get('corner', ''))}</strong></td><td>{mismatches(r)}</td>"
                     f"<td>{sum(p['pass'] for p in ps)} of {len(ps)}</td><td>{margin(r)}</td><td>{figs}</td></tr>")
     # every parameter at every corner, in the first run's order
     by = [{p['id']: p for p in r.get('parameters') or []} for r, _ in runs]
@@ -710,10 +746,12 @@ def whole_chip(base, pdk, all_corners=False, how='hours, so run now and then and
         return s if p['pass'] else f'{s} <strong>fails</strong>'
     params = res.get('parameters') or []
     met = sum(all(c.get(p['id'], {}).get('pass', True) for c in by) for p in params)
-    heads = ''.join(f"<th>{e(r.get('corner', ''))}: SPICE (cycles)</th>" for r, _ in runs)
+    heads = ''.join(f"<th data-col=\"{e(r.get('corner', ''))}\">{e(r.get('corner', ''))}: SPICE (cycles)</th>"
+                    for r, _ in runs)
+    cs = [e(r.get('corner', '')) for r, _ in runs]
 
     def prow(p):
-        cells = ''.join(f'<td>{cell(c.get(p["id"]))}</td>' for c in by)
+        cells = ''.join(f'<td data-col="{c}">{cell(b.get(p["id"]))}</td>' for c, b in zip(cs, by))
         return (f"<tr><td>{p['id']}</td><td>{e(p['symbol'])}</td><td>{'≤' if p['bound'] == 'max' else '≥'} "
                 f"{p['limit']:g} ns</td>{cells}</tr>")
     trs = ''.join(prow(p) for p in params)
@@ -722,12 +760,11 @@ over every cycle that has them</summary><div class="scroll"><table>
 <thead><tr><th>#</th><th>Parameter</th><th>Limit</th>{heads}</tr></thead>
 <tbody>{trs}</tbody></table></div></details>""" if params else '')
 
-    def figures_of(r, rd):   # one corner's: the whole run, then each cycle as the manual draws it
-        c = e(r.get('corner', ''))
-        return ([fig(f'{rd}/program.svg', f"power-up, RESET, and the program at 4 MHz, {c}", wide=True)]
-                + [fig(f'{rd}/{k}.svg', label + (f', {c}' if all_corners else '')) for k, label in CHIP_FIGURES])
-    g = grid(*[f for r, rd in (runs if all_corners else runs[:1]) for f in figures_of(r, rd)])
-    shown = "every corner's" if all_corners else f"{e(res.get('corner', ''))}'s"
+    # the whole run, then each cycle as the manual draws it; every corner's, switched in place
+    g = switched(there, [(caption, k == 'program', {r.get('corner'): f'{rd}/{k}.svg' for r, rd in runs})
+                         for k, caption in [('program', 'power-up, RESET, and the program at 4 MHz')] + list(CHIP_FIGURES)])
+    shown = ("each corner's: the switch over them changes the corner in place, the dimensions too"
+             if len(runs) > 1 else f"{e(res.get('corner', ''))}'s")
     name = PDKS.get(pdk, pdk)
     corners = ', '.join(e(r.get('corner', '')) for r, _ in runs)
     return (f"""<h3 class="sec">The whole chip, {e(name)}</h3>
@@ -749,9 +786,9 @@ draws them; the figures below are {shown}.</p>
 
 
 def transistor(src, out):
-    """The site's transistor-level section, over <src>/spice/ (copied to <out>/spice/): the pads
-    (spice-pads.yml's asic/spice/pads.py), the GF180 chip's NMI catcher (asic/spice/nmi.py, in its ASIC
-    job) and the whole chip (asic/spice/chip.py's committed run, as asic() copies it)."""
+    """The site's transistor-level section, over <src>/spice/ (copied to <out>/spice/): the whole chip
+    (asic/spice/chip.py's committed run, as asic() copies it), the GF180 chip's NMI catcher
+    (asic/spice/nmi.py, in its ASIC job) and the pads (spice-pads.yml's asic/spice/pads.py)."""
     if not os.path.isdir(os.path.join(src, 'spice')):
         return ''
     base = os.path.join(out, 'spice')
@@ -779,8 +816,9 @@ def transistor(src, out):
         pads.append(f"""<p class="figtitle"><strong>{e(name)}</strong> <span class="muted">{e(what)} · {more}
 {'· Liberty: ' + liberty if liberty else ''}</span></p>
 {g}""")
+    pad_part = []
     if pads:
-        parts.append(f"""<h3 class="sec">The pads</h3>
+        pad_part.append(f"""<h3 class="sec">The pads</h3>
 <p class="muted">Every pad cell the chips use, from the PDK's own netlist with its transistor models, at the
 corners the chips are signed off at (<a href="{code}/pads.py">pads.py</a>): the outputs into 1–250 pF, the
 data bus's tri-state pads turning on and floating, the inputs on edges up to 30 ns, and the Schmitt-trigger
@@ -800,12 +838,13 @@ replace the PDKs' own in the chips' pin-timing checks
             a = cases.get('A', {})
             caught = sum(v['set_ns'] is not None and v['clear_after_clk_ns'] is not None for v in cases.values())
             figs = links([(f'nmi/nmi_{c}.svg', 'all')] + [(f'nmi/nmi_{k}_{c}.svg', k) for k in cases])
-            rows.append(f"<tr><td class=\"nw\"><strong>{c}</strong> <span class=\"muted\">{m.get('volts', '')} V, "
+            rows.append(f"<tr data-col=\"{c}\"><td class=\"nw\"><strong>{c}</strong> <span class=\"muted\">{m.get('volts', '')} V, "
                         f"{m.get('temp_c', '')} °C</span></td><td>{caught} of {len(cases)}</td>"
                         f"<td>{ns(a.get('set_ns'))}</td><td>{ns(a.get('clear_after_clk_ns'))}</td>"
                         f"<td>{ns(a.get('held_low_ns'))}</td><td>{figs}</td></tr>")
-        g = grid(fig(f'nmi/nmi_{main_c}.svg', f'the six cases, {main_c}', wide=True),
-                 *[fig(f'nmi/nmi_{k}_{main_c}.svg', f'{k}: {e(about.get(k, ""))}') for k in nmi[main_c]['cases']])
+        g = switched(there, [('the six cases', True, {c: f'nmi/nmi_{c}.svg' for c in corners})]
+                     + [(f'{k}: {e(about.get(k, ""))}', False, {c: f'nmi/nmi_{k}_{c}.svg' for c in corners})
+                        for k in nmi[main_c]['cases']], default=main_c)
         parts.append(f"""<h3 class="sec">The NMI pulse catcher</h3>
 <p class="muted">The NMOS Z80 takes an NMI pulse of any width -- TwNMI, 80 ns at 4 MHz, is under half a
 clock -- not only one a clock edge sees: a flip-flop clocked by the NMI pin itself catches it and holds it
@@ -823,20 +862,23 @@ extracts them from the PDK's layouts, on the routed chip's wiring -- and run at 
 </table></div>
 {g}""")
 
+    chips = []
     for pdk in sorted(os.listdir(os.path.join(base, 'chip'))) if os.path.isdir(os.path.join(base, 'chip')) else []:
         if (chip := whole_chip(base, pdk)):
             ci = (f'''<p class="muted">The run on GitHub's runners, every corner's figures:
 <a href="transistor/">transistor/</a> (<a href="{SERVER}/{REPO}/actions/workflows/transistor.yml">transistor.yml</a>,
 by hand).</p>''' if os.path.isfile(os.path.join(out, 'transistor', 'index.html')) else '')
-            parts.append(chip + ci)
+            chips.append(chip + ci)
 
+    parts = chips + parts + pad_part
     if not parts:
         return ''
     return f"""<h2 id="transistor">At transistor level</h2>
 <p class="muted">The timing above is OpenSTA's, from the PDKs' Liberty models. Here the chips run as
 transistors, in ngspice with the PDKs' own netlists and transistor models, against the NMOS Z80
 datasheet's test conditions (<a href="{SERVER}/{REPO}/tree/main/asic/spice">asic/spice</a>).</p>
-{chr(10).join(parts)}"""
+{chr(10).join(parts)}
+{SWITCH_JS}"""
 
 
 def ci_page(src, out):
@@ -858,7 +900,7 @@ def ci_page(src, out):
     commit = f'<a href="{SERVER}/{REPO}/commit/{sha}">{e(meta.get("ref", "main"))} @ {sha[:7]}</a>' if sha else ''
     gds = (f', the layout from <a href="{SERVER}/{REPO}/actions/runs/{meta["targets_run"]}">Targets run '
            f'{meta["targets_run"]}</a>' if meta.get('targets_run') else '')
-    chips = [whole_chip(base, pdk, all_corners=True,
+    chips = [whole_chip(base, pdk,
                         how=f'on GitHub\'s runners by <a href="{SERVER}/{REPO}/blob/main/.github/workflows/'
                             f'transistor.yml">transistor.yml</a>, each corner in windows of one job each')
              for pdk in sorted(os.listdir(os.path.join(base, 'chip')))]
@@ -880,6 +922,7 @@ def ci_page(src, out):
 <footer>transistor.yml runs by hand (Actions, "Transistor", Run workflow); its artifact transistor-gf180mcu
 stays on the <a href="{SERVER}/{REPO}/actions/workflows/transistor.yml">Actions</a> tab for 90 days.</footer>
 </main>
+{SWITCH_JS}
 </body>
 </html>
 """
@@ -942,7 +985,73 @@ th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--li
 th { color: var(--muted); font-weight: 600; font-size: 13px; white-space: nowrap; }
 td a, td.nw { white-space: nowrap; }
 footer { color: var(--muted); font-size: 13px; margin-top: 36px; }
+[hidden] { display: none !important; }
+.cornerset { margin: 8px 0 18px; }
+.cornerset .figs { margin: 0; }
+.cornersw { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 0;
+  background: var(--bg); }
+.cornersw button { font: inherit; font-size: 14px; padding: 4px 12px; border: 1px solid var(--line);
+  border-radius: 999px; background: var(--card); color: var(--fg); cursor: pointer; }
+.cornersw button[aria-checked="true"] { background: var(--link); border-color: var(--link); color: var(--bg); }
+.cornersw button:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+.cornersw .cv { margin-left: 7px; font-size: 12px; opacity: .8; }
+tr.sel > td, th.sel, td.sel { background: color-mix(in srgb, var(--link) 10%, var(--card)); }
 '''
+
+# the corner switch (switched()): every switch on the page shows one corner -- its figures' images
+# swapped in place, its rows and columns in the tables marked; arrow keys step through the corners
+SWITCH_JS = '''<script>
+(function () {
+  var groups = document.querySelectorAll('.cornersw');
+  if (!groups.length) return;
+  function pick(c) {
+    document.querySelectorAll('.cornersw button').forEach(function (b) {
+      var on = b.getAttribute('data-corner') === c;
+      b.setAttribute('aria-checked', on ? 'true' : 'false');
+      b.tabIndex = on ? 0 : -1;
+    });
+    document.querySelectorAll('img.sw').forEach(function (img) {
+      var p = img.getAttribute('data-' + c), f = img.closest('figure');
+      f.hidden = !p;
+      if (p && img.getAttribute('src') !== p) { img.setAttribute('src', p); img.parentNode.setAttribute('href', p); }
+    });
+    document.querySelectorAll('.cname').forEach(function (n) { n.textContent = c; });
+    document.querySelectorAll('[data-col]').forEach(function (n) {
+      n.classList.toggle('sel', n.getAttribute('data-col') === c);
+    });
+  }
+  var loaded = false;
+  function preload() {   // every corner's figures, so the first switch is instant too
+    if (loaded) return;
+    loaded = true;
+    document.querySelectorAll('img.sw').forEach(function (img) {
+      ['ss', 'tt', 'ff'].forEach(function (c) {
+        var p = img.getAttribute('data-' + c);
+        if (p) new Image().src = p;
+      });
+    });
+  }
+  groups.forEach(function (g) {
+    g.addEventListener('pointerenter', preload);
+    g.addEventListener('focusin', preload);
+    g.addEventListener('click', function (ev) {
+      var b = ev.target.closest('button');
+      if (b) pick(b.getAttribute('data-corner'));
+    });
+    g.addEventListener('keydown', function (ev) {
+      var bs = Array.prototype.slice.call(g.querySelectorAll('button')), i = bs.indexOf(document.activeElement);
+      var d = {ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1}[ev.key];
+      if (i < 0 || !d) return;
+      ev.preventDefault();
+      var b = bs[(i + d + bs.length) % bs.length];
+      pick(b.getAttribute('data-corner'));
+      b.focus();
+    });
+  });
+  var on = document.querySelector('.cornersw [aria-checked="true"]');
+  if (on) pick(on.getAttribute('data-corner'));
+})();
+</script>'''
 
 
 def site(src, out):
