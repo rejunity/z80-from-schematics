@@ -1,4 +1,7 @@
 /* ============================================================================
+ * SPDX-FileCopyrightText: 2026 ReJ aka Renaldas Zioma
+ * SPDX-License-Identifier: MIT
+ *
  * z80_sim.c - system model: external memory + I/O responding to the core bus.
  * ==========================================================================*/
 #include <string.h>

@@ -1,4 +1,7 @@
 /* ============================================================================
+ * SPDX-FileCopyrightText: 2026 ReJ aka Renaldas Zioma
+ * SPDX-License-Identifier: MIT
+ *
  * z80_pla.c - instruction decode PLA (docs/pla.md).
  *
  * Decodes (prefix_state, opcode) into a control word using the standard

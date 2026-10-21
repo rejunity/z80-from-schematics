@@ -1,4 +1,7 @@
 /* ============================================================================
+ * SPDX-FileCopyrightText: 2026 ReJ aka Renaldas Zioma
+ * SPDX-License-Identifier: MIT
+ *
  * z80_timing.c - the Z80 timing module: drive external pins as a pure
  * combinational function of the current timing state.
  *
