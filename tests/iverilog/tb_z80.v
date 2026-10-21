@@ -21,7 +21,8 @@
 
 module tb_z80;
     reg         clk = 1'b0;
-    reg         reset_n = 1'b0;
+    reg         por_n = 1'b0;           // power-on reset
+    reg         reset_n = 1'b0;         // the RESET pin
     reg         wait_n = 1'b1, int_n = 1'b1, nmi_n = 1'b1, busreq_n = 1'b1;
     wire [7:0]  data_in;
 
@@ -35,7 +36,7 @@ module tb_z80;
     reg  [7:0]  mem [0:65535];
 
     z80_top dut (
-        .clk(clk), .reset_n(reset_n),
+        .clk(clk), .por_n(por_n), .reset_n(reset_n),
         .addr(addr), .data_in(data_in), .data_out(data_out), .data_drive(data_drive),
         .m1_n(m1_n), .mreq_n(mreq_n), .iorq_n(iorq_n), .rd_n(rd_n), .wr_n(wr_n),
         .rfsh_n(rfsh_n), .halt_n(halt_n), .busack_n(busack_n),
@@ -68,7 +69,7 @@ module tb_z80;
     // scenario programs that the C tracegen + perfectz80_runner consume.
     integer nmi_lo, nmi_hi, int_lo, int_hi, wait_lo, wait_hi;
     integer busreq_lo, busreq_hi, reset_lo, reset_hi;
-    reg [1023:0] progf;
+    reg [8*512-1:0] progf;          // paths up to 512 characters
 
     task dump;
         $display("%0d %0d %0d %04X %02X %02X %0d %0d %0d %0d %0d %0d %0d %0d",
@@ -120,15 +121,18 @@ module tb_z80;
         for (i = 0; i < 65536; i = i + 1) mem[i] = 8'h00;
         $readmemh(progf, mem);
 
-        // Hold reset across a couple of T-states, release it in the
-        // clock-low half (so the next edge the DUT sees is a rising edge),
-        // then the first rising edge ENTERS T1.P of the M1 fetch at PC=0 --
+        // Power-on: por_n, then RESET held across a couple of T-states and
+        // released in a clock-low half. The core samples RESET on rising
+        // edges and enters T1.P of the M1 fetch at PC=0 on the third one --
         // that is trace line 0, matching the C model's z80_init() state.
-        reset_n = 1'b0;
+        por_n = 1'b0; reset_n = 1'b0;
+        @(negedge clk); #1 por_n = 1'b1;
         repeat (2) @(negedge clk);
         #1 reset_n = 1'b1;
+        @(posedge clk); @(posedge clk);
         events(0);
         @(posedge clk); #1;
+        if (m1_n !== 1'b0) $display("tb_z80: no M1 at trace line 0");
         dbg_phi = 1'b0;
         service;
         dump;                                 // line 0 = T1.P

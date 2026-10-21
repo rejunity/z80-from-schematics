@@ -7,9 +7,17 @@
                                and the chip: the GDS, a picture of it, a map
                                of the cells by Z80 block, and a map of the
                                core's cells by kind or of the chip's clock
-                               and power (needs gdstk, numpy and Pillow)
+                               and power (needs gdstk, numpy and Pillow);
+                               for a chip simulated at transistor level
+                               (asic/spice/chip/<pdk>/), its pins as a logic
+                               analyser shows them, and all of that
+                               simulation's figures in spice/chip/<pdk>/
+                               (other corners' in spice/chip/<pdk>/<corner>/)
                                + rz80-<pdk>.json
-  dist.py site <in> <out>      index.html over everything fpga/asic made
+  dist.py site <in> <out>      index.html over everything fpga/asic made,
+                               and over <in>/spice/: the pads and the NMI
+                               catcher at transistor level (spice/pads/,
+                               spice/nmi/; targets.yml)
   dist.py summary <in> <url>   job-summary markdown: the layout renders as
                                served by the site deployed at <url>
 
@@ -44,6 +52,7 @@ PDKS = {
     'sky130':     'SkyWater SKY130',
     'ihp-sg13g2': 'IHP SG13G2',
     'gf180mcu':   'GlobalFoundries GF180MCU',
+    'gf180mcu-9t': 'GlobalFoundries GF180MCU, 9-track cells',
 }
 # site and summary order: each PDK's core, then the chips with pad rings
 ENTRIES = list(PDKS) + [f'{p}-chip' for p in PDKS]
@@ -65,6 +74,7 @@ STACKS = {  # (GDS layer, datatype, style) of the drawing layers, bottom to top
     'gf180mcu':   [(22, 0, 'diff'), (30, 0, 'poly'), (34, 0, 'm1'), (36, 0, 'm2'), (42, 0, 'm3'),
                    (46, 0, 'm4'), (81, 0, 'm5'), (53, 0, 'top1')],
 }
+STACKS['gf180mcu-9t'] = STACKS['gf180mcu']
 BACKGROUND = (13, 17, 23)
 # Cell map: every standard-cell instance (a reference in the GDS) as its
 # outline, coloured by the kind of library cell. First match wins, on the
@@ -560,6 +570,26 @@ def asic(pdk, out):
         pads = sum(len(cfg.get(side) or []) for side in ('PAD_SOUTH', 'PAD_EAST', 'PAD_NORTH', 'PAD_WEST'))
         collect(run, f'{pdk}-chip', f'{PDKS.get(pdk, pdk)} chip, {pads} pads', STACKS[pdk], out,
                 {'readme': readme, 'pads': pads}, macro_runs={'z80_top': core} if core else None)
+        # its pins, as asic/spice/chip.py simulated them at transistor level (committed: hours of ngspice)
+        pins = os.path.join('asic', 'spice', 'chip', pdk, 'program-dark.svg')
+        if os.path.isfile(pins):
+            shutil.copy(pins, os.path.join(out, f'rz80-{pdk}-chip-pins.svg'))
+            info = json.load(open(os.path.join(out, f'rz80-{pdk}-chip.json')))
+            info['files'].append(f'rz80-{pdk}-chip-pins.svg')
+            json.dump(info, open(os.path.join(out, f'rz80-{pdk}-chip.json'), 'w'), indent=1)
+            # and all of that run's figures, for the site's transistor-level section
+            res = os.path.join(os.path.dirname(pins), 'results.json')
+            if os.path.isfile(res):
+                dst = os.path.join(out, 'spice', 'chip', pdk)
+                os.makedirs(dst, exist_ok=True)
+                for f in json.load(open(res))['figures'] + ['results.json']:
+                    shutil.copy(os.path.join(os.path.dirname(pins), f), dst)
+                # the other corners' runs, committed in <corner>/ beside it
+                for cres in sorted(glob.glob(os.path.join(os.path.dirname(pins), '*', 'results.json'))):
+                    cdst = os.path.join(dst, os.path.basename(os.path.dirname(cres)))
+                    os.makedirs(cdst, exist_ok=True)
+                    for f in json.load(open(cres))['figures'] + ['results.json']:
+                        shutil.copy(os.path.join(os.path.dirname(cres), f), cdst)
 
 
 def load(src):
@@ -592,16 +622,505 @@ def asic_facts(p):
     return facts
 
 
+PAD_SETS = {  # spice/pads/<pdk>/ (spice-pads.yml): (name, its pads)
+    'gf180mcu': ('GF180', "gf180mcu_fd_io's 5 V pads"),
+    'ihp-sg13g2': ('IHP SG13G2', "sg13g2_io's 3.3 V pads"),
+}
+CHIP_CORNERS = ('tt', 'ss', 'ff')
+# the corner switch over the transistor-level figures, in its order (chip.py's and nmi.py's corners)
+SWITCH_CORNERS = (('ss', 'Slow', '4.5 V, 125 °C'), ('tt', 'Typical', '5.0 V, 25 °C'),
+                  ('ff', 'Fast', '5.5 V, −40 °C'))
+CHIP_FIGURES = (('fetch', 'opcode fetch (M1)'), ('mread', 'memory read'), ('mwrite', 'memory write'),
+                ('iowrite', 'I/O write'), ('ioread', 'I/O read'))
+
+
+CODE_SPICE = f'{SERVER}/{REPO}/blob/main/asic/spice'
+
+
+def spice_helpers(base):
+    """there / fig / grid / links over a page's spice/ directory (base), linked as spice/..."""
+    e = html.escape
+    there = lambda p: os.path.isfile(os.path.join(base, p))
+
+    def fig(path, caption, wide=False):
+        if not there(path):
+            return ''
+        cls = ' class="wide"' if wide else ''
+        return (f'<figure{cls}><a href="spice/{path}"><img src="spice/{path}" alt="{e(caption)}" loading="lazy"></a>'
+                f'<figcaption>{caption}</figcaption></figure>')
+
+    def grid(*figs, two=False):   # one figure a row, at a readable size; two for thumbnails
+        figs = [f for f in figs if f]
+        return f'<div class="figs{" two" if two else ""}">{"".join(figs)}</div>' if figs else ''
+
+    def links(items):
+        return ' · '.join(f'<a href="spice/{p}">{label}</a>' for p, label in items if there(p))
+    return there, fig, grid, links
+
+
+def switched(there, slots, default='tt'):
+    """Figures that change corner in place: a switch (slow, typical, fast) over a grid whose every image
+    holds each corner's figure (data-<corner>, spice/...); SWITCH_JS swaps them, every switch on the page
+    together. slots: [(caption, wide, {corner: path under spice/})]. One corner: no switch."""
+    e = html.escape
+    have = [c for c, *_ in SWITCH_CORNERS if any(there(ps.get(c, '')) for _, _, ps in slots)]
+    if not have:
+        return ''
+    default = default if default in have else have[0]
+    figs = []
+    for caption, wide, ps in slots:
+        ok = {c: p for c, p in ps.items() if c in have and there(p)}
+        if not ok:
+            continue
+        first = ok.get(default) or next(iter(ok.values()))
+        data = ''.join(f' data-{c}="spice/{p}"' for c, p in ok.items())
+        attrs = (' class="wide"' if wide else '') + ('' if default in ok else ' hidden')
+        figs.append(f'<figure{attrs}><a href="spice/{first}"><img class="sw" src="spice/{first}"{data} '
+                    f'alt="{e(caption)}" loading="lazy"></a><figcaption>{caption}, '
+                    f'<span class="cname">{default}</span></figcaption></figure>')
+    grid = f'<div class="figs">{"".join(figs)}</div>'
+    if len(have) < 2:
+        return grid
+    buttons = []
+    for c, name, cond in SWITCH_CORNERS:
+        if c in have:
+            on = c == default
+            buttons.append(f'<button type="button" role="radio" data-corner="{c}" aria-checked="{"true" if on else "false"}"'
+                           f'{"" if on else " tabindex=-1"}>{name}<span class="cv">{c} · {cond}</span></button>')
+    return (f'<div class="cornerset"><div class="cornersw" role="radiogroup" aria-label="Corner">'
+            f'{"".join(buttons)}</div>{grid}</div>')
+
+
+def whole_chip(base, pdk, how='hours, so run now and then and committed'):
+    """A chip's runs at transistor level (chip.py's results.json and figures, in base/chip/<pdk>/: tt's,
+    the other corners' in <corner>/): its pins against the RTL and the AC parameters at every corner, and
+    the figures, under a switch between the corners. how: where the runs come from."""
+    e = html.escape
+    there, fig, grid, links = spice_helpers(base)
+    code = CODE_SPICE
+    ns = lambda x: '–' if x is None else f'{x:.1f} ns'
+    d = f'chip/{pdk}'
+    if not there(f'{d}/results.json'):
+        return ''
+    # tt's run in chip/<pdk>/, the other corners' in chip/<pdk>/<corner>/
+    runs = [(json.load(open(os.path.join(base, d, 'results.json'))), d)]
+    runs += [(json.load(open(p)), f'{d}/{os.path.basename(os.path.dirname(p))}')
+             for p in sorted(glob.glob(os.path.join(base, d, '*', 'results.json')))]
+    runs.sort(key=lambda r: CHIP_CORNERS.index(r[0].get('corner')) if r[0].get('corner') in CHIP_CORNERS else 9)
+    res = runs[0][0]
+
+    def mismatches(r):
+        mism = r.get('functional_mismatches') or []
+        if not mism:  # [clock edge (ns), pin, the RTL's value(, the transistors')]
+            return '0'
+        more = ', ...' if len(mism) > 6 else ''
+        return f"<strong>{len(mism)}</strong> ({', '.join(f'{m[1]} at {float(m[0]):.0f} ns' for m in mism[:6])}{more})"
+
+    def spice(r):   # the range over every cycle, and edges the RTL makes that the pins did not
+        miss = len(r.get('missing_at_ns') or [])
+        rng = (f"{r['spice_min']:.1f} – {r['spice_max']:.1f} ns <span class=\"muted\">({r['n']})</span>"
+               if r['n'] else '–')
+        return rng + (f" <strong>+ {miss} missing</strong>" if miss else '')
+
+    def margin(r):  # the parameter closest to its limit, over every cycle
+        ps = [p for p in r.get('parameters') or [] if p['n']]
+        if not ps:
+            return '–'
+        gap = lambda p: p['limit'] - p['spice_max'] if p['bound'] == 'max' else p['spice_min'] - p['limit']
+        p = min(ps, key=gap)
+        return f"{gap(p):.1f} ns <span class=\"muted\">{e(p['symbol'])}</span>"
+
+    rows = []
+    for r, rd in runs:
+        ps = r.get('parameters') or []
+        figs = links([(f'{rd}/program.svg', 'program')] + [(f'{rd}/{k}.svg', label) for k, label in CHIP_FIGURES])
+        rows.append(f"<tr data-col=\"{e(r.get('corner', ''))}\"><td class=\"nw\"><strong>{e(r.get('corner', ''))}</strong></td><td>{mismatches(r)}</td>"
+                    f"<td>{sum(p['pass'] for p in ps)} of {len(ps)}</td><td>{margin(r)}</td><td>{figs}</td></tr>")
+    # every parameter at every corner, in the first run's order
+    by = [{p['id']: p for p in r.get('parameters') or []} for r, _ in runs]
+
+    def cell(p):
+        if not p:
+            return '–'
+        s = spice(p) + (f" <span class=\"muted\">STA {p['sta']:.1f}</span>" if p.get('sta') is not None else '')
+        return s if p['pass'] else f'{s} <strong>fails</strong>'
+    params = res.get('parameters') or []
+    met = sum(all(c.get(p['id'], {}).get('pass', True) for c in by) for p in params)
+    heads = ''.join(f"<th data-col=\"{e(r.get('corner', ''))}\">{e(r.get('corner', ''))}: SPICE (cycles)</th>"
+                    for r, _ in runs)
+    cs = [e(r.get('corner', '')) for r, _ in runs]
+
+    def prow(p):
+        cells = ''.join(f'<td data-col="{c}">{cell(b.get(p["id"]))}</td>' for c, b in zip(cs, by))
+        return (f"<tr><td>{p['id']}</td><td>{e(p['symbol'])}</td><td>{'≤' if p['bound'] == 'max' else '≥'} "
+                f"{p['limit']:g} ns</td>{cells}</tr>")
+    trs = ''.join(prow(p) for p in params)
+    table = (f"""<details><summary>The datasheet's AC parameters: {met} of {len(params)} met at every corner,
+over every cycle that has them</summary><div class="scroll"><table>
+<thead><tr><th>#</th><th>Parameter</th><th>Limit</th>{heads}</tr></thead>
+<tbody>{trs}</tbody></table></div></details>""" if params else '')
+
+    # the whole run, then each cycle as the manual draws it; every corner's, switched in place
+    g = switched(there, [(caption, k == 'program', {r.get('corner'): f'{rd}/{k}.svg' for r, rd in runs})
+                         for k, caption in [('program', 'power-up, RESET, and the program at 4 MHz')] + list(CHIP_FIGURES)])
+    shown = ("each corner's: the switch over them changes the corner in place, the dimensions too"
+             if len(runs) > 1 else f"{e(res.get('corner', ''))}'s")
+    name = PDKS.get(pdk, pdk)
+    corners = ', '.join(e(r.get('corner', '')) for r, _ in runs)
+    return (f"""<h3 class="sec">The whole chip, {e(name)}</h3>
+<p class="muted">The chip's layout extracted with Magic to its transistors and their wiring, and run in
+ngspice at each corner ({corners}): power-up, RESET, and a short program
+-- a memory read, a memory write, an I/O write and read -- at 4 MHz with 15 ns edges, its outputs into
+100 pF (<a href="{code}/chip.py">chip.py</a>; {how}). Its pins are
+checked against the RTL at every clock edge after RESET, and the cycles measured as the Z80 manual
+draws them; the figures below are {shown}.</p>
+<div class="scroll"><table>
+<thead><tr><th>Corner</th><th>Pins against the RTL: mismatches</th><th>AC parameters met</th>
+<th>Closest to its limit</th><th>Figures</th></tr></thead>
+<tbody>
+{chr(10).join(rows)}
+</tbody>
+</table></div>
+{table}
+{g}""")
+
+
+def transistor(src, out):
+    """The site's transistor-level section, over <src>/spice/ (copied to <out>/spice/): the whole chip
+    (asic/spice/chip.py's committed run, as asic() copies it), the GF180 chip's NMI catcher
+    (asic/spice/nmi.py, in its ASIC job) and the pads (spice-pads.yml's asic/spice/pads.py)."""
+    if not os.path.isdir(os.path.join(src, 'spice')):
+        return ''
+    base = os.path.join(out, 'spice')
+    shutil.copytree(os.path.join(src, 'spice'), base, dirs_exist_ok=True)
+    e = html.escape
+    there, fig, grid, links = spice_helpers(base)
+    code = CODE_SPICE
+    ns = lambda x: '–' if x is None else f'{x:.1f} ns'
+    parts = []
+
+    pads = []
+    for pdk, (name, what) in PAD_SETS.items():
+        d = f'pads/{pdk}'
+        g = grid(fig(f'{d}/out.svg', 'outputs: edges into 1–250 pF, and their drive'),
+                 fig(f'{d}/tristate.svg', 'the data bus: turning on, and floating'),
+                 fig(f'{d}/in.svg', 'inputs: pin to core on edges up to 30 ns, and where they switch'),
+                 fig(f'{d}/clk_reset.svg', 'CLK and RESET: the Schmitt-trigger input'), two=True)
+        if not g:
+            continue
+        libs = [(f'{d}/{os.path.basename(f)}', re.sub(r'^(gf180mcu_fd_io__|sg13g2_io_)', '', os.path.basename(f)[:-4]))
+                for f in sorted(glob.glob(os.path.join(base, d, '*.lib')))]
+        more = links([(f'{d}/summary.txt', 'summary'), (f'{d}/delay_vs_load.svg', 'delay vs load'),
+                      (f'{d}/inputs.svg', 'inputs vs edge'), (f'{d}/waveforms.svg', 'waveforms'), (f'{d}/pads.json', 'pads.json')])
+        liberty = ', '.join(f'<a href="spice/{p}">{e(label)}</a>' for p, label in libs)
+        pads.append(f"""<p class="figtitle"><strong>{e(name)}</strong> <span class="muted">{e(what)} · {more}
+{'· Liberty: ' + liberty if liberty else ''}</span></p>
+{g}""")
+    pad_part = []
+    if pads:
+        pad_part.append(f"""<h3 class="sec">The pads</h3>
+<p class="muted">Every pad cell the chips use, from the PDK's own netlist with its transistor models, at the
+corners the chips are signed off at (<a href="{code}/pads.py">pads.py</a>): the outputs into 1–250 pF, the
+data bus's tri-state pads turning on and floating, the inputs on edges up to 30 ns, and the Schmitt-trigger
+input CLK and RESET take. Checked in every run against the committed results; their Liberty files
+replace the PDKs' own in the chips' pin-timing checks
+(<a href="{SERVER}/{REPO}/blob/main/asic/timing/pin_timing.py">pin_timing.py</a>).</p>
+{chr(10).join(pads)}""")
+
+    corners = [c for c in ('tt', 'ss', 'ff') if there(f'nmi/nmi_{c}.json')]
+    if corners:
+        nmi = {c: json.load(open(os.path.join(base, 'nmi', f'nmi_{c}.json'))) for c in corners}
+        main_c = 'tt' if 'tt' in nmi else corners[0]
+        about = nmi[main_c].get('about', {})
+        rows = []
+        for c, m in nmi.items():
+            cases = m['cases']
+            a = cases.get('A', {})
+            caught = sum(v['set_ns'] is not None and v['clear_after_clk_ns'] is not None for v in cases.values())
+            figs = links([(f'nmi/nmi_{c}.svg', 'all')] + [(f'nmi/nmi_{k}_{c}.svg', k) for k in cases])
+            rows.append(f"<tr data-col=\"{c}\"><td class=\"nw\"><strong>{c}</strong> <span class=\"muted\">{m.get('volts', '')} V, "
+                        f"{m.get('temp_c', '')} °C</span></td><td>{caught} of {len(cases)}</td>"
+                        f"<td>{ns(a.get('set_ns'))}</td><td>{ns(a.get('clear_after_clk_ns'))}</td>"
+                        f"<td>{ns(a.get('held_low_ns'))}</td><td>{figs}</td></tr>")
+        g = switched(there, [('the six cases', True, {c: f'nmi/nmi_{c}.svg' for c in corners})]
+                     + [(f'{k}: {e(about.get(k, ""))}', False, {c: f'nmi/nmi_{k}_{c}.svg' for c in corners})
+                        for k in nmi[main_c]['cases']], default=main_c)
+        parts.append(f"""<h3 class="sec">The NMI pulse catcher</h3>
+<p class="muted">The NMOS Z80 takes an NMI pulse of any width -- TwNMI, 80 ns at 4 MHz, is under half a
+clock -- not only one a clock edge sees: a flip-flop clocked by the NMI pin itself catches it and holds it
+for the core until the next rising CLK edge, which clears it
+(<a href="{SERVER}/{REPO}/blob/main/rtl/z80_top.v">z80_top.v</a>). Here it is cut out of the GF180 7-track
+chip, from the NMI and CLK pins to the flip-flops -- the pads, the clock tree to its leaf, the cells as Magic
+extracts them from the PDK's layouts, on the routed chip's wiring -- and run at each corner with six pulses
+(<a href="{code}/nmi.py">nmi.py</a>).</p>
+<div class="scroll"><table>
+<thead><tr><th>Corner</th><th>Pulses caught and cleared</th><th>NMI pin falls → caught (A)</th>
+<th>CLK pin rises → cleared (A)</th><th>The core sees NMI for (A)</th><th>Figures</th></tr></thead>
+<tbody>
+{chr(10).join(rows)}
+</tbody>
+</table></div>
+{g}""")
+
+    chips = []
+    for pdk in sorted(os.listdir(os.path.join(base, 'chip'))) if os.path.isdir(os.path.join(base, 'chip')) else []:
+        if (chip := whole_chip(base, pdk)):
+            ci = (f'''<p class="muted">The run on GitHub's runners, every corner's figures:
+<a href="transistor/">transistor/</a> (<a href="{SERVER}/{REPO}/actions/workflows/transistor.yml">transistor.yml</a>,
+by hand).</p>''' if os.path.isfile(os.path.join(out, 'transistor', 'index.html')) else '')
+            chips.append(chip + ci)
+
+    parts = chips + parts + pad_part
+    if not parts:
+        return ''
+    return f"""<h2 id="transistor">At transistor level</h2>
+<p class="muted">The timing above is OpenSTA's, from the PDKs' Liberty models. Here the chips run as
+transistors, in ngspice with the PDKs' own netlists and transistor models, against the NMOS Z80
+datasheet's test conditions (<a href="{SERVER}/{REPO}/tree/main/asic/spice">asic/spice</a>).</p>
+{chr(10).join(parts)}
+{SWITCH_JS}"""
+
+
+def ci_page(src, out):
+    """transistor/index.html: the whole chip as transistor.yml last ran it on GitHub's runners -- its
+    artifact transistor-gf180mcu, downloaded into <src>/transistor/spice/ (chip/<pdk>/ as chip.py's
+    committed runs, and run.json: the run, its commit, the Targets run whose GDS it extracted) -- with
+    every corner's figures. False when there is no such run."""
+    s = os.path.join(src, 'transistor', 'spice')
+    if not os.path.isdir(os.path.join(s, 'chip')):
+        return False
+    # a run whose pins differ from the RTL's or that fails an AC parameter fails (chip.py), and is not
+    # shown -- nor are the runs from before that check
+    bad = []
+    for p in sorted(glob.glob(os.path.join(s, 'chip', '**', 'results.json'), recursive=True)):
+        r = json.load(open(p))
+        if r.get('functional_mismatches') or not all(q['pass'] for q in r.get('parameters') or []):
+            bad.append(os.path.relpath(p, s))
+    if bad:
+        print(f'{s}: not published: its pins or AC parameters failed ({", ".join(bad)})')
+        return False
+    page_dir = os.path.join(out, 'transistor')
+    base = os.path.join(page_dir, 'spice')
+    shutil.copytree(s, base, dirs_exist_ok=True)
+    e = html.escape
+    meta = json.load(open(os.path.join(s, 'run.json'))) if os.path.isfile(os.path.join(s, 'run.json')) else {}
+    run = (f'<a href="{SERVER}/{REPO}/actions/runs/{meta["run_id"]}">transistor.yml run</a>'
+           if meta.get('run_id') else 'transistor.yml run')
+    sha = meta.get('sha', '')
+    commit = f'<a href="{SERVER}/{REPO}/commit/{sha}">{e(meta.get("ref", "main"))} @ {sha[:7]}</a>' if sha else ''
+    gds = (f', the layout from <a href="{SERVER}/{REPO}/actions/runs/{meta["targets_run"]}">Targets run '
+           f'{meta["targets_run"]}</a>' if meta.get('targets_run') else '')
+    chips = [whole_chip(base, pdk,
+                        how=f'on GitHub\'s runners by <a href="{SERVER}/{REPO}/blob/main/.github/workflows/'
+                            f'transistor.yml">transistor.yml</a>, each corner in windows of one job each')
+             for pdk in sorted(os.listdir(os.path.join(base, 'chip')))]
+    page = f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rz80 at transistor level</title>
+<style>
+{SITE_CSS}</style>
+</head>
+<body>
+<main>
+<h1>rz80 at transistor level</h1>
+<p class="muted">The chip's layout run as transistors in ngspice, from the latest {run}{' on ' + commit if commit else ''}
+{e(meta.get('date', ''))}{gds}. <a href="../">All builds</a>.</p>
+{chr(10).join(c for c in chips if c) or '<p>no runs in this artifact</p>'}
+<footer>transistor.yml runs by hand (Actions, "Transistor", Run workflow); its artifact transistor-gf180mcu
+stays on the <a href="{SERVER}/{REPO}/actions/workflows/transistor.yml">Actions</a> tab for 90 days.</footer>
+</main>
+{SWITCH_JS}
+</body>
+</html>
+"""
+    open(os.path.join(page_dir, 'index.html'), 'w').write(page)
+    print(f'{page_dir}/index.html: {sum(bool(c) for c in chips)} chips at transistor level')
+    return True
+
+
+def md_inline(text):
+    """the Markdown inside a table cell -- [links](url) and `code` -- as HTML"""
+    t = html.escape(text, quote=False)
+    t = re.sub(r'\[([^\]]+)\]\(([^)\s]+)\)', lambda m: f'<a href="{html.escape(m.group(2))}">{m.group(1)}</a>', t)
+    return re.sub(r'`([^`]+)`', r'<code>\1</code>', t)
+
+
+def cfast_bench(src, out):
+    """The C model's speed: ci.yml's latest cfast-bench artifact (scripts/cfast_bench.py's bench.json and
+    bench.svg, in <src>/cfast-bench/), its chart at <out>/cfast-bench.svg -- a fixed address, which
+    cfast/BENCHMARK.md shows -- and its table. '' when there is none."""
+    d = os.path.join(src, 'cfast-bench')
+    if not os.path.isfile(os.path.join(d, 'bench.json')):
+        return ''
+    e = html.escape
+    b = json.load(open(os.path.join(d, 'bench.json')))
+    m, res = b['machine'], b['results']
+    if os.path.isfile(os.path.join(d, 'bench.svg')):
+        shutil.copy(os.path.join(d, 'bench.svg'), os.path.join(out, 'cfast-bench.svg'))
+    base = next((r for r in res if r['binary'] == 'zexfast'), res[0])
+    rows = ''.join(
+        f"<tr><td class=\"nw\">{'<strong>' + e(r['name']) + '</strong>' if r is base else e(r['name'])}</td>"
+        f"<td>{e(r['steps'])}</td><td>{r['minstr']:.1f}</td><td>{r['mhz']:.0f} MHz</td>"
+        f"<td>{r['minstr'] / base['minstr']:.2f}×</td><td class=\"muted\">{md_inline(r.get('about', ''))}</td></tr>"
+        for r in res)
+    ref = m.get('ref') or 'main'
+    run = (f'<a href="{SERVER}/{REPO}/actions/runs/{m["run"]}">ci.yml run</a>' if m.get('run') else 'ci.yml')
+    commit = (f'<a href="{SERVER}/{REPO}/commit/{m["commit"]}">{e(m["ref"]) + " @ " if m.get("ref") else ""}'
+              f'{e(m["commit"])}</a>') if m.get('commit') else ''
+    return f"""<h2 id="cfast">The C model, for emulators</h2>
+<p class="muted">cfast is the C model generated into a phase engine: every half clock the same pins as the model
+and the RTL (make cfast_identity), at the speed an emulator needs. Here it runs against four other C Z80
+emulators on the same {b['instructions'] / 1e6:g} million ZEXDOC instructions, the best of {b['rounds']}
+rounds of CPU time on GitHub's runner ({e(m.get('cpu', ''))}): the latest {run}{' on ' + commit if commit else ''},
+{e(m.get('date', ''))}. Every push runs it; how, and what the columns mean:
+<a href="{SERVER}/{REPO}/blob/{e(ref)}/cfast/BENCHMARK.md">cfast/BENCHMARK.md</a>.</p>
+<div class="figs"><figure><img src="cfast-bench.svg" alt="ZEXDOC million instructions a second, per emulator"
+loading="lazy"></figure></div>
+<div class="scroll"><table>
+<thead><tr><th>Emulator</th><th>Sees every</th><th>ZEXDOC Minstr/s</th><th>Z80 clock</th><th>Against cfast</th>
+<th>What it is</th></tr></thead>
+<tbody>{rows}</tbody></table></div>"""
+
+
+SITE_CSS = ''':root { --bg: #f7f7f5; --fg: #1c1c1a; --muted: #6a6a64; --card: #fff; --line: #e2e1dc; --link: #1f55c0; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #141414; --fg: #ebeae6; --muted: #a2a19b; --card: #1d1d1c; --line: #34332f; --link: #8fb1ff; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 1120px; margin: 0 auto; padding: 32px 16px 48px; }
+h1 { font-size: 26px; margin: 0 0 6px; }
+h2 { font-size: 19px; margin: 36px 0 6px; }
+h3 { font-size: 16px; margin: 0; }
+p { margin: 0 0 12px; }
+a { color: var(--link); }
+.muted, .size { color: var(--muted); }
+.size { font-size: 12px; }
+.pdk { background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+  margin: 0 0 16px; }
+.pics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--line); }
+figure { margin: 0; position: relative; background: #0d1117; }
+figure img, .noimg { display: block; width: 100%; aspect-ratio: 1; object-fit: contain; }
+.noimg { display: grid; place-items: center; color: #888; }
+.pics .wide { grid-column: 1 / -1; }
+.pics .wide img { aspect-ratio: auto; }
+figcaption { position: absolute; left: 8px; top: 8px; padding: 1px 7px; border-radius: 4px; font-size: 12px;
+  color: #d6dbe1; background: rgba(13, 17, 23, .75); }
+.body { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 4px 28px;
+  padding: 14px 16px 6px; border-top: 1px solid var(--line); }
+.body .muted { font-size: 13px; margin: 0 0 8px; }
+h4 { font-size: 13px; color: var(--muted); font-weight: 600; margin: 2px 0 6px; }
+.legend { list-style: none; padding: 0; margin: 0 0 10px; font-size: 13px; }
+.legend li { display: flex; align-items: center; gap: 7px; }
+.swatch { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+.figs { display: grid; gap: 12px; margin: 8px 0 18px; align-items: start; }
+.figs.two { grid-template-columns: repeat(2, 1fr); }
+.figs figure { background: #fff; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.figs .wide { grid-column: 1 / -1; }
+.figs figure img { aspect-ratio: auto; height: auto; }
+.figs figcaption { position: static; display: block; border-radius: 0; padding: 5px 10px; font-size: 13px;
+  color: var(--muted); background: var(--card); border-top: 1px solid var(--line); }
+h3.sec { margin: 26px 0 4px; }
+.figtitle { margin: 14px 0 0; font-size: 14px; }
+details { margin: 0 0 14px; }
+summary { cursor: pointer; color: var(--link); font-size: 14px; margin: 0 0 6px; }
+@media (max-width: 640px) {
+  .pics, .figs.two { grid-template-columns: 1fr; }
+}
+dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 0 0 10px; font-size: 14px; }
+dt { color: var(--muted); }
+dd { margin: 0; font-variant-numeric: tabular-nums; }
+.scroll { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); font-size: 14px; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 13px; white-space: nowrap; }
+td a, td.nw { white-space: nowrap; }
+footer { color: var(--muted); font-size: 13px; margin-top: 36px; }
+[hidden] { display: none !important; }
+.cornerset { margin: 8px 0 18px; }
+.cornerset .figs { margin: 0; }
+.cornersw { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 0;
+  background: var(--bg); }
+.cornersw button { font: inherit; font-size: 14px; padding: 4px 12px; border: 1px solid var(--line);
+  border-radius: 999px; background: var(--card); color: var(--fg); cursor: pointer; }
+.cornersw button[aria-checked="true"] { background: var(--link); border-color: var(--link); color: var(--bg); }
+.cornersw button:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+.cornersw .cv { margin-left: 7px; font-size: 12px; opacity: .8; }
+tr.sel > td, th.sel, td.sel { background: color-mix(in srgb, var(--link) 10%, var(--card)); }
+'''
+
+# the corner switch (switched()): every switch on the page shows one corner -- its figures' images
+# swapped in place, its rows and columns in the tables marked; arrow keys step through the corners
+SWITCH_JS = '''<script>
+(function () {
+  var groups = document.querySelectorAll('.cornersw');
+  if (!groups.length) return;
+  function pick(c) {
+    document.querySelectorAll('.cornersw button').forEach(function (b) {
+      var on = b.getAttribute('data-corner') === c;
+      b.setAttribute('aria-checked', on ? 'true' : 'false');
+      b.tabIndex = on ? 0 : -1;
+    });
+    document.querySelectorAll('img.sw').forEach(function (img) {
+      var p = img.getAttribute('data-' + c), f = img.closest('figure');
+      f.hidden = !p;
+      if (p && img.getAttribute('src') !== p) { img.setAttribute('src', p); img.parentNode.setAttribute('href', p); }
+    });
+    document.querySelectorAll('.cname').forEach(function (n) { n.textContent = c; });
+    document.querySelectorAll('[data-col]').forEach(function (n) {
+      n.classList.toggle('sel', n.getAttribute('data-col') === c);
+    });
+  }
+  var loaded = false;
+  function preload() {   // every corner's figures, so the first switch is instant too
+    if (loaded) return;
+    loaded = true;
+    document.querySelectorAll('img.sw').forEach(function (img) {
+      ['ss', 'tt', 'ff'].forEach(function (c) {
+        var p = img.getAttribute('data-' + c);
+        if (p) new Image().src = p;
+      });
+    });
+  }
+  groups.forEach(function (g) {
+    g.addEventListener('pointerenter', preload);
+    g.addEventListener('focusin', preload);
+    g.addEventListener('click', function (ev) {
+      var b = ev.target.closest('button');
+      if (b) pick(b.getAttribute('data-corner'));
+    });
+    g.addEventListener('keydown', function (ev) {
+      var bs = Array.prototype.slice.call(g.querySelectorAll('button')), i = bs.indexOf(document.activeElement);
+      var d = {ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1}[ev.key];
+      if (i < 0 || !d) return;
+      ev.preventDefault();
+      var b = bs[(i + d + bs.length) % bs.length];
+      pick(b.getAttribute('data-corner'));
+      b.focus();
+    });
+  });
+  var on = document.querySelector('.cornersw [aria-checked="true"]');
+  if (on) pick(on.getAttribute('data-corner'));
+})();
+</script>'''
+
+
 def site(src, out):
     os.makedirs(out, exist_ok=True)
+    ci_page(src, out)
     for f in glob.glob(os.path.join(src, 'rz80-*')):
         shutil.copy(f, out)
     boards, pdks = load(out)
     e = html.escape
-    sha = os.environ.get('GITHUB_SHA', '')
+    # the Targets run the site is built from: this run, or the one pages.yml names (SITE_RUN_ID, SITE_SHA)
+    sha = os.environ.get('SITE_SHA') or os.environ.get('GITHUB_SHA', '')
+    run_url = f"{SERVER}/{REPO}/actions/runs/{os.environ['SITE_RUN_ID']}" if os.environ.get('SITE_RUN_ID') else RUN_URL
     when = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
     commit = f'<a href="{SERVER}/{REPO}/commit/{sha}">main @ {sha[:7]}</a>' if sha else 'main'
-    run = f'<a href="{RUN_URL}">Targets run</a>' if RUN_URL else 'Targets run'
+    run = f'<a href="{run_url}">Targets run</a>' if run_url else 'Targets run'
 
     chip_cards, core_cards = [], []
     for p in pdks:
@@ -613,6 +1132,12 @@ def site(src, out):
             return f'<figure>{img}<figcaption>{caption}</figcaption></figure>'
         facts = ''.join(f'<dt>{k}</dt><dd>{e(v)}</dd>' for k, v in asic_facts(p))
 
+        def wide(f, caption):   # a logic analyser's view, under the three pictures
+            if f not in p['files']:
+                return ''
+            return (f'<figure class="wide"><a href="{f}"><img src="{f}" alt="{e(p["name"])}: {caption}" '
+                    f'loading="lazy"></a><figcaption>{caption}</figcaption></figure>')
+
         def legend(title, table, counts):
             items = ''.join(f'<li><span class="swatch" style="background: rgb{colour}"></span>{e(name)}'
                             f' <span class="muted">{counts[name]:,}</span></li>'
@@ -622,7 +1147,8 @@ def site(src, out):
         links = [f'<a href="{f}"{" download" if f.endswith(".gds") else ""}>{label}</a>'
                  f' <span class="size">{size(os.path.join(out, f))}</span>'
                  for f, label in ((f"rz80-{p['pdk']}.gds", 'GDS'), (f"rz80-{p['pdk']}.png", 'layout'),
-                                  (second[0], second[1].split()[0]), (f"rz80-{p['pdk']}-blocks.png", 'blocks'))
+                                  (second[0], second[1].split()[0]), (f"rz80-{p['pdk']}-blocks.png", 'blocks'),
+                                  (f"rz80-{p['pdk']}-pins.svg", 'pins'))
                  if f in p['files']]
         links.append(f'<a href="{p.get("readme") or readme_url("asic", p["pdk"])}">README</a>')
         if chip:   # the clock and power picture's legend: (colour, count) per entry
@@ -635,6 +1161,7 @@ def site(src, out):
 {picture(f"rz80-{p['pdk']}.png", 'layout')}
 {picture(*second)}
 {picture(f"rz80-{p['pdk']}-blocks.png", 'cells by Z80 block')}
+{wide(f"rz80-{p['pdk']}-pins.svg", 'its pins at transistor level (ngspice): power-up, RESET, a short program at 4 MHz')}
 </div>
 <div class="body">
 <div><h3>{e(p['name'])}</h3><p class="muted">{e(p.get('pdk_variant') or '')} · {e(p.get('library') or '')}</p>
@@ -662,48 +1189,7 @@ def site(src, out):
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>rz80 builds</title>
 <style>
-:root {{ --bg: #f7f7f5; --fg: #1c1c1a; --muted: #6a6a64; --card: #fff; --line: #e2e1dc; --link: #1f55c0; }}
-@media (prefers-color-scheme: dark) {{
-  :root {{ --bg: #141414; --fg: #ebeae6; --muted: #a2a19b; --card: #1d1d1c; --line: #34332f; --link: #8fb1ff; }}
-}}
-* {{ box-sizing: border-box; }}
-body {{ margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }}
-main {{ max-width: 1120px; margin: 0 auto; padding: 32px 16px 48px; }}
-h1 {{ font-size: 26px; margin: 0 0 6px; }}
-h2 {{ font-size: 19px; margin: 36px 0 6px; }}
-h3 {{ font-size: 16px; margin: 0; }}
-p {{ margin: 0 0 12px; }}
-a {{ color: var(--link); }}
-.muted, .size {{ color: var(--muted); }}
-.size {{ font-size: 12px; }}
-.pdk {{ background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
-  margin: 0 0 16px; }}
-.pics {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--line); }}
-figure {{ margin: 0; position: relative; background: #0d1117; }}
-figure img, .noimg {{ display: block; width: 100%; aspect-ratio: 1; object-fit: contain; }}
-.noimg {{ display: grid; place-items: center; color: #888; }}
-figcaption {{ position: absolute; left: 8px; top: 8px; padding: 1px 7px; border-radius: 4px; font-size: 12px;
-  color: #d6dbe1; background: rgba(13, 17, 23, .75); }}
-.body {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 4px 28px;
-  padding: 14px 16px 6px; border-top: 1px solid var(--line); }}
-.body .muted {{ font-size: 13px; margin: 0 0 8px; }}
-h4 {{ font-size: 13px; color: var(--muted); font-weight: 600; margin: 2px 0 6px; }}
-.legend {{ list-style: none; padding: 0; margin: 0 0 10px; font-size: 13px; }}
-.legend li {{ display: flex; align-items: center; gap: 7px; }}
-.swatch {{ width: 10px; height: 10px; border-radius: 2px; flex: none; }}
-@media (max-width: 640px) {{
-  .pics {{ grid-template-columns: 1fr; }}
-}}
-dl {{ display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 0 0 10px; font-size: 14px; }}
-dt {{ color: var(--muted); }}
-dd {{ margin: 0; font-variant-numeric: tabular-nums; }}
-.scroll {{ overflow-x: auto; }}
-table {{ width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); font-size: 14px; }}
-th, td {{ text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }}
-th {{ color: var(--muted); font-weight: 600; font-size: 13px; white-space: nowrap; }}
-td a {{ white-space: nowrap; }}
-footer {{ color: var(--muted); font-size: 13px; margin-top: 36px; }}
-</style>
+{SITE_CSS}</style>
 </head>
 <body>
 <main>
@@ -717,8 +1203,12 @@ each pin's pad on the side of the die where the Z80 has its own. The layout show
 metal blue to top metal yellow; the clock and power picture the clock in green -- the CLK pad, every clock
 wire and buffer -- over the power rings, stripes and rails (core supply red, ground blue; a split I/O
 supply amber and teal) and the supply pads in their net's colour; the block map every cell by the Z80
-block it was synthesized in.</p>
+block it was synthesized in. Where a chip has been simulated at transistor level -- its layout extracted
+to transistors and wires and run in ngspice (<a href="{SERVER}/{REPO}/tree/main/asic/spice">asic/spice</a>)
+-- its pins are shown under it as a logic analyser shows them.</p>
 {chr(10).join(chip_cards) or '<p>none in this build</p>'}
+
+{transistor(src, out)}
 
 <h2>ASIC core layouts</h2>
 <p class="muted">The bare core (no pad ring), RTL to GDS with LibreLane. The pictures are drawn from the GDS
@@ -736,8 +1226,11 @@ with 1K Tiny BASIC. Chip: the board as a Z80 replacement, the bus on its pins. E
 </tbody>
 </table></div>
 
-<footer>Published by <a href="{SERVER}/{REPO}/blob/main/.github/workflows/targets.yml">targets.yml</a>
-(every push to main and nightly). Every run, failed ones included, also keeps its bitstreams, GDS and logs
+{cfast_bench(src, out)}
+
+<footer>Published by <a href="{SERVER}/{REPO}/blob/main/.github/workflows/pages.yml">pages.yml</a> after
+<a href="{SERVER}/{REPO}/blob/main/.github/workflows/targets.yml">targets.yml</a> (every push to main and nightly)
+or <a href="{SERVER}/{REPO}/blob/main/.github/workflows/transistor.yml">transistor.yml</a> (by hand). Every run, failed ones included, also keeps its bitstreams, GDS and logs
 as artifacts on the <a href="{SERVER}/{REPO}/actions/workflows/targets.yml">Actions</a> tab for 14 days.</footer>
 </main>
 </body>

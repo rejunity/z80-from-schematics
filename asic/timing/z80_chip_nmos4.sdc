@@ -18,6 +18,9 @@ set_input_transition 15 [get_ports {D[0] D[1] D[2] D[3] D[4] D[5] D[6] D[7] WAIT
 set_false_path -from [get_ports NMI_n]
 # RESET floats the address bus directly (z80_chip.v), unclocked
 set_false_path -from [get_ports RESET_n] -to [get_ports {A[*]}]
+# MREQ IORQ RD WR float while BUSACK is low and come back high: their
+# pads, enabled by z80_top's busack_n, never turn on driving low
+set_false_path -rise_through [get_pins u_top/busack_n] -fall_to [get_ports {MREQ_n IORQ_n RD_n WR_n}]
 # read data is held until RD (IORQ in INTA) rises, not 0 ns past the
 # sampling edge (P16 ThD(RDr)): pin_timing.py checks the replica's hold
 # against its own RD / IORQ rise; the flow does not repair a hold the

@@ -1,4 +1,6 @@
-/* Pin-driven interrupt device: no data until M1 and IORQ overlap. */
+/* Pin-driven interrupt device: no data until M1 and IORQ overlap; in IM0
+   it also supplies the operands of the CALL / JP it hands over, read at the
+   interrupted PC, which doesn't move (perfectz80). */
 #include "z80_sim.h"
 #include "test_util.h"
 
@@ -13,6 +15,8 @@ static void run_case(unsigned mode, uint8_t opcode, unsigned extra_wait, bool fr
     uint16_t target=(mode==1 || (mode==0 && opcode==0xff)) ? 0x38 : 0x200;
     s.mem[target]=0x76;
     unsigned overlaps=0, refreshes=0, waits=0;
+    unsigned ops_left = (mode==0 && (opcode==0xcd || opcode==0xc3)) ? 2 : 0, op_k=0;
+    bool in_read=false, dev_op=false;
     bool seen=false, reached=false;
     uint16_t ret=0;
     uint8_t ack_r=0;
@@ -22,9 +26,6 @@ static void run_case(unsigned mode, uint8_t opcode, unsigned extra_wait, bool fr
         if(c->bus_op==BUSOP_INTA) {
             if(!seen) {
                 seen=true; ret=c->pins.addr; ack_r=c->reg_r;
-                if(mode==0 && (opcode==0xcd || opcode==0xc3)) {
-                    s.mem[ret]=0; s.mem[(uint16_t)(ret+1)]=2;
-                }
                 if(mode==0 && opcode==0) {target=ret; s.mem[target]=0x76;}
             }
             CHECK(c->pins.rd_n && c->pins.wr_n,"ack does not assert RD/WR");
@@ -38,6 +39,15 @@ static void run_case(unsigned mode, uint8_t opcode, unsigned extra_wait, bool fr
             // Poison the bus until the device is ready, and outside ack.
             c->pins.data_in=(!c->pins.m1_n && !c->pins.iorq_n && c->pins.wait_n) ? opcode : 0;
         }
+        /* the device's operand bytes (0200) on the reads after the IM0 ack */
+        if(seen && !c->pins.mreq_n && !c->pins.rd_n && c->pins.m1_n) {
+            if(!in_read && ops_left) {
+                CHECK_EQ_U(c->pins.addr,ret,"IM0 operand read at the interrupted PC");
+                dev_op=true; ops_left--; op_k++;
+            }
+            in_read=true;
+            if(dev_op) c->pins.data_in = op_k==1 ? 0x00 : 0x02;
+        } else { in_read=false; dev_op=false; }
         if(seen && c->bus_op==BUSOP_M1 && !c->pins.rd_n && c->pins.addr==target) reached=true;
         z80_sys_phase(&s);
     }
@@ -48,8 +58,10 @@ static void run_case(unsigned mode, uint8_t opcode, unsigned extra_wait, bool fr
     CHECK_EQ_U(waits,extra_wait,"inserted waits");
     uint16_t sp=(mode==0 && (opcode==0xc3 || opcode==0)) ? 0x9000 : 0x8ffe;
     CHECK_EQ_U(s.cpu.rf[RFP_SP],sp,"stack depth");
+    CHECK_EQ_U(ops_left,0,"IM0 operands read");
     if(sp==0x8ffe) {
-        if(mode==0 && opcode==0xcd) ret=(uint16_t)(ret+2);
+        /* IM0 CALL pushes the interrupted PC: the operands came from the
+           device, PC never moved */
         CHECK_EQ_U(s.mem[0x8ffe] | (s.mem[0x8fff]<<8),ret,"return address");
     }
 }
