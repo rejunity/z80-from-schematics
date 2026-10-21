@@ -101,11 +101,12 @@ IM0_SEQS = {
 BASIC = ["inc_a", "ld_a_hl", "ld_hl_a", "inc_hl"]
 GROUPS = ["int", "nmi", "nmi_short", "nmi_reentry", "reset", "reset_release",
           "reset_wait", "reset_short", "combo", "busreq", "wait", "im2", "im2_combo",
-          "im0", "im0_combo", "opcodes", "classes", "classes_reset", "fuzz", "fuzz_reset"]
-# run only when named (--groups): RESET at every T-state of the timing classes
-# and the fuzz with RESET, where the die's register write-back timing still
-# differs (known difference 19)
-EXPLICIT = {"classes_reset", "fuzz_reset"}
+          "im0", "im0_combo", "opcodes", "classes", "classes_reset", "fuzz", "fuzz_reset",
+          "reset_m1wait", "reset_busreq", "reset_nmi"]
+# run only when named (--groups): RESET at every T-state of the timing classes,
+# the fuzz with RESET and NMI after RESET's release, where the die's register
+# write-back timing still differs (known difference 19)
+EXPLICIT = {"classes_reset", "fuzz_reset", "reset_nmi"}
 FUZZ_N, FUZZ_SEED = 2000, 1     # the recorded fuzz cases; --fuzz-seed / --fuzz-n for others
 
 # ---- every opcode (the `opcodes` group) ------------------------------------
@@ -485,6 +486,30 @@ def cases(groups, phases, fuzz=(FUZZ_N, FUZZ_SEED)):
                         out.append(case(f"cls_{rep}_wait{w}_T{n}_p{j:02d}", "classes", rep,
                                         [(WAIT, at(n, j), at(n, j) + 16 * w)], run=60 + length,
                                         meta=dict(m, kind=f"wait{w}"), **kw))
+    if want("reset_m1wait"):   # RESET while WAIT stretches an M1 (Tw after T2)
+        for t in ("inc_a", "ld_a_hl"):
+            for w in (1, 2, 4):                 # WAIT low from the target's T2.P, w T
+                for n in range(1, 12):
+                    for j in (0, 4, 8, 12):
+                        out.append(case(f"resetm1w_{t}_w{w}_T{n}_p{j:02d}", "reset_m1wait", t,
+                                        [(WAIT, at(2, 0), at(2, 0) + 16 * w), (RESET, at(n, j), at(n, j) + 64)],
+                                        run=300, meta={"n": n, "phase": j, "width": w}))
+    if want("reset_busreq"):   # RESET before, in and after a bus grant
+        for t in ("inc_a", "ld_a_hl", "push_bc"):
+            for w in (2, 6):                    # BUSREQ low from the target's T1, w T
+                for n in range(1, 14):
+                    for j in (0, 4, 8, 12):
+                        out.append(case(f"resetbr_{t}_w{w}_T{n}_p{j:02d}", "reset_busreq", t,
+                                        [(BUSREQ, at(1, 4), at(1, 4) + 16 * w), (RESET, at(n, j), at(n, j) + 64)],
+                                        run=300, meta={"n": n, "phase": j, "width": w}))
+    if want("reset_nmi"):      # an NMI edge from RESET's release through the restart
+        for rw in (3, 4, 6):                    # RESET from the target's T1, rw T
+            for d in range(-2, 8):              # NMI falls d T after the release, j/16 more
+                for j in (0, 4, 8, 12):
+                    lo = at(1, 0) + 16 * rw + 16 * d + j
+                    out.append(case(f"resetnmi_r{rw}_d{d}_p{j:02d}", "reset_nmi", "inc_a",
+                                    [(RESET, at(1, 0), at(1, 0) + 16 * rw), (NMI, lo, lo + 16)],
+                                    run=300, meta={"rw": rw, "d": d, "phase": j}))
     for g in ("fuzz", "fuzz_reset"):    # random code, modes and pin events
         if want(g):
             out += fuzz_cases(g, *fuzz)

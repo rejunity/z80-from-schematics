@@ -82,6 +82,7 @@ module tb_event_sweep;
     integer t, half, mark_half, hold_until, in_read;
     integer inta_n, dev_pos, was_read, was_inta;
     integer busreq_walk, wait_walk, walk_up, walk_wait_until, strobe, prev_strobe;
+    integer hold_low;           // +hold's WAIT is low (RESET releases it; WAIT pulses it doesn't)
     reg [63:0] inta_ops;
     reg [8*512-1:0] progf, evf;     // paths up to 512 characters
     reg found;
@@ -109,7 +110,7 @@ module tb_event_sweep;
         if (!$value$plusargs("inta_ops=%h", inta_ops)) inta_ops = 64'h0;
         if (!$value$plusargs("busreq_walk=%d", busreq_walk)) busreq_walk = 0;
         if (!$value$plusargs("wait_walk=%d", wait_walk)) wait_walk = 0;
-        walk_up = 0; walk_wait_until = -1; prev_strobe = 0;
+        walk_up = 0; walk_wait_until = -1; prev_strobe = 0; hold_low = 0;
         dev_q = {inta_ops, vec[7:0]};
         dev_read = 1'b0; dev_byte = 8'h00; dev_pos = 0; was_read = 0; was_inta = 0;
         n_ev = 0;
@@ -165,11 +166,11 @@ module tb_event_sweep;
                     if (int_at >= 0 && !m1_n && !iorq_n) int_n = 1'b1;
                     if (hold >= 0 && m1_n && !mreq_n && !rd_n && addr == hold) begin
                         if (!in_read) begin
-                            wait_n = 1'b0; in_read = 1;
+                            wait_n = 1'b0; in_read = 1; hold_low = 1;
                             hold_until = half + 2 * hold_t;
                         end
                     end else in_read = 0;
-                    if (hold >= 0 && !wait_n && (half >= hold_until || !reset_n)) wait_n = 1'b1;
+                    if (hold_low && (half >= hold_until || !reset_n)) begin wait_n = 1'b1; hold_low = 0; end
                     if (busreq_walk) begin
                         if (!busack_n && !walk_up) begin busreq_n = 1'b1; walk_up = 1; end
                         else if (walk_up && busack_n) begin busreq_n = 1'b0; walk_up = 0; end
@@ -191,7 +192,7 @@ module tb_event_sweep;
                     if ((t - mark_half * 16 - 1) / 2 == ev_lo[e]) drive(ev_pin[e], 0);
                     if (ev_hi[e] >= 0 && (t - mark_half * 16 - 1) / 2 == ev_hi[e]) drive(ev_pin[e], 1);
                 end
-                if (!reset_n && !wait_n) wait_n = 1'b1;
+                if (hold_low && !reset_n) begin wait_n = 1'b1; hold_low = 0; end
             end
             #1;
             if (t % 16 == 15 && !mreq_n && !wr_n) mem[addr] = data_out;

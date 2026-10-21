@@ -154,7 +154,7 @@ int main(int argc, char **argv) {
                 prev_strobe = strobe;
             }
             apply_events(p, rel);
-            if (!p->reset_n && !p->wait_n) { wait_low = false; p->wait_n = true; }
+            if (wait_low && !p->reset_n) { wait_low = false; p->wait_n = true; }
             printf("%d %d %04x %02x %d %d %d %d %d %d %d %d %04x %02x %02x\n", rel, clk, p->addr, p->data_out,
                    p->mreq_n, p->iorq_n, p->rd_n, p->wr_n, p->m1_n, p->rfsh_n, p->halt_n, p->busack_n,
                    p->addr_drive ? 0xffff : 0, p->data_drive ? 0xff : 0, p->ctl_drive ? 0xff : 0xf0);
