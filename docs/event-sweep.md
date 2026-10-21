@@ -167,7 +167,7 @@ that half sees the pulse. The sweep therefore shows whether the chip's
 input logic can catch such a pulse; it does not test the data sheet's
 minimum widths, which depend on analog timing.
 
-## Results (rejunity `sweep-all`, 21 October 2026)
+## Results (rejunity `sweep-all`, 21 October 2026; `latch`, 22 October)
 
 | group | cases | match | differ |
 |---|---|---|---|
@@ -194,8 +194,9 @@ minimum widths, which depend on analog timing.
 | reset_busreq | 312 | 312 | 0 |
 | reset_nmi (run by name) | 120 | 48 | 72 |
 | fuzz_reset (run by name) | 2000 | 1935 | 65 |
+| latch | 268 | 268 | 0 |
 
-The default run, 33,248 cases, matches perfectz80 in all but 26 -- the
+The default run, 33,516 cases, matches perfectz80 in all but 26 -- the
 pads driven included -- and the C model matches the RTL in every
 half-cycle of all of them. The 26 in the baseline are RESET stopping
 ADD HL,BC or INC BC in the T-states where the die still writes their
@@ -248,6 +249,10 @@ Since then:
   the rising edge that ends the NMI response's second push, which the die
   and the RTL lose and the C model kept (`nmir_entry_gap12_p12`); it loses
   it now.
+- The data latch (`latch`): perfectz80 and the RTL take an opcode or INTA
+  byte from the bus in T2.N (the last Tw.N) and read data from T3.P; the C
+  model took each half a clock earlier, which no other group could see
+  (known difference 28). It takes the die's edges now.
 
 `build/event_sweep/report.md` has the per-instruction grids.
 `build/event_sweep/diff/` has a side-by-side trace for every differing case.
