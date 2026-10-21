@@ -1,4 +1,7 @@
 /* ============================================================================
+ * SPDX-FileCopyrightText: 2026 ReJ aka Renaldas Zioma
+ * SPDX-License-Identifier: MIT
+ *
  * z80_core.c - the Z80 CPU module: phase engine, micro-sequencer, bus-cycle
  * setup, and register file accessors.
  *
@@ -1358,6 +1361,7 @@ static void reset_state(z80_t *c)
     c->pins.rd_n = c->pins.wr_n = c->pins.rfsh_n = 1;
     c->pins.halt_n = 1; c->pins.busack_n = 1;
     c->pins.data_drive = false;
+    c->pins.addr_drive = false; c->pins.ctl_drive = true;   /* the reset idle */
     c->pins.addr = 0x0000;
     c->pins.data_out = 0;
 }
@@ -1500,6 +1504,12 @@ void z80_phase_step(z80_t *c)
         c->pins.data_drive = false;
         c->pins.addr = held_addr;
     }
+    /* the die's pad drivers (perfectz80's pull-up / pull-down gates,
+       scripts/pz80_pads.c): the address floats in a bus grant and in the
+       reset idle, MREQ IORQ RD WR in a bus grant only, to the rising edge
+       that starts the held M-cycle (half a T-state after BUSACK rises) */
+    c->pins.addr_drive = !(c->bus_granted || c->rst_idle);
+    c->pins.ctl_drive  = !c->bus_granted;
     if (c->rst_idle) {
         c->pins.m1_n = c->pins.mreq_n = c->pins.iorq_n = 1;
         c->pins.rd_n = c->pins.wr_n = c->pins.rfsh_n = 1;

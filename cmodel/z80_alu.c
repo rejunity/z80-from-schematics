@@ -1,4 +1,7 @@
 /* ============================================================================
+ * SPDX-FileCopyrightText: 2026 ReJ aka Renaldas Zioma
+ * SPDX-License-Identifier: MIT
+ *
  * z80_alu.c - the Z80 ALU module: combinational arithmetic + flag assembly.
  *
  * Mirrors rtl/z80_alu.v one-to-one. The Verilog module has a single port-list

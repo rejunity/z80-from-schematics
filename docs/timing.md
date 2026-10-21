@@ -79,7 +79,10 @@ not part of the read window.
 
 The data outlives `/WR` by the clock-low half of T3 (Zilog PS0178
 Figure 6: TdWRr(D) data stable from WR rise, TdCr(Dz) float from the next
-clock rise); perfectz80's data bus floats at the next T1.P too.
+clock rise); perfectz80's data bus floats at the next T1.P too. A write
+M-cycle longer than 3 T (EX (SP),HL's last write, LDI / LDD / LDIR /
+LDDR's: 5 T) drives the data through its T4 and T5 as well, to the next
+T1.P (perfectz80's data pads).
 
 Inserted Tw states hold `/WR` continuously low, together with `/MREQ` and
 stable address/data. Internally Tw reuses `t_state=2`; its rising half must
@@ -274,6 +277,28 @@ RESET that stops that M1 early loses and RZ80 keeps; RZ80 runs some long
 internal M-cycles as one where the die has two (ADD HL,rr's 4 + 3 T), so a cut
 inside them is approximate; RESET during WAIT or a bus grant is untested
 (docs/known-differences.md).
+
+## Pad drivers (bus float)
+
+Which pins the die drives in each half-cycle, from perfectz80: every
+output pad has pull-ups to VCC gated by one internal node and pull-downs to
+GND gated by another, and floats while both gates are low
+(`scripts/pz80_pads.c` reads them; the event sweep compares them in every
+half-cycle). `z80_top` exports the same as `addr_drive`, `ctl_drive` and
+`data_drive`, and the chips' pads and the FPGA chip builds use them:
+
+- **Address A0-A15** (`addr_drive`): floats in a bus grant -- from the first
+  half-cycle with BUSACK low to the rising edge that starts the held
+  M-cycle, half a T-state after BUSACK rises -- and in the RESET idle:
+  the M-cycle RESET cuts still drives it, the idle T-states don't, and T1
+  of the restart at 0000 drives it again. (Not the RESET pin: the bus
+  floats neither as the pin falls nor after it rises, until the restart.)
+- **MREQ IORQ RD WR** (`ctl_drive`): float in a bus grant only, over the
+  same half-cycles as the address; in RESET they are driven, inactive.
+- **D0-D7** (`data_drive`): driven in a write from T1.N to the next T1.P
+  (above), in an I/O write likewise; never in a read, an INTA, a grant or
+  the RESET idle.
+- **M1 RFSH HALT BUSACK**: always driven.
 
 ## Address bus in internal T-states
 

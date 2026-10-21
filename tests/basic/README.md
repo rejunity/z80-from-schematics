@@ -19,9 +19,12 @@ Source: https://github.com/feilipu/NASCOM_BASIC_4.7 (Phillip Stevens'
 RC2014 / NascomBasic32k 8 kB ROM build).
 Provenance: Microsoft Basic 4.7 (1978 NASCOM port), adapted for Z80 +
 RC2014's 68B50 ACIA at I/O ports 0x80 (status/control) and 0x81 (data).
-License: MS Basic 4.7 has been freely redistributable since the late
-1970s "give-it-away" letter; the RC2014 wrapper code is Phillip Stevens'
-non-commercial license.
+License: not established for this exact ROM build. Upstream identifies
+Microsoft copyright, Grant Searle additions limited to noncommercial use,
+and Phillip Stevens additions under MPL-2.0. The earlier local claim about
+a "give-it-away" letter is not a verified redistribution grant. See
+[THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md); this ROM is excluded
+from the project's MIT and CERN-OHL-W-2.0 grants.
 
 I/O conventions the runner emulates:
   - `IN  (0x80)` -> ACIA status: bit 0 RDRF, bit 1 TDRE (always 1 here)
@@ -91,9 +94,14 @@ the `basicStarted` flag will already be `'Y'` and the loader's
 File: `tinybasic_1k.hex`  (Intel HEX, **1018 bytes** of ROM 0x0000-0x03F9 — fits in 1 K)
 Source: https://github.com/WillStevens/basic1K  (1K Tiny BASIC for 8080/Z80,
 runs unmodified on Z80 too).
-Provenance: Will Stevens, 2023, MIT license. About 60% the size of Palo
-Alto Tiny BASIC; supports GOSUB/RETURN, FOR/NEXT, RND, ABS, USR, and a
-single array `@`.
+Provenance: Will Stevens, 2023, GNU GPL v3. The bundled HEX file is
+byte-identical to upstream `basic8080.hex` checked on 2026-10-17;
+`basic8080.asm` states GPL v3. Preserve the upstream license and supply the
+exact corresponding source and required build information when
+redistributing the binary. See
+[THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md).
+About 60% the size of Palo Alto Tiny BASIC; supports GOSUB/RETURN, FOR/NEXT,
+RND, ABS, USR, and a single array `@`.
 
 I/O conventions:
   - `IN  (0)`     -> 0x00 if no byte queued, 0xFF if a byte is ready
