@@ -40,6 +40,11 @@ FP_SIZING: absolute
 DIE_AREA: [0, 0, 1662, 1512]
 CORE_AREA: [442, 442, 1220, 1070]
 GRT_ALLOW_CONGESTION: true
+# z80_top's addr_drive / ctl_drive run from the macro to 16 address and 4
+# control pads; the buffers repair_design puts on them find legal 9-track
+# rows around the macro only further than the default 500 x 100 allows
+PL_MAX_DISPLACEMENT_X: 1000
+PL_MAX_DISPLACEMENT_Y: 500
 
 # ---- the core: z80_top as a hard macro ----
 # Hardened by ../config.yaml (`make`), with its pins on the sides of their
