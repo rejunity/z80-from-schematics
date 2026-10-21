@@ -1,4 +1,9 @@
 // ===========================================================================
+// SPDX-FileCopyrightText: 2026 ReJ aka Renaldas Zioma
+// SPDX-License-Identifier: CERN-OHL-W-2.0
+// Source Location: https://github.com/rejunity/z80-from-schematics
+// See HARDWARE_NOTICE.md for the section 4.1 Product notice.
+//
 // z80_timing.v - external pin drive as a pure function of timing state
 // (mirrors cmodel/z80_timing.c). t.P = (phi==0), t.N = (phi==1).
 // ===========================================================================
@@ -61,9 +66,12 @@ module z80_timing (
             // the strobe low when WAIT repeats T2 as Tw.P.
             if (!((t == 3'd1) && (phi == 1'b0)) && !((t == 3'd3) && (phi == 1'b1)) && (t <= 3'd3))
                 mreq_n = 1'b0;
-            // data T1.N .. T3.N: driven past WR's rise, floats at the next
-            // rising edge (PS0178 Figure 6, TdWRr(D) / TdCr(Dz); perfectz80)
-            if (!((t == 3'd1) && (phi == 1'b0)) && (t <= 3'd3)) data_drive = 1'b1;
+            // data from T1.N to the end of the M-cycle: driven past WR's
+            // rise, floats at the next rising edge (PS0178 Figure 6,
+            // TdWRr(D) / TdCr(Dz); perfectz80) -- through T4 / T5 of a long
+            // write too (EX (SP),HL's last, LDI's: perfectz80's data pads
+            // stay driven to the next T1)
+            if (!((t == 3'd1) && (phi == 1'b0))) data_drive = 1'b1;
             if (((t == 3'd2) && (phi == 1'b1)) || ((t == 3'd3) && (phi == 1'b0))) wr_n = 1'b0;
         end
         `BUSOP_IORD: begin

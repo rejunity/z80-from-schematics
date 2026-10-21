@@ -1,4 +1,9 @@
 // ===========================================================================
+// SPDX-FileCopyrightText: 2026 ReJ aka Renaldas Zioma
+// SPDX-License-Identifier: CERN-OHL-W-2.0
+// Source Location: https://github.com/rejunity/z80-from-schematics
+// See HARDWARE_NOTICE.md for the section 4.1 Product notice.
+//
 // z80_core.v - the Z80 engine, organised the way the die is.
 //
 //   decode PLA       z80_pla: (prefix state, opcode) -> instruction class
@@ -93,6 +98,10 @@ module z80_core (
     output wire        halt_n_neg,
     output wire        busack_n_pos,
     output wire        busack_n_neg,
+    output wire        addr_drive_pos,  // the address pads are driven
+    output wire        addr_drive_neg,
+    output wire        ctl_drive_pos,   // the MREQ IORQ RD WR pads are driven
+    output wire        ctl_drive_neg,
     // debug (for trace)
     output wire [3:0]  dbg_t,
     output wire [2:0]  dbg_m
@@ -309,6 +318,16 @@ module z80_core (
     // BUSACK rises on its falling edge, the held M-cycle starts after it.
     assign busack_n_pos = bus_granted_n ? 1'b0 : 1'b1;
     assign busack_n_neg = (bus_granted && !busreq_n) ? 1'b0 : 1'b1;
+    // The die's pad drivers (perfectz80's pull-up / pull-down gates,
+    // scripts/pz80_pads.c): the address floats in a bus grant and in the
+    // reset idle, MREQ IORQ RD WR in a bus grant only -- from the first
+    // granted half to the rising edge that starts the held M-cycle, half a
+    // T-state after BUSACK rises. The cut M-cycle before the reset idle
+    // still drives the address; every other pin is always driven.
+    assign addr_drive_pos = !idle_pos;
+    assign addr_drive_neg = !idle_neg;
+    assign ctl_drive_pos  = !bus_granted_n;
+    assign ctl_drive_neg  = !bus_granted;
     assign dbg_t = t_state; assign dbg_m = m_cycle;
 
     // =======================================================================
@@ -1049,8 +1068,10 @@ module z80_core (
                         halted_n = 1'b0; iff1_n = 1'b0; iff2_n = 1'b0;
                         irq_seq_n = 2'd2;
                         bus_op_n = `BUSOP_INTA; m_addr_n = pc_next; m_wdata_n = 8'h0;
-                        // T1 T2 Tw Tw T3 T4 (+1 internal state for IM1/IM2's PC push)
-                        m_len_n = (im == 2'd0) ? 4'd6 : 4'd7; t_n = 4'd1; m_cycle_n = 3'd1;
+                        // T1 T2 Tw Tw T3 T4 (+1 internal state for IM1/IM2's PC push),
+                        // in the mode the instruction just ending set: an IM n
+                        // taking effect at this boundary (perfectz80, op_ed46_int)
+                        m_len_n = (im_n == 2'd0) ? 4'd6 : 4'd7; t_n = 4'd1; m_cycle_n = 3'd1;
                     end else if (halted_n) begin
                         irq_seq_n = 2'd3;
                         bus_op_n = `BUSOP_M1; m_addr_n = pc_next; m_wdata_n = 8'h0;
