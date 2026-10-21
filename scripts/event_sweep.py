@@ -101,7 +101,10 @@ IM0_SEQS = {
 BASIC = ["inc_a", "ld_a_hl", "ld_hl_a", "inc_hl"]
 GROUPS = ["int", "nmi", "nmi_short", "nmi_reentry", "reset", "reset_release",
           "reset_wait", "reset_short", "combo", "busreq", "wait", "im2", "im2_combo",
-          "im0", "im0_combo", "opcodes", "classes"]
+          "im0", "im0_combo", "opcodes", "classes", "classes_reset"]
+# run only when named (--groups): RESET at every T-state of the timing classes,
+# where the die's register write-back timing still differs (known difference 19)
+EXPLICIT = {"classes_reset"}
 
 # ---- every opcode (the `opcodes` group) ------------------------------------
 # Operands: d = 05 (IX+5 / IY+5), n = 99, nn = 0300 (zeros: a NOP run, safe
@@ -264,7 +267,7 @@ def cases(groups, phases):
     step = 16 // phases
     ph = range(step // 2, 16, step)
     out = []
-    want = lambda g: "all" in groups or g in groups
+    want = lambda g: ("all" in groups and g not in EXPLICIT) or g in groups
     if want("int"):          # IM1, EI, INT held until INTA
         for t in INT_TARGETS:
             for n in range(TARGETS[t][1] + 2):
@@ -421,7 +424,7 @@ def cases(groups, phases):
                                     run=300 if pin == RESET else None, im=0, ei=True,
                                     inta_release=True, vec=0xcd, ops=(0x34, 0x12),
                                     meta={"kind": name, "n": n, "phase": j}))
-    if want("classes"):      # one opcode of each timing class TARGETS doesn't cover, every pin at every T-state
+    if want("classes") or want("classes_reset"):  # one opcode of each timing class TARGETS doesn't cover
         ops = {n: (code, setup) for n, code, setup in all_opcodes()}
         for rep, length, _ in CLASS_REPS:
             code, setup = ops[rep]
@@ -429,12 +432,16 @@ def cases(groups, phases):
             for n in range(length + 2):
                 for j in ph:
                     m = {"n": n, "phase": j, "class": rep}
+                    if want("classes_reset"):
+                        out.append(case(f"cls_{rep}_reset_T{n}_p{j:02d}", "classes_reset", rep,
+                                        [(RESET, at(n, j), at(n, j) + 64)], run=300, ei=True,
+                                        meta=dict(m, kind="reset"), **kw))
+                    if not want("classes"):
+                        continue
                     out += [case(f"cls_{rep}_nmi_T{n}_p{j:02d}", "classes", rep,
                                  [(NMI, at(n, j), at(n, j) + 16)], run=60 + length, meta=dict(m, kind="nmi"), **kw),
                             case(f"cls_{rep}_int_T{n}_p{j:02d}", "classes", rep, [(INT, at(n, j), -1)],
-                                 run=60 + length, ei=True, inta_release=True, meta=dict(m, kind="int"), **kw),
-                            case(f"cls_{rep}_reset_T{n}_p{j:02d}", "classes", rep,
-                                 [(RESET, at(n, j), at(n, j) + 64)], run=300, ei=True, meta=dict(m, kind="reset"), **kw)]
+                                 run=60 + length, ei=True, inta_release=True, meta=dict(m, kind="int"), **kw)]
                     for w in (1, 4):
                         out.append(case(f"cls_{rep}_busreq{w}_T{n}_p{j:02d}", "classes", rep,
                                         [(BUSREQ, at(n, j), at(n, j) + 16 * w)], run=60 + length,

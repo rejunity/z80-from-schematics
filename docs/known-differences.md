@@ -274,6 +274,13 @@ Notes for each row:
      The sweep's `reset_add_hl_bc` (20) and `reset_inc_bc` (6) cases are
      these, in the baseline; RESET with WAIT is untested. Modelling it means
      holding each class's writes until the T-state the die does them in.
+     The event sweep's `classes_reset` group (RESET at every T-state of one
+     opcode of every timing class, run by name) measures the rest: 170 of
+     2,210 cases in 27 classes differ the same way -- e.g. LD BC,nn: with
+     RESET from T5 the die hasn't written C yet and the RTL has, from T6
+     the die and the RTL have and the C model hasn't, from T8 both models
+     have written B and the die hasn't -- and in 84 of them the C model and
+     the RTL differ from each other.
  20. **IM0: the instruction from the interrupting device — resolved
      2026-10-21.** Found by the event sweep's `im0` group (twenty
      instructions handed over in INTA, perfectz80). On the die PC doesn't

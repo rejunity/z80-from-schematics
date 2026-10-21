@@ -106,7 +106,8 @@ Instructions under test:
 | `im0` | twenty instructions handed over in IM0: RST 38 / 00 / 08, CALL, JP, LD A,n, LD A,(nn), JR, INC BC, PUSH BC, HALT, EI, EX (SP),HL, RETI, LD IX,nn, LD (IX+d),n, RLC A, RLC (IX+d), JP (IX), LDIR |
 | `im0_combo` | IM0 CALL 1234 after INC A; NMI, WAIT, BUSREQ or RESET (as in `im2_combo`) from every T-state of it |
 | `opcodes` | every opcode -- 1,841 programs: unprefixed, CB, ED, DD / FD and DD CB / FD CB, the flag-dependent ones also with F = 00 and FF, DJNZ also with B = 1, INIR / OTIR / INDR / OTDR with B = 2 -- each plain, with the BUSREQ walk, with the WAIT walk, with INT from the marker's T4 (EI) and with a 1 T NMI at its T1 |
-| `classes` | one opcode of each of the 68 timing classes the instructions above don't cover (`CLASS_REPS`): 1 T NMI, INT until INTA, 4 T RESET, 1 T and 4 T BUSREQ, 1 T and 3 T WAIT from every T-state |
+| `classes` | one opcode of each of the 68 timing classes the instructions above don't cover (`CLASS_REPS`): 1 T NMI, INT until INTA, 1 T and 4 T BUSREQ, 1 T and 3 T WAIT from every T-state |
+| `classes_reset` | 4 T RESET from every T-state of the same 68 (run by name: `--groups classes_reset`; known difference 19) |
 
 The timing classes: the `opcodes` group's programs grouped by perfectz80's
 control pins in their plain run and their BUSREQ and WAIT walks, 86 of
@@ -132,7 +133,7 @@ that half sees the pulse. The sweep therefore shows whether the chip's
 input logic can catch such a pulse; it does not test the data sheet's
 minimum widths, which depend on analog timing.
 
-## Results (rejunity `nmos-im`, 21 October 2026)
+## Results (rejunity `sweep-all`, 21 October 2026)
 
 | group | cases | match | differ |
 |---|---|---|---|
@@ -151,13 +152,25 @@ minimum widths, which depend on analog timing.
 | im2_combo | 300 | 300 | 0 |
 | im0 | 40 | 40 | 0 |
 | im0_combo | 300 | 300 | 0 |
+| opcodes | 9205 | 9205 | 0 |
+| classes | 13260 | 13260 | 0 |
+| classes_reset (run by name) | 2210 | 2040 | 170 |
 
-8181 of 8207 cases match, and the C model matches the RTL in every
-half-cycle of all 8207. The 26 in the baseline are RESET stopping ADD HL,BC
-or INC BC in the T-states where the die still writes their result
-(docs/known-differences.md row 19): the register dump after reset differs,
-the pins do not. When the sweep was written (main `ec3c5d2`, 2287 cases) 809
-did. Since then:
+The default run, 30,672 cases, matches perfectz80 in all but 26 -- the
+pads driven included -- and the C model matches the RTL in every
+half-cycle of all of them. The 26 in the baseline are RESET stopping
+ADD HL,BC or INC BC in the T-states where the die still writes their
+result (docs/known-differences.md row 19): the register dump after reset
+differs, the pins do not. `classes_reset`, RESET at every T-state of the
+68 classes, shows how far row 19 reaches: 170 cases in 27 classes (LD
+rr,nn, LD rr,(nn), JR, DJNZ, RST, IN r,(C), the DD / FD index forms, LDI /
+CPI / INI / OUTI and their repeats) store other registers after the reset
+than the die, and in 84 of them the C model and the RTL differ from each
+other too -- each writes some results at another T-state. It joins the
+default run when row 19 is fixed.
+
+When the sweep was written (main `ec3c5d2`, 2287 cases) 809 differed.
+Since then:
 - `e60d06e` latches INT on the rising edge that starts the last T-state and
   catches an NMI pulse of any width, as perfectz80 does: INT and NMI were
   taken half a clock early (a pulse in the high half of the last T-state),
