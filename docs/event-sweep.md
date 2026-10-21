@@ -38,7 +38,8 @@ case gives one (the IM2 vector, or the opcode in IM0). In IM0 it can hand
 over more bytes, one per INTA cycle or memory read until it has none left,
 as the die takes them: the opcode after a prefix in another INTA cycle, the
 operands as memory reads at the interrupted PC. An opcode fetch from memory
-ends its instruction. I/O reads see FF.
+ends its instruction. An IN reads what an OUT wrote to its address (FF
+before).
 
 Times are counted from the rising edge that starts the marker fetch's T1.
 A pulse is placed at T-state `n` of the target (`M4` is the marker's T4, `T1`
@@ -108,6 +109,8 @@ Instructions under test:
 | `opcodes` | every opcode -- 1,841 programs: unprefixed, CB, ED, DD / FD and DD CB / FD CB, the flag-dependent ones also with F = 00 and FF, DJNZ also with B = 1, INIR / OTIR / INDR / OTDR with B = 2 -- each plain, with the BUSREQ walk, with the WAIT walk, with INT from the marker's T4 (EI) and with a 1 T NMI at its T1 |
 | `classes` | one opcode of each of the 68 timing classes the instructions above don't cover (`CLASS_REPS`): 1 T NMI, INT until INTA, 1 T and 4 T BUSREQ, 1 T and 3 T WAIT from every T-state |
 | `classes_reset` | 4 T RESET from every T-state of the same 68 (run by name: `--groups classes_reset`; known difference 19) |
+| `fuzz` | 2,000 random cases (seed 1): 3-10 instructions drawn from every opcode program, a random F and BC, IM0 (an RST byte), IM1 or IM2 (vector 40, 41 or FF), EI or not, and one to three NMI / INT / WAIT / BUSREQ pulses of random widths in the first 40 T-states, 200 T run |
+| `fuzz_reset` | the same with RESET among the pins (run by name; known difference 19) |
 
 The timing classes: the `opcodes` group's programs grouped by perfectz80's
 control pins in their plain run and their BUSREQ and WAIT walks, 86 of
@@ -155,8 +158,9 @@ minimum widths, which depend on analog timing.
 | opcodes | 9205 | 9205 | 0 |
 | classes | 13260 | 13260 | 0 |
 | classes_reset (run by name) | 2210 | 2040 | 170 |
+| fuzz | 2000 | 2000 | 0 |
 
-The default run, 30,672 cases, matches perfectz80 in all but 26 -- the
+The default run, 32,672 cases, matches perfectz80 in all but 26 -- the
 pads driven included -- and the C model matches the RTL in every
 half-cycle of all of them. The 26 in the baseline are RESET stopping
 ADD HL,BC or INC BC in the T-states where the die still writes their
@@ -238,6 +242,19 @@ git diff tests/event_sweep/baseline.txt
 
 Review the baseline diff with `build/event_sweep/diff/<case>.txt` before
 committing it.
+
+## The fuzz
+
+The groups above place one or two events where they were written to; the
+fuzz puts random code, modes and pins together (`fuzz_cases()`): case i of
+a seed is always the same, so a difference reproduces with
+`--groups fuzz --fuzz-seed S --fuzz-n N --match fuzz_sS_0000i`. The default
+run has seed 1's 2,000 cases, from perfectz80's recorded traces; CI's
+nightly run also tries 500 cases of a fresh seed (its run id), perfectz80
+live, and fails on any difference. When it was added, seed 1 found two
+things nothing else had: a nested NMI's IFF2 (known difference 24) and the
+RTL testbench answering every IN with FF where perfectz80's harness and the
+C system return what an OUT wrote.
 
 ## perfectz80's recorded traces
 

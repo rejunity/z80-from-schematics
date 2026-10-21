@@ -32,7 +32,8 @@
 // one per INTA cycle or memory read, in place of memory: the rest of an
 // IM0 instruction (the die fetches the opcode after a prefix with another
 // INTA and reads the operands at the unchanged PC). An opcode fetch from
-// memory ends the device's instruction. I/O reads see FF.
+// memory ends the device's instruction. An IN reads what an OUT wrote to its
+// address, FF before (as perfectz80's harness and the C system do).
 // Memory writes are captured from the pins at the end of every half-cycle.
 // Output: `h clk addr data mreq iorq rd wr m1 rfsh halt busack aen den cen`
 // for halves 0 .. 2*run-1 from the marker's T1, pins sampled at the end of
@@ -71,9 +72,10 @@ module tb_event_sweep;
     reg  [7:0]  dev_byte;
     reg  [71:0] dev_q;          // the device's bytes, the first one lowest
     reg         dev_read;
+    reg  [7:0]  io [0:65535];   // I/O space: OUT writes, IN reads back (FF until written)
     assign data_in = (!mreq_n && !rd_n) ? (dev_read ? dev_byte : mem[addr]) :
                      (!iorq_n && !m1_n) ? dev_byte :
-                     (!iorq_n && !rd_n) ? 8'hff : 8'h00;
+                     (!iorq_n && !rd_n) ? io[addr] : 8'h00;
 
     integer ev_pin [0:7], ev_lo [0:7], ev_hi [0:7];
     integer n_ev, fd, r, k, e, run, marker, hold, hold_t, int_at, inta_release, vec;
@@ -118,7 +120,7 @@ module tb_event_sweep;
                 n_ev = n_ev + 1;
             $fclose(fd);
         end
-        for (k = 0; k < 65536; k = k + 1) mem[k] = 8'h00;
+        for (k = 0; k < 65536; k = k + 1) begin mem[k] = 8'h00; io[k] = 8'hff; end
         $readmemh(progf, mem);
 
         // Power-on: por_n for the first half-cycle, RESET 4 T low, released
@@ -193,6 +195,7 @@ module tb_event_sweep;
             end
             #1;
             if (t % 16 == 15 && !mreq_n && !wr_n) mem[addr] = data_out;
+            if (t % 16 == 15 && !iorq_n && !wr_n) io[addr] = data_out;
             if (found && t % 16 == 15) begin
                 $display("%0d %0d %04x %02x %0d %0d %0d %0d %0d %0d %0d %0d %04x %02x %02x",
                          half - mark_half, clk, addr, data_out,

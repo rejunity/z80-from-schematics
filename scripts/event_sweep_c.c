@@ -15,8 +15,8 @@
    except on NMI: here the harness is rtl/z80_top.v's NMI pulse catcher
    (the die's NMI flip-flop, set by the pin's falling edge itself), which
    holds NMI low for the model until the next rising edge has seen it.
-   The interrupting device (-v, -o) is the one in event_sweep_pz80.c; I/O
-   reads FF. */
+   The interrupting device (-v, -o) is the one in event_sweep_pz80.c; an IN
+   reads what an OUT wrote to its address, FF before. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
