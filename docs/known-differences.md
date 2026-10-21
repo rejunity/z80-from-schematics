@@ -36,6 +36,8 @@ Status legend:
 | 19 | RESET between an instruction and its write-back | timing / reset          | watching |
 | 20 | IM0: the instruction from the interrupting device | interrupt               | resolved |
 | 21 | HALT pin when an NMI response fetches a HALT byte | timing / interrupt      | resolved |
+| 22 | Pad drivers: when the bus floats              | bus                       | resolved |
+| 23 | INTA right after IM n                         | interrupt                 | resolved |
 
 Notes for each row:
 
@@ -272,6 +274,13 @@ Notes for each row:
      The sweep's `reset_add_hl_bc` (20) and `reset_inc_bc` (6) cases are
      these, in the baseline; RESET with WAIT is untested. Modelling it means
      holding each class's writes until the T-state the die does them in.
+     The event sweep's `classes_reset` group (RESET at every T-state of one
+     opcode of every timing class, run by name) measures the rest: 170 of
+     2,210 cases in 27 classes differ the same way -- e.g. LD BC,nn: with
+     RESET from T5 the die hasn't written C yet and the RTL has, from T6
+     the die and the RTL have and the C model hasn't, from T8 both models
+     have written B and the die hasn't -- and in 84 of them the C model and
+     the RTL differ from each other.
  20. **IM0: the instruction from the interrupting device — resolved
      2026-10-21.** Found by the event sweep's `im0` group (twenty
      instructions handed over in INTA, perfectz80). On the die PC doesn't
@@ -295,6 +304,30 @@ Notes for each row:
      -- the RTL lowered the HALT pin for half a T-state in that M1's T4, from
      the raw opcode decode. The pin now follows the instruction that runs, as
      in the C model and perfectz80.
+ 22. **Pad drivers: when the bus floats — resolved 2026-10-21.** The event
+     sweep now also compares which pads are driven in every half-cycle:
+     perfectz80's pull-up / pull-down gates (`scripts/pz80_pads.c`) against
+     `z80_top`'s new `addr_drive` / `ctl_drive` outputs and `data_drive`
+     (docs/timing.md "Pad drivers"). Three differences:
+     - RESET: the chips floated the address while the RESET pin was low;
+       the die drives it through the M-cycle RESET cuts and floats it only
+       in the idle T-states, up to T1 of the restart (after the pin rises).
+     - Bus grant: the chips released the address and MREQ IORQ RD WR with
+       BUSACK; the die keeps them floating half a T-state longer, to the
+       rising edge that starts the held M-cycle. The Tang chip build also
+       floated M1 and RFSH, which the die always drives.
+     - Long writes (EX (SP),HL's last, LDI / LDD / LDIR / LDDR's 5 T write):
+       the die drives the data bus through T4 and T5 to the next T1; the
+       models stopped after T3.
+     The models now export the die's enables and the chips' pads use them.
+ 23. **INTA right after IM n — resolved 2026-10-21** (RTL only). Found by
+     the event sweep's `opcodes` group (`op_ed46_int`, `op_ed4e_int`,
+     `op_ed66_int`, `op_ed6e_int`): an INT accepted at the end of IM 0
+     (IM 1 before it) gets the new mode's response -- IM0's 6-T INTA, then
+     the RST from the bus -- on the die and in the C model. The RTL sized
+     the INTA from the mode before the instruction (7 T, IM1's) and then
+     added the RST's own T-state: the push came a T-state late. It now
+     takes the mode the ending instruction sets.
 
 Add rows as new differences are discovered. Each "watching" row should gain a
 test that pins the chosen behaviour or escalates it.
