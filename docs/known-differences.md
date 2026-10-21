@@ -15,11 +15,11 @@ Status legend:
 
 | #  | Area                                          | Class                     | Status   |
 |----|-----------------------------------------------|---------------------------|----------|
-| 1  | Reset register initialisation                 | reference ambiguity       | accepted |
+| 1  | Reset register initialisation                 | reference ambiguity       | resolved |
 | 2  | SCF / CCF X / Y flags (NMOS Q variant)        | undocumented / flag       | resolved |
 | 3  | `OUT (C),0` (ED71)                            | undocumented              | accepted |
 | 4  | M1 deassert phase                             | timing                    | resolved |
-| 5  | `LD A,I` / `LD A,R` PF interrupt race         | undocumented / interrupt  | watching |
+| 5  | `LD A,I` / `LD A,R` PF interrupt race         | undocumented / interrupt  | resolved |
 | 6  | Verilator build on host                       | environment               | resolved |
 | 7  | DDCB / FDCB `(IX+d)` ZEXDOC subtests          | tooling (stale binary)    | resolved |
 | 8  | Interrupt / HALT subsystem in RTL             | resolved                  | resolved |
@@ -28,13 +28,25 @@ Status legend:
 | 11 | `DD 36` / `FD 36` cycle count                 | timing                    | resolved |
 | 12 | `INI` / `IND` / `INIR` / `INDR` flag set      | undocumented / flag       | watching |
 | 13 | `LDIR` / `LDDR` Q-leak into next instruction  | undocumented / flag       | watching |
-| 14 | Pin-scenario vs perfectz80 (informational)    | timing                    | watching |
+| 14 | Pin-scenario vs perfectz80                    | timing                    | resolved |
+| 15 | RTL clocking: reset / BUSREQ settle vs C model | timing                    | resolved |
+| 16 | BUSREQ / BUSACK vs the NMOS Z80               | timing / bus              | resolved |
+| 17 | RESET / INT / NMI sweep vs perfectz80         | timing / interrupt        | resolved |
+| 18 | Refresh and idle address bus                  | timing / bus              | resolved |
+| 19 | RESET between an instruction and its write-back | timing / reset          | watching |
+| 20 | IM0: the instruction from the interrupting device | interrupt               | resolved |
+| 21 | HALT pin when an NMI response fetches a HALT byte | timing / interrupt      | resolved |
 
 Notes for each row:
 
-  1. Reset register init — real Z80 leaves SP / AF / main regs undefined at
-     power-up; we force `SP=FFFF, AF=FFFF`, alternates / IX / IY = `FFFF` for
-     deterministic C↔RTL compare.
+  1. Reset register init — **resolved 2026-10-20.** perfectz80 comes up with
+     every register pair at 5555 and keeps every register across RESET; only
+     PC, I, R, IFF1 / IFF2 and IM are cleared. RZ80's power-on reset
+     (`z80_top.por_n`, not a Z80 pin; `z80_reset()` in C) loads 5555, and
+     RESET keeps every register, WZ and the exchange flip-flops
+     (docs/timing.md "RESET"). The real NMOS part comes up with random
+     registers; the ASIC chip ties `por_n` off and RESET alone initialises
+     the control state.
 
   2. SCF / CCF X / Y flags — NMOS Q-register variant implemented: X / Y derived
      from `(A | Q)`, where Q holds the F value left by the previous F-modifying
@@ -55,9 +67,14 @@ Notes for each row:
      starting at T3.P, which is what both models produce. No code change
      needed; `make perfectz80` is the gate of record.
 
-  5. `LD A,I/R` PF interrupt race — the documented race that clears PF if INT
-     arrives during the instruction is modelled only at the sequencer's INT
-     sample point; corner timing may differ from silicon.
+  5. `LD A,I/R` PF interrupt race — **resolved 2026-10-20.** On the NMOS
+     Z80 an INT accepted at the end of LD A,I / LD A,R clears IFF2 while
+     the instruction writes P/V from it, so P/V reads 0. perfectz80 shows
+     it from every INT start up to the last T-state's rising edge (pushed F
+     29 instead of 2D); an NMI accepted there leaves P/V = IFF2. RZ80 used
+     IFF2 unconditionally. The C model and the RTL now clear P/V when the
+     boundary's decision accepts an INT; the event sweep's LD A,I / LD A,R
+     cases and `test_int.c` pin it. (The CMOS Z84C00 fixed the race.)
 
   6. Verilator build on host — earlier blocked on Apple clang 14 vs macOS SDK
      C++17 libc++. Resolved with Apple clang 21 + Verilator 5.042 from Homebrew;
@@ -124,46 +141,43 @@ Notes for each row:
      exactly the "Q-flag carry-over" effect this row described).
 
  14. Pin-scenario vs perfectz80 (`make pin_scenarios` /
-     `pin_scenarios_rtl` / `pin_scenarios_netlist`) — twelve trace
-     programs (`prog9_inta_im1`..`prog20_block_int`) drive INT / NMI /
+     `pin_scenarios_rtl` / `pin_scenarios_netlist`) — fourteen trace
+     programs (`prog9_inta_im1`..`prog22_wait_cpir`) drive INT / NMI /
      WAIT / BUSREQ / RESET through the `.events` sidecar and diff
      against perfectz80 per-half-cycle. **Current status
-     (2026-06-18)**: 5 / 12 PASS cleanly:
-     - `prog9_inta_im1` ✓
-     - `prog12_inta_im2` ✓
-     - `prog16_ei_delay` ✓
-     - `prog18_di_then_int` ✓
-     - `prog20_block_int` ✓
-
-     5 / 12 have informational ctrl-pin timing diffs (post the
-     2026-06-18 C1 reset + RFSH-edge + HALT-pin-at-T4.N fixes):
-     - `prog10_halt_nmi`   (**1** / 200, was 5) — last residual HALT-pin diff during NMI ack
-     - `prog17_reset`      (131 / 200) — reset deferral (silicon completes current M-cycle before applying reset state)
-     - `prog11_wait_mem`   (142 / 200) — WAIT-insertion sub-T-state phasing
-     - `prog13_halt_int`   (144 / 200) — HALT-pin during NOP-loop M-cycles
-     - `prog14_wait_io`    (147 / 200) — IORQ + WAIT timing during IN/OUT
-     - `prog15_busreq_m1`  (154 / 200) — BUSREQ-aborts-M1 M-cycle ordering
-
-     `prog9_inta_im1`, `prog12_inta_im2`, `prog16_ei_delay`,
-     `prog18_di_then_int`, `prog19_nmi_in_int`, `prog20_block_int`
-     all PASS clean (6 / 12).
+     (2026-10-20)**: 14 / 14 PASS through the RTL and through the C model,
+     the address included in every phase. Until then `perfectz80_runner` set NMI, INT and
+     WAIT high again at every phase, so perfectz80 saw a one-phase pulse
+     where the C model and the RTL held the scenario's level from its
+     `lo` event to its `hi` event; it now holds the level too. That
+     difference alone made `prog11_wait_mem`, `prog13_halt_int` and
+     `prog14_wait_io` differ in ~145 / 200 phases; with it gone both WAIT
+     programs pass, like `prog21_wait_ldir` and `prog22_wait_cpir`.
+     `prog10_halt_nmi` and `prog13_halt_int` pass since the HALT pin
+     rises in the low half of the last T4 (row 17), `prog17_reset` since
+     both models run the die's sampled RESET, `prog15_busreq_m1` since
+     both grant and release BUSREQ as the die does (row 16).
+     **2026-10-21**: the targets gate CI. The INT scenarios (`prog9`,
+     `prog12`, `prog16`, `prog19`, `prog20`) had never taken their
+     interrupt -- INT pulses of 1-3 T-states between the CPU's sampling
+     edges -- so they passed without testing it; they now hold INT across
+     an instruction's end and release it after INTA. Every harness puts 00
+     on the bus during INTA (`perfectz80_runner` left perfectz80's default,
+     E0), so `prog12`'s IM2 table read at {I, 00} is compared. `prog19`
+     then showed row 21.
 
      `.events` is now consumed by all paths — C tracegen, iverilog
      RTL, Verilator, LibreLane gate-level netlist — via per-pin
-     `+<pin>_lo / +<pin>_hi` plusargs. Make targets are informational
-     (exit 0 even on divergence); current divergences are folded into
-     the simplifications-audit list rather than gating CI. Functional
-     behaviour on all of these is verified by Rak + FUSE +
-     `make halt2int` even where the per-phase pin trace differs.
-     When all twelve reach control-pin parity, this row flips to
-     `resolved` and the gates become hard.
+     `+<pin>_lo / +<pin>_hi` plusargs, and the make targets fail on any
+     control-pin or address difference.
 
      Additionally, `scripts/compare_signal_timing.py` (used by
      `make perfectz80` / `_rtl` / `_netlist`) compares `addr` and
      `data_o` with an **address-bus don't-care tolerance**: phases
      where no data transfer is in progress on either side (refresh
      windows, idle phases between M-cycles, T1.P setup) are treated as
-     matches regardless of `addr` value. With the tolerance in place,
+     matches regardless of `addr` value; the refresh address itself is
+     gated separately (row 18). With the tolerance in place,
      `addr` matches at **100 %** on 10/12 trace programs (8 hand + 4
      random), with the residual 95-98 % on `prog_rnd_02` / `prog_rnd_03`
      being the reset-register-init delta (row 1) surfacing via PUSH
@@ -178,15 +192,11 @@ Notes for each row:
      retiming is trace-identical to the C model on `make compare`, FUSE,
      Rak and BASIC. Deliberate residual RTL↔C differences, all confined
      to the informational pin-scenario programs:
-     - **Reset**: the C model carries silicon's ~5-half-cycle reset-assert
-       filter and ~4-half-cycle release settle (`prog17_reset`). The RTL
-       resets asynchronously the moment `reset_n` falls and starts T1 of
-       the first M1 on the first rising edge after release.
-     - **BUSREQ release**: the C model settles 2 half-cycles after
-       `busreq_n` rises (`prog15_busreq_m1`); the RTL samples `busreq_n`
-       on the rising edge and restarts M1 on that edge. (The previous 2×
-       RTL could restart on a falling edge and run phase-swapped
-       thereafter; that is fixed.)
+     - **Reset** — resolved 2026-10-20: both models run the die's sampled
+       RESET (docs/timing.md "RESET"); `prog17_reset` and the sweep's 544
+       RESET cases match perfectz80.
+     - **BUSREQ release** — resolved 2026-10-20: both models grant and
+       release as the die does (row 16).
      - **Pins during a bus grant**: both now idle their strobes while
        BUSACK is low. The previous 2× RTL kept driving the frozen
        M-cycle's strobes.
@@ -195,6 +205,96 @@ Notes for each row:
        ends the last Tw (the original 2× RTL double-latched).
      Watching: fold the reset / BUSREQ settle into the RTL once the
      pin-scenario gates become hard.
+
+ 16. **BUSREQ / BUSACK vs the NMOS Z80 — resolved 2026-10-20.** Found by
+     sweeping BUSREQ through perfectz80; both models now do what the die
+     does (docs/timing.md "BUSREQ / BUSACK"):
+     - **Grant point**: after *any* machine cycle (PS0178 Figure 10), the
+       next one held until the release -- inside an instruction too (after
+       the M1 of `LD SP,nn`, after each operand read). The models granted
+       only at instruction boundaries.
+     - **Sample edge**: BUSREQ is sampled on the rising edge that starts the
+       M-cycle's last T-state, like INT (TsBUSREQ / ThBUSREQ); the models
+       sampled the edge that ends it.
+     - **BUSACK edges**: BUSACK falls on the rising edge after the sample
+       (TdCr(BUSACKf)). On release the sample is on a rising edge, BUSACK
+       rises on the next falling edge (TdCf(BUSACKr)) and the held M-cycle
+       starts on the rising edge after that; the shortest grant is one
+       T-state.
+     - **M-cycle boundaries**: the die's, internal cycles included -- ADD /
+       ADC / SBC HL,rr now run internal M-cycles of 4 + 3 T-states, and the
+       1- and 2-T internal states after an M1 or a read are part of it.
+     The event sweep's `busreq` group (1 T and 4 T at every T-state of 24
+     instructions) and the BUSREQ-with-INT / NMI / HALT combos match;
+     `prog15_busreq_m1` passes in both models.
+
+ 17. RESET / INT / NMI / BUSREQ / WAIT sweep vs perfectz80 (`make
+     event_sweep`, see [event-sweep.md](event-sweep.md), from hardesk) —
+     pulses at every T-state of 24 instructions, diffed per half-cycle
+     against perfectz80, the address and BUSACK included. **5879 of 5905
+     cases match (2026-10-20)**; the 26 in `tests/event_sweep/baseline.txt`
+     are row 19 (RESET in ADD HL,BC / INC BC's write-back), and CI fails on
+     any other difference. RESET is the die's sampled RESET with the special
+     reset and registers kept (row 1); BUSREQ the die's grant (row 16).
+
+ 18. **Refresh and idle address bus vs perfectz80 — resolved
+     2026-10-20.** The address now agrees with perfectz80 in every
+     half-cycle, in the C model and the RTL, on every trace program, pin
+     scenario and event-sweep case; `compare_signal_timing.py` and the
+     sweep gate on it.
+     - **Refresh.** perfectz80 drives I:R, the R from before this M1's
+       increment (the first M1 after reset refreshes 0000); RZ80 stepped R
+       at the T3 rising edge and drove I:(R+1). R now steps on the rising
+       edge that ends the refresh (T4 of an M1, the second refresh T-state
+       of an INTA). Matters to DRAM controllers that use the refresh
+       address and to the ZX81, whose display hangs its line counter on A6
+       of the refresh address.
+     - **Internal T-states.** The bus keeps the last address: the refresh
+       address after an M1 ("ir:1" in the Spectrum's contention tables),
+       the operand address after a read ("hl:1", "pc+1:1"), and so through
+       an M1's T5 / T6, IM1 / IM2's seventh INTA T-state, the reset idle
+       and a bus grant. RZ80 drove its address latch, which carries the
+       IDU / EA work of those T-states (468 of 2,215 phases differed);
+       the pins now hold instead.
+
+ 19. **RESET between an instruction and its write-back** — the die
+     finishes some results in the next M1, which a RESET that stops that
+     M1 early loses (perfectz80, RESET at every T-state; the register
+     dump after reset shows it):
+     - INC A: H and N in the next M1's T2, A and the other flags in T3;
+     - LD A,(HL): A in the next M1's T2; POP DE: DE in its T1; EX DE,HL:
+       the swap in its T3;
+     - ADD HL,rr: L as the die's M2 ends, H in the next M1's T1, the flags
+       in its T2 / T3; INC rr: the pair late in the M1's T5 / T6.
+     RZ80 writes every result on the instruction's last edge (ADD HL,rr
+     and INC rr theirs earlier still) and keeps them. The push SP-1, which
+     the die does on the edge that ends the previous cycle, is modelled.
+     The sweep's `reset_add_hl_bc` (20) and `reset_inc_bc` (6) cases are
+     these, in the baseline; RESET with WAIT is untested. Modelling it means
+     holding each class's writes until the T-state the die does them in.
+ 20. **IM0: the instruction from the interrupting device — resolved
+     2026-10-21.** Found by the event sweep's `im0` group (twenty
+     instructions handed over in INTA, perfectz80). On the die PC doesn't
+     move until that instruction ends: its operands are memory reads at the
+     interrupted PC (a CALL's two operand reads show the same address, and
+     the device answers them), the opcode after a prefix comes in another
+     6 T acknowledge cycle, CALL and RST push the interrupted PC, JR jumps
+     relative to it, and a HALT handed over drops the HALT pin in the
+     acknowledge's last T-state. Both models read the operands at PC, PC+1
+     and moved PC past them (a CALL pushed PC+2), fetched the opcode after a
+     prefix from memory, and kept HALT high in the acknowledge; single-byte
+     instructions (RST, INC rr, PUSH, EI, EX (SP),HL) already matched.
+     `make bus_controls` (`tb_int_ack.v`, `test_int_ack.c`) had the old
+     reading built in -- operands from memory at PC, PC+1 and a return
+     address two higher; its device now supplies the operands. docs/timing.md
+     "Interrupt acknowledge".
+ 21. **HALT pin when an NMI response fetches a HALT byte — resolved
+     2026-10-21** (RTL only). The NMI response's M1 fetches the byte at PC
+     and discards it; when that byte was a HALT opcode -- an NMI taken at the
+     top of an interrupt handler that starts with HALT (`prog19_nmi_in_int`)
+     -- the RTL lowered the HALT pin for half a T-state in that M1's T4, from
+     the raw opcode decode. The pin now follows the instruction that runs, as
+     in the C model and perfectz80.
 
 Add rows as new differences are discovered. Each "watching" row should gain a
 test that pins the chosen behaviour or escalates it.

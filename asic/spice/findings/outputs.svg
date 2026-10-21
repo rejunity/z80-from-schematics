@@ -1,0 +1,134 @@
+<svg xmlns='http://www.w3.org/2000/svg' width='900' height='646' viewBox='0 0 900 646'>
+<rect width='900' height='646' fill='white'/>
+<text x='450.0' y='20' font-size='14.5' font-weight='bold' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>Outputs: the libraries extrapolate fine; the datasheet&#x27;s 1.5 V level moves the edges</text>
+<text x='10' y='48' font-size='13' font-weight='bold' font-family='Helvetica, Arial, sans-serif'>GF180: data input to pin, into 100 pF</text>
+<line x1='193.5' y1='60' x2='193.5' y2='190' stroke='#e6e6e6'/>
+<text x='193.5' y='204' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>5</text>
+<line x1='332.6' y1='60' x2='332.6' y2='190' stroke='#e6e6e6'/>
+<text x='332.6' y='204' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>10</text>
+<line x1='471.7' y1='60' x2='471.7' y2='190' stroke='#e6e6e6'/>
+<text x='471.7' y='204' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>15</text>
+<line x1='610.7' y1='60' x2='610.7' y2='190' stroke='#e6e6e6'/>
+<text x='610.7' y='204' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>20</text>
+<line x1='749.8' y1='60' x2='749.8' y2='190' stroke='#e6e6e6'/>
+<text x='749.8' y='204' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>25</text>
+<text x='535.0' y='220' font-size='11.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>ns</text>
+<text x='182' y='76' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>bi_t tt rise</text>
+<line x1='325.7' y1='72' x2='492.6' y2='72' stroke='#bbb' stroke-width='2'/>
+<path d='M492.6,67 L497.6,72 L492.6,77 L487.6,72 Z' fill='#9a9a9a'/>
+<circle cx='474.7' cy='72' r='4.5' fill='#1f6fb4'/>
+<rect x='321.7' y='68' width='8' height='8' fill='#d1352b'/>
+<text x='182' y='97' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>bi_t tt fall</text>
+<line x1='417.9' y1='93' x2='543.8' y2='93' stroke='#bbb' stroke-width='2'/>
+<path d='M452.6,88 L457.6,93 L452.6,98 L447.6,93 Z' fill='#9a9a9a'/>
+<circle cx='417.9' cy='93' r='4.5' fill='#1f6fb4'/>
+<rect x='539.8' y='89' width='8' height='8' fill='#d1352b'/>
+<text x='182' y='118' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>bi_t ss rise</text>
+<line x1='540.9' y1='114' x2='776.4' y2='114' stroke='#bbb' stroke-width='2'/>
+<path d='M776.4,109 L781.4,114 L776.4,119 L771.4,114 Z' fill='#9a9a9a'/>
+<circle cx='743.9' cy='114' r='4.5' fill='#1f6fb4'/>
+<rect x='536.9' y='110' width='8' height='8' fill='#d1352b'/>
+<text x='182' y='139' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>bi_t ss fall</text>
+<line x1='667.4' y1='135' x2='843.0' y2='135' stroke='#bbb' stroke-width='2'/>
+<path d='M730.1,130 L735.1,135 L730.1,140 L725.1,135 Z' fill='#9a9a9a'/>
+<circle cx='667.4' cy='135' r='4.5' fill='#1f6fb4'/>
+<rect x='839.0' y='131' width='8' height='8' fill='#d1352b'/>
+<text x='182' y='160' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>bi_t ff rise</text>
+<line x1='227.0' y1='156' x2='355.8' y2='156' stroke='#bbb' stroke-width='2'/>
+<path d='M355.8,151 L360.8,156 L355.8,161 L350.8,156 Z' fill='#9a9a9a'/>
+<circle cx='342.7' cy='156' r='4.5' fill='#1f6fb4'/>
+<rect x='223.0' y='152' width='8' height='8' fill='#d1352b'/>
+<text x='182' y='181' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>bi_t ff fall</text>
+<line x1='299.6' y1='177' x2='396.7' y2='177' stroke='#bbb' stroke-width='2'/>
+<path d='M321.9,172 L326.9,177 L321.9,182 L316.9,177 Z' fill='#9a9a9a'/>
+<circle cx='299.6' cy='177' r='4.5' fill='#1f6fb4'/>
+<rect x='392.7' y='173' width='8' height='8' fill='#d1352b'/>
+<path d='M194.0,227 L199.0,232 L194.0,237 L189.0,232 Z' fill='#9a9a9a'/>
+<text x='204' y='236' font-size='11' font-family='Helvetica, Arial, sans-serif'>PDK library, 50 % (as STA extrapolates it)</text>
+<circle cx='494.4' cy='232' r='4.5' fill='#1f6fb4'/>
+<text x='504.40000000000003' y='236' font-size='11' font-family='Helvetica, Arial, sans-serif'>simulated, 50 %</text>
+<rect x='190.0' y='246' width='8' height='8' fill='#d1352b'/>
+<text x='204' y='254' font-size='11' font-family='Helvetica, Arial, sans-serif'>simulated, 1.5 V (where PS0178 measures)</text>
+<text x='10' y='288' font-size='13' font-weight='bold' font-family='Helvetica, Arial, sans-serif'>IHP: data input to pin, into 100 pF</text>
+<line x1='267.3' y1='300' x2='267.3' y2='556' stroke='#e6e6e6'/>
+<text x='267.3' y='570' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>8</text>
+<line x1='367.2' y1='300' x2='367.2' y2='556' stroke='#e6e6e6'/>
+<text x='367.2' y='570' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>10</text>
+<line x1='467.1' y1='300' x2='467.1' y2='556' stroke='#e6e6e6'/>
+<text x='467.1' y='570' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>12</text>
+<line x1='567.0' y1='300' x2='567.0' y2='556' stroke='#e6e6e6'/>
+<text x='567.0' y='570' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>14</text>
+<line x1='666.9' y1='300' x2='666.9' y2='556' stroke='#e6e6e6'/>
+<text x='666.9' y='570' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>16</text>
+<line x1='766.7' y1='300' x2='766.7' y2='556' stroke='#e6e6e6'/>
+<text x='766.7' y='570' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>18</text>
+<line x1='866.6' y1='300' x2='866.6' y2='556' stroke='#e6e6e6'/>
+<text x='866.6' y='570' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>20</text>
+<text x='535.0' y='586' font-size='11.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>ns</text>
+<text x='182' y='316' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>InOut16mA typ rise</text>
+<line x1='426.8' y1='312' x2='493.7' y2='312' stroke='#bbb' stroke-width='2'/>
+<path d='M493.7,307 L498.7,312 L493.7,317 L488.7,312 Z' fill='#9a9a9a'/>
+<circle cx='479.3' cy='312' r='4.5' fill='#1f6fb4'/>
+<rect x='422.8' y='308' width='8' height='8' fill='#d1352b'/>
+<text x='182' y='337' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>InOut16mA typ fall</text>
+<line x1='454.8' y1='333' x2='506.8' y2='333' stroke='#bbb' stroke-width='2'/>
+<path d='M465.4,328 L470.4,333 L465.4,338 L460.4,333 Z' fill='#9a9a9a'/>
+<circle cx='454.8' cy='333' r='4.5' fill='#1f6fb4'/>
+<rect x='502.8' y='329' width='8' height='8' fill='#d1352b'/>
+<text x='182' y='358' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>InOut16mA slow rise</text>
+<line x1='820.4' y1='354' x2='842.9' y2='354' stroke='#bbb' stroke-width='2'/>
+<path d='M842.9,349 L847.9,354 L842.9,359 L837.9,354 Z' fill='#9a9a9a'/>
+<circle cx='820.4' cy='354' r='4.5' fill='#1f6fb4'/>
+<rect x='816.4' y='350' width='8' height='8' fill='#d1352b'/>
+<text x='182' y='379' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>InOut16mA slow fall</text>
+<line x1='799.6' y1='375' x2='819.2' y2='375' stroke='#bbb' stroke-width='2'/>
+<path d='M819.2,370 L824.2,375 L819.2,380 L814.2,375 Z' fill='#9a9a9a'/>
+<circle cx='799.6' cy='375' r='4.5' fill='#1f6fb4'/>
+<rect x='795.6' y='371' width='8' height='8' fill='#d1352b'/>
+<text x='182' y='400' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>InOut16mA fast rise</text>
+<line x1='227.0' y1='396' x2='304.6' y2='396' stroke='#bbb' stroke-width='2'/>
+<path d='M304.6,391 L309.6,396 L304.6,401 L299.6,396 Z' fill='#9a9a9a'/>
+<circle cx='293.4' cy='396' r='4.5' fill='#1f6fb4'/>
+<rect x='223.0' y='392' width='8' height='8' fill='#d1352b'/>
+<text x='182' y='421' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>InOut16mA fast fall</text>
+<line x1='283.3' y1='417' x2='351.7' y2='417' stroke='#bbb' stroke-width='2'/>
+<path d='M289.2,412 L294.2,417 L289.2,422 L284.2,417 Z' fill='#9a9a9a'/>
+<circle cx='283.3' cy='417' r='4.5' fill='#1f6fb4'/>
+<rect x='347.7' y='413' width='8' height='8' fill='#d1352b'/>
+<text x='182' y='442' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>Out16mA typ rise</text>
+<line x1='432.2' y1='438' x2='498.3' y2='438' stroke='#bbb' stroke-width='2'/>
+<path d='M498.3,433 L503.3,438 L498.3,443 L493.3,438 Z' fill='#9a9a9a'/>
+<circle cx='484.8' cy='438' r='4.5' fill='#1f6fb4'/>
+<rect x='428.2' y='434' width='8' height='8' fill='#d1352b'/>
+<text x='182' y='463' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>Out16mA typ fall</text>
+<line x1='447.5' y1='459' x2='499.5' y2='459' stroke='#bbb' stroke-width='2'/>
+<path d='M454.8,454 L459.8,459 L454.8,464 L449.8,459 Z' fill='#9a9a9a'/>
+<circle cx='447.5' cy='459' r='4.5' fill='#1f6fb4'/>
+<rect x='495.5' y='455' width='8' height='8' fill='#d1352b'/>
+<text x='182' y='484' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>Out16mA slow rise</text>
+<line x1='822.5' y1='480' x2='843.0' y2='480' stroke='#bbb' stroke-width='2'/>
+<path d='M843.0,475 L848.0,480 L843.0,485 L838.0,480 Z' fill='#9a9a9a'/>
+<circle cx='822.5' cy='480' r='4.5' fill='#1f6fb4'/>
+<rect x='818.5' y='476' width='8' height='8' fill='#d1352b'/>
+<text x='182' y='505' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>Out16mA slow fall</text>
+<line x1='786.9' y1='501' x2='802.3' y2='501' stroke='#bbb' stroke-width='2'/>
+<path d='M802.3,496 L807.3,501 L802.3,506 L797.3,501 Z' fill='#9a9a9a'/>
+<circle cx='786.9' cy='501' r='4.5' fill='#1f6fb4'/>
+<rect x='782.9' y='497' width='8' height='8' fill='#d1352b'/>
+<text x='182' y='526' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>Out16mA fast rise</text>
+<line x1='233.5' y1='522' x2='311.0' y2='522' stroke='#bbb' stroke-width='2'/>
+<path d='M311.0,517 L316.0,522 L311.0,527 L306.0,522 Z' fill='#9a9a9a'/>
+<circle cx='300.0' cy='522' r='4.5' fill='#1f6fb4'/>
+<rect x='229.5' y='518' width='8' height='8' fill='#d1352b'/>
+<text x='182' y='547' font-size='11' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>Out16mA fast fall</text>
+<line x1='276.8' y1='543' x2='345.3' y2='543' stroke='#bbb' stroke-width='2'/>
+<path d='M281.3,538 L286.3,543 L281.3,548 L276.3,543 Z' fill='#9a9a9a'/>
+<circle cx='276.8' cy='543' r='4.5' fill='#1f6fb4'/>
+<rect x='341.3' y='539' width='8' height='8' fill='#d1352b'/>
+<path d='M194.0,593 L199.0,598 L194.0,603 L189.0,598 Z' fill='#9a9a9a'/>
+<text x='204' y='602' font-size='11' font-family='Helvetica, Arial, sans-serif'>PDK library, 50 % (as STA extrapolates it)</text>
+<circle cx='494.4' cy='598' r='4.5' fill='#1f6fb4'/>
+<text x='504.40000000000003' y='602' font-size='11' font-family='Helvetica, Arial, sans-serif'>simulated, 50 %</text>
+<rect x='190.0' y='612' width='8' height='8' fill='#d1352b'/>
+<text x='204' y='620' font-size='11' font-family='Helvetica, Arial, sans-serif'>simulated, 1.5 V (where PS0178 measures)</text>
+</svg>
