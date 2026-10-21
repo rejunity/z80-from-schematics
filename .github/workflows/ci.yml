@@ -81,6 +81,10 @@ jobs:
         run: make bus_controls
       - name: FUSE / Cringle 1356 cases through iverilog RTL
         run: make fuse_rtl
+      # the chip flows' pin-timing SDC is generated from the NMOS Z80
+      # datasheet table (asic/timing/); the committed one must match
+      - name: NMOS pin-timing SDC up to date
+        run: make timing_sdc_check
 
   basic-c-tests:
     name: BASIC ROM via C model (NASCOM 4.7c + Tiny BASIC)
@@ -180,18 +184,15 @@ jobs:
         # programs (prog_rnd_01..04 from scripts/gen_random_trace_progs.py)
         # give opcode-mix coverage no hand-written program would have.
         run: make perfectz80_rtl
-      - name: Pin-scenario programs vs perfectz80 — C path (INFORMATIONAL)
-        # 12 trace programs (prog9..prog20) that drive INT / NMI / WAIT /
-        # BUSREQ / RESET via the .events sidecar. Currently surface real
-        # silicon-faithfulness divergences vs gate-level — the make target
-        # is informational and exits 0 even on divergences. CI shows the
-        # findings without going red.
+      - name: Pin-scenario programs vs perfectz80 — C path
+        # 14 trace programs (prog9..prog22) that drive INT / NMI / WAIT /
+        # BUSREQ / RESET via the .events sidecar; every phase's control
+        # pins and address must match the gate-level netlist.
         run: make pin_scenarios
-      - name: Pin-scenario programs vs perfectz80 — iverilog RTL path (INFORMATIONAL)
-        # Same 12 scenarios through the iverilog RTL testbench. .events
-        # is now plumbed via per-pin +<pin>_lo / +<pin>_hi plusargs
-        # (compare_signal_timing.py encodes the sidecar). Same
-        # informational status.
+      - name: Pin-scenario programs vs perfectz80 — iverilog RTL path
+        # Same 14 scenarios through the iverilog RTL testbench. .events
+        # is plumbed via per-pin +<pin>_lo / +<pin>_hi plusargs
+        # (compare_signal_timing.py encodes the sidecar).
         run: make pin_scenarios_rtl
       - name: Upload per-program VCDs as artifact (open in GTKWave / Surfer)
         # compare_signal_timing.py + the pin-scenario runner emit
@@ -204,6 +205,36 @@ jobs:
         with:
           name: parity-vcds
           path: build/vcd/
+          if-no-files-found: warn
+          retention-days: 14
+
+  event-sweep:
+    name: RESET / INT / NMI timing sweep (iverilog RTL vs perfectz80)
+    runs-on: ubuntu-latest
+    # ~2300 cases, each run once through the RTL and (deduplicated per
+    # half-cycle) through perfectz80: ~2 min on a 4-core runner.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install C + iverilog
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential python3 iverilog
+      - name: Sweep RESET / INT / NMI across T-states and clock halves
+        # Fails on any difference from perfectz80 that is not in
+        # tests/event_sweep/baseline.txt, or that changed. After an
+        # intended RTL change: make event_sweep EVENT_SWEEP_ARGS=--update-baseline
+        # and review the baseline diff (docs/event-sweep.md).
+        run: make event_sweep
+      - name: Upload report and per-case side-by-side traces
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: event-sweep
+          path: |
+            build/event_sweep/report.md
+            build/event_sweep/diff/
           if-no-files-found: warn
           retention-days: 14
 
@@ -260,7 +291,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: build/synth
-          key: synth-${{ hashFiles('rtl/*.v', 'librelane/config.json', 'librelane/run_synth.sh') }}
+          key: synth-${{ hashFiles('rtl/*.v', 'asic/librelane/config.json', 'asic/librelane/run_synth.sh') }}
 
       - name: Install C toolchain + iverilog
         run: |
@@ -278,11 +309,10 @@ jobs:
       - name: Gate-level netlist vs perfectz80 (8 hand + 4 random = 12 programs)
         run: make perfectz80_netlist
 
-      - name: Pin-scenarios vs perfectz80 — gate-level netlist (INFORMATIONAL)
-        # 12 pin-scenario programs (prog9..prog20) driven through the
+      - name: Pin-scenarios vs perfectz80 — gate-level netlist
+        # The 14 pin-scenario programs (prog9..prog22) driven through the
         # synthesised sky130 netlist via tb_z80_netlist.v's .events
-        # plusarg support. Informational like the C and iverilog
-        # pin_scenarios* targets.
+        # plusarg support; gated like the C and iverilog paths.
         run: make pin_scenarios_netlist
 
       - name: Upload synthesised netlist artifact
@@ -324,7 +354,7 @@ jobs:
     # Runs on every push. Measured wall clock on a warm-cache runner is
     # ~9 min: nix install (~1 min) + Verilator gate-level build (~4 min)
     # + 4 canned BASIC subtests on the synthesised netlist (~3 min). The
-    # synth output is cached on hash(rtl/*.v + librelane/config.json +
+    # synth output is cached on hash(rtl/*.v + asic/librelane/config.json +
     # run_synth.sh) so most pushes skip the ~3 min synthesis step.
     # The 60 min is a safety net, not a budget: each BASIC subtest also
     # carries its own --max-seconds wall-clock budget (see
@@ -353,7 +383,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: build/synth
-          key: synth-${{ hashFiles('rtl/*.v', 'librelane/config.json', 'librelane/run_synth.sh') }}
+          key: synth-${{ hashFiles('rtl/*.v', 'asic/librelane/config.json', 'asic/librelane/run_synth.sh') }}
 
       - name: Install C toolchain (no apt verilator — see below)
         # apt's Verilator on Ubuntu 24.04 is 5.020 which lacks Verilog-1995

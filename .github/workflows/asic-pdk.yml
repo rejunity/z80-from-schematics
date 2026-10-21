@@ -1,9 +1,11 @@
 # One ASIC PDK: RTL-to-GDS of z80_top with LibreLane (Classic flow, the
 # bare core -- no pad ring), the sign-off checks, and the signs-of-life
 # program on the RTL and on the routed netlist (asic/<pdk>/Makefile).
-# Artifacts: asic-<pdk>-gds (the GDS and LibreLane's KLayout render of
-# it, .github/scripts/dist.py; targets.yml also publishes them on GitHub
-# Pages) and asic-<pdk>-results (metrics, netlists, timing, logs).
+# Artifacts: asic-<pdk>-gds (the GDS, a picture of it and maps of its
+# standard cells by kind and by Z80 block, .github/scripts/dist.py;
+# targets.yml also publishes them on GitHub
+# Pages) and asic-<pdk>-results (metrics, netlists, timing, LibreLane's
+# own KLayout render, logs).
 #
 # Called by targets.yml (main: every push and nightly) and by each PDK
 # branch's own asic-<pdk>.yml (every push to that branch). asic/ lives
@@ -17,7 +19,7 @@ on:
   workflow_call:
     inputs:
       pdk:
-        description: Directory under asic/ and branch asic-<pdk> (sky130, ihp-sg13g2, gf180mcu)
+        description: Directory under asic/ and branch asic-<pdk> (sky130, ihp-sg13g2, gf180mcu, gf180mcu-9t)
         required: true
         type: string
 
@@ -71,12 +73,17 @@ jobs:
       - name: Install LibreLane ${{ env.LIBRELANE_VERSION }} and iverilog
         run: nix profile install github:librelane/librelane/$LIBRELANE_VERSION nixpkgs#iverilog
 
-      # LibreLane pins the PDK version, so its version keys the cache
+      # LibreLane pins the PDK version, unless asic/<pdk>/Makefile pins its
+      # own (PDK_VERSION, fetched with LibreLane's ciel): both key the cache
+      - name: PDK version pinned by the Makefile
+        id: pdk
+        run: echo "version=$(sed -n 's/^PDK_VERSION *:= *//p' asic/$PDK/Makefile)" >> "$GITHUB_OUTPUT"
+
       - name: Cache the PDK (ciel)
         uses: actions/cache@v4
         with:
           path: ~/.ciel
-          key: ciel-${{ inputs.pdk }}-librelane-${{ env.LIBRELANE_VERSION }}
+          key: ciel-${{ inputs.pdk }}-librelane-${{ env.LIBRELANE_VERSION }}${{ steps.pdk.outputs.version && format('-{0}', steps.pdk.outputs.version) || '' }}
 
       - name: Signs of life (RTL)
         run: make -C asic/$PDK sign_of_life_rtl
@@ -95,11 +102,75 @@ jobs:
       - name: Signs of life (routed netlist, PDK cell models)
         run: make -C asic/$PDK sign_of_life
 
-      # rz80-<pdk>.gds, rz80-<pdk>.png (final/render: the Classic flow's
-      # KLayout.Render step) and the headline numbers, if the flow finished
-      - name: Collect the GDS and its render
+      # The chip, where the PDK branch has one (asic/<pdk>/chip/): z80_top
+      # in a ring of I/O pads placed like the Z80's, LibreLane's Chip flow
+      # (seal ring, fill, density), its sign-off, and the signs-of-life
+      # program through the pads.
+      - name: Chip with pad ring (RTL-to-GDS)
+        if: hashFiles(format('asic/{0}/chip/config.yaml', inputs.pdk)) != ''
+        run: make -C asic/$PDK chip LIBRELANE_ARGS=--hide-progress-bar
+
+      - name: Chip sign-off summary
+        if: hashFiles(format('asic/{0}/chip/config.yaml', inputs.pdk)) != ''
+        run: |
+          rc=0
+          make -s -C asic/$PDK chip_summary > chip_summary.txt || rc=$?
+          cat chip_summary.txt
+          { echo "### asic/$PDK chip"; echo '```'; cat chip_summary.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
+
+      - name: Chip signs of life (through the pads)
+        if: hashFiles(format('asic/{0}/chip/config.yaml', inputs.pdk)) != ''
+        run: make -C asic/$PDK chip_sign_of_life
+
+      # The chip's pins against the NMOS Z80's datasheet at 4 MHz (Zilog
+      # PS0178, Z8400): OpenSTA on the routed chip, 100 pF loads, every AC
+      # parameter the replica has to meet, at each process corner
+      # (asic/timing/pin_timing.py; fails on any). Branches whose chip has
+      # no `pin_timing` target skip it.
+      - name: Chip pin timing vs the NMOS Z80 datasheet (4 MHz)
+        if: hashFiles(format('asic/{0}/chip/config.yaml', inputs.pdk)) != ''
+        run: |
+          if ! grep -q '^pin_timing:' asic/$PDK/Makefile; then
+            echo "asic/$PDK has no pin_timing target" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          rc=0
+          make -s -C asic/$PDK pin_timing > pin_timing.txt || rc=$?
+          cat pin_timing.txt
+          { echo "### asic/$PDK chip: pin timing vs the NMOS Z80 (4 MHz)"; echo '```'; cat pin_timing.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
+
+      # The NMI pulse catcher at transistor level (asic/spice/nmi.py): cut
+      # out of this chip from the NMI and CLK pins to the catcher's
+      # flip-flops -- the standard cells as Magic extracts them from the
+      # PDK's layouts, the wires from the routed chip's SPEF -- and run in
+      # ngspice at each corner, a minute or two (ngspice and Magic: the
+      # versions nmi.py pins, built with nix). The GF180 7-track chip only.
+      - name: NMI pulse catcher at transistor level (ngspice)
+        if: inputs.pdk == 'gf180mcu' && hashFiles('asic/spice/nmi.py') != '' && hashFiles(format('asic/{0}/chip/config.yaml', inputs.pdk)) != ''
+        run: |
+          run=$(ls -dt asic/$PDK/chip/runs/*/ | head -1)
+          rc=0
+          python3 asic/spice/nmi.py $run --out dist/spice/nmi | tee nmi.txt || rc=$?
+          { echo "### asic/$PDK chip: the NMI pulse catcher at transistor level"; echo '```'; cat nmi.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
+
+      - uses: actions/setup-python@v5
         if: always()
-        run: python3 .github/scripts/dist.py asic $PDK dist
+        with:
+          python-version: '3.12'
+
+      # rz80-<pdk>.gds, rz80-<pdk>.png (dist.py draws the cell rows and the
+      # metal stack with gdstk + Pillow), rz80-<pdk>-cells.png (every
+      # standard cell, coloured by kind: flip-flops, buffers, logic, fill),
+      # rz80-<pdk>-blocks.png (every cell by its Z80 block, from the final
+      # DEF) and the headline numbers, if the flow finished
+      - name: Collect the GDS and render it
+        if: always()
+        run: |
+          pip install --quiet gdstk numpy pillow
+          python .github/scripts/dist.py asic $PDK dist
 
       - name: Upload the GDS and its render
         id: gds
@@ -119,6 +190,12 @@ jobs:
           path: |
             asic/${{ inputs.pdk }}/runs/*/final/metrics.*
             asic/${{ inputs.pdk }}/runs/*/final/nl/
+            asic/${{ inputs.pdk }}/runs/*/final/render/
+            asic/${{ inputs.pdk }}/chip/runs/*/final/metrics.*
+            asic/${{ inputs.pdk }}/chip/runs/*/*-openroad-stapostpnr/summary.rpt
+            asic/${{ inputs.pdk }}/chip/runs/*/flow.log
+            asic/${{ inputs.pdk }}/chip/runs/*/warning.log
+            asic/${{ inputs.pdk }}/chip/runs/*/error.log
             asic/${{ inputs.pdk }}/runs/*/*-openroad-stapostpnr/summary.rpt
             asic/${{ inputs.pdk }}/runs/*/flow.log
             asic/${{ inputs.pdk }}/runs/*/warning.log
