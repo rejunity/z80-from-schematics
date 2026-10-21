@@ -29,9 +29,9 @@ stack.
 | Gate-level vs perfectz80 (iverilog RTL path)      | `tests/traces/`                | `make perfectz80_rtl`                    | ~15 s           | Same diff but driving the iverilog RTL testbench (silicon-faithful leg) |
 | Gate-level vs perfectz80 (LibreLane synth path)   | `asic/librelane/` + `tests/iverilog/tb_z80_netlist.v` | `make perfectz80_netlist` | ~5 min cold / ~1 min warm | yosys-synthesised sky130 gate-level netlist diffed against the Visual-Z80 gate-level netlist over all 12 trace programs (8 hand + 4 random) — the "ultimate test" |
 | Gate-level BASIC ROM (LibreLane synth path)       | `asic/librelane/` + `tests/verilator/sim_basic.cpp` | `make basic_netlist_tests` | ~9 min (CI)         | "Real software" — NASCOM BASIC 4.7c + Tiny BASIC running on the synthesised gates (Verilator + sky130 cells). CI runs on every push. |
-| Pin-scenario programs vs perfectz80 — C path      | `tests/traces/pin_scenarios/`  | `make pin_scenarios`                     | ~15 s           | INT / NMI / WAIT / BUSREQ / RESET event-driven scenarios (informational) |
-| Pin-scenario programs vs perfectz80 — iverilog RTL| `tests/traces/pin_scenarios/`  | `make pin_scenarios_rtl`                 | ~15 s           | Same 14 scenarios through tb_z80.v's `.events` plusarg support (informational) |
-| Pin-scenario programs vs perfectz80 — sky130 netlist | `tests/traces/pin_scenarios/` | `make pin_scenarios_netlist`           | ~30 s           | Same 14 scenarios through the LibreLane gate-level netlist (informational) |
+| Pin-scenario programs vs perfectz80 — C path      | `tests/traces/pin_scenarios/`  | `make pin_scenarios`                     | ~15 s           | INT / NMI / WAIT / BUSREQ / RESET event-driven scenarios; every phase's control pins and address must match |
+| Pin-scenario programs vs perfectz80 — iverilog RTL| `tests/traces/pin_scenarios/`  | `make pin_scenarios_rtl`                 | ~15 s           | Same 14 scenarios through tb_z80.v's `.events` plusarg support |
+| Pin-scenario programs vs perfectz80 — sky130 netlist | `tests/traces/pin_scenarios/` | `make pin_scenarios_netlist`           | ~30 s           | Same 14 scenarios through the LibreLane gate-level netlist |
 | Real KC85 silicon sync capture                    | `tests/sigrok/`                | `make silicon_cycles`                    | ~1 s            | Per-opcode T-state count vs a real Z80 logic-analyzer capture |
 | Real KC85 silicon 20 MHz capture                  | `tests/sigrok/`                | `make silicon_async`                     | ~3 s            | Real CPU clock + sub-T-state pin-edge offsets |
 | Lockstep 5-way oracle on ZEXDOC3                  | `scripts/lockstep_quint.c`     | (inline, see CI)                         | ~3 s            | Instruction-by-instruction regs + memory match across all 5 emulators (mine + superzazu + chips + suzukiplan + redcode). See [`docs/oracles.md`](../docs/oracles.md). |
@@ -203,9 +203,9 @@ breakdown.
 | `make compare`           | C model ↔ iverilog ↔ Verilator (all three identical, every phase) | **PASS** on all 12 programs (8 hand + 4 random) |
 | `make perfectz80`        | C model vs perfectz80 gate-level netlist (7 control pins + bus addr/data) | **PASS** on control pins, all 12 programs; **100 % `addr` match** with don't-care tolerance on 10/12, ~95-98 % on prog_rnd_02/03 (reset-register-init delta surfacing via PUSH) |
 | `make perfectz80_rtl`    | iverilog RTL vs perfectz80 (same 12 programs, RTL trace source)   | **PASS** on all 12 programs — silicon-faithful leg |
-| `make pin_scenarios`     | C model vs perfectz80 on the 12 pin-scenario programs             | **Informational**; divergences are real audit findings, not regressions |
-| `make pin_scenarios_rtl` | iverilog RTL vs perfectz80 on the 12 pin-scenarios                | **Informational**; same root causes as `make pin_scenarios` plus any RTL-only deltas |
-| `make pin_scenarios_netlist` | LibreLane sky130 gate-level netlist vs perfectz80 on the 12 pin-scenarios | **Informational**; same as above plus any synth-introduced deltas |
+| `make pin_scenarios`     | C model vs perfectz80 on the 14 pin-scenario programs             | **PASS** on all 14; gates CI |
+| `make pin_scenarios_rtl` | iverilog RTL vs perfectz80 on the 14 pin-scenarios                | **PASS** on all 14; gates CI |
+| `make pin_scenarios_netlist` | LibreLane sky130 gate-level netlist vs perfectz80 on the 14 pin-scenarios | **PASS** on all 14; gates CI |
 
 `compare_signal_timing.py` (the driver for `make perfectz80` / `_rtl` /
 `_netlist`) gates on the address in every phase along with the control

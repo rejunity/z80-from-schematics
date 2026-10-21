@@ -289,8 +289,10 @@ module z80_core (
     // end of HALT itself never lowers the pin. After instruction-done,
     // the `halted` register takes over. Mirrors cmodel/z80_core.c halt_n
     // driving. Being a clock-low-half event it only appears in the *_neg
-    // image.
-    wire exec_halt_in_m1 = (exec_w == `EXEC_HALT)
+    // image. The instruction is the one that runs (eff_exec): the fetch of
+    // an NMI response (or of HALT's NOPs) discards its opcode, so a HALT
+    // byte read there doesn't lower the pin (perfectz80).
+    wire exec_halt_in_m1 = (eff_exec == `EXEC_HALT)
                         && (bus_op == `BUSOP_M1)
                         && (t_state == 4'd4);
     wire halt_exit = (t_state == m_len) && (nmi_pending | (~int_n_rise & iff1));

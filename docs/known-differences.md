@@ -28,12 +28,13 @@ Status legend:
 | 11 | `DD 36` / `FD 36` cycle count                 | timing                    | resolved |
 | 12 | `INI` / `IND` / `INIR` / `INDR` flag set      | undocumented / flag       | watching |
 | 13 | `LDIR` / `LDDR` Q-leak into next instruction  | undocumented / flag       | watching |
-| 14 | Pin-scenario vs perfectz80 (informational)    | timing                    | resolved |
+| 14 | Pin-scenario vs perfectz80                    | timing                    | resolved |
 | 15 | RTL clocking: reset / BUSREQ settle vs C model | timing                    | resolved |
 | 16 | BUSREQ / BUSACK vs the NMOS Z80               | timing / bus              | resolved |
 | 17 | RESET / INT / NMI sweep vs perfectz80         | timing / interrupt        | resolved |
 | 18 | Refresh and idle address bus                  | timing / bus              | resolved |
 | 19 | RESET between an instruction and its write-back | timing / reset          | watching |
+| 21 | HALT pin when an NMI response fetches a HALT byte | timing / interrupt      | resolved |
 
 Notes for each row:
 
@@ -155,16 +156,19 @@ Notes for each row:
      rises in the low half of the last T4 (row 17), `prog17_reset` since
      both models run the die's sampled RESET, `prog15_busreq_m1` since
      both grant and release BUSREQ as the die does (row 16).
+     **2026-10-21**: the targets gate CI. The INT scenarios (`prog9`,
+     `prog12`, `prog16`, `prog19`, `prog20`) had never taken their
+     interrupt -- INT pulses of 1-3 T-states between the CPU's sampling
+     edges -- so they passed without testing it; they now hold INT across
+     an instruction's end and release it after INTA. Every harness puts 00
+     on the bus during INTA (`perfectz80_runner` left perfectz80's default,
+     E0), so `prog12`'s IM2 table read at {I, 00} is compared. `prog19`
+     then showed row 21.
 
      `.events` is now consumed by all paths — C tracegen, iverilog
      RTL, Verilator, LibreLane gate-level netlist — via per-pin
-     `+<pin>_lo / +<pin>_hi` plusargs. Make targets are informational
-     (exit 0 even on divergence); current divergences are folded into
-     the simplifications-audit list rather than gating CI. Functional
-     behaviour on all of these is verified by Rak + FUSE +
-     `make halt2int` even where the per-phase pin trace differs.
-     When all of them reach control-pin parity, this row flips to
-     `resolved` and the gates become hard.
+     `+<pin>_lo / +<pin>_hi` plusargs, and the make targets fail on any
+     control-pin or address difference.
 
      Additionally, `scripts/compare_signal_timing.py` (used by
      `make perfectz80` / `_rtl` / `_netlist`) compares `addr` and
@@ -267,6 +271,13 @@ Notes for each row:
      The sweep's `reset_add_hl_bc` (20) and `reset_inc_bc` (6) cases are
      these, in the baseline; RESET with WAIT is untested. Modelling it means
      holding each class's writes until the T-state the die does them in.
+ 21. **HALT pin when an NMI response fetches a HALT byte — resolved
+     2026-10-21** (RTL only). The NMI response's M1 fetches the byte at PC
+     and discards it; when that byte was a HALT opcode -- an NMI taken at the
+     top of an interrupt handler that starts with HALT (`prog19_nmi_in_int`)
+     -- the RTL lowered the HALT pin for half a T-state in that M1's T4, from
+     the raw opcode decode. The pin now follows the instruction that runs, as
+     in the C model and perfectz80.
 
 Add rows as new differences are discovered. Each "watching" row should gain a
 test that pins the chosen behaviour or escalates it.
