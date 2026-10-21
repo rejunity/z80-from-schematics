@@ -74,9 +74,13 @@ MODES := sbc chip
 EXTBUS_sbc  := 0
 EXTBUS_chip := 1
 # Z80 clock constraint per build (MHz): sbc runs at 4; the chip build's
-# external CLK is constrained at 8 to leave margin over a 4-6 MHz Z80 bus.
+# external CLK is constrained at 7.5 to leave margin over a 4-6 MHz Z80
+# bus. Its limit is the half-cycle path from read data (falling edge)
+# through the ALU into the register file (README "Utilisation and
+# timing"): 7.6-8.0 MHz over nextpnr seeds since the RESET-in-wait-state
+# changes; the other UP5K boards still make 8.
 ZCLK_MHZ_sbc  := 4
-ZCLK_MHZ_chip := 8
+ZCLK_MHZ_chip := 7.5
 MODE ?= sbc
 # keep the per-build synth/pnr netlists (make would delete chained intermediates)
 .SECONDARY:

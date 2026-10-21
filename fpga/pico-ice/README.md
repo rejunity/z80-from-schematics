@@ -215,33 +215,36 @@ nextpnr-ice40, UP5K-SG48 (`make`, `make timing`):
 
 | | sbc | chip |
 |---|---|---|
-| logic cells | 4,389 / 5,280 (83 %) | 3,577 / 5,280 (67 %) |
-| yosys `SB_LUT4` / flip-flops / `SB_CARRY` | 3,922 / 784 / 232 | 3,419 / 419 / 207 |
+| logic cells | 4,469 / 5,280 (84 %) | 3,667 / 5,280 (69 %) |
+| yosys `SB_LUT4` / flip-flops / `SB_CARRY` | 4,001 / 812 / 232 | 3,501 / 441 / 205 |
 | EBR (`SB_RAM40_4K`) | 16 / 30 | 0 |
 | SPRAM | 1 / 4 | 0 |
 | I/O | 29 / 39 (+ RGB driver) | 29 / 39 (+ RGB driver) |
-| global buffers | 6 / 8 | 4 / 8 |
+| global buffers | 7 / 8 | 4 / 8 |
 | PLL | 1 / 1 | 0 |
-| **Z80 clock Fmax** | **7.22 MHz** (constraint 4 MHz) | **8.67 MHz** (constraint 8 MHz) |
-| board clock Fmax | 70.2 MHz (12 MHz); PLL 24 MHz domain 134.3 MHz | 72.7 MHz (12 MHz) |
+| **Z80 clock Fmax** | **7.19 MHz** (constraint 4 MHz) | **7.89 MHz** (constraint 7.5 MHz) |
+| board clock Fmax | 61.4 MHz (12 MHz); PLL 24 MHz domain 135.5 MHz | 79.7 MHz (12 MHz) |
 
-The core alone is ~3.4k LUT4 (the chip build is essentially that); the SoC
-adds ~500 LUT4 and ~360 flip-flops, 256 of those the 32-byte RX FIFO (the
+The core alone is ~3.5k LUT4 (the chip build is essentially that); the SoC
+adds ~500 LUT4 and ~370 flip-flops, 256 of those the 32-byte RX FIFO (the
 iCE40 has no distributed RAM, and the FIFO head is read asynchronously).
 
 Both Z80-clock limits are **half-cycle paths** — z80_top works on both
 edges, so nextpnr's Fmax is 1 / (2 × the worst falling-to-rising path):
 
-* chip (57.7 ns): read data sampled at the falling edge (`data_in_neg`) →
-  ALU incl. a carry chain → register file at the next rising edge;
-* sbc (69.2 ns): the pin former's falling-edge flop → /RD → the SoC's
+* chip (63.4 ns): read data sampled at the falling edge (`data_in_neg`) →
+  ALU incl. a carry chain → register file at the next rising edge. The
+  die writes an ALU result later (at T2 of the next M1, row 19 of
+  docs/known-differences.md); until the core does too, this path keeps
+  the chip build under 8 MHz here, so its constraint is 7.5 MHz;
+* sbc (69.5 ns): the pin former's falling-edge flop → /RD → the SoC's
   data-in mux (I/O vs memory) → the core's opcode decode → rising edge.
 
 Header timing of the chip build (nextpnr estimates, `make timing`, no I/O
-constraints set): D → rising edge ≈ 56 ns (the opcode fetch at T3 of M1
-goes straight into decode), D → falling edge ≈ 5.5 ns (memory / I/O read
-data), clock → pins ≈ 14 ns. At 4 MHz that leaves ~430 ns from address
-to opcode and ~600 ns from address to read data; at 8 MHz ~180 / ~290 ns.
+constraints set): D → rising edge ≈ 63 ns (the opcode fetch at T3 of M1
+goes straight into decode), D → falling edge ≈ 7 ns (memory / I/O read
+data), clock → pins ≈ 14 ns. At 4 MHz that leaves ~420 ns from address
+to opcode and ~600 ns from address to read data; at 7.5 MHz ~190 / ~310 ns.
 
 ## Toolchain — venv, no system packages
 
@@ -253,7 +256,7 @@ are staged into `build/` (the core with wildcards: `rtl/*.v`, `rtl/*.vh`)
 and the tools run from there because the YoWASP sandbox only sees the
 current directory tree. The two builds differ only in the
 `-chparam EXTERNAL_BUS` passed to yosys and the Z80 clock constraint the
-Makefile appends to `pico-ice.pcf` (4 MHz sbc, 8 MHz chip). The figures
+Makefile appends to `pico-ice.pcf` (4 MHz sbc, 7.5 MHz chip). The figures
 above are from yowasp-yosys 0.70 and yowasp-nextpnr-ice40 0.11.1.
 
 Synthesis runs `synth_ice40` directly on the RTL — no `proc; async2sync`
@@ -361,7 +364,7 @@ terminal a per-character delay (1 ms is plenty).
 * Needs the stock firmware's 12 MHz on ICE35 (v1.1 or later); a custom
   RP2040 firmware with another clock changes every frequency here.
 * The chip build is constrained and timed for an external CLK up to
-  8 MHz; the opcode path wants D valid ~56 ns before the rising edge of T3.
+  7.5 MHz; the opcode path wants D valid ~63 ns before the rising edge of T3.
 * 3.3 V I/O only (see Pinout).
 
 ## Sources
