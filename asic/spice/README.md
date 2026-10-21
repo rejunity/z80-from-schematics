@@ -337,8 +337,9 @@ hours each.
 - `asic-pdk.yml`, GF180 7-track: after the chip's pin timing, `nmi.py`
   at three corners (~2 min), failing when a case's pulse is not caught,
   held for the core and cleared.
-- The GitHub Pages job puts the pads, the NMI catcher and the committed
-  whole-chip run under "At transistor level".
+- `pages.yml` puts the pads, the NMI catcher and the committed whole-chip
+  runs under "At transistor level" on the project's site, and the latest
+  `transistor.yml` run on its own page, `transistor/`, linked from there.
 - `transistor.yml`, by hand (Actions, "Transistor", Run workflow): the
   whole chip at the three corners. It extracts the GDS of main's latest
   Targets run, runs the program in four windows of about 3.3 µs, one job

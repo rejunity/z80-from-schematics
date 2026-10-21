@@ -398,12 +398,15 @@ The branches run the same jobs on their own pushes (`fpga-<board>.yml`,
 fails its job's first step: merge main into it. The FPGA tools are pip's
 latest YoWASP builds, so the nightly run also catches toolchain drift.
 
-When every board and PDK passed on main, the `pages` job publishes that
-build on GitHub Pages, <https://rejunity.github.io/z80-from-schematics/>:
+When every board and PDK passed on main, `pages.yml` publishes that
+build on GitHub Pages, <https://rejunity.github.io/z80-from-schematics/>
+(it runs after Targets and after Transistor, the hand-run whole chip at
+transistor level, and builds the site from both their latest runs on
+main: Pages replaces the whole site on every deploy):
 three pictures of each layout with its die size, cell counts and timing,
 and the GDS and bitstream files under stable names (`rz80-<pdk>.gds`,
 `rz80-<board>-basic|tinybasic|chip.<ext>`). The pictures also appear in
-that job's summary on the run page. `.github/scripts/dist.py` names the
+the Pages run's summary. `.github/scripts/dist.py` names the
 files, draws the pictures with gdstk and Pillow -- the cell rows and the
 metal stack as translucent layers (LibreLane's own KLayout render reads
 badly at die scale), a cell map: every standard-cell instance in the
