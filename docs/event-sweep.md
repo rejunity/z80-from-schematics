@@ -2,15 +2,20 @@
 
 `make event_sweep` drives RESET, INT, NMI, BUSREQ and WAIT pulses into the
 iverilog RTL and into the perfectz80 transistor-level netlist at every
-T-state of a set of instructions, in IM1, IM2 and IM0. It compares the two
-half-cycle by half-cycle, and runs every case through the C model too, which
-must match the RTL in every half-cycle. CI runs it on every push.
+T-state of a set of instructions, in IM1, IM2 and IM0, and of one opcode of
+every timing class the die has; it runs every opcode with BUSREQ and WAIT
+walked through it. It compares the two half-cycle by half-cycle -- the pins,
+the address and which pads the die drives -- and runs every case through
+the C model too, which must match the RTL in every half-cycle. CI runs it
+on every push, in four shards, from perfectz80's recorded traces.
 
 Files:
 
 - `scripts/event_sweep.py`: case list, program, runner, comparison, report
 - `tests/iverilog/tb_event_sweep.v`: RTL side (1/16-T event resolution)
 - `scripts/event_sweep_pz80.c`: perfectz80 side
+- `scripts/pz80_pads.c`: which of perfectz80's pads the die drives
+- `tests/event_sweep/pz80/`: perfectz80's recorded traces, one file per group
 - `scripts/event_sweep_c.c`: C model side (`--c-model`)
 - `tests/event_sweep/baseline.txt`: cases where the RTL differs today
 
@@ -38,15 +43,28 @@ ends its instruction. I/O reads see FF.
 Times are counted from the rising edge that starts the marker fetch's T1.
 A pulse is placed at T-state `n` of the target (`M4` is the marker's T4, `T1`
 is the target's T1), `j`/16 of a clock after that T-state's rising edge.
-Both sides then dump `mreq iorq rd wr m1 rfsh halt busack`, the address and
-the data bus for every half-cycle from the marker on.
+Both sides then dump `mreq iorq rd wr m1 rfsh halt busack`, the address,
+the data bus and the pads driven for every half-cycle from the marker on.
+The pads driven are, on perfectz80, every output pad whose pull-up or
+pull-down gate is high (the address pads, the data pads, and MREQ IORQ RD
+WR M1 RFSH HALT BUSAK), and on RZ80 `z80_top`'s `addr_drive`, `data_drive`
+and `ctl_drive` (docs/timing.md "Pad drivers").
+
+Two cases react to the pins, the same way on every side:
+- the BUSREQ walk: BUSREQ low from the marker on; when BUSACK is seen low,
+  BUSREQ goes high for the release and low again once BUSACK is high, so
+  the instruction is granted at every M-cycle end where the die grants;
+- the WAIT walk: WAIT low for the three half-cycles from each fall of MREQ
+  (not a refresh) or IORQ, so every bus cycle gets the wait states its
+  sampling edges see.
 
 A case matches when:
 - every control pin agrees in every half-cycle;
 - the address agrees in every half-cycle: transfers, refreshes (I:R), and
   the internal and idle T-states, where the bus keeps its last address;
 - BUSACK is one of the control pins;
-- the data agrees wherever both sides drive WR.
+- the data agrees wherever both sides drive WR;
+- the same pads are driven in every half-cycle.
 
 Instructions under test:
 - INC A (no memory access)
@@ -87,6 +105,13 @@ Instructions under test:
 | `im2_combo` | IM2 response after INC A (vector 40); NMI, 1 T and 3 T WAIT, 1 T and 4 T BUSREQ, or 4 T RESET from every T-state of it, its table reads and the handler's first fetch |
 | `im0` | twenty instructions handed over in IM0: RST 38 / 00 / 08, CALL, JP, LD A,n, LD A,(nn), JR, INC BC, PUSH BC, HALT, EI, EX (SP),HL, RETI, LD IX,nn, LD (IX+d),n, RLC A, RLC (IX+d), JP (IX), LDIR |
 | `im0_combo` | IM0 CALL 1234 after INC A; NMI, WAIT, BUSREQ or RESET (as in `im2_combo`) from every T-state of it |
+| `opcodes` | every opcode -- 1,841 programs: unprefixed, CB, ED, DD / FD and DD CB / FD CB, the flag-dependent ones also with F = 00 and FF, DJNZ also with B = 1, INIR / OTIR / INDR / OTDR with B = 2 -- each plain, with the BUSREQ walk, with the WAIT walk, with INT from the marker's T4 (EI) and with a 1 T NMI at its T1 |
+| `classes` | one opcode of each of the 68 timing classes the instructions above don't cover (`CLASS_REPS`): 1 T NMI, INT until INTA, 4 T RESET, 1 T and 4 T BUSREQ, 1 T and 3 T WAIT from every T-state |
+
+The timing classes: the `opcodes` group's programs grouped by perfectz80's
+control pins in their plain run and their BUSREQ and WAIT walks, 86 of
+them; the 31 instructions above cover 18. `scripts/event_sweep.py
+--classes` prints the table from the recorded traces.
 
 ### What a simulation can and can't tell
 
@@ -201,7 +226,28 @@ git diff tests/event_sweep/baseline.txt
 Review the baseline diff with `build/event_sweep/diff/<case>.txt` before
 committing it.
 
+## perfectz80's recorded traces
+
+perfectz80 is the slow side: a transistor-level netlist, about 10,000
+half-cycles a second. `tests/event_sweep/pz80/<group>.txt.xz` holds its
+output for every case of the group, keyed by what the run depends on: the
+harness and perfectz80's sources (`event_sweep_pz80.c`, `pz80_pads.c`,
+`scripts/refs/perfectz80/`), the program's bytes, the options and the
+pulses as perfectz80 resolves them (whole half-cycles). A run takes a
+recorded trace where one exists and runs perfectz80 for the rest: CI runs
+only the RTL and the C model. Changing the harness or perfectz80 makes
+every recorded trace stale, and a new or changed case has none:
+
+```
+make event_sweep EVENT_SWEEP_ARGS=--record      # rewrites the files of the groups run
+```
+
+`--no-cache` runs perfectz80 for every case.
+
 Useful options (`scripts/event_sweep.py --help`):
 - `--groups nmi,reset` and `--match inc_hl` run a subset.
+- `--shard K/N` runs every Nth case from the Kth (CI's four jobs).
+- `--record` writes perfectz80's traces; `--no-cache` ignores them.
+- `--classes` prints the opcodes' timing classes.
 - `--phases 16` runs the full 1/16-T grid.
 - `--jobs N` sets the parallelism.
