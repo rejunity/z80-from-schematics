@@ -25,9 +25,9 @@ import sys
 
 # name, binary, what the caller steps through, about it (Markdown)
 EMULATORS = [
-    ("cfast, z80f_run", "zexfast", "half clock",
-     "rz80's phase engine generated from its timing tables, steps back to back with the bus inlined (`cfast/`)"),
-    ("cfast, z80f_tick", "zexrunner_fast", "half clock",
+    ("rz80 cfast, z80f_run", "zexfast", "half clock",
+     "the phase engine generated from the C model's timing tables, steps back to back with the bus inlined (`cfast/`)"),
+    ("rz80 cfast, z80f_tick", "zexrunner_fast", "half clock",
      "the same steps, one half clock per call, the pins in a word"),
     ("rz80 C model", "zexrunner", "half clock",
      "the reference model the RTL is checked against (`cmodel/`)"),
@@ -94,7 +94,7 @@ def markdown(res, m, a):
 def svg(res, m, a):
     """the table as bars: Minstr/s, coloured by what the caller steps"""
     colour = {"half clock": "#1f55c0", "clock": "#2a9d8f", "instruction": "#8a8f98"}
-    W, left, top, row = 760, 150, 54, 30
+    W, left, top, row = 780, 176, 54, 30
     H = top + row * len(res) + 46
     top_v = max(r["minstr"] for r in res)
     scale = (W - left - 150) / top_v

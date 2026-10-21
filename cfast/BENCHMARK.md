@@ -15,8 +15,8 @@ The table below is one run of it, on GitHub's runner:
 
 | Emulator | Sees every | ZEXDOC Minstr/s | Z80 clock | Against cfast |
 |---|---|---:|---:|---:|
-| **cfast, z80f_run** | half clock | 62.7 | 507 MHz | 1.00× |
-| cfast, z80f_tick | half clock | 18.2 | 147 MHz | 0.29× |
+| **rz80 cfast, z80f_run** | half clock | 62.7 | 507 MHz | 1.00× |
+| rz80 cfast, z80f_tick | half clock | 18.2 | 147 MHz | 0.29× |
 | rz80 C model | half clock | 10.9 | 88 MHz | 0.17× |
 | chips | clock | 45.9 | 371 MHz | 0.73× |
 | suzukiplan | instruction | 96.4 | 779 MHz | 1.54× |
@@ -25,8 +25,8 @@ The table below is one run of it, on GitHub's runner:
 
 The first 50,000,000 instructions of ZEXDOC, the best of 5 rounds of each emulator's CPU time (on CPU 1); Z80 clock: the T-states it emulates a second. AMD EPYC 9V45 96-Core Processor, cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, -O2; GitHub Actions (ubuntu24), commit e64fd89, 2026-10-21 12:41 UTC.
 
-- **cfast, z80f_run**: rz80's phase engine generated from its timing tables, steps back to back with the bus inlined (`cfast/`)
-- **cfast, z80f_tick**: the same steps, one half clock per call, the pins in a word
+- **rz80 cfast, z80f_run**: the phase engine generated from the C model's timing tables, steps back to back with the bus inlined (`cfast/`)
+- **rz80 cfast, z80f_tick**: the same steps, one half clock per call, the pins in a word
 - **rz80 C model**: the reference model the RTL is checked against (`cmodel/`)
 - **chips**: [floooh/chips](https://github.com/floooh/chips) `z80.h`: `z80_tick`, the pins in a word
 - **suzukiplan**: [suzukiplan/z80](https://github.com/suzukiplan/z80): `execute(1)`
