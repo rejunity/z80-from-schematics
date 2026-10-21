@@ -53,7 +53,9 @@ module z80_chip (
     wire ctl_oe  = cpu_busack_n;
 
     z80_top u_top (
-        .clk(cpu_clk), .reset_n(cpu_reset_n),
+        // por_n tied off: registers come up random, like the NMOS part's,
+        // and RESET alone starts the core (rtl/z80_top.v)
+        .clk(cpu_clk), .por_n(1'b1), .reset_n(cpu_reset_n),
         .addr(addr), .data_in(data_in), .data_out(data_out), .data_drive(data_drive),
         .m1_n(cpu_m1_n), .mreq_n(cpu_mreq_n), .iorq_n(cpu_iorq_n), .rd_n(cpu_rd_n), .wr_n(cpu_wr_n),
         .rfsh_n(cpu_rfsh_n), .halt_n(cpu_halt_n), .busack_n(cpu_busack_n),

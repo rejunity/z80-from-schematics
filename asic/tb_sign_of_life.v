@@ -19,6 +19,7 @@
 
 module tb_sign_of_life;
     reg         clk = 1'b0;
+    reg         por_n = 1'b0;           // z80_top's power-on reset (the chip has none)
     reg         reset_n = 1'b0;
     wire [15:0] addr;
     wire [7:0]  data_out;
@@ -33,7 +34,7 @@ module tb_sign_of_life;
 `define DUT z80_top   // the chip: z80_chip_shim (chip_shim.v)
 `endif
     `DUT dut (
-        .clk(clk), .reset_n(reset_n),
+        .clk(clk), .por_n(por_n), .reset_n(reset_n),
         .addr(addr), .data_in(data_in), .data_out(data_out), .data_drive(data_drive),
         .m1_n(m1_n), .mreq_n(mreq_n), .iorq_n(iorq_n), .rd_n(rd_n), .wr_n(wr_n),
         .rfsh_n(rfsh_n), .halt_n(halt_n), .busack_n(busack_n),
@@ -72,7 +73,8 @@ module tb_sign_of_life;
         mem[16'h0022] = 8'hD3; mem[16'h0023] = 8'h43;
         mem[16'h0024] = 8'hC9;
         errors = 0; nio = 0; io_prev = 1'b0;
-        repeat (6) @(negedge clk);
+        @(negedge clk); #1 por_n = 1'b1;
+        repeat (5) @(negedge clk);
         reset_n = 1'b1;
     end
 
