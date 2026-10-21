@@ -941,6 +941,50 @@ stays on the <a href="{SERVER}/{REPO}/actions/workflows/transistor.yml">Actions<
     return True
 
 
+def md_inline(text):
+    """the Markdown inside a table cell -- [links](url) and `code` -- as HTML"""
+    t = html.escape(text, quote=False)
+    t = re.sub(r'\[([^\]]+)\]\(([^)\s]+)\)', lambda m: f'<a href="{html.escape(m.group(2))}">{m.group(1)}</a>', t)
+    return re.sub(r'`([^`]+)`', r'<code>\1</code>', t)
+
+
+def cfast_bench(src, out):
+    """The C model's speed: ci.yml's latest cfast-bench artifact (scripts/cfast_bench.py's bench.json and
+    bench.svg, in <src>/cfast-bench/), its chart at <out>/cfast-bench.svg -- a fixed address, which
+    cfast/BENCHMARK.md shows -- and its table. '' when there is none."""
+    d = os.path.join(src, 'cfast-bench')
+    if not os.path.isfile(os.path.join(d, 'bench.json')):
+        return ''
+    e = html.escape
+    b = json.load(open(os.path.join(d, 'bench.json')))
+    m, res = b['machine'], b['results']
+    if os.path.isfile(os.path.join(d, 'bench.svg')):
+        shutil.copy(os.path.join(d, 'bench.svg'), os.path.join(out, 'cfast-bench.svg'))
+    base = next((r for r in res if r['binary'] == 'zexfast'), res[0])
+    rows = ''.join(
+        f"<tr><td class=\"nw\">{'<strong>' + e(r['name']) + '</strong>' if r is base else e(r['name'])}</td>"
+        f"<td>{e(r['steps'])}</td><td>{r['minstr']:.1f}</td><td>{r['mhz']:.0f} MHz</td>"
+        f"<td>{r['minstr'] / base['minstr']:.2f}×</td><td class=\"muted\">{md_inline(r.get('about', ''))}</td></tr>"
+        for r in res)
+    ref = m.get('ref') or 'main'
+    run = (f'<a href="{SERVER}/{REPO}/actions/runs/{m["run"]}">ci.yml run</a>' if m.get('run') else 'ci.yml')
+    commit = (f'<a href="{SERVER}/{REPO}/commit/{m["commit"]}">{e(m["ref"]) + " @ " if m.get("ref") else ""}'
+              f'{e(m["commit"])}</a>') if m.get('commit') else ''
+    return f"""<h2 id="cfast">The C model, for emulators</h2>
+<p class="muted">cfast is the C model generated into a phase engine: every half clock the same pins as the model
+and the RTL (make cfast_identity), at the speed an emulator needs. Here it runs against four other C Z80
+emulators on the same {b['instructions'] / 1e6:g} million ZEXDOC instructions, the best of {b['rounds']}
+rounds of CPU time on GitHub's runner ({e(m.get('cpu', ''))}): the latest {run}{' on ' + commit if commit else ''},
+{e(m.get('date', ''))}. Every push runs it; how, and what the columns mean:
+<a href="{SERVER}/{REPO}/blob/{e(ref)}/cfast/BENCHMARK.md">cfast/BENCHMARK.md</a>.</p>
+<div class="figs"><figure><img src="cfast-bench.svg" alt="ZEXDOC million instructions a second, per emulator"
+loading="lazy"></figure></div>
+<div class="scroll"><table>
+<thead><tr><th>Emulator</th><th>Sees every</th><th>ZEXDOC Minstr/s</th><th>Z80 clock</th><th>Against cfast</th>
+<th>What it is</th></tr></thead>
+<tbody>{rows}</tbody></table></div>"""
+
+
 SITE_CSS = ''':root { --bg: #f7f7f5; --fg: #1c1c1a; --muted: #6a6a64; --card: #fff; --line: #e2e1dc; --link: #1f55c0; }
 @media (prefers-color-scheme: dark) {
   :root { --bg: #141414; --fg: #ebeae6; --muted: #a2a19b; --card: #1d1d1c; --line: #34332f; --link: #8fb1ff; }
@@ -1181,6 +1225,8 @@ with 1K Tiny BASIC. Chip: the board as a Z80 replacement, the bus on its pins. E
 {chr(10).join(rows)}
 </tbody>
 </table></div>
+
+{cfast_bench(src, out)}
 
 <footer>Published by <a href="{SERVER}/{REPO}/blob/main/.github/workflows/pages.yml">pages.yml</a> after
 <a href="{SERVER}/{REPO}/blob/main/.github/workflows/targets.yml">targets.yml</a> (every push to main and nightly)
