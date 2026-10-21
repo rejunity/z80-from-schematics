@@ -434,6 +434,34 @@ jobs:
         run: make basic_netlist_tests
 
   # =====================================================================
+  # cfast's speed: the benchmark of cfast/BENCHMARK.md, on every push
+  # =====================================================================
+  cfast-bench:
+    name: cfast's speed against four other C emulators (ZEXDOC)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install C toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential python3
+      - name: Build every emulator and run them on ZEXDOC
+        # scripts/cfast_bench.py: 50M instructions each, the best of 5
+        # interleaved rounds of CPU time, every run on CPU 1 alone. Fails if
+        # an emulator stops early or runs other instructions than the model.
+        run: make cfast_bench CFAST_BENCH_ARGS="--cpu 1 --rounds 5"
+      - name: The table, in the job's summary
+        run: cat build/bench/bench.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload the table, the numbers and the chart (the site shows the latest, pages.yml)
+        uses: actions/upload-artifact@v6
+        with:
+          name: cfast-bench
+          path: build/bench/
+          retention-days: 90
+
+  # =====================================================================
   # ZEX TIER (C model) — runs on every event, including every push.
   # ZEXDOC and ZEXALL are independent jobs so they run in parallel
   # (~18 + 19 min serial -> ~19 min parallel wall clock). Neither

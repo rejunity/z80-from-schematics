@@ -14,6 +14,7 @@
 #   make phase_identity  every pin of every phase vs PHASE_REF=<rev>
 #   make cfast      the phase engine generated from the timing tables
 #   make cfast_identity  cfast phase by phase vs PHASE_REF=<rev>
+#   make cfast_bench  cfast against the other C emulators (cfast/BENCHMARK.md)
 #   make clean      remove build artifacts
 # =============================================================================
 
@@ -57,7 +58,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
-.PHONY: cfast cfast_identity cfast_single cfast_single_identity pinhash phase_identity zexrunner_tick timing_sdc timing_sdc_check equiv all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist event_sweep basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test verilator_z80test z80test_rtl halt2int halt2int_probe
+.PHONY: cfast cfast_bench cfast_identity cfast_single cfast_single_identity pinhash phase_identity zexrunner_tick timing_sdc timing_sdc_check equiv all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist event_sweep basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test verilator_z80test z80test_rtl halt2int halt2int_probe
 
 all: cmodel ctest
 
@@ -674,6 +675,39 @@ $(BIN)/pinhash_single: $(SCRIPTS)/pinhash.c $(CFAST_SINGLE)
 cfast_single_identity: cfast_single pinhash
 	@$(PYTHON) $(SCRIPTS)/phase_identity.py --ref $(PHASE_REF) --new-exe $(BIN)/pinhash \
 	  --fast-exe $(BIN)/pinhash_single --run-exe $(BIN)/pinhash_single $(PHASE_ARGS)
+
+# cfast_bench: cfast's two frames, the reference model and the four other C
+# emulators in scripts/refs/ on the same ZEXDOC instructions, each in the
+# harness of cfast/bench/ (the oracles at -O2, redcode with the features the
+# lockstep CI job builds it with); scripts/cfast_bench.py writes
+# build/bench/bench.{md,json,svg}. CI runs it on every push (job cfast-bench).
+# e.g. make cfast_bench CFAST_BENCH_ARGS="--cpu 3 --rounds 5"
+CFAST_BENCH_ARGS ?=
+BENCH_REFS := $(SCRIPTS)/refs
+BENCH_BINS := $(BIN)/bench_chips $(BIN)/bench_superzazu $(BIN)/bench_redcode $(BIN)/bench_suzukiplan
+REDCODE_FLAGS := -I$(BENCH_REFS)/redcode_z80 -I$(BENCH_REFS)/redcode_z80/Zeta \
+  -DZ80_STATIC -DZ80_WITH_LOCAL_HEADER -DZ80_WITH_EXECUTE -DZ80_WITH_Q \
+  -DZ80_WITH_PARITY_COMPUTATION -DZ80_WITH_SPECIAL_RESET -DZ80_WITH_FULL_IM0 \
+  -DZ80_WITH_UNOFFICIAL_RETI
+
+cfast_bench: cfast $(BIN)/zexrunner $(BENCH_BINS)
+	@$(PYTHON) $(SCRIPTS)/cfast_bench.py --bin $(BIN) --out $(BUILD)/bench $(CFAST_BENCH_ARGS)
+
+$(BIN)/bench_chips: $(CFAST)/bench/bench_chips.c $(CFAST)/bench/bench_common.h
+	@mkdir -p $(BIN)
+	$(CC) -std=gnu11 -O2 -w -I$(BENCH_REFS) $< -o $@
+
+$(BIN)/bench_superzazu: $(CFAST)/bench/bench_superzazu.c $(CFAST)/bench/bench_common.h
+	@mkdir -p $(BIN)
+	$(CC) -std=gnu11 -O2 -w -I$(BENCH_REFS) $< -o $@
+
+$(BIN)/bench_redcode: $(CFAST)/bench/bench_redcode.c $(CFAST)/bench/bench_common.h
+	@mkdir -p $(BIN)
+	$(CC) -std=gnu11 -O2 -w $(REDCODE_FLAGS) $< $(BENCH_REFS)/redcode_z80/Z80.c -o $@
+
+$(BIN)/bench_suzukiplan: $(CFAST)/bench/bench_suzukiplan.cpp $(CFAST)/bench/bench_common.h
+	@mkdir -p $(BIN)
+	$(CXX) -std=gnu++17 -O2 -w -I$(BENCH_REFS) $< -o $@
 
 # ----------------------------------------------------------------------------
 # full suite
