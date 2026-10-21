@@ -18,7 +18,7 @@ The table below is one run of it, on GitHub's runner:
 | **rz80 cfast, z80f_run** | half clock | 62.7 | 507 MHz | 1.00× |
 | rz80 cfast, z80f_tick | half clock | 18.2 | 147 MHz | 0.29× |
 | rz80 C model | half clock | 10.9 | 88 MHz | 0.17× |
-| chips | clock | 45.9 | 371 MHz | 0.73× |
+| floooh/chips | clock | 45.9 | 371 MHz | 0.73× |
 | suzukiplan | instruction | 96.4 | 779 MHz | 1.54× |
 | superzazu | instruction | 188.0 | 1520 MHz | 3.00× |
 | redcode | instruction | 185.1 | 1496 MHz | 2.95× |
@@ -28,7 +28,7 @@ The first 50,000,000 instructions of ZEXDOC, the best of 5 rounds of each emulat
 - **rz80 cfast, z80f_run**: the phase engine generated from the C model's timing tables, steps back to back with the bus inlined (`cfast/`)
 - **rz80 cfast, z80f_tick**: the same steps, one half clock per call, the pins in a word
 - **rz80 C model**: the reference model the RTL is checked against (`cmodel/`)
-- **chips**: [floooh/chips](https://github.com/floooh/chips) `z80.h`: `z80_tick`, the pins in a word
+- **floooh/chips**: [floooh/chips](https://github.com/floooh/chips) `z80.h`: `z80_tick`, the pins in a word
 - **suzukiplan**: [suzukiplan/z80](https://github.com/suzukiplan/z80): `execute(1)`
 - **superzazu**: [superzazu/z80](https://github.com/superzazu/z80): `z80_step`
 - **redcode**: [redcode/Z80](https://github.com/redcode/Z80): `z80_execute(1)`
@@ -39,9 +39,9 @@ The first 50,000,000 instructions of ZEXDOC, the best of 5 rounds of each emulat
   cfast and the rz80 C model run a half clock (one phase) at a time with the
   pins of each (`z80f_tick` one per call, `z80f_run` back to back with the
   machine's bus inlined into the steps), so a wait state, a bus request or
-  an interrupt lands on the half clock it lands on in silicon. chips steps
-  a clock (a T-state) with its pins; the other three run whole instructions
-  and report the clocks they took.
+  an interrupt lands on the half clock it lands on in silicon.
+  floooh/chips steps a clock (a T-state) with its pins; the other three
+  run whole instructions and report the clocks they took.
 - **ZEXDOC Minstr/s**: million instructions a second, over the first 50
   million of ZEXDOC.
 - **Z80 clock**: the T-states it emulates a second, the clock of a Z80 it
@@ -55,8 +55,8 @@ The first 50,000,000 instructions of ZEXDOC, the best of 5 rounds of each emulat
 - Every emulator runs in a harness of the same frame (`cfast/bench/`;
   rz80's own: `cfast/zexfast.c`, `scripts/zexrunner.c`): ZEXDOC at 0100,
   its BDOS calls caught at 0005. Each must run the same instructions: their
-  T-states agree within 0.5 % (chips and redcode end a prefixed instruction
-  their own way, which moves them 0.1 %), or the script fails.
+  T-states agree within 0.5 % (floooh/chips and redcode end a prefixed
+  instruction their own way, which moves them 0.1 %), or the script fails.
 - The time is each process's own CPU time, the best of 5 rounds, with the
   emulators interleaved within each round and pinned to one CPU.
 - rz80's code builds with the project's flags (`-O2`, LTO), the others at

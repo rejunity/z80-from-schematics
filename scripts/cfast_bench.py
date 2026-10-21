@@ -11,8 +11,8 @@ table) and bench.svg (the same as bars).
 
 make cfast_bench builds every emulator and runs this (cfast/BENCHMARK.md).
 Every emulator must run all the instructions, and their T-states must
-agree within 0.5 % (chips and redcode count a prefix's end their own way,
-which moves them by about 0.1 %): else it exits 1."""
+agree within 0.5 % (floooh/chips and redcode count a prefix's end their
+own way, which moves them by about 0.1 %): else it exits 1."""
 import argparse
 import datetime
 import html
@@ -31,7 +31,7 @@ EMULATORS = [
      "the same steps, one half clock per call, the pins in a word"),
     ("rz80 C model", "zexrunner", "half clock",
      "the reference model the RTL is checked against (`cmodel/`)"),
-    ("chips", "bench_chips", "clock",
+    ("floooh/chips", "bench_chips", "clock",
      "[floooh/chips](https://github.com/floooh/chips) `z80.h`: `z80_tick`, the pins in a word"),
     ("suzukiplan", "bench_suzukiplan", "instruction",
      "[suzukiplan/z80](https://github.com/suzukiplan/z80): `execute(1)`"),

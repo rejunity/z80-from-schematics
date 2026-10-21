@@ -1,4 +1,4 @@
-/* chips (floooh/chips z80.h): z80_tick, one T-state per call, the pins in a word */
+/* floooh/chips z80.h: z80_tick, one T-state per call, the pins in a word */
 #include "bench_common.h"
 #define CHIPS_IMPL
 #include "chips_z80.h"
@@ -28,6 +28,6 @@ int main(int argc, char **argv)
             if (pc == 5) bdos((uint8_t)C.bc, C.de, (uint8_t)C.de);
         }
     }
-    report("chips", n, N, t, (unsigned)(C.pc - 1));
+    report("floooh/chips", n, N, t, (unsigned)(C.pc - 1));
     return 0;
 }
