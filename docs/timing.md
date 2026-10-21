@@ -256,7 +256,11 @@ sweep's 544 RESET cases match.
   - cut after an I/O cycle's Tw: IORQ and RD / WR release in Tw.N;
   - the 1- and 2-T internal cycles are extensions of an M1 or a read on the
     die (ring states T5 / T6) and drive nothing; when RES2 rises on the T1.N
-    of a longer internal cycle, MREQ falls there and holds through T2.P;
+    of a longer internal cycle, MREQ falls there and holds through T2.P, and
+    the address bus shows the address latch -- what that T1 loaded: HL in
+    ADD / ADC / SBC HL's first internal cycle and WZ (HL+1) in their second,
+    WZ as the instruction found it in JR's, DJNZ's, (IX+d)'s, CPI's and RLD /
+    RRD's, PC from before the -2 in a block repeat;
   - in a bus grant nothing: the bus is the DMA master's. RES2 set in a
     granted T-state releases it as BUSREQ would -- BUSACK rises in that
     T-state's low half -- and the reset idle follows.
@@ -281,31 +285,60 @@ sweep's 544 RESET cases match.
   value, the register file to 5555 as perfectz80 comes up, and the core in
   the reset idle until RESET is seen high.
 
-Not modelled: the die finishes some results in the next M1's T1-T3 (A and F
-after INC A, A after LD A,(HL), DE after POP DE, the EX DE,HL swap), which a
-RESET that stops that M1 early loses and RZ80 keeps; RZ80 runs some long
-internal M-cycles as one where the die has two (ADD HL,rr's 4 + 3 T), so a cut
-inside them is approximate (docs/known-differences.md row 19).
+Which results of the instruction it stops a cut leaves written: Register
+write-back below.
 
 ## Register write-back
 
 When the die writes a result into the register file only matters if RESET
 stops an instruction part-way: a register the die hadn't written yet keeps
 its old value through the reset (RESET keeps every register but PC, I, R),
-and the code after it sees that. perfectz80 shows the die's schedule --
-the register file read in the reset idle after RESET at every T-state of
-every opcode (and of each followed by an INT or NMI response):
+and the code after it sees that. perfectz80 shows the die's schedule -- the
+register file after RESET at every T-state of every opcode (and of each
+followed by an INT or NMI response, and with WAIT and BUSREQ around it):
 
 - The die writes a result in the low half of a T-state, and RES2 rising on
   that same falling edge -- the cut that makes this T-state the last --
   blocks it. So a write in T_k's low half is kept by a cut that ends on
-  T_k+1 or later.
+  T_k+1 or later. A Tw that WAIT adds after T2 is that later T-state for
+  T2's writes, as a granted T-state is for those of an M-cycle's last.
 - **The next M1** (or INTA, or the NMI response's M1): ALU and load
-  results -- ALU ops, INC / DEC r, LD r,r' / r,n / r,(HL) / r,(IX+d),
-  CB and DD CB ops (the register copy), IN r,(C), RLD / RRD, LD A,I / R,
-  NEG / DAA / CPL / RLCA.. -- go into their register in its T2 low half and
-  F in its T3 (an INTA's T5: after its two wait states). EX AF,AF' flips in
-  its T1, EXX and EX DE,HL in its T2.
+  results -- ALU ops, INC / DEC r, LD r,r' / r,n / r,(HL) / r,(IX+d), CB
+  and DD CB ops (the register copy), IN r,(C), RLD / RRD, LD A,I / R, NEG /
+  DAA / CPL / RLCA.. -- go into their register in its T2 low half and F in
+  its T3. EX AF,AF' flips in its T1, EXX and EX DE,HL in its T2. A cut
+  after T2 (on T4, or a Tw, or an INTA's second wait state) leaves F's
+  write armed: the die makes it in the first M1 after the restart, its
+  flag latches complete -- so F stands with the register.
+- **F after a cut on that T2** -- RESET in the instruction's last T-state:
+  the die has armed F's write too, but its flag latches load at other
+  times than the ALU computes the flags, and some still hold earlier
+  values; it writes them into F in the restart's first M1 (in its T3,
+  whatever opcode it fetches there):
+  - S and Z load from the result in that T2, which the cut blocks: S keeps
+    the old flag and Z the 1 it was preset to in the instruction's last
+    T-state -- in every instruction that sets them from an 8-bit result;
+  - P/V is preset too, and in the next M1's T1 takes the parity of the
+    result's bits 0-2 (the parity chain's first stage: set when they hold
+    an even number of ones); BIT's, of the tested byte's masked bits 0-2;
+  - H and N are latched with the result (SCF / CCF: H from A's bit 3), C
+    too in the rotates and shifts and DAA; the 8-bit ALU ops, NEG, SCF and
+    CCF keep the old C;
+  - X and Y come from the internal bus, which still holds what the
+    instruction last put on it: the operand of an 8-bit op on a register
+    (r, n, A for the rotates of A), the result of one on memory (it was
+    written back), DAA's correction (00 06 60 66), A OR F for CPL and NEG,
+    the byte RLD / RRD write back, the second opcode byte for LD A,I / R;
+    SCF / CCF and IN r,(C) set theirs;
+  - ADD HL,rr: all but C, which still is the low bytes' carry; ADC / SBC
+    HL: S, Z and C still the low bytes', P/V their overflow XOR the parity
+    of the high byte's bits 0-2;
+  - LDI / LDD (and LDIR / LDDR) all but H, which comes from A + the byte
+    moved; INI / IND: H set when B's low nibble is 0 (B-1 once more);
+    OUTI / OUTD: H clear; the compares and the I/O repeats: all of F.
+
+  perfectz80: every opcode under twelve register setups (21,708 cuts), and
+  the models match each.
 - **A read's last T-state**: LD A,(nn), LD A,(BC) / (DE), IN A,(n), and each
   byte of POP, LD rr,nn, LD rr,(nn), LD HL,(nn) -- the low byte at the end
   of its own read, before the high byte is read.
@@ -313,19 +346,25 @@ every opcode (and of each followed by an INT or NMI response):
   ADC / SBC HL,rr: L in the first internal M-cycle's T3, H in the second's;
   DJNZ's B-1 in the offset read's T1; a push's first SP-1 in the T-state
   before its first write (M1's T5, the extra T), the second in that write's
-  T2; POP's and RET's SP+1 in each read's T2; LDI: HL in the read's T2, DE in the write's T2, BC in its
-  T4; CPI: HL in the read's T2, BC in the internal M-cycle's T4; INI: B in
-  the I/O read's T1, HL in the write's T2; OUTI: B in the memory read's T1,
-  HL in its T2; EX (SP),HL: SP+1 in the second read's T4, back in the first
-  write's T2, HL in the last write's T4.
+  T2; POP's and RET's SP+1 in each read's T2; LDI: HL in the read's T2, DE
+  in the write's T2, BC in its T4; CPI: HL in the read's T2, BC in the
+  internal M-cycle's T4; INI: B in the I/O read's T1, HL in the write's T2;
+  OUTI: B in the memory read's T1, HL in its T2; EX (SP),HL: SP+1 in the
+  second read's T4, back in the first write's T2, HL in the last write's
+  T4.
 
 Both models compute most results earlier, on an M-cycle's last edge, and
 keep a write-back log: each byte written before the die's edge, its old
 value and the edge it becomes permanent on; a RESET cut before that edge
 puts it back (cmodel `wb_rule` / `wb_note`, rtl `z80_regfile`'s two slots
-and the pending exchanges). The writes the die makes before the models'
-M-cycle ends are made on the die's edge (DJNZ's, INI's and OUTI's B-1, EX
-(SP),HL's SP steps, ADC / SBC HL's sum at the first internal M-cycle's end).
+and the pending exchanges) -- F after a cut on the next M1's T2 as the
+flag latches hold it (cmodel `f_cut()`, rtl `z80_core`'s `f_cut`). The
+writes the die makes before the models' M-cycle ends are made on the die's
+edge (cmodel `wb_hooks`, the RTL's mid-M-cycle micro-ops): DJNZ's, INI's
+and OUTI's B-1, the block pointer steps, the stack's SP steps, EX (SP),HL's,
+ADC / SBC HL's sum at the first internal M-cycle's end. A cut that ends on
+a T2 that WAIT held, or on a Tw after it, makes the T2 writes then (the C
+model's stall path in `advance()`, the RTL's `stall_cut` / `tw_cut`).
 Nothing changes at an instruction boundary: only what a RESET part-way
 through leaves.
 
@@ -357,8 +396,9 @@ Internal T-states drive no new address: the bus keeps the last one -- the
 refresh address after an M1 (the Spectrum's contention tables' "ir:1"), the
 operand address after a read ("hl:1", "pc+1:1"). The same holds through an
 M1's T5 / T6, IM1 / IM2's seventh INTA T-state, the RESET idle and a bus
-grant (perfectz80, every half-cycle). The address latch (`m_addr`) still
-carries the IDU / EA work of those T-states; the pins take the held value.
+grant (perfectz80, every half-cycle). The pins take the held value; the
+address latch (`m_addr`) of a long internal M-cycle holds what the die's
+does there, which a RESET cut in its T1 shows (RESET above).
 
 ## WAIT summary
 

@@ -49,6 +49,7 @@ module z80_execute (
     input  wire        bc_nz,           // BC != 0
     input  wire        b_nz,            // B != 0
     input  wire        b_dec_nz,        // B-1 != 0
+    input  wire        tw_fix,          // RESET cuts a Tw after T2: the die's T2 write stands
     // control word
     output reg         ctl_mstart,   // start the next M-cycle
     output reg         ctl_m1,   // fetch the next opcode of a prefixed instruction
@@ -209,7 +210,20 @@ module z80_execute (
         // ---- mid-M-cycle micro-ops: the IDU's jobs while the address
         // latch holds (the execute step below owns the last T-state) ----
         if (!m_end) begin
-            if (latch_pos && bus_op == `BUSOP_M1 && !suppress_decode) begin
+            // a cut ending on a Tw after T2 (WAIT): the SP step the die made in
+            // T2's low half, which these cycles otherwise make at their end --
+            // a push's second SP-1 in its first write, a pop's SP+1 in each read
+            if (tw_fix && (((eff_exec == `EXEC_PUSH || eff_exec == `EXEC_RST) && m_cycle == 3'd3) ||
+                           ((eff_exec == `EXEC_CALL || eff_exec == `EXEC_CALL_CC) && m_cycle == 3'd5) ||
+                           ((eff_exec == `EXEC_NMI || eff_exec == `EXEC_INT) && m_cycle == 3'd2) ||
+                           (eff_exec == `EXEC_EX_SP_HL && m_cycle == 3'd4))) begin
+                ctl_ab = AB_REG; ctl_ri = RI_SP; ctl_inc = INC_M1; ctl_sp = SP_IDU;
+            end else if (tw_fix && (((eff_exec == `EXEC_POP || eff_exec == `EXEC_RET || eff_exec == `EXEC_RETN) &&
+                                     (m_cycle == 3'd2 || m_cycle == 3'd3)) ||
+                                    (eff_exec == `EXEC_RET_CC && (m_cycle == 3'd3 || m_cycle == 3'd4)))) begin
+                ctl_ab = AB_REG; ctl_ri = RI_SP; ctl_inc = INC_P1; ctl_sp = SP_IDU;
+            end
+            else if (latch_pos && bus_op == `BUSOP_M1 && !suppress_decode) begin
                 ctl_ri = RI_PC; ctl_inc = INC_P1; ctl_pc = PC_IDU;   // opcode fetch: PC+1
             end else if (eff_exec == `EXEC_BLOCK && t_state == 4'd1) begin
                 case (aux_w[2:1])

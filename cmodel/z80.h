@@ -329,6 +329,7 @@ typedef struct {
        at the instruction boundary it commits to q. */
     uint8_t      q;
     bool         f_modified;
+    bool         f_wr;          /* ... and this execute step (wb_note) */
 
     /* RESET, as the die does it (perfectz80; docs/timing.md "RESET"):
        the pin is sampled on every rising edge (res_s); the full reset res2
@@ -354,6 +355,11 @@ typedef struct {
        RESET cut before that edge puts it back. */
     struct { uint8_t pair, hi, old, m, t; } wb[16];
     uint8_t      wb_n;
+    /* F after a cut that ends on the next M1's (INTA's) T2: the die has
+       begun F's write-back there and makes it in the restart's first M1,
+       from its flag latches as the cut left them (docs/timing.md "Register
+       write-back"). The exec step that writes F sets it. */
+    uint8_t      wb_fcut;
 
     /* BUSREQ, as sampled on the rising edge that started this T-state (true
        = requested): in an M-cycle's last T-state it decides the grant, in a

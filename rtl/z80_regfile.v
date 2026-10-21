@@ -63,8 +63,12 @@ module z80_regfile (
     // on -- due = {next, m, t}: T-state t of M-cycle m, or (next) of the
     // next M1 / INTA cycle -- and a cut before that edge puts it back.
     input  wire        wb_adv,          // the sequencer advances on this edge (commits)
+    input  wire        wb_held,         // ... or a bus grant holds the next M-cycle (its T1's)
+    input  wire        wb_tw,           // ... and the cut ends on a Tw after T2 (T3's too)
     input  wire        wb_fin,          // ... and the instruction ends on it
     input  wire        wb_cut,          // a RESET cut ends on this edge
+    input  wire        wb_t2,           // ... on the next M1's (INTA's) T2: F from the flag latches
+    input  wire [7:0]  f_cut,           // ... as the die then writes it (with an F write)
     input  wire [2:0]  wb_m,            // the T-state this edge ends
     input  wire [3:0]  wb_t,
     input  wire        wb_m1,           // ... in an M1 or INTA cycle
@@ -73,7 +77,7 @@ module z80_regfile (
     input  wire        bw_log,
     input  wire [7:0]  bw_due,
     input  wire        f_log,           // F waits ...
-    input  wire [7:0]  f_due,           // ... for the next M1's T4 (or T2)
+    input  wire [7:0]  f_due,           // ... for the next M1's T3 (or T2)
     input  wire        sp_log,
     input  wire [7:0]  sp_due
 );
@@ -163,6 +167,8 @@ module z80_regfile (
     reg [15:0] s_old_n[0:1];
     reg  [7:0] s_dl_n [0:1], s_dh_n [0:1];
     reg        x_af_n, x_bank_n; reg [1:0] x_dh_n;
+    reg  [7:0] fc, fc_n;                      // F for a cut on the next M1's T2,
+    reg  [3:0] fc_p, fc_p_n;                  // ... and its physical pair
     reg [15:0] rf_w   [0:12];                 // rf_n with a cut's restores
     reg        xbank_w, xaf_w; reg [1:0] xdh_w;
     integer    k, q;
@@ -199,24 +205,30 @@ module z80_regfile (
             s_old_n[k] = s_old[k]; s_dl_n[k] = s_dl[k]; s_dh_n[k] = s_dh[k];
         end
         x_af_n = x_af; x_bank_n = x_bank; x_dh_n = x_dh;
+        fc_n = fc; fc_p_n = fc_p;
         // 1. what the die makes permanent on this edge; an instruction's end
         //    also ends what it writes within itself
-        if (wb_adv) begin
+        if (wb_adv || wb_held) begin
             for (k = 0; k < 2; k = k + 1) begin
-                if (s_vl_n[k] && (due_now(s_dl_n[k], wb_m, wb_t, wb_m1) || (wb_fin && !s_dl_n[k][7])))
+                if (s_vl_n[k] && (due_now(s_dl_n[k], wb_m, wb_t, wb_m1) || (wb_tw && due_now(s_dl_n[k], wb_m, 4'd3, wb_m1)) ||
+                                  (wb_fin && !s_dl_n[k][7])))
                     s_vl_n[k] = 1'b0;
-                if (s_vh_n[k] && (due_now(s_dh_n[k], wb_m, wb_t, wb_m1) || (wb_fin && !s_dh_n[k][7])))
+                if (s_vh_n[k] && (due_now(s_dh_n[k], wb_m, wb_t, wb_m1) || (wb_tw && due_now(s_dh_n[k], wb_m, 4'd3, wb_m1)) ||
+                                  (wb_fin && !s_dh_n[k][7])))
                     s_vh_n[k] = 1'b0;
             end
             if (wb_m1 && wb_t == 4'd2) x_af_n = 1'b0;
-            if (wb_m1 && wb_t == 4'd3) begin x_bank_n = 1'b0; x_dh_n = 2'b00; end
+            if (wb_m1 && (wb_t == 4'd3 || wb_tw)) begin x_bank_n = 1'b0; x_dh_n = 2'b00; end
         end
         // 2. this edge's writes that the die makes later
         if (we) begin
             if (pw_we && pw_log_lo) log_byte(pw_phys, 1'b0, rf[pw_phys][7:0],  pw_due_lo);
             if (pw_we && pw_log_hi) log_byte(pw_phys, 1'b1, rf[pw_phys][15:8], pw_due_hi);
             if (bw_we && bw_log)    log_byte(bw_phys, bw_hi, bw_hi ? rf[bw_phys][15:8] : rf[bw_phys][7:0], bw_due);
-            if (f_we && f_log)      log_byte(af_phys, 1'b0, rf[af_phys][7:0], f_due);
+            if (f_we && f_log) begin
+                log_byte(af_phys, 1'b0, rf[af_phys][7:0], f_due);
+                fc_n = f_cut; fc_p_n = af_phys;
+            end
             if (sp_we && sp_log) begin
                 log_byte(`RFP_SP, 1'b0, rf[`RFP_SP][7:0],  sp_due);
                 log_byte(`RFP_SP, 1'b1, rf[`RFP_SP][15:8], sp_due);
@@ -234,7 +246,7 @@ module z80_regfile (
             for (k = 0; k < 13; k = k + 1)
                 for (q = 0; q < 2; q = q + 1)
                     if (s_p_n[q] == k) begin
-                        if (s_vl_n[q]) rf_w[k][7:0]  = s_old_n[q][7:0];
+                        if (s_vl_n[q]) rf_w[k][7:0]  = (wb_t2 && s_dl_n[q][7] && k == fc_p_n) ? fc_n : s_old_n[q][7:0];
                         if (s_vh_n[q]) rf_w[k][15:8] = s_old_n[q][15:8];
                     end
             xbank_w = xbank_n ^ x_bank_n; xaf_w = xaf_n ^ x_af_n; xdh_w = xdh_n ^ x_dh_n;
@@ -255,6 +267,7 @@ module z80_regfile (
                 s_old[ri] <= 16'h0000; s_dl[ri] <= 8'h00; s_dh[ri] <= 8'h00;
             end
             x_af <= 1'b0; x_bank <= 1'b0; x_dh <= 2'b00;
+            fc <= 8'h00; fc_p <= 4'd0;
         end else begin
             for (ri = 0; ri < 13; ri = ri + 1) rf[ri] <= rf_w[ri];
             xbank <= xbank_w; xaf <= xaf_w; xdh <= xdh_w;
@@ -263,6 +276,7 @@ module z80_regfile (
                 s_old[ri] <= s_old_n[ri]; s_dl[ri] <= s_dl_n[ri]; s_dh[ri] <= s_dh_n[ri];
             end
             x_af <= x_af_n; x_bank <= x_bank_n; x_dh <= x_dh_n;
+            fc <= fc_n; fc_p <= fc_p_n;
         end
     end
 endmodule
