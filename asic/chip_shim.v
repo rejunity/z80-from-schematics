@@ -7,6 +7,7 @@
 // z80_chip, along with the core macro's own netlist.
 module z80_chip_shim (
     input  wire        clk,
+    input  wire        por_n,      // z80_top's power-on reset: z80_chip ties it off
     input  wire        reset_n,
     output wire [15:0] addr,
     input  wire [7:0]  data_in,
