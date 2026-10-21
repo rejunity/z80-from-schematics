@@ -302,6 +302,7 @@ module top #(
     wire core_nmi_n    = z80_nmi_n;
     wire core_busreq_n = EXTERNAL_BUS ? z80_busreq_n : 1'b1;
 
+    wire        addr_drive, ctl_drive;   // the die's pad enables
     z80_top cpu (
         .clk        (clk_z80),
         .por_n      (cpu_por_n),
@@ -322,28 +323,31 @@ module top #(
         .int_n      (core_int_n),
         .nmi_n      (core_nmi_n),
         .busreq_n   (core_busreq_n),
+        .addr_drive (addr_drive),
+        .ctl_drive  (ctl_drive),
         .dbg_t      (),
         .dbg_m      ()
     );
 
     // ---- J3 header drivers ----
-    // chip: only HALT remains driven during a DMA grant; address, data and
-    // the cycle-control pins are released (the internal BUSACK controls
-    // this but is not brought out because K8 carries D4 instead). D is
-    // driven only while the CPU drives it.
+    // chip: the die's pad drivers (z80_top addr_drive / ctl_drive /
+    // data_drive, docs/timing.md "Pad drivers"): the address floats in a bus
+    // grant and in the RESET idle, MREQ IORQ RD WR in a bus grant, both to
+    // the rising edge that starts the held M-cycle; D is driven only while
+    // the CPU drives it; M1 RFSH (and HALT) are always driven. BUSACK is
+    // not brought out: K8 carries D4 instead.
     // sbc: everything out. D shows the byte on the internal bus (the CPU's
     // write data while it drives, otherwise what memory / the ACIA
     // returned); WAIT and BUSREQ idle high, INT is the ACIA's.
     generate if (EXTERNAL_BUS) begin : g_hdr_chip
-        wire owned = busack_n;
-        assign z80_a        = owned ? addr    : 16'hzzzz;
-        assign z80_d        = (owned && data_drive) ? data_out : 8'hzz;
-        assign z80_m1_n     = owned ? m1_n    : 1'bz;
-        assign z80_mreq_n   = owned ? mreq_n  : 1'bz;
-        assign z80_iorq_n   = owned ? iorq_n  : 1'bz;
-        assign z80_rd_n     = owned ? rd_n    : 1'bz;
-        assign z80_wr_n     = owned ? wr_n    : 1'bz;
-        assign z80_rfsh_n   = owned ? rfsh_n  : 1'bz;
+        assign z80_a        = addr_drive ? addr : 16'hzzzz;
+        assign z80_d        = data_drive ? data_out : 8'hzz;
+        assign z80_m1_n     = m1_n;
+        assign z80_mreq_n   = ctl_drive ? mreq_n : 1'bz;
+        assign z80_iorq_n   = ctl_drive ? iorq_n : 1'bz;
+        assign z80_rd_n     = ctl_drive ? rd_n   : 1'bz;
+        assign z80_wr_n     = ctl_drive ? wr_n   : 1'bz;
+        assign z80_rfsh_n   = rfsh_n;
         // WAIT / INT / BUSREQ: inputs, not driven
     end else begin : g_hdr_sbc
         assign z80_a        = addr;
