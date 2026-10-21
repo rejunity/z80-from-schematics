@@ -1,4 +1,7 @@
 /* ============================================================================
+ * SPDX-FileCopyrightText: 2026 ReJ aka Renaldas Zioma
+ * SPDX-License-Identifier: MIT
+ *
  * z80_core.c - the Z80 CPU module: phase engine, micro-sequencer, bus-cycle
  * setup, and register file accessors.
  *
