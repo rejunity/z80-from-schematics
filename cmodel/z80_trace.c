@@ -1,4 +1,7 @@
 /* ============================================================================
+ * SPDX-FileCopyrightText: 2026 ReJ aka Renaldas Zioma
+ * SPDX-License-Identifier: MIT
+ *
  * z80_trace.c - shared bus-cycle trace format (docs/timing.md / brief).
  * Emits one record per phase. Active-low pins are printed at their raw level
  * (0 = asserted). The same column layout is produced by the RTL testbench so
