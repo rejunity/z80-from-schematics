@@ -81,7 +81,8 @@ every pin makes exactly one transition per edge — there is no clock-as-data
 mux (which would glitch WR# at the rising edge of T3 when the high-half
 value of T2 differs from the low-half value), no inverted clock net, and the
 outputs are flop-driven rather than decoded from state. Reset forces
-`a = idle pattern, b = 0`, so pins sit idle while `reset_n` is low.
+`a = idle pattern, b = 0`, so pins sit idle while `por_n` is low (the
+RESET pin is an ordinary sampled input; the core idles its strobes itself).
 
 Why can't the P half come straight from a core-registered copy? Because at
 the rising edge the output must flip from `neg(k-1)` to `pos(k)` in a single
@@ -99,10 +100,10 @@ the edge. That is why `*_pos` is a next-state function.
 | `int_n` | the rising edge that starts T_last (PS0178 Figure 8; perfectz80) | `int_n_rise` (wrapper posedge flop) |
 | `nmi_n` | falling-edge detect, both halves; a pulse of any width (TwNMI) | live **and** `nmi_n_neg`, through the wrapper's NMI pulse catcher |
 | `busreq_n` | instruction boundary; every rising edge while granted | live |
-| `reset_n` | async assert, sync release | — |
+| `reset_n` | every rising edge (the die's master-slave flip-flop) | `res_rise` (wrapper posedge flop) |
 
-Ten falling-edge flops in total (8 data + NMI + WAIT), one rising-edge
-flop (INT). Active-low control inputs reset to their *inactive* (high)
+Ten falling-edge flops in total (8 data + NMI + WAIT), two rising-edge
+flops (INT, RESET). Active-low control inputs reset to their *inactive* (high)
 level, so they want a DFF with async **set**, not reset.
 
 The half-cycle model says "INT sampled at T_last.P": the level an input

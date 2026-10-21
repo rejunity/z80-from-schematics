@@ -110,6 +110,33 @@ static void test_wait(void)
     CHECK(s.cpu.instr_count >= 1, "CPU resumes and completes after WAIT released");
 }
 
+/* NMOS race (perfectz80): an INT accepted at the end of LD A,I / LD A,R
+   clears IFF2 while the instruction writes P/V from it, so P/V reads 0. An
+   NMI there leaves P/V = IFF2 = 1. The handlers push AF to show F. */
+static void test_ld_a_ir_race(void)
+{
+    for (int k = 0; k < 4; k++) {
+        int nmi = k & 1; uint8_t op = (k & 2) ? 0x5F : 0x57;    /* LD A,I / LD A,R */
+        uint8_t prog[] = { 0x31, 0xF0, 0xFF, 0xED, 0x56, 0xFB, 0x00, 0xED, op, 0x00, 0x00 };
+        /* LD SP,FFF0; IM1; EI; NOP; LD A,I|R; NOP; NOP */
+        z80_system_t s; z80_sys_init(&s); z80_sys_load(&s, 0, prog, sizeof prog);
+        s.mem[0x0038] = 0xF5; s.mem[0x0039] = 0x76;     /* PUSH AF; HALT */
+        s.mem[0x0066] = 0xF5; s.mem[0x0067] = 0x76;
+        for (int i = 0; i < 4; i++) step_instr(&s);      /* up to the NOP after EI */
+        if (nmi) { s.cpu.pins.nmi_n = 0; z80_sys_phase(&s); s.cpu.pins.nmi_n = 1; }
+        else s.cpu.pins.int_n = 0;                       /* sampled at LD A,I's end */
+        run_to_halt(&s);
+        uint8_t f = s.mem[0xFFEC];
+        if (nmi) CHECK((f & Z80_PF) != 0, "NMI after LD A,I/R: P/V = IFF2 = 1");
+        else     CHECK((f & Z80_PF) == 0, "INT accepted after LD A,I/R: P/V = 0 (NMOS race)");
+    }
+    /* no interrupt: P/V = IFF2 */
+    uint8_t prog[] = { 0xFB, 0x00, 0xED, 0x57, 0x00 };  /* EI; NOP; LD A,I; NOP */
+    z80_system_t s; z80_sys_init(&s); z80_sys_load(&s, 0, prog, sizeof prog);
+    for (int i = 0; i < 3; i++) step_instr(&s);
+    CHECK((s.cpu.rf[RFP_AF] & Z80_PF) != 0, "LD A,I without an interrupt: P/V = IFF2 = 1");
+}
+
 int main(void)
 {
     test_nmi();
@@ -118,5 +145,6 @@ int main(void)
     test_halt_release();
     test_busreq();
     test_wait();
+    test_ld_a_ir_race();
     TEST_SUMMARY();
 }

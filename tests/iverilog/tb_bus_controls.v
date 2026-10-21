@@ -21,7 +21,7 @@ module tb_bus_controls;
     wire [8:0] pins = {data_drive, m1_n, mreq_n, iorq_n, rd_n,
                        wr_n, rfsh_n, halt_n, busack_n};
     z80_top dut (
-        .clk(clk), .reset_n(reset_n),
+        .clk(clk), .por_n(reset_n), .reset_n(reset_n),
         .addr(addr), .data_in(data_in), .data_out(data_out), .data_drive(data_drive),
         .m1_n(m1_n), .mreq_n(mreq_n), .iorq_n(iorq_n), .rd_n(rd_n),
         .wr_n(wr_n), .rfsh_n(rfsh_n), .halt_n(halt_n), .busack_n(busack_n),
@@ -41,9 +41,14 @@ module tb_bus_controls;
         .data_drive(ref_drive), .m1_n(ref_m1), .mreq_n(ref_mreq),
         .iorq_n(ref_iorq), .rd_n(ref_rd), .wr_n(ref_wr), .rfsh_n(ref_rfsh)
     );
-    wire ref_halt = !(dut.u_core.halted || ((dut.u_core.exec_w == `EXEC_HALT) &&
+    // HALT: low from T4.N of the HALT M1; high again from T4.N of the HALT
+    // NOP whose end accepts an NMI or INT (sampled on the rising edge
+    // before), so an interrupt pending at the end of HALT never lowers it
+    wire ref_halt_exit = phi && (dut.u_core.t_state == dut.u_core.m_len) &&
+                         (dut.u_core.nmi_pending || (!dut.int_n_rise && dut.u_core.iff1));
+    wire ref_halt = !((dut.u_core.halted || ((dut.u_core.exec_w == `EXEC_HALT) &&
                        (dut.u_core.bus_op == `BUSOP_M1) &&
-                       (dut.u_core.t_state == 4) && phi));
+                       (dut.u_core.t_state == 4) && phi)) && !ref_halt_exit);
     // A memory-write Tw.P retains WR; the base timing decoder describes
     // only the initial T2.P before WR first falls.
     reg ref_wait_write = 0;
@@ -52,11 +57,14 @@ module tb_bus_controls;
         else ref_wait_write <= dut.u_core.hold_wr;
     // Reset hold and bus grant (BUSACK) idle every strobe and release the
     // data bus (docs/known-differences.md row 15).
-    wire idle = dut.u_core.in_reset_hold || dut.u_core.bus_granted;
+    wire idle = dut.u_core.rst_idle || dut.u_core.bus_granted;
+    // BUSACK: low while granted; it rises in the low half of the granted
+    // T-state whose rising edge saw BUSREQ high (the release)
+    wire ref_busack = !(dut.u_core.bus_granted && !(phi && dut.busreq_rise));
     wire [8:0] expected = {idle ? 7'b0111111 :
                           {ref_drive, ref_m1, ref_mreq, ref_iorq, ref_rd,
                            ref_wait_write ? 1'b0 : ref_wr, ref_rfsh},
-                          ref_halt, !dut.u_core.bus_granted};
+                          ref_halt, ref_busack};
     integer i, steps = 0, waits = 0, grants = 0, halts = 0;
     reg [7:0] bus_seen = 0;
     reg [8:0] before_pins;
