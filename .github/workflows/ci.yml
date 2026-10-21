@@ -430,12 +430,13 @@ jobs:
         run: make basic_netlist_tests
 
   # =====================================================================
-  # cfast's speed: the benchmark of cfast/BENCHMARK.md, on every push
+  # cfast: the model's pins in every phase, then its speed (the benchmark
+  # of cfast/BENCHMARK.md), on every push
   # =====================================================================
   cfast-bench:
-    name: cfast's speed against four other C emulators (ZEXDOC)
+    name: cfast against the model phase by phase, and its speed (ZEXDOC)
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - name: Install C toolchain
@@ -443,6 +444,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential python3
+      - name: cfast phase by phase against the model (make cfast_identity)
+        # every pin of every phase through z80f_tick and z80f_run, and the
+        # registers every 1M phases, against the model of this commit
+        # (PHASE_REF=HEAD): ZEXDOC, z80test, every trace program and pin
+        # scenario, random code under random INT / NMI / WAIT / BUSREQ /
+        # RESET (scripts/phase_identity.py)
+        run: make cfast_identity
       - name: Build every emulator and run them on ZEXDOC
         # scripts/cfast_bench.py: 50M instructions each, the best of 5
         # interleaved rounds of CPU time, every run on CPU 1 alone. Fails if

@@ -69,7 +69,8 @@ Run it:
 
 ## Kept up to date
 
-CI's `cfast-bench` job runs it on every push: the table is in the job's
-summary and its artifact `cfast-bench` (90 days). `pages.yml` puts the
+CI's `cfast-bench` job runs it on every push, after `make cfast_identity`
+has checked cfast against the model in every phase: the table is in the
+job's summary and its artifact `cfast-bench` (90 days). `pages.yml` puts the
 latest one on the site with the chart above: from main, or from the branch
 `cmodel-fast` until cfast is on main.
