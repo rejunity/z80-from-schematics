@@ -87,7 +87,7 @@ interactive controls (Enter, Backspace, Ctrl-C / Ctrl-Space = BREAK, Ctrl-\\ = e
     make basic_netlist_tests # same canned-script regression on synthesised gates (~9 min)
     make z80test             # Patrik Rak z80test (doc / memptr / full) baseline
     make zexall_subset_c     # curated 14-test ZEXALL slice via C model         (~90 s)
-    make zexall_subset_rtl   # same 14-test slice via Verilator                 (~15-25 min)
+    make zexall_subset_rtl   # same 14-test slice via Verilator                 (~25-55 min)
     make zexall_rtl          # full ZEXALL via Verilator (local-only; not in CI — known fails)
     make pin_scenarios          # INT/NMI/WAIT/BUSREQ/RESET scenarios — C tracegen path
     make pin_scenarios_rtl      # same scenarios — iverilog RTL path
@@ -120,7 +120,7 @@ fossi-foundation substituter configured (see [docs/librelane-flow.md](docs/libre
 | ✅  | C unit tests (267 checks across 11 binaries; incl. per-T-state pin sequence) | PASS                   |
 | ✅  | ZEXDOC                                                          | 67 / 67                             |
 | ✅  | ZEXALL                                                          | 67 / 67                             |
-| ✅  | ZEXALL 14-test subset via Verilator RTL (main + nightly)        | 14 / 14 (~17 min)                   |
+| ✅  | ZEXALL 14-test subset via Verilator RTL (main + nightly)        | 14 / 14 (~25-55 min)                |
 | ✅  | FUSE corpus, C model                                            | **1348 / 1356 + 8 known-FUSE-wrong** (100 %) |
 | ✅  | FUSE corpus, through RTL (iverilog)                             | **1348 / 1356 + 8 known-FUSE-wrong** (100 %) |
 | ✅  | Patrik Rak z80test (doc / memptr / full)                        | **160 / 160 / 160** (100 %)         |

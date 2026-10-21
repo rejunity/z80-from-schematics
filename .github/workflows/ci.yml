@@ -458,9 +458,10 @@ jobs:
   # =====================================================================
 
   zexdoc:
-    name: ZEXDOC (~18 min via C model)
+    name: ZEXDOC (~15-40 min via C model)
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # runner speed varies ~2.5x: 15-39 min over October's main runs
+    timeout-minutes: 70
     steps:
       - uses: actions/checkout@v5
       - name: Install C toolchain
@@ -491,9 +492,10 @@ jobs:
           retention-days: 14
 
   zexall:
-    name: ZEXALL (~19 min via C model)
+    name: ZEXALL (~15-40 min via C model)
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # runner speed varies ~2.5x: 15-39 min over October's main runs
+    timeout-minutes: 70
     steps:
       - uses: actions/checkout@v5
       - name: Install C toolchain
@@ -523,7 +525,7 @@ jobs:
   # RTL ZEXALL via Verilator — apples-to-apples with the C-side zexall,
   # but every cycle simulated at gate-level-equivalent fidelity. Verilator
   # is ~20x slower than the C model, so this is gated to push-to-main /
-  # nightly cron / manual dispatch (~15-25 min wall clock).
+  # nightly cron / manual dispatch (~25-55 min wall clock).
   #
   # NOTE: the FULL ZEXALL via Verilator RTL is not currently run in CI.
   # We have a known set of silicon-faithful gaps (block-op M-cycle
@@ -534,7 +536,7 @@ jobs:
   # =====================================================================
 
   zexall-subset-rtl:
-    name: ZEXALL 14-test subset via Verilator RTL (~15-25 min)
+    name: ZEXALL 14-test subset via Verilator RTL (~25-55 min)
     runs-on: ubuntu-latest
     # Same gate as a former full-ZEXALL-RTL job — runs only on push to
     # main / master, nightly cron, or manual dispatch. Branch-push
@@ -546,9 +548,11 @@ jobs:
       || github.event_name == 'workflow_dispatch'
     # The subset is the curated audit-focused 14-test slice of ZEXALL
     # (LDIR/LDDR/CPIR/CPDR + DDCB variants + RRD/RLD + NEG + DAA/SCF/CCF
-    # + 16-bit ADC/SBC HL,rp). 550M instr on C = ~86 s; Verilator at
-    # ~0.5 Minstr/s on ubuntu-latest = ~15-25 min wall clock.
-    timeout-minutes: 50
+    # + 16-bit ADC/SBC HL,rp). 550M instr on C = ~86 s; Verilator on
+    # ubuntu-latest took 24-53 min over October's main runs (the runners'
+    # speed varies ~2.5x; the RTL's own speed did not change), so the
+    # limit leaves room for the slowest.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
       - name: Install C + Verilator

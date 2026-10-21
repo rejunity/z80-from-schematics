@@ -478,13 +478,13 @@ verilator_zex: dirs
 zexall_rtl: verilator_zex
 	@$(BUILD)/obj_dir_zex/sim_zex tests/zex/zexall.com 12000000000
 
-# Curated 14-test subset of ZEXALL chosen to fit comfortably under a
-# 45-50 min Verilator wall clock while exercising the instructions our
+# Curated 14-test subset of ZEXALL chosen to keep the Verilator wall clock
+# under an hour while exercising the instructions our
 # silicon-faithfulness audit has flagged as most error-prone (LDIR/
 # LDDR + variants, CPIR/CPDR, DDCB BIT/SET/RES/INC/DEC/SHF, RRD/RLD,
 # NEG, DAA/SCF/CCF Q-leak, 16-bit ADC/SBC HL,rp). C model runs the
-# subset in ~86 s / ~550 M instructions on the dev box, so Verilator
-# on ubuntu-latest (~0.5 Minstr/s) is roughly 15-25 min wall clock.
+# subset in ~86 s / ~550 M instructions on the dev box; Verilator on
+# ubuntu-latest takes 25-55 min wall clock, depending on the runner.
 #
 # The .com is generated from tests/zex/zexall.com by patching the
 # 67-entry test-pointer table at file offset 0x3A; everything else
