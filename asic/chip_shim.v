@@ -31,4 +31,17 @@ module z80_chip_shim (
         .M1_n(m1_n), .MREQ_n(mreq_n), .IORQ_n(iorq_n), .RD_n(rd_n), .WR_n(wr_n),
         .RFSH_n(rfsh_n), .HALT_n(halt_n), .BUSAK_n(busack_n)
     );
+
+    // A chip powers up with its flip-flops at random and runs: z80_top's
+    // dual-edge pin former settles on the first clock edges, and RESET
+    // starts the core. A gate-level simulation starts them unknown (X)
+    // instead, which the former (each half fed from the other) never
+    // leaves. So the shim starts the chip in one of its power-up states,
+    // the one z80_top's power-on reset gives (the chip ties por_n off):
+    // the macro's por_n held low until the testbench's por_n rises.
+    initial begin
+        force chip.u_top.por_n = 1'b0;
+        wait (por_n === 1'b1);
+        release chip.u_top.por_n;
+    end
 endmodule
