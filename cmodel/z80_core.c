@@ -412,6 +412,17 @@ static inline uint16_t blk_k(const z80_t *c)
     return (uint16_t)(c->tmpl + v);
 }
 
+/* a push's first SP-1: in the T.N that ends the M-cycle before its first
+   write (M1's T5, CALL's extra T, the NMI / INT response's first cycle),
+   which a RESET cut ending on that T-state blocks (cut_now; the RTL's
+   push_cut). The write is set up at SP-1 either way. */
+static inline uint16_t push_sp(z80_t *c)
+{
+    uint16_t sp = (uint16_t)(z80_SP(c) - 1);
+    if (!c->cut_now) z80_setSP(c, sp);
+    return sp;
+}
+
 /* a block instruction repeats: PC back to its first opcode byte, WZ =
    PC+1, an internal M-cycle of 5 T at the old PC */
 static inline void blk_repeat(z80_t *c)
@@ -812,8 +823,7 @@ static Z80_STEP_INLINE void z80_exec_step(z80_t *c)
             if (taken) z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 1);
             else finish(c);
         }
-        else if (m == 4) { z80_setSP(c, (uint16_t)(z80_SP(c) - 1));
-                           z80_start_mcycle(c, BUSOP_MWR, z80_SP(c), (uint8_t)(z80_PC(c) >> 8), 0); }
+        else if (m == 4) z80_start_mcycle(c, BUSOP_MWR, push_sp(c), (uint8_t)(z80_PC(c) >> 8), 0);
         else if (m == 5) { z80_setSP(c, (uint16_t)(z80_SP(c) - 1));   /* in this write's T2.N: on this edge */
                            z80_start_mcycle(c, BUSOP_MWR, z80_SP(c), (uint8_t)(z80_PC(c) & 0xFF), 0); }
         else { z80_setPC(c, c->tmp16); finish(c); }
@@ -836,16 +846,14 @@ static Z80_STEP_INLINE void z80_exec_step(z80_t *c)
         break;
     case EXEC_RST:
         if (m == 1) z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 1); /* extra M1 T */
-        else if (m == 2) { z80_setSP(c, (uint16_t)(z80_SP(c) - 1));
-                           z80_start_mcycle(c, BUSOP_MWR, z80_SP(c), (uint8_t)(z80_PC(c) >> 8), 0); }
+        else if (m == 2) z80_start_mcycle(c, BUSOP_MWR, push_sp(c), (uint8_t)(z80_PC(c) >> 8), 0);
         else if (m == 3) { z80_setSP(c, (uint16_t)(z80_SP(c) - 1));   /* in this write's T2.N: on this edge */
                            z80_start_mcycle(c, BUSOP_MWR, z80_SP(c), (uint8_t)(z80_PC(c) & 0xFF), 0); }
         else { z80_setPC(c, ctl->rst_addr); c->rf[RFP_WZ] = ctl->rst_addr; finish(c); }
         break;
     case EXEC_PUSH:
         if (m == 1) z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 1);
-        else if (m == 2) { z80_setSP(c, (uint16_t)(z80_SP(c) - 1));
-                           z80_start_mcycle(c, BUSOP_MWR, z80_SP(c), (uint8_t)(c->rf[ctl->rp_sel] >> 8), 0); }
+        else if (m == 2) z80_start_mcycle(c, BUSOP_MWR, push_sp(c), (uint8_t)(c->rf[ctl->rp_sel] >> 8), 0);
         else if (m == 3) { z80_setSP(c, (uint16_t)(z80_SP(c) - 1));   /* in this write's T2.N: on this edge */
                            z80_start_mcycle(c, BUSOP_MWR, z80_SP(c), (uint8_t)(c->rf[ctl->rp_sel] & 0xFF), 0); }
         else finish(c);
@@ -1071,16 +1079,14 @@ static Z80_STEP_INLINE void z80_exec_step(z80_t *c)
     /* ---------- interrupt acceptance sequences ---------- */
     case EXEC_NMI:
         /* m1 was the 5T M1 ack (opcode discarded). push PC, jump to 0x0066. */
-        if (m == 1) { z80_setSP(c, (uint16_t)(z80_SP(c) - 1));
-                      z80_start_mcycle(c, BUSOP_MWR, z80_SP(c), (uint8_t)(z80_PC(c) >> 8), 0); }
+        if (m == 1) z80_start_mcycle(c, BUSOP_MWR, push_sp(c), (uint8_t)(z80_PC(c) >> 8), 0);
         else if (m == 2) { z80_setSP(c, (uint16_t)(z80_SP(c) - 1));   /* in this write's T2.N: on this edge */
                            z80_start_mcycle(c, BUSOP_MWR, z80_SP(c), (uint8_t)(z80_PC(c) & 0xFF), 0); }
         else { z80_setPC(c, 0x0066); c->rf[RFP_WZ] = 0x0066; finish(c); }
         break;
     case EXEC_INT:
         /* m1 was the INTA ack (bus byte in tmp8). push PC, then dispatch per IM. */
-        if (m == 1) { z80_setSP(c, (uint16_t)(z80_SP(c) - 1));
-                      z80_start_mcycle(c, BUSOP_MWR, z80_SP(c), (uint8_t)(z80_PC(c) >> 8), 0); }
+        if (m == 1) z80_start_mcycle(c, BUSOP_MWR, push_sp(c), (uint8_t)(z80_PC(c) >> 8), 0);
         else if (m == 2) { z80_setSP(c, (uint16_t)(z80_SP(c) - 1));   /* in this write's T2.N: on this edge */
                            z80_start_mcycle(c, BUSOP_MWR, z80_SP(c), (uint8_t)(z80_PC(c) & 0xFF), 0); }
         else if (m == 3) {
