@@ -38,8 +38,9 @@ Phase-exact actions:
 - **T1.P**: `pin_addr ← PC`; `pin_m1_n ← 0`; `pin_rfsh_n ← 1`.
 - **T1.N**: `pin_mreq_n ← 0`; `pin_rd_n ← 0`.
 - **T2.N**: sample `pin_wait_n`. If asserted (low), insert `Tw` (repeat a T2-like
-  wait state) and re-sample at next .N. If not waited, latch `pin_data_in → IR`
-  (the fetched opcode).
+  wait state) and re-sample at next .N. If not waited, the byte on the bus in
+  this T2.N is the opcode: `IR` takes it at the rising edge that ends T2 ("The
+  data latch" below).
 - **T3.P**: `pin_m1_n ← 1`; `pin_rd_n ← 1`; `pin_mreq_n ← 1`; `pin_addr ← {I,R}`;
   `pin_rfsh_n ← 0`. (Refresh address presented.)
 - **T3.N**: `pin_mreq_n ← 0` (refresh memory request).
@@ -66,7 +67,8 @@ displacement and the CB opcode as **operand reads** (not M1) after the two prefi
 - **T1.P**: `pin_addr ← <effective address>`.
 - **T1.N**: `pin_mreq_n ← 0`; `pin_rd_n ← 0`.
 - **T2.N**: sample `pin_wait_n`; insert `Tw` if asserted.
-- **T3.P**: latch `pin_data_in` (read window: data must be valid by here).
+- **T3.P**: the byte on the bus in T3.P is the data, taken at T3's falling
+  edge ("The data latch").
 - **T3.N**: `pin_rd_n ← 1`; `pin_mreq_n ← 1`. (Deasserted on the falling-edge
   transition — matches the gate-level / perfectz80 trace and decouples the
   latch phase from the deassert phase.)
@@ -110,7 +112,8 @@ the following transaction. The write-strobe hold does not change this rule.
 - **T2.P**: `pin_iorq_n ← 0`; `pin_rd_n ← 0`.
 - **Tw.N**: sample `pin_wait_n` (the automatic Tw is always present; further Tw if
   WAIT held).
-- **T3.P**: latch `pin_data_in`.
+- **T3.P**: the byte on the bus in T3.P is the data, taken at T3's falling
+  edge.
 - **T3.N**: `pin_iorq_n ← 1`; `pin_rd_n ← 1`.
 
 (In the C model and RTL the IORD cycle is `m_len=4`, counting Tw as T3 and the
@@ -167,7 +170,10 @@ FF, and twenty instructions handed over in IM0, with perfectz80, pins and
 address in every half-cycle (docs/event-sweep.md).
 
 NMI: similar to M1 but no data fetch used for vector; pushes PC and jumps to `0066h`;
-copies `IFF1→IFF2`, clears `IFF1`. The NMI edge latch is held clear for the whole
+clears `IFF1` and leaves `IFF2` as EI / DI / RETN set it (perfectz80) -- it holds
+IFF1's value from before the NMI, since only an NMI parts the two, and a nested NMI
+keeps it, so the RETNs bring back the enable from before the first NMI (the usual
+`IFF2 = IFF1` on every NMI would lose it). The NMI edge latch is held clear for the whole
 response, from its M1's T1 to the last T-state of the second push: an NMI falling
 edge there is lost, even when NMI then stays low (perfectz80). An edge from the
 handler's first T-state on starts a nested NMI. An NMI edge during an INT response
@@ -175,13 +181,15 @@ is kept and taken right after it.
 
 ### External-clock reset release (Tang Primer)
 
-RESET (power-on counter, key[0], header /RESET) asserts asynchronously and
-holds `z80_top` at the idle pin pattern. Its release passes through a two-flop
-synchronizer clocked by the Z80 clock, so the first T1 starts on a rising edge
-that follows the release, never on one that preceded it, whatever the phase
-of the release. `tb_reset_top.v` sweeps 200 RESET-release offsets across a
-1 MHz external clock and checks that the first fetch is an M1 at 0000 and that
-the first `JP 0100h` survives three Tw of WAIT stretching. This establishes
+RESET (power-on counter, key[0], header /RESET) goes to `z80_top`
+unsynchronized, as on a real Z80: `z80_top` samples it on rising edges as the
+die does, so the first T1 starts on the third rising edge after the release,
+never on one that preceded it, whatever the phase of the release. The SoC
+around it (UART, ACIA, the power-on flop that drives `por_n`) takes a copy
+synchronized by two flops on the Z80 clock. `tb_reset_top.v` sweeps 200
+RESET-release offsets across a 1 MHz external clock and checks that the
+first fetch is an M1 at 0000 and that the first `JP 0100h` survives three
+Tw of WAIT stretching. This establishes
 the RTL ordering; hardware retesting of the single-clock build is still
 needed for the intermittent zero opcode reported in
 `event_tests_20261007/reset_low_release_high`. That capture also shows WAIT
@@ -190,6 +198,34 @@ data remains 00 until after RD ends (38.560 us), with C3 first visible at
 39.040 us. A CPU correctly sampling WAIT must consume 00 in that case. The
 peripheral must keep WAIT low across the sample until data is ready; the
 reset ordering alone does not prove this driver-side race is gone.
+
+## The data latch
+
+Which half-cycle's byte each read takes, from perfectz80 with the right
+byte on the bus in one half-cycle only and a decoy in every other (the
+event sweep's `latch` group, docs/event-sweep.md):
+
+| read | the byte on the bus in | taken at |
+|---|---|---|
+| opcode fetch (M1): an opcode, a prefix, the opcode after a prefix | T2.N, or the last Tw.N | the rising edge that starts T3 |
+| memory read: (HL), an operand, POP, an index displacement, DD CB's d and op | T3.P | T3's falling edge |
+| I/O read: IN A,(n), IN r,(C), INI | T3.P | T3's falling edge |
+| INTA: the IM2 vector, the IM0 opcode | the second automatic Tw.N, or the last Tw.N | the rising edge that starts T3 |
+
+In any other half-cycle of the read, T1.P to T3.N, the byte doesn't
+matter: the die takes the decoy there. A Tw moves the edge one T-state
+later. So a memory or device has until the half-cycle before that edge to
+put its byte on the bus (the datasheet's setup times bound how late within
+it) and may change it from the next half-cycle; an opcode fetch's byte is
+gone by the time MREQ and RD rise at T3.P, a read's by T3.N.
+
+The RTL takes the same edges: `latch_pos` the live bus at the rising edge
+that ends T2 of an M1 (the fourth T-state of an INTA), `latch_neg`
+`data_in_neg` -- `z80_top`'s falling-edge copy -- in T3 of a memory read (T4
+of an I/O read, whose automatic Tw is its T3). The C model's step into a
+phase takes the bus of the half-cycle before it, so `is_latch_phase` names
+the phase after the one read from: T3.P for an opcode, T3.N for read data
+(cmodel/z80_core.c).
 
 ## HALT
 
@@ -263,7 +299,8 @@ sweep's 544 RESET cases match.
   `z80_top.res_rise`.)
 - **Full reset (RES2; 95 / 197).** It takes the sample on the falling edge in
   the middle of each T-state, except in the low half of an M1's T2 (INTA's
-  too), where it holds.
+  too), where it holds -- that T2 only: in the wait states WAIT adds after
+  it RES2 takes the sample again.
 - **Stop.** While RES2 was set on the previous falling edge, no T-state
   follows the current one: the CPU finishes the T-state in hand and the one
   after it, then idles with every strobe high. A cycle cut short releases its
@@ -277,7 +314,13 @@ sweep's 544 RESET cases match.
   - cut after an I/O cycle's Tw: IORQ and RD / WR release in Tw.N;
   - the 1- and 2-T internal cycles are extensions of an M1 or a read on the
     die (ring states T5 / T6) and drive nothing; when RES2 rises on the T1.N
-    of a longer internal cycle, MREQ falls there and holds through T2.P.
+    of a longer internal cycle, MREQ falls there and holds through T2.P;
+  - in a bus grant nothing: the bus is the DMA master's. RES2 set in a
+    granted T-state releases it as BUSREQ would -- BUSACK rises in that
+    T-state's low half -- and the reset idle follows.
+- **NMI.** An NMI edge while RES2 is set is lost; the pin is still followed,
+  so an NMI that falls then and stays low isn't an edge later. Once RES2
+  clears, the last idle T-state before the restart takes an edge.
 - **Clears.** PC, I, R, IFF1 / IFF2, IM and the HALT state; the HALT pin
   rises on the falling edge where RES2 or the special-reset latch sets. Every
   other register (AF, BC, DE, HL, IX, IY, SP and the alternates), WZ and the
@@ -300,8 +343,7 @@ Not modelled: the die finishes some results in the next M1's T1-T3 (A and F
 after INC A, A after LD A,(HL), DE after POP DE, the EX DE,HL swap), which a
 RESET that stops that M1 early loses and RZ80 keeps; RZ80 runs some long
 internal M-cycles as one where the die has two (ADD HL,rr's 4 + 3 T), so a cut
-inside them is approximate; RESET during WAIT or a bus grant is untested
-(docs/known-differences.md).
+inside them is approximate (docs/known-differences.md row 19).
 
 ## Pad drivers (bus float)
 

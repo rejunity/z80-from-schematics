@@ -8,6 +8,7 @@
 //   vvp tb_event_sweep.vvp +prog=P.hex [+events=E.txt] +run=T
 //       [+marker=0200] [+inta_release=1] [+int_at=0066] [+hold=8000 +hold_t=N]
 //       [+inta_vec=FF] [+inta_n=N +inta_ops=HEX] [+busreq_walk=1] [+wait_walk=1]
+//       [+dwin=r0,r1,w,vv,dd]
 //
 // Time: one T-state is 32 time units, so an event placed at sixteenth s
 // lands at 2*s+1 units, never on a clock edge. Sixteenth 0 is the rising
@@ -32,7 +33,11 @@
 // one per INTA cycle or memory read, in place of memory: the rest of an
 // IM0 instruction (the die fetches the opcode after a prefix with another
 // INTA and reads the operands at the unchanged PC). An opcode fetch from
-// memory ends the device's instruction. I/O reads see FF.
+// memory ends the device's instruction. An IN reads what an OUT wrote to its
+// address, FF before (as perfectz80's harness and the C system do).
+// +dwin is a data window: in half-cycles r0 .. r1 from the marker's T1 the
+// data bus carries dd (hex), in half-cycle w vv, from just after the edge
+// that starts the half-cycle to the edge that ends it (as the events).
 // Memory writes are captured from the pins at the end of every half-cycle.
 // Output: `h clk addr data mreq iorq rd wr m1 rfsh halt busack aen den cen`
 // for halves 0 .. 2*run-1 from the marker's T1, pins sampled at the end of
@@ -71,15 +76,22 @@ module tb_event_sweep;
     reg  [7:0]  dev_byte;
     reg  [71:0] dev_q;          // the device's bytes, the first one lowest
     reg         dev_read;
-    assign data_in = (!mreq_n && !rd_n) ? (dev_read ? dev_byte : mem[addr]) :
+    reg  [7:0]  io [0:65535];   // I/O space: OUT writes, IN reads back (FF until written)
+    reg         dwin_on;        // +dwin: this half-cycle is in the window
+    reg  [7:0]  dwin_byte;
+    assign data_in = dwin_on ? dwin_byte :
+                     (!mreq_n && !rd_n) ? (dev_read ? dev_byte : mem[addr]) :
                      (!iorq_n && !m1_n) ? dev_byte :
-                     (!iorq_n && !rd_n) ? 8'hff : 8'h00;
+                     (!iorq_n && !rd_n) ? io[addr] : 8'h00;
 
     integer ev_pin [0:7], ev_lo [0:7], ev_hi [0:7];
     integer n_ev, fd, r, k, e, run, marker, hold, hold_t, int_at, inta_release, vec;
     integer t, half, mark_half, hold_until, in_read;
     integer inta_n, dev_pos, was_read, was_inta;
     integer busreq_walk, wait_walk, walk_up, walk_wait_until, strobe, prev_strobe;
+    integer hold_low;           // +hold's WAIT is low (RESET releases it; WAIT pulses it doesn't)
+    integer dw_r0, dw_r1, dw_w, dw_v, dw_d;
+    reg [8*64-1:0] dwin_arg;
     reg [63:0] inta_ops;
     reg [8*512-1:0] progf, evf;     // paths up to 512 characters
     reg found;
@@ -107,7 +119,12 @@ module tb_event_sweep;
         if (!$value$plusargs("inta_ops=%h", inta_ops)) inta_ops = 64'h0;
         if (!$value$plusargs("busreq_walk=%d", busreq_walk)) busreq_walk = 0;
         if (!$value$plusargs("wait_walk=%d", wait_walk)) wait_walk = 0;
-        walk_up = 0; walk_wait_until = -1; prev_strobe = 0;
+        walk_up = 0; walk_wait_until = -1; prev_strobe = 0; hold_low = 0;
+        dw_r0 = -1; dw_r1 = -1; dw_w = -1; dw_v = 0; dw_d = 0; dwin_on = 1'b0; dwin_byte = 8'h00;
+        if ($value$plusargs("dwin=%s", dwin_arg))
+            if ($sscanf(dwin_arg, "%d,%d,%d,%h,%h", dw_r0, dw_r1, dw_w, dw_v, dw_d) != 5) begin
+                $display("bad +dwin"); $finish(0);
+            end
         dev_q = {inta_ops, vec[7:0]};
         dev_read = 1'b0; dev_byte = 8'h00; dev_pos = 0; was_read = 0; was_inta = 0;
         n_ev = 0;
@@ -118,7 +135,7 @@ module tb_event_sweep;
                 n_ev = n_ev + 1;
             $fclose(fd);
         end
-        for (k = 0; k < 65536; k = k + 1) mem[k] = 8'h00;
+        for (k = 0; k < 65536; k = k + 1) begin mem[k] = 8'h00; io[k] = 8'hff; end
         $readmemh(progf, mem);
 
         // Power-on: por_n for the first half-cycle, RESET 4 T low, released
@@ -158,16 +175,18 @@ module tb_event_sweep;
                     mark_half = half - (half % 2);   // the T1 rising edge
                 end
                 if (found) begin
+                    dwin_on = dw_r0 >= 0 && half - mark_half >= dw_r0 && half - mark_half <= dw_r1;
+                    dwin_byte = (half - mark_half == dw_w) ? dw_v : dw_d;
                     if (inta_release && !m1_n && !iorq_n) int_n = 1'b1;
                     if (int_at >= 0 && !m1_n && !mreq_n && addr == int_at) int_n = 1'b0;
                     if (int_at >= 0 && !m1_n && !iorq_n) int_n = 1'b1;
                     if (hold >= 0 && m1_n && !mreq_n && !rd_n && addr == hold) begin
                         if (!in_read) begin
-                            wait_n = 1'b0; in_read = 1;
+                            wait_n = 1'b0; in_read = 1; hold_low = 1;
                             hold_until = half + 2 * hold_t;
                         end
                     end else in_read = 0;
-                    if (hold >= 0 && !wait_n && (half >= hold_until || !reset_n)) wait_n = 1'b1;
+                    if (hold_low && (half >= hold_until || !reset_n)) begin wait_n = 1'b1; hold_low = 0; end
                     if (busreq_walk) begin
                         if (!busack_n && !walk_up) begin busreq_n = 1'b1; walk_up = 1; end
                         else if (walk_up && busack_n) begin busreq_n = 1'b0; walk_up = 0; end
@@ -189,10 +208,11 @@ module tb_event_sweep;
                     if ((t - mark_half * 16 - 1) / 2 == ev_lo[e]) drive(ev_pin[e], 0);
                     if (ev_hi[e] >= 0 && (t - mark_half * 16 - 1) / 2 == ev_hi[e]) drive(ev_pin[e], 1);
                 end
-                if (!reset_n && !wait_n) wait_n = 1'b1;
+                if (hold_low && !reset_n) begin wait_n = 1'b1; hold_low = 0; end
             end
             #1;
             if (t % 16 == 15 && !mreq_n && !wr_n) mem[addr] = data_out;
+            if (t % 16 == 15 && !iorq_n && !wr_n) io[addr] = data_out;
             if (found && t % 16 == 15) begin
                 $display("%0d %0d %04x %02x %0d %0d %0d %0d %0d %0d %0d %0d %04x %02x %02x",
                          half - mark_half, clk, addr, data_out,

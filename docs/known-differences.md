@@ -38,6 +38,10 @@ Status legend:
 | 21 | HALT pin when an NMI response fetches a HALT byte | timing / interrupt      | resolved |
 | 22 | Pad drivers: when the bus floats              | bus                       | resolved |
 | 23 | INTA right after IM n                         | interrupt                 | resolved |
+| 24 | Nested NMI: IFF2                              | interrupt                 | resolved |
+| 25 | RESET in an M1's wait states                  | timing / reset            | resolved |
+| 26 | RESET in a bus grant                          | timing / reset / bus      | resolved |
+| 27 | NMI after RESET's release                     | timing / reset / interrupt | resolved |
 
 Notes for each row:
 
@@ -328,6 +332,41 @@ Notes for each row:
      the INTA from the mode before the instruction (7 T, IM1's) and then
      added the RST's own T-state: the push came a T-state late. It now
      takes the mode the ending instruction sets.
+ 24. **Nested NMI: IFF2 — resolved 2026-10-21.** Found by the event sweep's
+     `fuzz` group (five cases: an NMI taken in the NMI handler, INT held,
+     two RETNs): perfectz80 takes the INT one instruction after the last
+     RETN, both models never did. An accepted NMI clears IFF1 and leaves
+     IFF2 alone on the die; the models did `IFF2 = IFF1; IFF1 = 0`, the
+     usual emulator rule, which is the same until an NMI comes while IFF1
+     is already off -- the nested NMI then cleared IFF2 too, and the RETNs
+     had no enable to bring back. Both models now clear IFF1 only.
+ 25. **RESET in an M1's wait states — resolved 2026-10-21.** The die's RES2
+     holds its sample in the low half of an M1's T2 only; in the wait states
+     WAIT adds after that T2 it takes the pin again, and the cut comes a
+     T-state earlier. The models counted a Tw as T2 (`t_state` stays 2) and
+     held RES2 through it; they now track the Tw (`in_tw`). Found by the
+     event sweep's `fuzz_reset`; the `reset_m1wait` group (264 cases)
+     sweeps it.
+ 26. **RESET in a bus grant — resolved 2026-10-21.** RES2 set in a granted
+     T-state releases the grant as BUSREQ would: BUSACK rises in that
+     T-state's low half and the reset idle follows, with nothing driven --
+     the bus is the DMA master's. The models held BUSACK half a T-state
+     longer and put the T1 cut pattern (MREQ, RD low) and its RD hold on
+     the bus. `reset_busreq` (312 cases).
+ 27. **NMI after RESET's release — resolved 2026-10-21.** An NMI edge is lost
+     while RES2 is set (the pin still followed), and taken once RES2 clears
+     -- in the last idle T-state before the restart too. The models ignored
+     NMI through the whole reset idle and lost an edge there. `reset_nmi`
+     (120 cases; run by name until row 19, which 72 of them show).
+ 28. **The data latch — resolved 2026-10-22** (C model only). The die takes
+     an opcode or INTA byte from the bus in the low half before the rising
+     edge that starts T3 (T2.N, the last Tw.N, an INTA's second automatic
+     Tw.N), and read data from T3's high half at its falling edge. The C
+     model took each half a clock earlier -- an opcode from T2.P, read data
+     from T2.N -- unseen while every harness held the byte through the
+     whole read. Found by the event sweep's `latch` group (the byte in one
+     half-cycle only, 268 cases); the RTL already took the die's edges.
+     docs/timing.md "The data latch".
 
 Add rows as new differences are discovered. Each "watching" row should gain a
 test that pins the chosen behaviour or escalates it.
@@ -345,7 +384,7 @@ test that pins the chosen behaviour or escalates it.
 | FUSE corpus (Kendall 2006) (`make fuse`)                   | 1356 cases                                          | **1348 PASS + 8 known-FUSE-wrong (silicon-faithful)**     |
 | FUSE through RTL via iverilog (`make fuse_rtl`)            | 1356 cases                                          | **1348 PASS + 8 known-FUSE-wrong (matches C)**            |
 | Patrik Rak z80test (`make z80test`)                        | doc / memptr / full (~470 micro-tests across three)  | **160 / 160 / 160 PASS** (all silicon-faithful)           |
-| ZEXALL 14-test subset via Verilator RTL (`make zexall_subset_rtl`) | 550 M instr through Verilator                 | **14 / 14** PASS; ~17 min on CI                            |
+| ZEXALL 14-test subset via Verilator RTL (`make zexall_subset_rtl`) | 550 M instr through Verilator                 | **14 / 14** PASS; ~25-55 min on CI                         |
 | Real KC85 silicon — sync   (`make silicon_cycles`)         | 50 classified opcodes (kc85-cpuclk.sr)              | **50 OK** (4 with /WAIT attribution); 0 emu mismatches    |
 | Real KC85 silicon — 20 MHz (`make silicon_async`)          | CPU clock + sub-T pin offsets + 9-opcode re-sample  | **CPU ≈ 1.767 MHz**, M1 / MREQ / RD / WR at spec offsets   |
 | MAME Z80 differential                                      | —                                                   | resolved via suzukiplan (MAME's `z80.cpp` ties tightly to MAME's device framework) |

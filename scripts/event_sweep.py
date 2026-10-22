@@ -28,12 +28,19 @@
 # and fails on any half-cycle where it differs from the RTL: the two are
 # phase-identical, so the baseline covers both.
 #
+# The `latch` group drives the data bus itself: in one read -- an opcode
+# fetch, a memory or I/O read, an INTA -- the right byte is on the bus in
+# one half-cycle only and a decoy in every other, so each case shows
+# whether the byte a model takes is the one the die takes (docs/timing.md
+# "The data latch").
+#
 # Usage:
 #   scripts/event_sweep.py [--groups int,nmi,...] [--match STR] [--phases N]
 #                          [--jobs N] [--c-model] [--update-baseline]
+#                          [--record] [--verify-recorded N]
 # Output: build/event_sweep/report.md, one side-by-side trace per differing
 # case in build/event_sweep/diff/.
-import argparse, collections, hashlib, lzma, os, subprocess, sys
+import argparse, collections, hashlib, lzma, os, random, re, subprocess, sys
 from concurrent.futures import Future, ThreadPoolExecutor
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -101,10 +108,46 @@ IM0_SEQS = {
 BASIC = ["inc_a", "ld_a_hl", "ld_hl_a", "inc_hl"]
 GROUPS = ["int", "nmi", "nmi_short", "nmi_reentry", "reset", "reset_release",
           "reset_wait", "reset_short", "combo", "busreq", "wait", "im2", "im2_combo",
-          "im0", "im0_combo", "opcodes", "classes", "classes_reset"]
+          "im0", "im0_combo", "opcodes", "classes", "classes_reset", "fuzz", "fuzz_reset",
+          "reset_m1wait", "reset_busreq", "reset_nmi", "latch"]
 # run only when named (--groups): RESET at every T-state of the timing classes,
-# where the die's register write-back timing still differs (known difference 19)
-EXPLICIT = {"classes_reset"}
+# the fuzz with RESET and NMI after RESET's release, where the die's register
+# write-back timing still differs (known difference 19)
+EXPLICIT = {"classes_reset", "fuzz_reset", "reset_nmi"}
+FUZZ_N, FUZZ_SEED = 2000, 1     # the recorded fuzz cases; --fuzz-seed / --fuzz-n for others
+
+# ---- the data latch (the `latch` group) -------------------------------------
+# One read of each kind, at a fixed T-state of a short program: its T1.P
+# half-cycle (from the marker's T1), the right byte and a decoy that changes
+# what the program does -- another opcode, another stored value, another IM2
+# table entry. Each read is swept with the right byte in one half-cycle from
+# its T1.P to its T3.N and the decoy in the others, without and with one Tw
+# (WAIT low across the edge that samples it). The store after each load
+# shows the byte taken; an opcode shows in the cycles that follow.
+STORE_A = [0x32, 0x10, 0x70]                            # LD (7010),A
+LATCH_READS = [   # (name, kind, code, T1.P half, right byte, decoy, what)
+    ("m1", "m1", [0x7e] + STORE_A, 8, 0x7e, 0x81, "opcode fetch: LD A,(HL) / ADD A,C"),
+    ("m1_dd", "m1", [0xdd, 0x7e, 0x05] + STORE_A, 8, 0xdd, 0x22, "prefix fetch: DD / LD (nn),HL"),
+    ("m1_dd_op", "m1", [0xdd, 0x7e, 0x05] + STORE_A, 16, 0x7e, 0x81, "the opcode fetch after DD"),
+    ("mrd_hl", "mrd", [0x7e] + STORE_A, 16, 0x11, 0xee, "memory read: LD A,(HL)"),
+    ("mrd_n", "mrd", [0x3e, 0x5a] + STORE_A, 16, 0x5a, 0xa5, "operand read: LD A,n"),
+    ("mrd_pop_lo", "mrd", [0xc1, 0xed, 0x43, 0x10, 0x70], 16, 0x00, 0xff, "POP BC, low byte"),
+    ("mrd_pop_hi", "mrd", [0xc1, 0xed, 0x43, 0x10, 0x70], 22, 0x00, 0xff, "POP BC, high byte"),
+    ("mrd_ixd", "mrd", [0xdd, 0x7e, 0x05] + STORE_A, 24, 0x05, 0xfa, "displacement: LD A,(IX+d)"),
+    ("mrd_ddcb_d", "mrd", [0xdd, 0xcb, 0x05, 0x06], 24, 0x05, 0xfa, "DD CB d op: d"),
+    ("mrd_ddcb_op", "mrd", [0xdd, 0xcb, 0x05, 0x06], 30, 0x06, 0xf9, "DD CB d op: op, a read, not a fetch"),
+    ("iord_n", "iord", [0xdb, 0x10] + STORE_A, 22, 0xff, 0x00, "I/O read: IN A,(n)"),
+    ("iord_c", "iord", [0xed, 0x50, 0xed, 0x53, 0x10, 0x70], 24, 0xff, 0x00, "I/O read: IN D,(C)"),
+    ("iord_ini", "iord", [0xed, 0xa2], 26, 0xff, 0x00, "I/O read: INI (stored at HL)"),
+    ("inta_im2", "inta", [0x3c], 16, 0x40, 0xbf, "INTA, IM2 vector: table at 3F40 / 3FBF"),
+    ("inta_im0", "inta", [0x3c], 16, 0xff, 0x00, "INTA, IM0 opcode: RST 38 / NOP"),
+]
+# per kind: the T-states of the read, T1 to T3 (Twa: an automatic wait
+# state, the datasheet's TW*), and the one whose falling edge samples WAIT:
+# the one Tw a case adds follows it
+LATCH_HALVES = {"m1": ["T1", "T2", "T3"], "mrd": ["T1", "T2", "T3"],
+                "iord": ["T1", "T2", "Twa", "T3"], "inta": ["T1", "T2", "Twa1", "Twa2", "T3"]}
+LATCH_WAIT_AT = {"m1": 1, "mrd": 1, "iord": 2, "inta": 3}   # index of that T-state
 
 # ---- every opcode (the `opcodes` group) ------------------------------------
 # Operands: d = 05 (IX+5 / IY+5), n = 99, nn = 0300 (zeros: a NOP run, safe
@@ -151,6 +194,39 @@ CLASS_REPS = [   # (opcode program, T-states, class size): scripts/event_sweep.p
     ("dddb", 15, 2), ("dddf", 15, 2), ("dde3", 23, 2), ("dde7", 15, 2), ("dde9", 8, 2),
     ("ddef", 15, 2), ("ddf7", 15, 2), ("ddff", 15, 2), ("ddcb40", 20, 128),
 ]
+
+
+def fuzz_cases(group, n, seed):
+    """n random cases: 3-10 instructions drawn from every opcode program, a
+    random F and BC (1-4), interrupt mode (IM0 with an RST byte, IM1, IM2
+    with an even, odd or FF vector), EI or not, and one to three pulses of
+    NMI, INT (held until INTA), WAIT, BUSREQ -- and RESET in `fuzz_reset` --
+    anywhere in the first 40 T-states, of random widths. Case i of a seed is
+    always the same."""
+    ops = all_opcodes()
+    pins = (NMI, INT, WAIT, BUSREQ) + ((RESET,) if group == "fuzz_reset" else ())
+    out = []
+    for i in range(n):
+        r = random.Random(f"{group} {seed} {i}")
+        code = []
+        for _ in range(r.randint(3, 10)):
+            code += r.choice(ops)[1]
+        im = r.choice((0, 1, 2))
+        vec = (r.choice((0xc7, 0xcf, 0xd7, 0xdf, 0xe7, 0xef, 0xf7, 0xff)) if im == 0 else
+               r.choice((0x40, 0x41, 0xff)) if im == 2 else 0xff)
+        pulses = []
+        for _ in range(r.randint(1, 3)):
+            pin = r.choice(pins)
+            lo = at(r.randint(0, 40), r.randrange(16))
+            width = {NMI: r.choice((1, 4, 16, 48)), INT: -1, WAIT: r.choice((16, 32, 48)),
+                     BUSREQ: r.choice((16, 32, 64)), RESET: r.choice((48, 64, 96))}[pin]
+            pulses.append((pin, lo, -1 if width < 0 else lo + width))
+        out.append(case(f"{group}_s{seed}_{i:05d}", group, f"{group}{i}", pulses, run=200,
+                        code=code, setup=(0x01, r.randrange(256), 0x42, 0xc5, 0xf1, 0x01, r.randint(1, 4), 0x00),
+                        im=im, ei=r.random() < 0.7, vec=vec,
+                        inta_release=any(p == INT for p, _, _ in pulses),
+                        meta={"pins": sorted({PIN_NAMES[p] for p, _, _ in pulses})}))
+    return out
 
 
 def all_opcodes():
@@ -249,7 +325,7 @@ def case(name, group, target, pulses, run=None, **kw):
          "code": tuple(TARGETS[target][0]) if target in TARGETS else (), "setup": (),
          "im": 1, "ei": False, "nmi_nops": 0, "inta_release": False,
          "int_at": None, "hold": None, "vec": 0xff, "ops": (), "meta": {},
-         "busreq_walk": False, "wait_walk": False}
+         "busreq_walk": False, "wait_walk": False, "dwin": None}
     c.update(kw)
     c["code"], c["setup"] = tuple(c["code"]), tuple(c["setup"])
     return c
@@ -260,7 +336,7 @@ def prog_id(c):
     return (c["code"], c["setup"], c["im"], c["ei"], c["nmi_nops"])
 
 
-def cases(groups, phases):
+def cases(groups, phases, fuzz=(FUZZ_N, FUZZ_SEED)):
     """phases: positions per T-state for 1 T and longer pulses (16 = every
     1/16 T as on hardware; 2 = one in each half, which is all a zero-delay
     simulation can tell apart). Sub-T pulses always sweep all 16."""
@@ -450,6 +526,58 @@ def cases(groups, phases):
                         out.append(case(f"cls_{rep}_wait{w}_T{n}_p{j:02d}", "classes", rep,
                                         [(WAIT, at(n, j), at(n, j) + 16 * w)], run=60 + length,
                                         meta=dict(m, kind=f"wait{w}"), **kw))
+    if want("reset_m1wait"):   # RESET while WAIT stretches an M1 (Tw after T2)
+        for t in ("inc_a", "ld_a_hl"):
+            for w in (1, 2, 4):                 # WAIT low from the target's T2.P, w T
+                for n in range(1, 12):
+                    for j in (0, 4, 8, 12):
+                        out.append(case(f"resetm1w_{t}_w{w}_T{n}_p{j:02d}", "reset_m1wait", t,
+                                        [(WAIT, at(2, 0), at(2, 0) + 16 * w), (RESET, at(n, j), at(n, j) + 64)],
+                                        run=300, meta={"n": n, "phase": j, "width": w}))
+    if want("reset_busreq"):   # RESET before, in and after a bus grant
+        for t in ("inc_a", "ld_a_hl", "push_bc"):
+            for w in (2, 6):                    # BUSREQ low from the target's T1, w T
+                for n in range(1, 14):
+                    for j in (0, 4, 8, 12):
+                        out.append(case(f"resetbr_{t}_w{w}_T{n}_p{j:02d}", "reset_busreq", t,
+                                        [(BUSREQ, at(1, 4), at(1, 4) + 16 * w), (RESET, at(n, j), at(n, j) + 64)],
+                                        run=300, meta={"n": n, "phase": j, "width": w}))
+    if want("reset_nmi"):      # an NMI edge from RESET's release through the restart
+        for rw in (3, 4, 6):                    # RESET from the target's T1, rw T
+            for d in range(-2, 8):              # NMI falls d T after the release, j/16 more
+                for j in (0, 4, 8, 12):
+                    lo = at(1, 0) + 16 * rw + 16 * d + j
+                    out.append(case(f"resetnmi_r{rw}_d{d}_p{j:02d}", "reset_nmi", "inc_a",
+                                    [(RESET, at(1, 0), at(1, 0) + 16 * rw), (NMI, lo, lo + 16)],
+                                    run=300, meta={"rw": rw, "d": d, "phase": j}))
+    for g in ("fuzz", "fuzz_reset"):    # random code, modes and pin events
+        if want(g):
+            out += fuzz_cases(g, *fuzz)
+    if want("latch"):        # the data latch: the right byte in one half-cycle of a read
+        for name, kind, code, t1, vv, dd, what in LATCH_READS:
+            for nw in (0, 1):
+                states = list(LATCH_HALVES[kind])
+                pulses = []
+                if kind == "inta":   # IM2 / IM0, EI, INT taken after INC A
+                    pulses.append((INT, at(2, 4), -1))
+                    kw = dict(im=2 if name == "inta_im2" else 0, ei=True, inta_release=True,
+                              vec=vv)
+                else:
+                    kw = {}
+                if nw:               # WAIT low across the falling edge that samples it
+                    i = LATCH_WAIT_AT[kind]
+                    lo = (t1 + 2 * i) * 8 + 4
+                    pulses.append((WAIT, lo, lo + 16))
+                    states.insert(i + 1, "Tw")
+                halves = [f"{st}{'PN'[k]}" for st in states for k in (0, 1)]
+                r1 = t1 + len(halves) - 1
+                m = {"read": name, "kind": kind, "what": what, "waits": nw, "halves": halves}
+                out.append(case(f"latch_{name}_w{nw}_plain", "latch", name, list(pulses), run=80,
+                                code=code, meta=dict(m, half=None), **kw))
+                for k, hn in enumerate(halves):
+                    out.append(case(f"latch_{name}_w{nw}_{k:02d}{hn}", "latch", name, list(pulses),
+                                    run=80, code=code, dwin=(t1, r1, t1 + k, vv, dd),
+                                    meta=dict(m, half=k), **kw))
     if want("opcodes"):      # every opcode: plain, BUSREQ and WAIT walked through it, INT, NMI
         for name, code, setup in all_opcodes():
             kw = {"code": code, "setup": setup, "run": 120}
@@ -474,15 +602,29 @@ def pz80_key(c):
     pulses = tuple(sorted((p, half(lo), half(hi), lo // 8 == hi // 8 and hi >= 0)
                           for p, lo, hi in c["pulses"]))
     return (prog_id(c), c["inta_release"], c["int_at"], c["hold"], c["run"], c["vec"], c["ops"],
-            c["busreq_walk"], c["wait_walk"], pulses)
+            c["busreq_walk"], c["wait_walk"], pulses) + ((("dwin", c["dwin"]),) if c["dwin"] else ())
+
+
+def harness_version():
+    """HARNESS_VERSION in scripts/event_sweep_pz80.c: bumped when a change
+    to the harness changes what it prints for a case it ran before."""
+    src = open(os.path.join(ROOT, "scripts", "event_sweep_pz80.c")).read()
+    m = re.search(r"^#define HARNESS_VERSION (\d+)", src, re.M)
+    if not m:
+        sys.exit("scripts/event_sweep_pz80.c: no #define HARNESS_VERSION")
+    return int(m.group(1))
 
 
 def harness_id():
-    """perfectz80 (its netlist and simulator) and the sweep's harness: a
-    recorded trace holds while these are unchanged."""
-    h = hashlib.sha1()
+    """perfectz80 (its netlist and simulator), the pad-driver reader and the
+    harness's version: a recorded trace holds while these are unchanged.
+    The harness's own source is not hashed -- an option added for new cases
+    leaves the old ones' output alone -- so a change that does alter it must
+    bump HARNESS_VERSION, and --verify-recorded (CI) catches one that
+    didn't."""
+    h = hashlib.sha1(f"event_sweep_pz80 v{harness_version()}\n".encode())
     refs = os.path.join(ROOT, "scripts", "refs", "perfectz80")
-    files = [os.path.join(ROOT, "scripts", f) for f in ("event_sweep_pz80.c", "pz80_pads.c", "pz80_pads.h")]
+    files = [os.path.join(ROOT, "scripts", f) for f in ("pz80_pads.c", "pz80_pads.h")]
     files += sorted(os.path.join(refs, f) for f in os.listdir(refs) if f.endswith((".c", ".h")))
     for f in files:
         h.update(open(f, "rb").read())
@@ -534,6 +676,11 @@ def run_pz80(c, workdir):
     return parse_rows(out, f"pz80 {c['name']}"), out
 
 
+def dwin_arg(d):
+    r0, r1, w, vv, dd = d
+    return f"{r0},{r1},{w},{vv:02x},{dd:02x}"
+
+
 def run_case(c, workdir, side, raw=False):
     prog = c["prog"]
     ev = os.path.join(workdir, f"{c['name']}.{side}.events")    # the sides run in parallel
@@ -551,6 +698,7 @@ def run_case(c, workdir, side, raw=False):
                     "+inta_ops=" + "".join(f"{b:02x}" for b in reversed(c["ops"]))]
         if c["busreq_walk"]: cmd.append("+busreq_walk=1")
         if c["wait_walk"]: cmd.append("+wait_walk=1")
+        if c["dwin"]: cmd.append("+dwin=" + dwin_arg(c["dwin"]))
     else:                    # perfectz80, or the C model: the same options
         cmd = [PZ80 if side == "pz80" else CMODEL, "-e", ev, "-r", str(c["run"])]
         if c["inta_release"]: cmd.append("-i")
@@ -560,6 +708,7 @@ def run_case(c, workdir, side, raw=False):
         if c["ops"]: cmd += ["-o", "".join(f"{b:02x}" for b in c["ops"])]
         if c["busreq_walk"]: cmd.append("-B")
         if c["wait_walk"]: cmd.append("-W")
+        if c["dwin"]: cmd += ["-D", dwin_arg(c["dwin"])]
         cmd.append(prog)
     out = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
     return out if raw else parse_rows(out, f"{side} {c['name']}")
@@ -748,7 +897,52 @@ def write_diff(c, rtl, pz, path):
             f.write(f"{mark} {fmt(a):<56} | {fmt(b)}\n")
 
 
-def report(results, baseline, new, changed, fixed, path):
+def latch_section(latch):
+    """The `latch` group as a grid: for each read, the half-cycle whose byte
+    perfectz80 takes (its trace equals the run with the right byte all
+    through the read); `!` where the RTL takes another."""
+    same = lambda a, b: first_difference(a, b) is None
+    out = ["\n## The data latch\n",
+           "Each read with the right byte on the bus in one half-cycle only and a decoy in the "
+           "others (`latch` group): `●` perfectz80 takes the byte of that half-cycle, `·` it takes "
+           "the decoy; `!` the RTL differs there. Twa: an automatic wait state (TW*), Tw: one "
+           "WAIT adds.\n"]
+    for kind, title in (("m1", "Opcode fetch (M1)"), ("mrd", "Memory read"), ("iord", "I/O read"),
+                        ("inta", "Interrupt acknowledge (INTA)")):
+        reads = [r for r in LATCH_READS if r[1] == kind]
+        cols = []
+        for name, *_ in reads:
+            for nw in (0, 1):
+                key = f"latch_{name}_w{nw}_plain"
+                if key in latch:
+                    for h in latch[key][2]["halves"]:
+                        if h not in cols: cols.append(h)
+        order = {"T1": 0, "T2": 1, "Twa": 2, "Twa1": 2, "Twa2": 3, "Tw": 4, "T3": 5}
+        cols.sort(key=lambda h: (order[h[:-1]], h[-1] == "N"))
+        rows = []
+        for name, _, _, _, _, _, what in reads:
+            for nw in (0, 1):
+                key = f"latch_{name}_w{nw}_plain"
+                if key not in latch:
+                    continue
+                prtl, ppz, m = latch[key]
+                cells = {}
+                for k, h in enumerate(m["halves"]):
+                    n = f"latch_{name}_w{nw}_{k:02d}{h}"
+                    if n not in latch:
+                        continue
+                    rtl, pz, _ = latch[n]
+                    tp, tr = same(pz, ppz), same(rtl, prtl)
+                    cells.setdefault(h, "")
+                    cells[h] += ("●" if tp else "·") + ("" if tp == tr else "!")
+                rows.append(f"| `{name}` {what} | {nw} | " + " | ".join(cells.get(h, "") for h in cols) + " |")
+        if rows:
+            out += [f"### {title}\n", "| read | Tw | " + " | ".join(cols) + " |",
+                    "|---|---|" + "---|" * len(cols)] + rows + [""]
+    return out
+
+
+def report(results, baseline, new, changed, fixed, path, latch=None):
     by_group = collections.defaultdict(list)
     for c, s, fr, fp in results:
         by_group[c["group"]].append((c, s))
@@ -808,6 +1002,8 @@ def report(results, baseline, new, changed, fixed, path):
         rows = [r for r in full.get(g, []) if any(p == RESET for p, _, _ in r[0]["pulses"])]
         if rows:
             out += [f"\n## {g} ({len(rows)} cases)\n"] + reset_section(rows)
+    if latch:
+        out += latch_section(latch)
     out.append("\n## Differing cases by group\n")
     for g in GROUPS:
         rows = [(c, s) for c, s in by_group.get(g, []) if s]
@@ -861,6 +1057,7 @@ def timing_classes(cache, hid):
 
 
 def main():
+    global OUT
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--groups", default="all")
     ap.add_argument("--match", default="")
@@ -874,9 +1071,19 @@ def main():
     ap.add_argument("--no-cache", action="store_true", help="run perfectz80 for every case")
     ap.add_argument("--shard", default="", metavar="K/N",
                     help="run every Nth case from the Kth (0-based): CI splits the sweep over N jobs")
+    ap.add_argument("--fuzz-seed", type=int, default=FUZZ_SEED,
+                    help=f"the fuzz groups' seed ({FUZZ_SEED}: the recorded cases)")
+    ap.add_argument("--fuzz-n", type=int, default=FUZZ_N, help="cases per fuzz group")
+    ap.add_argument("--out", default=OUT, help="report and work directory (build/event_sweep)")
     ap.add_argument("--classes", action="store_true",
                     help="print the opcodes' timing classes from the recorded traces and exit")
+    ap.add_argument("--verify-recorded", type=int, default=0, metavar="N",
+                    help="also run N of the cases' recorded perfectz80 traces live and fail on any "
+                         "difference (a harness change that needed a HARNESS_VERSION bump)")
+    ap.add_argument("--verify-seed", type=int, default=None,
+                    help="the --verify-recorded sample's seed (default: a random one, printed)")
     a = ap.parse_args()
+    OUT = os.path.abspath(a.out)
     if a.classes:
         timing_classes(load_cache(), harness_id())
         return 0
@@ -884,7 +1091,7 @@ def main():
         if not os.path.exists(exe):
             sys.exit(f"missing {exe}: run `make event_sweep`")
     k, n = (int(x) for x in a.shard.split("/")) if a.shard else (0, 1)
-    todo = [c for i, c in enumerate(cases(a.groups.split(","), a.phases))
+    todo = [c for i, c in enumerate(cases(a.groups.split(","), a.phases, (a.fuzz_n, a.fuzz_seed)))
             if a.match in c["name"] and i % n == k]
     if a.shard and a.update_baseline:
         sys.exit("--update-baseline needs every case: run it without --shard")
@@ -914,6 +1121,13 @@ def main():
     hits = sum(1 for c in pz_cases.values() if cache_key(c, hid) in cache)
     print(f"{len(todo)} cases ({len(pz_cases)} distinct for perfectz80: {hits} recorded, "
           f"{len(pz_cases) - hits} to run), {a.jobs} jobs", flush=True)
+    verify = []
+    if a.verify_recorded:      # a sample of the recorded traces, run again live
+        rec = sorted((k for k, c in pz_cases.items() if cache_key(c, hid) in cache),
+                     key=lambda k: pz_cases[k]["name"])
+        seed = a.verify_seed if a.verify_seed is not None else random.randrange(1 << 30)
+        verify = random.Random(seed).sample(rec, min(a.verify_recorded, len(rec)))
+        print(f"verifying {len(verify)} recorded perfectz80 traces live (--verify-seed {seed})", flush=True)
     with ThreadPoolExecutor(a.jobs) as pool:
         pz_runs = {}
         for k, c in pz_cases.items():
@@ -922,7 +1136,8 @@ def main():
                           else pool.submit(run_pz80, c, work))
         rtl_runs = [(c, pool.submit(run_case, c, work, "rtl"),
                      pool.submit(run_case, c, work, "c") if a.c_model else None) for c in todo]
-        results, c_differs = [], []
+        v_runs = [(pz_cases[k], pool.submit(run_pz80, pz_cases[k], work)) for k in verify]
+        results, c_differs, latch = [], [], {}
         for i, (c, fut, cfut) in enumerate(rtl_runs, 1):
             rtl, pz = fut.result(), pz_runs[pz80_key(c)].result()[0]
             s = summarize(c, rtl, pz)
@@ -935,8 +1150,11 @@ def main():
                     c_differs.append((c["name"], d))
                     write_diff(c, cm, rtl, os.path.join(diff_dir, f"{c['name']}.c_vs_rtl.txt"))
             results.append((c, s, facts(c, rtl), facts(c, pz)))
+            if c["group"] == "latch":
+                latch[c["name"]] = (rtl, pz, c["meta"])
             if i % 250 == 0 or i == len(rtl_runs):
                 print(f"  {i}/{len(rtl_runs)}", flush=True)
+        v_bad = [c["name"] for c, fut in v_runs if fut.result()[1] != cache[cache_key(c, hid)]]
 
     if a.record:               # perfectz80's traces of the groups run, for later runs
         texts = collections.defaultdict(dict)
@@ -958,7 +1176,7 @@ def main():
     new = {c["name"] for c, s, *_ in results if s and c["name"] not in baseline}
     changed = {c["name"] for c, s, *_ in results if s and c["name"] in baseline and baseline[c["name"]] != s["key"]}
     fixed = {c["name"] for c, s, *_ in results if not s and c["name"] in baseline}
-    report(results, baseline, new, changed, fixed, os.path.join(OUT, "report.md"))
+    report(results, baseline, new, changed, fixed, os.path.join(OUT, "report.md"), latch)
     differing = sum(1 for _, s, *_ in results if s)
     print(f"{len(results) - differing} match, {differing} differ "
           f"({len(new)} new, {len(changed)} changed, {len(fixed)} known now match); "
@@ -968,6 +1186,13 @@ def main():
         for n, (half, what) in sorted(c_differs)[:50]:
             print(f"::error::{n}: the C model differs from the RTL at half {half} ({', '.join(what)}; "
                   f"build/event_sweep/diff/{n}.c_vs_rtl.txt, C left)")
+    if verify:
+        print(f"recorded perfectz80 traces run again live: {len(verify) - len(v_bad)} identical, "
+              f"{len(v_bad)} differ")
+        for n in sorted(v_bad):
+            print(f"::error::{n}: perfectz80 now prints something else than its recorded trace: "
+                  f"a harness change that needs HARNESS_VERSION bumped and the groups recorded again "
+                  f"(scripts/event_sweep_pz80.c)")
 
     if a.update_baseline:
         kept = {n: k for n, k in baseline.items() if n not in ran}
@@ -985,7 +1210,7 @@ def main():
     for n in sorted(new | changed)[:50]:
         print(f"::error::{n}: {'new' if n in new else 'changed'} difference from perfectz80 "
               f"(build/event_sweep/diff/{n}.txt)")
-    return 1 if new or changed or c_differs else 0
+    return 1 if new or changed or c_differs or (verify and v_bad) else 0
 
 
 if __name__ == "__main__":
