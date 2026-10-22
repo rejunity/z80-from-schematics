@@ -169,26 +169,27 @@ nextpnr-ice40 0.11, yosys 0.70 (`synth_ice40 -abc9 -dsp`), default seed:
 
 | | sbc | chip |
 |---|---|---|
-| logic cells (`ICESTORM_LC`) | 4397 / 5280 (83 %) | 3547 / 5280 (67 %) |
-| `SB_LUT4` after synthesis | 3935 | 3395 |
+| logic cells (`ICESTORM_LC`) | 4654 / 5280 (88 %) | 3761 / 5280 (71 %) |
+| `SB_LUT4` after synthesis | 4162 | 3572 |
 | EBR (`SB_RAM40_4K`) | 16 / 30 | 0 |
 | SPRAM | 1 / 4 | 0 |
 | PLL | 1 / 1 | 0 |
 | I/O | 30 / 39 | 30 / 39 |
-| global buffers | 6 / 8 | 4 / 8 |
-| Z80 clock Fmax | **7.11 MHz** (constraint 4 MHz) | **8.61 MHz** (constraint 8 MHz) |
-| 12 MHz domain Fmax | 76 MHz | 74 MHz |
-| 48 MHz divider clock | 125 MHz | — |
+| global buffers | 7 / 8 | 4 / 8 |
+| Z80 clock Fmax | **8.47 MHz** (constraint 4 MHz) | **11.77 MHz** (constraint 8 MHz) |
+| 12 MHz domain Fmax | 75 MHz | 76 MHz |
+| 48 MHz divider clock | 135 MHz | — |
 
-Both Z80 clock limits are half-cycle paths into a rising-edge flop: in
-the chip build the falling-edge read-data sampler → ALU/carry chain
-(58 ns); in the sbc build the falling-edge /RD output → the SoC's
-data-in mux → the core's opcode decode (70 ns). Other seeds give 8.4–8.6
-MHz for the chip build; `-device u` and nextpnr's timing knobs did not
-improve it. `make timing` prints the summary; `make chip Z80_MHZ_chip=10`
-re-checks the chip build against another CLK frequency (the Makefile
-appends `set_frequency clk_z80 …` to `icebreaker.pcf` per build).
-nextpnr does not analyse hold times or external I/O timing.
+Both Z80 clock limits are half-cycle paths into a rising-edge flop, the
+address latch, through the address unit's 16-bit adders (nn + 1, PC + e,
+IX + d): in the chip build from the falling-edge read-data sampler
+(42 ns); in the sbc build from the falling-edge /RD output through the
+SoC's data-in mux (59 ns). The ALU is no longer on such a path: like the
+die, the core writes an ALU result at T2 of the next M1 (row 19 of
+docs/known-differences.md). `make timing` prints the summary; `make chip
+Z80_MHZ_chip=10` re-checks the chip build against another CLK frequency
+(the Makefile appends `set_frequency clk_z80 …` to `icebreaker.pcf` per
+build). nextpnr does not analyse hold times or external I/O timing.
 
 ## Toolchain — venv, no system packages
 
