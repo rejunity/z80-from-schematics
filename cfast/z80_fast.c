@@ -37,7 +37,12 @@
    instruction's F, DD CB and the CB ops on (HL), IN r,(C), LD A,I / R,
    RRD / RLD, ADD / ADC / SBC HL's F, the exchanges, and a decode an
    interrupt response replaced (WBP_DEC) -- goes through wb_fire(). Fast
-   mode never sees a RESET cut, which the reference engine handles. */
+   mode never sees a RESET cut, which the reference engine handles.
+   Measured on ZEXDOC (z80f_run): forming the writes at the instruction's
+   end and storing them on the edge runs slower (29.5 against 31.0
+   Minstr/s), making them there -- with what they replace kept for a phase
+   that goes to the reference engine before the edge -- the same (31.1):
+   the cost is the dispatch on the instruction, not where it happens. */
 
 /* the ALU on the instruction's operation and flag mode (md): A and b, F and
    Q as they stand, xy the bit ops' X / Y source; the result, F in *f */
