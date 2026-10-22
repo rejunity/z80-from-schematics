@@ -11,6 +11,10 @@
 #   make test       run the full C + RTL + compare suite
 #   make zexdoc     run ZEXDOC through the C model
 #   make zexall     run ZEXALL through the C model
+#   make phase_identity  every pin of every phase vs PHASE_REF=<rev>
+#   make cfast      the phase engine generated from the timing tables
+#   make cfast_identity  cfast phase by phase vs PHASE_REF=<rev>
+#   make cfast_bench  cfast against the other C emulators (cfast/BENCHMARK.md)
 #   make clean      remove build artifacts
 # =============================================================================
 
@@ -21,6 +25,16 @@ IVERILOG  ?= iverilog
 VVP       ?= vvp
 VERILATOR ?= verilator
 PYTHON    ?= python3
+
+# Link-time optimisation (default on): the per-phase engine, the timing
+# generator and the runners' bus loops (z80_sys_phase) inline across
+# translation units -- ZEXDOC 2.8 -> 4.2 Minstr/s. Fat objects keep
+# build/libz80.a usable by links without -flto. LTO=0 for a plain build
+# (make clean when switching).
+LTO ?= 1
+ifeq ($(LTO),1)
+CFLAGS += -flto $(shell $(CC) -ffat-lto-objects -x c -c /dev/null -o /dev/null 2>/dev/null && echo -ffat-lto-objects)
+endif
 
 # ---- layout ----
 BUILD     := build
@@ -44,7 +58,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
-.PHONY: timing_sdc timing_sdc_check equiv all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist event_sweep basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test verilator_z80test z80test_rtl halt2int halt2int_probe
+.PHONY: cfast cfast_bench cfast_identity cfast_single cfast_single_identity pinhash phase_identity zexrunner_tick timing_sdc timing_sdc_check equiv all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist event_sweep basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test verilator_z80test z80test_rtl halt2int halt2int_probe
 
 all: cmodel ctest
 
@@ -87,11 +101,16 @@ $(BIN)/tracegen: $(SCRIPTS)/tracegen.c $(CMODEL_LIB) $(CMODEL_HDRS)
 	@mkdir -p $(BIN)
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(CMODEL_LIB) -o $@
 
-# ZEX CP/M harness runner
+# ZEX CP/M harness runner; zexrunner_tick runs its bus through z80_tick
 zexrunner: cmodel $(BIN)/zexrunner
 $(BIN)/zexrunner: $(SCRIPTS)/zexrunner.c $(CMODEL_LIB) $(CMODEL_HDRS)
 	@mkdir -p $(BIN)
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(CMODEL_LIB) -o $@
+
+zexrunner_tick: cmodel $(BIN)/zexrunner_tick
+$(BIN)/zexrunner_tick: $(SCRIPTS)/zexrunner.c $(CMODEL_LIB) $(CMODEL_HDRS)
+	@mkdir -p $(BIN)
+	$(CC) $(CFLAGS) -DZEX_TICK $(INCLUDES) $< $(CMODEL_LIB) -o $@
 
 # Patrik Rak z80test (raxoft) harness — ZX Spectrum .tap loader + ROM stubs
 # at 0x10 (RST 10 print) and 0x1601 (CHAN-OPEN no-op). Tests/z80test/*.tap
@@ -478,13 +497,13 @@ verilator_zex: dirs
 zexall_rtl: verilator_zex
 	@$(BUILD)/obj_dir_zex/sim_zex tests/zex/zexall.com 12000000000
 
-# Curated 14-test subset of ZEXALL chosen to fit comfortably under a
-# 45-50 min Verilator wall clock while exercising the instructions our
+# Curated 14-test subset of ZEXALL chosen to keep the Verilator wall clock
+# under an hour while exercising the instructions our
 # silicon-faithfulness audit has flagged as most error-prone (LDIR/
 # LDDR + variants, CPIR/CPDR, DDCB BIT/SET/RES/INC/DEC/SHF, RRD/RLD,
 # NEG, DAA/SCF/CCF Q-leak, 16-bit ADC/SBC HL,rp). C model runs the
-# subset in ~86 s / ~550 M instructions on the dev box, so Verilator
-# on ubuntu-latest (~0.5 Minstr/s) is roughly 15-25 min wall clock.
+# subset in ~86 s / ~550 M instructions on the dev box; Verilator on
+# ubuntu-latest takes 25-55 min wall clock, depending on the runner.
 #
 # The .com is generated from tests/zex/zexall.com by patching the
 # 67-entry test-pointer table at file offset 0x3A; everything else
@@ -567,6 +586,133 @@ zexdoc: zexrunner
 
 zexall: zexrunner
 	@$(PYTHON) $(SCRIPTS)/run_zex.py zexall $(ZEX_MAX)
+
+# ----------------------------------------------------------------------------
+# phase identity: the work tree's model against a reference revision
+# ----------------------------------------------------------------------------
+# Every pin of every phase (the 14 trace columns + data_drive, as a rolling
+# hash) and the register file every 1M phases, through ZEXDOC, prelim,
+# z80test, all trace programs and pin scenarios, random memory soups and a
+# random data bus under random INT/NMI/WAIT/BUSREQ/RESET activity
+# (scripts/phase_identity.py, scripts/pinhash.c). PHASE_REF=<rev> picks the
+# reference (default HEAD: proves uncommitted work changes no pin);
+# PHASE_ARGS=--long runs ZEXDOC and z80test to the end.
+PHASE_REF  ?= HEAD
+PHASE_ARGS ?=
+# pinhash also hashes the die's pad drivers when the model has them
+# (z80_pins_t addr_drive / ctl_drive); phase_identity.py decides it the same
+# way for the reference
+PINHASH_DEFS := $(if $(shell grep -l addr_drive $(CMODEL)/z80.h 2>/dev/null),-DPINHASH_DRIVES)
+pinhash: cmodel $(BIN)/pinhash
+$(BIN)/pinhash: $(SCRIPTS)/pinhash.c $(CMODEL_LIB) $(CMODEL_HDRS)
+	@mkdir -p $(BIN)
+	$(CC) $(CFLAGS) $(PINHASH_DEFS) $(INCLUDES) $< $(CMODEL_LIB) -o $@
+
+phase_identity: pinhash
+	@$(PYTHON) $(SCRIPTS)/phase_identity.py --ref $(PHASE_REF) --new-exe $(BIN)/pinhash $(PHASE_ARGS)
+
+# ----------------------------------------------------------------------------
+# cfast: the phase engine generated from the model's timing tables (prototype)
+# ----------------------------------------------------------------------------
+# cfast/dump_tables.c prints cmodel/'s timing ROM and timing points;
+# cfast/gen_fast.py turns them into straight-line phase steps that
+# cfast/z80_fast.c runs around the model's own sequencer, with
+# z80_phase_step for what the steps don't cover: z80f_tick, one phase per
+# call (zexrunner_fast), and z80f_run, the steps back to back with the
+# bus inlined (cfast/z80_fast_run.h, zexfast). make cfast_identity checks
+# both phase by phase against PHASE_REF.
+CFAST     := cfast
+CFAST_GEN := $(BUILD)/cfast
+CFAST_INC := -I$(CMODEL) -I$(CFAST) -I$(CFAST_GEN)
+CFAST_DEP := $(CFAST)/z80_fast.c $(CFAST)/z80_fast.h $(CFAST_GEN)/z80_fast_steps.h \
+             $(CMODEL_SRCS) $(CMODEL_HDRS)
+
+cfast: $(BIN)/zexrunner_fast $(BIN)/pinhash_fast $(BIN)/zexfast $(BIN)/pinhash_run
+
+$(CFAST_GEN)/dump_tables: $(CFAST)/dump_tables.c $(CMODEL_SRCS) $(CMODEL_HDRS)
+	@mkdir -p $(CFAST_GEN)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -o $@
+
+$(CFAST_GEN)/tables.json: $(CFAST_GEN)/dump_tables
+	$< > $@
+
+$(CFAST_GEN)/z80_fast_steps.h: $(CFAST)/gen_fast.py $(CFAST_GEN)/tables.json
+	$(PYTHON) $(CFAST)/gen_fast.py $(CFAST_GEN)/tables.json $(CFAST_GEN)
+
+$(BIN)/zexrunner_fast: $(SCRIPTS)/zexrunner.c $(CFAST_DEP)
+	@mkdir -p $(BIN)
+	$(CC) $(CFLAGS) -DZ80_FAST $(CFAST_INC) $< $(CFAST)/z80_fast.c $(CMODEL)/z80_sim.c -o $@
+
+$(BIN)/pinhash_fast: $(SCRIPTS)/pinhash.c $(CFAST_DEP)
+	@mkdir -p $(BIN)
+	$(CC) $(CFLAGS) $(PINHASH_DEFS) -DZ80_FAST $(CFAST_INC) $< $(CFAST)/z80_fast.c $(CMODEL)/z80_sim.c -o $@
+
+# the run frame: cfast/zexfast.c, and pinhash compiled around z80f_run
+$(BIN)/zexfast: $(CFAST)/zexfast.c $(CFAST)/z80_fast_run.h $(CFAST_DEP)
+	@mkdir -p $(BIN)
+	$(CC) $(CFLAGS) $(CFAST_INC) $< -o $@
+
+$(BIN)/pinhash_run: $(SCRIPTS)/pinhash.c $(CFAST)/z80_fast_run.h $(CFAST_DEP)
+	@mkdir -p $(BIN)
+	$(CC) $(CFLAGS) $(PINHASH_DEFS) -DZ80_FAST_RUN $(CFAST_INC) $< $(CMODEL)/z80_sim.c -o $@
+
+cfast_identity: cfast pinhash
+	@$(PYTHON) $(SCRIPTS)/phase_identity.py --ref $(PHASE_REF) --new-exe $(BIN)/pinhash \
+	  --fast-exe $(BIN)/pinhash_fast --run-exe $(BIN)/pinhash_run $(PHASE_ARGS)
+
+# cfast as one header (stb style, cfast/amalgamate.py): the model, the
+# generated steps, z80f_tick and z80f_run. cfast_single_identity checks the
+# header's two frames like cfast_identity.
+CFAST_SINGLE := $(CFAST_GEN)/z80_cfast.h
+cfast_single: $(CFAST_SINGLE) $(BIN)/zexfast_single $(BIN)/pinhash_single
+
+$(CFAST_SINGLE): $(CFAST)/amalgamate.py $(CFAST)/z80_fast_run.h $(CFAST_DEP)
+	$(PYTHON) $(CFAST)/amalgamate.py $(CFAST_GEN) $@
+
+$(BIN)/zexfast_single: $(CFAST)/zexfast.c $(CFAST_SINGLE)
+	@mkdir -p $(BIN)
+	$(CC) $(CFLAGS) -DZEX_SINGLE -I$(CFAST_GEN) $< -o $@
+
+$(BIN)/pinhash_single: $(SCRIPTS)/pinhash.c $(CFAST_SINGLE)
+	@mkdir -p $(BIN)
+	$(CC) $(CFLAGS) $(PINHASH_DEFS) -DZ80_FAST_RUN -DZ80_SINGLE -I$(CMODEL) -I$(CFAST_GEN) $< $(CMODEL)/z80_sim.c -o $@
+
+cfast_single_identity: cfast_single pinhash
+	@$(PYTHON) $(SCRIPTS)/phase_identity.py --ref $(PHASE_REF) --new-exe $(BIN)/pinhash \
+	  --fast-exe $(BIN)/pinhash_single --run-exe $(BIN)/pinhash_single $(PHASE_ARGS)
+
+# cfast_bench: cfast's two frames, the reference model and the four other C
+# emulators in scripts/refs/ on the same ZEXDOC instructions, each in the
+# harness of cfast/bench/ (the oracles at -O2, redcode with the features the
+# lockstep CI job builds it with); scripts/cfast_bench.py writes
+# build/bench/bench.{md,json,svg}. CI runs it on every push (job cfast-bench).
+# e.g. make cfast_bench CFAST_BENCH_ARGS="--cpu 3 --rounds 5"
+CFAST_BENCH_ARGS ?=
+BENCH_REFS := $(SCRIPTS)/refs
+BENCH_BINS := $(BIN)/bench_chips $(BIN)/bench_superzazu $(BIN)/bench_redcode $(BIN)/bench_suzukiplan
+REDCODE_FLAGS := -I$(BENCH_REFS)/redcode_z80 -I$(BENCH_REFS)/redcode_z80/Zeta \
+  -DZ80_STATIC -DZ80_WITH_LOCAL_HEADER -DZ80_WITH_EXECUTE -DZ80_WITH_Q \
+  -DZ80_WITH_PARITY_COMPUTATION -DZ80_WITH_SPECIAL_RESET -DZ80_WITH_FULL_IM0 \
+  -DZ80_WITH_UNOFFICIAL_RETI
+
+cfast_bench: cfast $(BIN)/zexrunner $(BENCH_BINS)
+	@$(PYTHON) $(SCRIPTS)/cfast_bench.py --bin $(BIN) --out $(BUILD)/bench $(CFAST_BENCH_ARGS)
+
+$(BIN)/bench_chips: $(CFAST)/bench/bench_chips.c $(CFAST)/bench/bench_common.h
+	@mkdir -p $(BIN)
+	$(CC) -std=gnu11 -O2 -w -I$(BENCH_REFS) $< -o $@
+
+$(BIN)/bench_superzazu: $(CFAST)/bench/bench_superzazu.c $(CFAST)/bench/bench_common.h
+	@mkdir -p $(BIN)
+	$(CC) -std=gnu11 -O2 -w -I$(BENCH_REFS) $< -o $@
+
+$(BIN)/bench_redcode: $(CFAST)/bench/bench_redcode.c $(CFAST)/bench/bench_common.h
+	@mkdir -p $(BIN)
+	$(CC) -std=gnu11 -O2 -w $(REDCODE_FLAGS) $< $(BENCH_REFS)/redcode_z80/Z80.c -o $@
+
+$(BIN)/bench_suzukiplan: $(CFAST)/bench/bench_suzukiplan.cpp $(CFAST)/bench/bench_common.h
+	@mkdir -p $(BIN)
+	$(CXX) -std=gnu++17 -O2 -w -I$(BENCH_REFS) $< -o $@
 
 # ----------------------------------------------------------------------------
 # full suite

@@ -61,9 +61,17 @@ static inline bool z80_cc_true(uint8_t f, uint8_t cc){
     }
 }
 
+/* the sequencer's step: inlined into its one caller, end_mcycle(), which
+   the phase engine and cfast's steps call at every M-cycle's end */
+#if defined(__GNUC__)
+#define Z80_STEP_INLINE inline __attribute__((always_inline))
+#else
+#define Z80_STEP_INLINE inline
+#endif
+
 /* forward decls — sequencer / bus helpers are referenced by the phase
    engine below; bus helpers are referenced by the sequencer.            */
-static void z80_exec_step(z80_t *c);
+static Z80_STEP_INLINE void z80_exec_step(z80_t *c);
 static void z80_start_m1(z80_t *cpu);
 static void z80_start_mcycle(z80_t *cpu, uint8_t busop, uint16_t addr,
                              uint8_t wdata, uint8_t extra_t);
@@ -163,61 +171,60 @@ static void finish(z80_t *c) { c->instr_done = true; c->im0_ins = false; }
    perfectz80 under RESET at every T-state: the die writes a result in the
    low half of a T-state, and a cut ending on that T-state blocks it, so the
    write is kept from the cut ending on the T-state after. This model writes
-   on an M-cycle's last edge; wb_rule() gives, for each byte an exec step
-   changed, the edge the die's write becomes permanent on, and the byte's old
-   value waits in c->wb until then -- a RESET cut before it restores it (F
-   after a cut on the next M1's T2: as the die's flag latches hold it,
-   f_cut()). The writes the die makes before this model's exec step reaches
-   them are made on the die's edge instead (wb_hooks). */
+   on an M-cycle's last edge: before an exec step writes a byte the die
+   writes on a later edge, it logs the byte's value and that edge (wb_put)
+   -- T-state t of M-cycle m of this instruction, or (m = WB_NEXT) of the
+   next M1 or INTA cycle -- and a RESET cut before that edge puts it back
+   (F after a cut on the next M1's T2: as the die's flag latches hold it,
+   f_cut()). The edges, by the classes that log:
+     - the next M1's T3 (the register in its T2.N, F in its T3.N -- which a
+       cut after T2.N leaves to the restart's M1, with the flag latches
+       complete): the 8-bit loads, the ALU, INC / DEC, the rotates, CB and
+       DDCB, IN r,(C), RRD / RLD, LD A,I / R; EXX, EX DE,HL; F of ADD /
+       ADC / SBC HL, of LDI, and of INI / OUTI when they end;
+     - its T2: EX AF,AF' (the exchange flip-flop), F of CPI and of INI /
+       OUTI when they repeat (every flag latched before the M1);
+     - its T1: a read straight into its register in that read's last T.N
+       (LD A,(nn), LD A,(rr), IN A,(n)), the second byte of a 16-bit load or
+       POP, H of ADD / ADC / SBC HL (the second internal M-cycle's T3.N);
+     - in the instruction: the first byte of a 16-bit load or POP in the
+       second read's T1; INC / DEC rr, LD SP,HL in the M1's T5.N (the edge
+       ending T6); L of ADD HL in the first internal M-cycle's T3.N; a
+       push's first SP-1 in the T.N that ends the M-cycle before the write;
+       CPI's BC in its internal M-cycle's T4.N.
+   The writes the die makes before this model's exec step reaches them are
+   made on the die's edge instead (wb_hooks). */
 #define WB_NEXT 0          /* wb m: the next M1 / INTA cycle */
 
-static void wb_rule(const z80_t *c, uint8_t ex, uint8_t mc, uint8_t pair, bool hi,
-                    uint8_t *m, uint8_t *t)
+/* byte hi of pair p is about to be written early: its value waits for the
+   die's edge, T-state t of the next M1 / INTA cycle (m = WB_NEXT) or of
+   the M-cycle after this one (m: its number) -- the oldest value when the
+   byte already waits, with the new edge */
+static inline void wb_put(z80_t *c, uint8_t p, uint8_t hi, uint8_t m, uint8_t t)
 {
-    bool f = pair == RFP_AF && !hi;
-    *m = 0xff; *t = 0;                         /* default: this edge */
-    switch (ex) {
-    /* results the die writes in the next M1: the register in T2.N, F in T3.N --
-       which a cut after T2.N leaves to the restart's M1, with the flag
-       latches complete: so both are kept from the T-state after T2 on */
-    case EXEC_LD_R_R: case EXEC_LD_R_N: case EXEC_LD_R_M:
-    case EXEC_ALU_R: case EXEC_ALU_N: case EXEC_ALU_M:
-    case EXEC_INC_R: case EXEC_DEC_R: case EXEC_INC_M: case EXEC_DEC_M:
-    case EXEC_ROT_A: case EXEC_DAA: case EXEC_CPL: case EXEC_SCF: case EXEC_CCF: case EXEC_NEG:
-    case EXEC_CB_R: case EXEC_CB_M: case EXEC_DDCB: case EXEC_IN_C:
-    case EXEC_RRD: case EXEC_RLD: case EXEC_LD_A_IR:
-        *m = WB_NEXT; *t = 3; break;
-    case EXEC_EX_AF:  *m = WB_NEXT; *t = 2; break;   /* the exchange flip-flops in the next M1 */
-    case EXEC_EXX: case EXEC_EX_DE_HL: *m = WB_NEXT; *t = 3; break;
-    /* a read straight into its register, in that read's last T.N */
-    case EXEC_LD_A_NN: case EXEC_LD_A_RP: case EXEC_IN_A_N:
-        *m = WB_NEXT; *t = 1; break;
-    case EXEC_LD_RP_NN: case EXEC_LD_RP_NNA: case EXEC_LD_HL_NN: case EXEC_POP:
-        if (ex == EXEC_POP && pair == RFP_SP) break;
-        if (!hi) { *m = (uint8_t)(mc + 1); *t = 1; }   /* the first byte, in the second read's T1 */
-        else     { *m = WB_NEXT; *t = 1; }
-        break;
-    case EXEC_INC_RP: case EXEC_DEC_RP: case EXEC_LD_SP_HL:
-        *m = 2; *t = 2; break;                 /* M1's T5.N: the edge ending T6 */
-    case EXEC_ADD_HL_RP: case EXEC_ADC16: case EXEC_SBC16:
-        if (f) { *m = WB_NEXT; *t = 3; }
-        else if (hi) { *m = WB_NEXT; *t = 1; } /* H in the second internal M-cycle's T3.N */
-        else if (ex == EXEC_ADD_HL_RP) { *m = 2; *t = 4; }  /* L in the first one's */
-        break;
-    /* a push's first SP-1, in the T.N that ends the M-cycle before the write */
-    case EXEC_PUSH: case EXEC_RST: if (pair == RFP_SP && mc == 2) { *m = 3; *t = 1; } break;
-    case EXEC_CALL: case EXEC_CALL_CC: if (pair == RFP_SP && mc == 4) { *m = 5; *t = 1; } break;
-    case EXEC_NMI: case EXEC_INT: if (pair == RFP_SP && mc == 1) { *m = 2; *t = 1; } break;
-    case EXEC_BLOCK: {
-        uint8_t cat = (uint8_t)((c->ctl.aux >> 1) & 3);
-        /* F: the compares, and the I/O ones that repeat, have every flag
-           latched before the next M1 -- its T2 then writes them all */
-        if (f) { *m = WB_NEXT; *t = (cat == 1 || (cat >= 2 && !c->instr_done)) ? 2 : 3; }
-        else if (cat == 1 && pair == RFP_BC) { *m = 3; *t = 5; }  /* CPI's BC */
-    } break;
-    default: break;
-    }
+    unsigned i = 2u * p + hi;
+    uint32_t bit = 1u << i;
+    if (!((c->wb_next | c->wb_inst) & bit)) c->wb_old[i] = (uint8_t)(c->rf[p] >> (8 * hi));
+    if (m == WB_NEXT) c->wb_next |= bit;      /* no byte waits for both */
+    else              c->wb_inst |= bit;
+    c->wb_t[i] = t;
 }
+static inline void wb_put2(z80_t *c, uint8_t p, uint8_t m, uint8_t t)
+{
+    wb_put(c, p, 0, m, t); wb_put(c, p, 1, m, t);
+}
+/* an 8-bit register as setr() writes it, or (idx) setri() */
+static inline void wb_put_r(z80_t *c, uint8_t r, bool idx, uint8_t m, uint8_t t)
+{
+    if (r == REG_iHL) return;
+    if (idx && c->ctl.idx && !c->ctl.use_disp && (r == REG_H || r == REG_L))
+        wb_put(c, hl_pair(c), r == REG_H, m, t);
+    else
+        wb_put(c, r == REG_A ? (uint8_t)RFP_AF : (uint8_t)(RFP_BC + (r >> 1)),
+               (uint8_t)(r == REG_A || !(r & 1)), m, t);
+}
+#define WB_A(m_, t_)  wb_put(c, RFP_AF, 1, (m_), (t_))
+#define WB_F(m_, t_)  wb_put(c, RFP_AF, 0, (m_), (t_))
 
 /* F as the die writes it after a cut that ends on the next M1's T2: its
    flag latches as they stand in that M1's T1 (perfectz80). S and Z take
@@ -227,11 +234,11 @@ static void wb_rule(const z80_t *c, uint8_t ex, uint8_t mc, uint8_t pair, bool h
    still carries the ALU's operand. fo / fn: F before / after the step. */
 static uint8_t f_cut(const z80_t *c, uint8_t fo, uint8_t fn, uint8_t a, uint8_t b, uint8_t res)
 {
-    const uint8_t XY = Z80_YF | Z80_XF;
+    const uint8_t XYF = Z80_YF | Z80_XF;
     uint8_t p3 = (uint8_t)(((res ^ (res >> 1) ^ (res >> 2)) & 1) ? 0 : Z80_PF);
     switch (c->ctl.exec) {
     case EXEC_ALU_R: case EXEC_ALU_N: case EXEC_ALU_M:
-        return (uint8_t)((fo & (Z80_SF | Z80_CF)) | Z80_ZF | p3 | (fn & (Z80_HF | Z80_NF)) | (b & XY));
+        return (uint8_t)((fo & (Z80_SF | Z80_CF)) | Z80_ZF | p3 | (fn & (Z80_HF | Z80_NF)) | (b & XYF));
     case EXEC_INC_R: case EXEC_DEC_R: case EXEC_CB_R:
     case EXEC_INC_M: case EXEC_DEC_M: case EXEC_CB_M: case EXEC_DDCB: {
         if (c->ctl.flag_mode == FLAG_BIT || (c->ctl.exec == EXEC_DDCB && (c->tmph >> 6) == CB_BIT)) {
@@ -242,22 +249,22 @@ static uint8_t f_cut(const z80_t *c, uint8_t fo, uint8_t fn, uint8_t a, uint8_t 
         /* the bus: a register's old value, or (memory) the result written back */
         bool mem = c->ctl.exec == EXEC_INC_M || c->ctl.exec == EXEC_DEC_M ||
                    c->ctl.exec == EXEC_CB_M || c->ctl.exec == EXEC_DDCB;
-        return (uint8_t)((fo & Z80_SF) | Z80_ZF | p3 | (fn & (Z80_HF | Z80_NF | Z80_CF)) | ((mem ? res : b) & XY));
+        return (uint8_t)((fo & Z80_SF) | Z80_ZF | p3 | (fn & (Z80_HF | Z80_NF | Z80_CF)) | ((mem ? res : b) & XYF));
     }
     case EXEC_ROT_A:                           /* S Z P/V untouched */
-        return (uint8_t)((fn & ~XY) | (a & XY));
+        return (uint8_t)((fn & ~XYF) | (a & XYF));
     case EXEC_DAA: {                           /* the bus: the correction, 00 06 60 66 */
         uint8_t corr = (uint8_t)((fn & Z80_NF) ? a - res : res - a);
-        return (uint8_t)((fo & Z80_SF) | Z80_ZF | p3 | (fn & (Z80_HF | Z80_NF | Z80_CF)) | (corr & XY));
+        return (uint8_t)((fo & Z80_SF) | Z80_ZF | p3 | (fn & (Z80_HF | Z80_NF | Z80_CF)) | (corr & XYF));
     }
     case EXEC_CPL:
-        return (uint8_t)((fn & ~XY) | ((a | fo) & XY));
+        return (uint8_t)((fn & ~XYF) | ((a | fo) & XYF));
     case EXEC_SCF: case EXEC_CCF:              /* C waits for T2; H: A's bit 3 */
         return (uint8_t)((fn & ~(Z80_HF | Z80_CF)) | ((a & 0x08) ? Z80_HF : 0) | (fo & Z80_CF));
     case EXEC_IN_C:
-        return (uint8_t)((fo & Z80_SF) | Z80_ZF | p3 | (fn & (XY | Z80_HF | Z80_NF | Z80_CF)));
+        return (uint8_t)((fo & Z80_SF) | Z80_ZF | p3 | (fn & (XYF | Z80_HF | Z80_NF | Z80_CF)));
     case EXEC_NEG:                             /* the bus: A and F's X / Y, as CPL's */
-        return (uint8_t)((fo & (Z80_SF | Z80_CF)) | Z80_ZF | p3 | (fn & (Z80_HF | Z80_NF)) | ((a | fo) & XY));
+        return (uint8_t)((fo & (Z80_SF | Z80_CF)) | Z80_ZF | p3 | (fn & (Z80_HF | Z80_NF)) | ((a | fo) & XYF));
     case EXEC_LD_A_IR:                         /* the bus: the opcode, 57 / 5F */
         return (uint8_t)((fo & Z80_SF) | Z80_ZF | p3 | (fn & (Z80_HF | Z80_NF | Z80_CF)) | (c->ctl.aux ? Z80_XF : 0));
     case EXEC_BLOCK: {                         /* every flag latched before the next M1 but H: */
@@ -270,87 +277,70 @@ static uint8_t f_cut(const z80_t *c, uint8_t fo, uint8_t fn, uint8_t a, uint8_t 
     }
     case EXEC_RRD: case EXEC_RLD: {            /* the bus: the byte written back */
         uint8_t mem = (uint8_t)(c->ctl.exec == EXEC_RRD ? (b >> 4) | (a << 4) : (b << 4) | (a & 0x0F));
-        return (uint8_t)((fo & Z80_SF) | Z80_ZF | p3 | (fn & (Z80_HF | Z80_NF | Z80_CF)) | (mem & XY));
+        return (uint8_t)((fo & Z80_SF) | Z80_ZF | p3 | (fn & (Z80_HF | Z80_NF | Z80_CF)) | (mem & XYF));
     }
     default:
         return fo;
     }
 }
 
-/* the classes wb_rule() gives a later edge for something */
-static bool wb_logs(uint8_t ex)
+/* the entries that stand by the end of this M-cycle: this instruction's
+   due in it -- every edge inside the instruction falls in the M-cycle
+   after the step that logs it --, and at the end of an M1 or INTA cycle
+   the last instruction's, due in that M1's T1-T3. A RESET cut inside the
+   M-cycle sorts the rest by the T-state it ends on (wb_undo), so no edge
+   before the M-cycle's last looks at the log. */
+static inline void wb_retire(z80_t *c)
 {
-    switch (ex) {
-    case EXEC_LD_R_R: case EXEC_LD_R_N: case EXEC_LD_R_M: case EXEC_ALU_R: case EXEC_ALU_N:
-    case EXEC_ALU_M: case EXEC_INC_R: case EXEC_DEC_R: case EXEC_INC_M: case EXEC_DEC_M:
-    case EXEC_ROT_A: case EXEC_DAA: case EXEC_CPL: case EXEC_SCF: case EXEC_CCF: case EXEC_NEG:
-    case EXEC_CB_R: case EXEC_CB_M: case EXEC_DDCB: case EXEC_IN_C: case EXEC_RRD: case EXEC_RLD:
-    case EXEC_LD_A_IR: case EXEC_EX_AF: case EXEC_EXX: case EXEC_EX_DE_HL: case EXEC_LD_A_NN:
-    case EXEC_LD_A_RP: case EXEC_IN_A_N: case EXEC_LD_RP_NN: case EXEC_LD_RP_NNA:
-    case EXEC_LD_HL_NN: case EXEC_POP: case EXEC_INC_RP: case EXEC_DEC_RP: case EXEC_LD_SP_HL:
-    case EXEC_ADD_HL_RP: case EXEC_ADC16: case EXEC_SBC16: case EXEC_PUSH: case EXEC_RST:
-    case EXEC_CALL: case EXEC_CALL_CC: case EXEC_NMI: case EXEC_INT: case EXEC_BLOCK:
-        return true;
-    default:
-        return false;
-    }
+    c->wb_inst = 0;
+    c->wb_next &= (c->bus_op == BUSOP_M1 || c->bus_op == BUSOP_INTA) ? 0u : ~0u;
 }
 
-/* log each byte this exec step changed that the die writes on a later edge */
-static void wb_note(z80_t *c, const uint16_t *before, uint8_t ex, uint8_t mc)
-{
-    static const uint8_t pairs[] = { RFP_AF, RFP_BC, RFP_DE, RFP_HL, RFP_AF2, RFP_BC2, RFP_DE2,
-                                     RFP_HL2, RFP_IX, RFP_IY, RFP_SP };
-    for (unsigned i = 0; i < sizeof pairs; i++) {
-        uint8_t p = pairs[i];
-        if (before[p] == c->rf[p] && !(p == RFP_AF && c->f_wr)) continue;
-        for (int hi = 0; hi < 2; hi++) {
-            uint8_t old = (uint8_t)(before[p] >> (8 * hi)), now = (uint8_t)(c->rf[p] >> (8 * hi));
-            if (old == now && !(p == RFP_AF && !hi && c->f_wr)) continue;   /* F: written */
-            uint8_t m, t;
-            wb_rule(c, ex, mc, p, hi != 0, &m, &t);
-            if (m == 0xff) continue;
-            unsigned k = 0;
-            while (k < c->wb_n && !(c->wb[k].pair == p && c->wb[k].hi == hi)) k++;
-            if (k == c->wb_n) {                /* else it keeps the oldest value, takes the new edge */
-                c->wb_n++;
-                c->wb[k].pair = p; c->wb[k].hi = (uint8_t)hi; c->wb[k].old = old;
-            }
-            c->wb[k].m = m; c->wb[k].t = t;
-        }
-    }
-}
-
-/* the writes that become permanent on this edge (the end of T-state t) */
-static inline void wb_edge(z80_t *c, uint8_t t)
+/* a RESET cut that ends on T-state tdone of this M-cycle (0: on the edge
+   that set it up): the die never makes the writes of the instruction it
+   stops that are still waiting -- due after tdone -- except F after a cut
+   that ends on the next M1's (INTA's) T2 (t2): the die makes that one in
+   the restart's first M1, from its half-loaded flag latches (wb_fcut) */
+static uint8_t wb_f_at_cut(const z80_t *c);
+static void wb_undo(z80_t *c, bool t2, uint8_t tdone)
 {
     bool m1 = c->bus_op == BUSOP_M1 || c->bus_op == BUSOP_INTA;
-    uint8_t k = 0;
-    for (uint8_t i = 0; i < c->wb_n; i++) {
-        bool due = c->wb[i].t == t && (c->wb[i].m == WB_NEXT ? m1 : c->wb[i].m == c->m_cycle);
-        if (!due) c->wb[k++] = c->wb[i];
-    }
-    c->wb_n = k;
-}
-
-/* a RESET cut: the die never makes the writes of the instruction it stops
-   that are still waiting -- except F after a cut that ends on the next M1's
-   (INTA's) T2 (t2): the die makes that one in the restart's first M1, from
-   its half-loaded flag latches (wb_fcut) */
-static void wb_undo(z80_t *c, bool t2)
-{
-    while (c->wb_n) {
-        c->wb_n--;
-        uint8_t p = c->wb[c->wb_n].pair, sh = (uint8_t)(8 * c->wb[c->wb_n].hi);
-        uint8_t v = c->wb[c->wb_n].old;
-        if (t2 && p == RFP_AF && !c->wb[c->wb_n].hi && c->wb[c->wb_n].m == WB_NEXT) v = c->wb_fcut;
+    const unsigned fi = 2 * RFP_AF;            /* F */
+    uint8_t fcut = (t2 && (c->wb_next >> fi & 1) && c->wb_t[fi] > tdone) ? wb_f_at_cut(c) : 0;
+    for (unsigned i = 0; i < 2 * RFP_COUNT; i++) {
+        bool next = c->wb_next >> i & 1;
+        if (!next && !(c->wb_inst >> i & 1)) continue;
+        if (c->wb_t[i] <= tdone && (m1 || !next))
+            continue;                          /* made by now */
+        uint8_t p = (uint8_t)(i / 2), sh = (uint8_t)(8 * (i & 1));
+        uint8_t v = c->wb_old[i];
+        if (t2 && next && i == fi) v = fcut;
         c->rf[p] = (uint16_t)((c->rf[p] & ~(0xFFu << sh)) | ((uint16_t)v << sh));
     }
+    c->wb_next = c->wb_inst = 0;
+}
+
+/* the M-cycles with a write wb_hooks() makes before their last edge: EX
+   (SP),HL's first write (SP+1 in T1), DJNZ's offset read (B-1 in T2), the
+   third M-cycle of LDI (DE in its write's T3), INI and OUTI (B in T2) --
+   the rest of wb_hooks()'s writes fall on an M-cycle's last edge
+   (end_mcycle). cfast runs these M-cycles in step variants that call
+   wb_hooks() on those edges (cfast/dump_tables.c lists them). */
+static const uint8_t wb_mid_m[EXEC_ILLEGAL + 1] = {
+    [EXEC_EX_SP_HL] = 4, [EXEC_DJNZ] = 3, [EXEC_BLOCK] = 3,
+};
+static inline bool wb_mid(const z80_t *c)
+{
+    return c->m_cycle == wb_mid_m[c->ctl.exec] &&
+           (c->ctl.exec != EXEC_BLOCK || ((c->ctl.aux >> 1) & 3) != 1);
 }
 
 /* the die's writes inside an M-cycle, on the edge ending T-state t: a
    write in T_k's low half on the edge ending T_k+1 -- in a bus cycle the T2
-   writes on the edge after T2, which WAIT can make a Tw's */
+   writes on the edge after T2, which WAIT can make a Tw's. Those on an
+   M-cycle's last edge the exec step makes too, at its start (marked "on
+   this edge"); this makes them for a RESET cut that ends inside a WAIT
+   (advance) and the ones before the last edge (wb_mid). */
 static inline void wb_hooks(z80_t *c, uint8_t t)
 {
     uint8_t m = c->m_cycle;
@@ -462,46 +452,23 @@ static void set_prefix_from_ir(z80_t *c)
 /* convenience for read-byte (the byte latched during the just-finished cycle) */
 #define RB (c->tmp8)
 
-static void z80_exec_step(z80_t *c)
+/* =====================================================================
+ * ALU input mux and ALU  (mirror rtl/z80_core.v's always @* alu-input mux
+ * and its u_alu instance).
+ *
+ * The mux selects the ALU's inputs: defaults track the PLA control word;
+ * per-exec overrides match V's case (exec_w). For EXEC_BLOCK the active
+ * inputs depend on (cat, m_cycle); the alu output is ignored at M-cycles
+ * where the formula is not committed. Both are combinational, so the
+ * sequencer evaluates them when it first reads an output (alu_res() /
+ * alu_fout() in z80_exec_step), from the datapath as the M-cycle ended:
+ * a step that updates an input before reading the outputs evaluates them
+ * first (ALU_EVAL).
+ * =================================================================== */
+static void alu_eval(z80_t *c, uint8_t m, uint8_t *alu_r, uint8_t *alu_fo,
+                     uint8_t *alu_ia, uint8_t *alu_ib)
 {
-    z80_control_t *ctl = &c->ctl;
-    uint8_t m = c->m_cycle;
-    c->f_wr = false;
-    uint8_t hlp = hl_pair(c);          /* HL / IX / IY for 16-bit "HL" ops */
-
-    /* (IX+d)/(IY+d) displacement preamble: fetch d (M2), then a 5T address calc
-       cycle (M3) for most ops; LD (IX+d),n folds the 2T IX+d compute into its
-       N immediate read instead, saving one M-cycle (spec timing 19T not 22T). */
-    uint8_t  mm = m;
-    uint16_t memaddr = c->rf[hlp];
-    if (ctl->idx && ctl->use_disp) {
-        if (m == 1) { z80_start_mcycle(c, BUSOP_MRD, z80_pc_inc(c), 0, 0); return; }
-        uint16_t wz0 = c->rf[RFP_WZ];
-        if (m == 2) {
-            int8_t d = (int8_t)c->tmp8;
-            c->rf[RFP_WZ] = (uint16_t)(c->rf[hlp] + d);
-        }
-        if (ctl->exec == EXEC_LD_M_N) {
-            mm = (uint8_t)(m - 1);          /* no separate internal cycle */
-            memaddr = c->rf[RFP_WZ];
-        } else {
-            if (m == 2) {                   /* the address latch holds WZ from before */
-                z80_start_mcycle(c, BUSOP_INTERNAL, wz0, 0, 5);
-                return;
-            }
-            mm = (uint8_t)(m - 2);
-            memaddr = c->rf[RFP_WZ];
-        }
-    }
-
-    /* =====================================================================
-     * ALU input mux  (mirrors rtl/z80_core.v's always @* alu-input mux).
-     *
-     * Drives the inputs to the single z80_alu() call below. Defaults track
-     * the PLA control word; per-exec overrides match V's case (exec_w).
-     * For EXEC_BLOCK the active inputs depend on (cat, m_cycle); the alu
-     * output is ignored at M-cycles where the formula is not committed.
-     * =================================================================== */
+    const z80_control_t *ctl = &c->ctl;
     uint8_t alu_md  = (uint8_t)ctl->flag_mode;
     uint8_t alu_a   = z80_A(c);
     uint8_t alu_b   = 0;
@@ -579,12 +546,51 @@ static void z80_exec_step(z80_t *c)
         default: break;
     }
 
-    /* Single z80_alu call (mirrors u_alu instance in V). */
-    uint8_t alu_res, alu_fout;
     z80_alu(alu_md, (uint8_t)ctl->alu_op, alu_rot, alu_bit, alu_xy,
-            alu_a, alu_b, z80_F(c), c->q,
-            &alu_res, &alu_fout);
-    uint8_t f0 = z80_F(c);
+            alu_a, alu_b, z80_F(c), c->q, alu_r, alu_fo);
+    *alu_ia = alu_a; *alu_ib = alu_b;
+}
+
+static Z80_STEP_INLINE void z80_exec_step(z80_t *c)
+{
+    z80_control_t *ctl = &c->ctl;
+    uint8_t m = c->m_cycle;
+    c->f_wr = false;
+    uint8_t hlp = hl_pair(c);          /* HL / IX / IY for 16-bit "HL" ops */
+
+    /* (IX+d)/(IY+d) displacement preamble: fetch d (M2), then a 5T address calc
+       cycle (M3) for most ops; LD (IX+d),n folds the 2T IX+d compute into its
+       N immediate read instead, saving one M-cycle (spec timing 19T not 22T). */
+    uint8_t  mm = m;
+    uint16_t memaddr = c->rf[hlp];
+    if (ctl->idx && ctl->use_disp) {
+        if (m == 1) { z80_start_mcycle(c, BUSOP_MRD, z80_pc_inc(c), 0, 0); return; }
+        uint16_t wz0 = c->rf[RFP_WZ];
+        if (m == 2) {
+            int8_t d = (int8_t)c->tmp8;
+            c->rf[RFP_WZ] = (uint16_t)(c->rf[hlp] + d);
+        }
+        if (ctl->exec == EXEC_LD_M_N) {
+            mm = (uint8_t)(m - 1);          /* no separate internal cycle */
+            memaddr = c->rf[RFP_WZ];
+        } else {
+            if (m == 2) {                   /* the address latch holds WZ from before */
+                z80_start_mcycle(c, BUSOP_INTERNAL, wz0, 0, 5);
+                return;
+            }
+            mm = (uint8_t)(m - 2);
+            memaddr = c->rf[RFP_WZ];
+        }
+    }
+
+    /* The ALU's outputs (alu_eval above), evaluated on first use: the
+       M-cycles that read neither skip the mux and the ALU. Its operands
+       (alu_ia / alu_ib) are for f_cut(). */
+    uint8_t alu_r = 0, alu_fo = 0, alu_ia = 0, alu_ib = 0;
+    bool    alu_valid = false;
+#define ALU_EVAL()  ((void)(alu_valid || (alu_eval(c, m, &alu_r, &alu_fo, &alu_ia, &alu_ib), alu_valid = true)))
+#define alu_res()   (ALU_EVAL(), alu_r)
+#define alu_fout()  (ALU_EVAL(), alu_fo)
     int fcut = -1;                     /* set by the steps whose F f_cut() can't form */
 
     switch (ctl->exec) {
@@ -622,12 +628,13 @@ static void z80_exec_step(z80_t *c)
             uint8_t op = c->tmph, val = RB, res = val;
             uint8_t x = (uint8_t)(op >> 6), yy = (uint8_t)((op >> 3) & 7), zz = (uint8_t)(op & 7);
             if (x == CB_BIT) {
-                z80_setF(c, alu_fout);
+                WB_F(WB_NEXT, 3); z80_setF(c, alu_fout());
                 finish(c);
             } else {
-                if      (x == CB_ROT) { res = alu_res; z80_setF(c, alu_fout); }
+                if      (x == CB_ROT) { res = alu_res(); WB_F(WB_NEXT, 3); z80_setF(c, alu_fout()); }
                 else if (x == CB_RES) res = (uint8_t)(val & ~(1u << yy));
                 else                  res = (uint8_t)(val |  (1u << yy));
+                wb_put_r(c, zz, false, WB_NEXT, 3);
                 if (zz != REG_iHL) setr(c, zz, res);   /* undocumented register copy */
                 z80_start_mcycle(c, BUSOP_MWR, c->rf[RFP_WZ], res, 0);
             }
@@ -659,34 +666,41 @@ static void z80_exec_step(z80_t *c)
         finish(c);
         break;
 
-    case EXEC_LD_R_R: setri(c, ctl->rf_dst, getri(c, ctl->rf_src)); finish(c); break;
+    case EXEC_LD_R_R:
+        wb_put_r(c, ctl->rf_dst, true, WB_NEXT, 3);
+        setri(c, ctl->rf_dst, getri(c, ctl->rf_src)); finish(c); break;
     case EXEC_ALU_R:
-        if (ctl->alu_op != ALU_CP) z80_setA(c, alu_res);
-        z80_setF(c, alu_fout); finish(c); break;
+        if (ctl->alu_op != ALU_CP) { WB_A(WB_NEXT, 3); z80_setA(c, alu_res()); }
+        WB_F(WB_NEXT, 3); z80_setF(c, alu_fout()); finish(c); break;
     case EXEC_INC_R:
-        setri(c, ctl->rf_dst, alu_res); z80_setF(c, alu_fout); finish(c); break;
     case EXEC_DEC_R:
-        setri(c, ctl->rf_dst, alu_res); z80_setF(c, alu_fout); finish(c); break;
+        wb_put_r(c, ctl->rf_dst, true, WB_NEXT, 3); WB_F(WB_NEXT, 3);
+        setri(c, ctl->rf_dst, alu_res()); z80_setF(c, alu_fout()); finish(c); break;
     case EXEC_ROT_A:
-        z80_setA(c, alu_res); z80_setF(c, alu_fout); finish(c); break;
     case EXEC_DAA:
-        z80_setA(c, alu_res); z80_setF(c, alu_fout); finish(c); break;
     case EXEC_CPL:
-        z80_setA(c, alu_res); z80_setF(c, alu_fout); finish(c); break;
+        WB_A(WB_NEXT, 3); WB_F(WB_NEXT, 3);
+        z80_setA(c, alu_res()); z80_setF(c, alu_fout()); finish(c); break;
     case EXEC_SCF:
-        z80_setF(c, alu_fout); finish(c); break;
     case EXEC_CCF:
-        z80_setF(c, alu_fout); finish(c); break;
+        WB_F(WB_NEXT, 3); z80_setF(c, alu_fout()); finish(c); break;
 
-    case EXEC_EX_DE_HL: { uint16_t t = c->rf[RFP_DE]; c->rf[RFP_DE] = c->rf[RFP_HL]; c->rf[RFP_HL] = t; finish(c); break; }
+    case EXEC_EX_DE_HL: {
+        wb_put2(c, RFP_DE, WB_NEXT, 3); wb_put2(c, RFP_HL, WB_NEXT, 3);
+        uint16_t t = c->rf[RFP_DE]; c->rf[RFP_DE] = c->rf[RFP_HL]; c->rf[RFP_HL] = t; finish(c); break;
+    }
     case EXEC_EX_AF:    {
         /* Swap replaces F with the alternate F — counts as modifying F, so
            Q (= new F) must be committed at instruction end. Sean Young §4.1. */
+        wb_put2(c, RFP_AF, WB_NEXT, 2); wb_put2(c, RFP_AF2, WB_NEXT, 2);
         uint16_t t = c->rf[RFP_AF]; c->rf[RFP_AF] = c->rf[RFP_AF2]; c->rf[RFP_AF2] = t;
         c->f_modified = true; finish(c); break;
     }
     case EXEC_EXX: {
         uint16_t t;
+        for (uint8_t p = RFP_BC; p <= RFP_HL; p++) {
+            wb_put2(c, p, WB_NEXT, 3); wb_put2(c, (uint8_t)(p + RFP_BC2 - RFP_BC), WB_NEXT, 3);
+        }
         t = c->rf[RFP_BC]; c->rf[RFP_BC] = c->rf[RFP_BC2]; c->rf[RFP_BC2] = t;
         t = c->rf[RFP_DE]; c->rf[RFP_DE] = c->rf[RFP_DE2]; c->rf[RFP_DE2] = t;
         t = c->rf[RFP_HL]; c->rf[RFP_HL] = c->rf[RFP_HL2]; c->rf[RFP_HL2] = t;
@@ -696,17 +710,19 @@ static void z80_exec_step(z80_t *c)
 
     /* ---------- 6T / internal-pad single-cycle ---------- */
     case EXEC_INC_RP:
-        if (m == 1) { c->rf[ctl->rp_sel] = (uint16_t)(c->rf[ctl->rp_sel] + 1);
+        if (m == 1) { wb_put2(c, ctl->rp_sel, 2, 2);
+                      c->rf[ctl->rp_sel] = (uint16_t)(c->rf[ctl->rp_sel] + 1);
                       z80_start_mcycle(c, BUSOP_INTERNAL, c->rf[ctl->rp_sel], 0, 2); }
         else finish(c);
         break;
     case EXEC_DEC_RP:
-        if (m == 1) { c->rf[ctl->rp_sel] = (uint16_t)(c->rf[ctl->rp_sel] - 1);
+        if (m == 1) { wb_put2(c, ctl->rp_sel, 2, 2);
+                      c->rf[ctl->rp_sel] = (uint16_t)(c->rf[ctl->rp_sel] - 1);
                       z80_start_mcycle(c, BUSOP_INTERNAL, c->rf[ctl->rp_sel], 0, 2); }
         else finish(c);
         break;
     case EXEC_LD_SP_HL:
-        if (m == 1) { z80_setSP(c, c->rf[hlp]);
+        if (m == 1) { wb_put2(c, RFP_SP, 2, 2); z80_setSP(c, c->rf[hlp]);
                       z80_start_mcycle(c, BUSOP_INTERNAL, c->rf[hlp], 0, 2); }
         else finish(c);
         break;
@@ -715,6 +731,7 @@ static void z80_exec_step(z80_t *c)
            take the bus between them; perfectz80) */
         if (m == 1) {                        /* the latch holds HL from before the sum */
             uint16_t hl0 = c->rf[hlp], rp0 = c->rf[ctl->rp_sel];
+            wb_put(c, hlp, 1, WB_NEXT, 1); wb_put(c, hlp, 0, 2, 4); WB_F(WB_NEXT, 3);
             do_add16(c);
             /* a cut on the next M1's T2: C still from the low bytes' sum */
             fcut = (uint8_t)((z80_F(c) & ~Z80_CF) | ((((hl0 & 0xFF) + (rp0 & 0xFF)) >> 8) ? Z80_CF : 0));
@@ -727,26 +744,26 @@ static void z80_exec_step(z80_t *c)
     /* ---------- immediate-8 ---------- */
     case EXEC_LD_R_N:
         if (m == 1) z80_start_mcycle(c, BUSOP_MRD, z80_pc_inc(c), 0, 0);
-        else { setri(c, ctl->rf_dst, RB); finish(c); }
+        else { wb_put_r(c, ctl->rf_dst, true, WB_NEXT, 3); setri(c, ctl->rf_dst, RB); finish(c); }
         break;
     case EXEC_ALU_N:
         if (m == 1) z80_start_mcycle(c, BUSOP_MRD, z80_pc_inc(c), 0, 0);
         else {
-            if (ctl->alu_op != ALU_CP) z80_setA(c, alu_res);
-            z80_setF(c, alu_fout); finish(c);
+            if (ctl->alu_op != ALU_CP) { WB_A(WB_NEXT, 3); z80_setA(c, alu_res()); }
+            WB_F(WB_NEXT, 3); z80_setF(c, alu_fout()); finish(c);
         }
         break;
 
     /* ---------- (HL) / (IX+d) read ---------- */
     case EXEC_LD_R_M:
         if (mm == 1) z80_start_mcycle(c, BUSOP_MRD, memaddr, 0, 0);
-        else { setri(c, ctl->rf_dst, RB); finish(c); }
+        else { wb_put_r(c, ctl->rf_dst, true, WB_NEXT, 3); setri(c, ctl->rf_dst, RB); finish(c); }
         break;
     case EXEC_ALU_M:
         if (mm == 1) z80_start_mcycle(c, BUSOP_MRD, memaddr, 0, 0);
         else {
-            if (ctl->alu_op != ALU_CP) z80_setA(c, alu_res);
-            z80_setF(c, alu_fout); finish(c);
+            if (ctl->alu_op != ALU_CP) { WB_A(WB_NEXT, 3); z80_setA(c, alu_res()); }
+            WB_F(WB_NEXT, 3); z80_setF(c, alu_fout()); finish(c);
         }
         break;
 
@@ -769,23 +786,25 @@ static void z80_exec_step(z80_t *c)
     /* ---------- (HL) / (IX+d) read-modify-write ---------- */
     case EXEC_INC_M:
         if (mm == 1) z80_start_mcycle(c, BUSOP_MRD, memaddr, 0, 1); /* 4T read */
-        else if (mm == 2) { z80_setF(c, alu_fout);
-                           z80_start_mcycle(c, BUSOP_MWR, memaddr, alu_res, 0); }
+        else if (mm == 2) { WB_F(WB_NEXT, 3); z80_setF(c, alu_fout());
+                           z80_start_mcycle(c, BUSOP_MWR, memaddr, alu_res(), 0); }
         else finish(c);
         break;
     case EXEC_DEC_M:
         if (mm == 1) z80_start_mcycle(c, BUSOP_MRD, memaddr, 0, 1);
-        else if (mm == 2) { z80_setF(c, alu_fout);
-                           z80_start_mcycle(c, BUSOP_MWR, memaddr, alu_res, 0); }
+        else if (mm == 2) { WB_F(WB_NEXT, 3); z80_setF(c, alu_fout());
+                           z80_start_mcycle(c, BUSOP_MWR, memaddr, alu_res(), 0); }
         else finish(c);
         break;
 
     /* ---------- immediate-16 ---------- */
     case EXEC_LD_RP_NN:                       /* each byte into its register at its read */
         if (m == 1) z80_start_mcycle(c, BUSOP_MRD, z80_pc_inc(c), 0, 0);
-        else if (m == 2) { c->tmpl = RB; c->rf[ctl->rp_sel] = (uint16_t)((c->rf[ctl->rp_sel] & 0xFF00) | RB);
+        else if (m == 2) { c->tmpl = RB; wb_put(c, ctl->rp_sel, 0, 3, 1);
+                           c->rf[ctl->rp_sel] = (uint16_t)((c->rf[ctl->rp_sel] & 0xFF00) | RB);
                            z80_start_mcycle(c, BUSOP_MRD, z80_pc_inc(c), 0, 0); }
-        else { c->rf[ctl->rp_sel] = z80_pair_hi_lo(RB, c->tmpl); finish(c); }
+        else { wb_put(c, ctl->rp_sel, 1, WB_NEXT, 1);
+               c->rf[ctl->rp_sel] = z80_pair_hi_lo(RB, c->tmpl); finish(c); }
         break;
     case EXEC_JP:
         if (m == 1) z80_start_mcycle(c, BUSOP_MRD, z80_pc_inc(c), 0, 0);
@@ -808,7 +827,7 @@ static void z80_exec_step(z80_t *c)
         else if (m == 3) { uint16_t nn = z80_pair_hi_lo(RB, c->tmpl); c->tmp16 = nn;
                            c->rf[RFP_WZ] = (uint16_t)(nn + 1);
                            z80_start_mcycle(c, BUSOP_MRD, nn, 0, 0); }
-        else { z80_setA(c, RB); finish(c); }
+        else { WB_A(WB_NEXT, 1); z80_setA(c, RB); finish(c); }
         break;
     case EXEC_LD_NN_A:
         if (m == 1) z80_start_mcycle(c, BUSOP_MRD, z80_pc_inc(c), 0, 0);
@@ -824,9 +843,10 @@ static void z80_exec_step(z80_t *c)
         else if (m == 3) { uint16_t nn = z80_pair_hi_lo(RB, c->tmpl); c->tmp16 = nn;
                            c->rf[RFP_WZ] = (uint16_t)(nn + 1);
                            z80_start_mcycle(c, BUSOP_MRD, nn, 0, 0); }
-        else if (m == 4) { c->rf[hlp] = (uint16_t)((c->rf[hlp] & 0xFF00) | RB);
+        else if (m == 4) { wb_put(c, hlp, 0, 5, 1); c->rf[hlp] = (uint16_t)((c->rf[hlp] & 0xFF00) | RB);
                            z80_start_mcycle(c, BUSOP_MRD, (uint16_t)(c->tmp16 + 1), 0, 0); }
-        else { c->rf[hlp] = (uint16_t)((c->rf[hlp] & 0x00FF) | ((uint16_t)RB << 8)); finish(c); }
+        else { wb_put(c, hlp, 1, WB_NEXT, 1);
+               c->rf[hlp] = (uint16_t)((c->rf[hlp] & 0x00FF) | ((uint16_t)RB << 8)); finish(c); }
         break;
     case EXEC_LD_NN_HL:
         if (m == 1) z80_start_mcycle(c, BUSOP_MRD, z80_pc_inc(c), 0, 0);
@@ -843,7 +863,7 @@ static void z80_exec_step(z80_t *c)
     case EXEC_LD_A_RP:
         if (m == 1) { uint16_t a = c->rf[ctl->rp_sel]; c->rf[RFP_WZ] = (uint16_t)(a + 1);
                       z80_start_mcycle(c, BUSOP_MRD, a, 0, 0); }
-        else { z80_setA(c, RB); finish(c); }
+        else { WB_A(WB_NEXT, 1); z80_setA(c, RB); finish(c); }
         break;
     case EXEC_LD_RP_A:
         if (m == 1) { uint16_t a = c->rf[ctl->rp_sel];
@@ -896,47 +916,52 @@ static void z80_exec_step(z80_t *c)
             if (taken) z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 1);
             else finish(c);
         }
-        else if (m == 4) { z80_setSP(c, (uint16_t)(z80_SP(c) - 1));
+        else if (m == 4) { wb_put2(c, RFP_SP, 5, 1); z80_setSP(c, (uint16_t)(z80_SP(c) - 1));
                            z80_start_mcycle(c, BUSOP_MWR, z80_SP(c), (uint8_t)(z80_PC(c) >> 8), 0); }
-        else if (m == 5)   /* SP-1 came in this write's T2 (wb_hooks) */
-            z80_start_mcycle(c, BUSOP_MWR, z80_SP(c), (uint8_t)(z80_PC(c) & 0xFF), 0);
+        else if (m == 5) { z80_setSP(c, (uint16_t)(z80_SP(c) - 1));   /* in this write's T2.N: on this edge */
+                           z80_start_mcycle(c, BUSOP_MWR, z80_SP(c), (uint8_t)(z80_PC(c) & 0xFF), 0); }
         else { z80_setPC(c, c->tmp16); finish(c); }
         break;
-    case EXEC_RET:                            /* SP+1 in each read's T2 (wb_hooks) */
+    case EXEC_RET:                            /* SP+1 in each read's T2.N: on its last edge */
         if (m == 1) z80_start_mcycle(c, BUSOP_MRD, z80_SP(c), 0, 0);
-        else if (m == 2) { c->tmpl = RB; z80_start_mcycle(c, BUSOP_MRD, z80_SP(c), 0, 0); }
-        else { uint16_t nn = z80_pair_hi_lo(RB, c->tmpl); z80_setPC(c, nn); c->rf[RFP_WZ] = nn; finish(c); }
+        else if (m == 2) { z80_setSP(c, (uint16_t)(z80_SP(c) + 1)); c->tmpl = RB; z80_start_mcycle(c, BUSOP_MRD, z80_SP(c), 0, 0); }
+        else { z80_setSP(c, (uint16_t)(z80_SP(c) + 1));
+               uint16_t nn = z80_pair_hi_lo(RB, c->tmpl); z80_setPC(c, nn); c->rf[RFP_WZ] = nn; finish(c); }
         break;
     case EXEC_RET_CC:
         if (m == 1) z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 1); /* extra M1 T */
         else if (m == 2) { if (z80_cc_true(z80_F(c), ctl->cc))
                                z80_start_mcycle(c, BUSOP_MRD, z80_SP(c), 0, 0);
                            else finish(c); }
-        else if (m == 3) { c->tmpl = RB; z80_start_mcycle(c, BUSOP_MRD, z80_SP(c), 0, 0); }
-        else { uint16_t nn = z80_pair_hi_lo(RB, c->tmpl); z80_setPC(c, nn); c->rf[RFP_WZ] = nn; finish(c); }
+        else if (m == 3) { z80_setSP(c, (uint16_t)(z80_SP(c) + 1));   /* SP+1 in each read's T2.N: on its last edge */
+                           c->tmpl = RB; z80_start_mcycle(c, BUSOP_MRD, z80_SP(c), 0, 0); }
+        else { z80_setSP(c, (uint16_t)(z80_SP(c) + 1));
+               uint16_t nn = z80_pair_hi_lo(RB, c->tmpl); z80_setPC(c, nn); c->rf[RFP_WZ] = nn; finish(c); }
         break;
     case EXEC_RST:
         if (m == 1) z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 1); /* extra M1 T */
-        else if (m == 2) { z80_setSP(c, (uint16_t)(z80_SP(c) - 1));
+        else if (m == 2) { wb_put2(c, RFP_SP, 3, 1); z80_setSP(c, (uint16_t)(z80_SP(c) - 1));
                            z80_start_mcycle(c, BUSOP_MWR, z80_SP(c), (uint8_t)(z80_PC(c) >> 8), 0); }
-        else if (m == 3)   /* SP-1 came in this write's T2 (wb_hooks) */
-            z80_start_mcycle(c, BUSOP_MWR, z80_SP(c), (uint8_t)(z80_PC(c) & 0xFF), 0);
+        else if (m == 3) { z80_setSP(c, (uint16_t)(z80_SP(c) - 1));   /* in this write's T2.N: on this edge */
+                           z80_start_mcycle(c, BUSOP_MWR, z80_SP(c), (uint8_t)(z80_PC(c) & 0xFF), 0); }
         else { z80_setPC(c, ctl->rst_addr); c->rf[RFP_WZ] = ctl->rst_addr; finish(c); }
         break;
     case EXEC_PUSH:
         if (m == 1) z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 1);
-        else if (m == 2) { z80_setSP(c, (uint16_t)(z80_SP(c) - 1));
+        else if (m == 2) { wb_put2(c, RFP_SP, 3, 1); z80_setSP(c, (uint16_t)(z80_SP(c) - 1));
                            z80_start_mcycle(c, BUSOP_MWR, z80_SP(c), (uint8_t)(c->rf[ctl->rp_sel] >> 8), 0); }
-        else if (m == 3)   /* SP-1 came in this write's T2 (wb_hooks) */
-            z80_start_mcycle(c, BUSOP_MWR, z80_SP(c), (uint8_t)(c->rf[ctl->rp_sel] & 0xFF), 0);
+        else if (m == 3) { z80_setSP(c, (uint16_t)(z80_SP(c) - 1));   /* in this write's T2.N: on this edge */
+                           z80_start_mcycle(c, BUSOP_MWR, z80_SP(c), (uint8_t)(c->rf[ctl->rp_sel] & 0xFF), 0); }
         else finish(c);
         break;
     case EXEC_POP:                            /* each byte into its register at its read; */
-        if (m == 1) z80_start_mcycle(c, BUSOP_MRD, z80_SP(c), 0, 0);   /* SP+1 in its T2 (wb_hooks) */
-        else if (m == 2) { c->tmpl = RB;
+        if (m == 1) z80_start_mcycle(c, BUSOP_MRD, z80_SP(c), 0, 0);   /* SP+1 in its T2.N */
+        else if (m == 2) { z80_setSP(c, (uint16_t)(z80_SP(c) + 1));   /* on this edge */
+                           c->tmpl = RB; wb_put(c, ctl->rp_sel, 0, 3, 1);
                            c->rf[ctl->rp_sel] = (uint16_t)((c->rf[ctl->rp_sel] & 0xFF00) | RB);
                            z80_start_mcycle(c, BUSOP_MRD, z80_SP(c), 0, 0); }
-        else { c->rf[ctl->rp_sel] = z80_pair_hi_lo(RB, c->tmpl); finish(c); }
+        else { z80_setSP(c, (uint16_t)(z80_SP(c) + 1)); wb_put(c, ctl->rp_sel, 1, WB_NEXT, 1);
+               c->rf[ctl->rp_sel] = z80_pair_hi_lo(RB, c->tmpl); finish(c); }
         break;
 
     /* ---------- EX (SP),HL ---------- */
@@ -945,7 +970,8 @@ static void z80_exec_step(z80_t *c)
         else if (m == 2) { c->tmpl = RB; z80_start_mcycle(c, BUSOP_MRD, (uint16_t)(z80_SP(c) + 1), 0, 1); }
         else if (m == 3) { c->tmph = RB;
                            z80_start_mcycle(c, BUSOP_MWR, (uint16_t)(z80_SP(c) + 1), (uint8_t)(c->rf[hlp] >> 8), 0); }
-        else if (m == 4) z80_start_mcycle(c, BUSOP_MWR, z80_SP(c), (uint8_t)(c->rf[hlp] & 0xFF), 2);
+        else if (m == 4) { z80_setSP(c, (uint16_t)(z80_SP(c) - 1));   /* back, in this write's T2.N: on this edge */
+                           z80_start_mcycle(c, BUSOP_MWR, z80_SP(c), (uint8_t)(c->rf[hlp] & 0xFF), 2); }
         else { c->rf[hlp] = z80_pair_hi_lo(c->tmph, c->tmpl); c->rf[RFP_WZ] = c->rf[hlp]; finish(c); }
         break;
 
@@ -955,7 +981,7 @@ static void z80_exec_step(z80_t *c)
         else if (m == 2) { uint16_t port = (uint16_t)(((uint16_t)z80_A(c) << 8) | RB);
                            c->rf[RFP_WZ] = (uint16_t)(port + 1);
                            z80_start_mcycle(c, BUSOP_IORD, port, 0, 0); }
-        else { z80_setA(c, RB); finish(c); }
+        else { WB_A(WB_NEXT, 1); z80_setA(c, RB); finish(c); }
         break;
     case EXEC_OUT_N_A:
         if (m == 1) z80_start_mcycle(c, BUSOP_MRD, z80_pc_inc(c), 0, 0);
@@ -972,22 +998,25 @@ static void z80_exec_step(z80_t *c)
     case EXEC_CB_R: {
         uint8_t val = getr(c, ctl->rf_src), res = val;
         switch (ctl->cb_kind) {
-            case CB_ROT: res = alu_res;    setr(c, ctl->rf_dst, res); z80_setF(c, alu_fout); break;
-            case CB_BIT:                   z80_setF(c, alu_fout); break;
-            case CB_RES: setr(c, ctl->rf_dst, (uint8_t)(val & ~(1u << ctl->bit_index))); break;
-            case CB_SET: setr(c, ctl->rf_dst, (uint8_t)(val |  (1u << ctl->bit_index))); break;
+            case CB_ROT: res = alu_res(); wb_put_r(c, ctl->rf_dst, false, WB_NEXT, 3); WB_F(WB_NEXT, 3);
+                         setr(c, ctl->rf_dst, res); z80_setF(c, alu_fout()); break;
+            case CB_BIT: WB_F(WB_NEXT, 3); z80_setF(c, alu_fout()); break;
+            case CB_RES: wb_put_r(c, ctl->rf_dst, false, WB_NEXT, 3);
+                         setr(c, ctl->rf_dst, (uint8_t)(val & ~(1u << ctl->bit_index))); break;
+            case CB_SET: wb_put_r(c, ctl->rf_dst, false, WB_NEXT, 3);
+                         setr(c, ctl->rf_dst, (uint8_t)(val |  (1u << ctl->bit_index))); break;
         }
         finish(c); break;
     }
     case EXEC_CB_M:
         if (m == 1) z80_start_mcycle(c, BUSOP_MRD, c->rf[RFP_HL], 0, 1); /* 4T read */
         else if (ctl->cb_kind == CB_BIT) {
-            z80_setF(c, alu_fout);
+            WB_F(WB_NEXT, 3); z80_setF(c, alu_fout());
             finish(c);
         } else if (m == 2) {
             uint8_t val = RB, res = val;
             switch (ctl->cb_kind) {
-                case CB_ROT: res = alu_res; z80_setF(c, alu_fout); break;
+                case CB_ROT: res = alu_res(); WB_F(WB_NEXT, 3); z80_setF(c, alu_fout()); break;
                 case CB_RES: res = (uint8_t)(val & ~(1u << ctl->bit_index)); break;
                 case CB_SET: res = (uint8_t)(val |  (1u << ctl->bit_index)); break;
                 default: break;
@@ -1004,6 +1033,7 @@ static void z80_exec_step(z80_t *c)
             uint8_t l = (uint8_t)c->rf[RFP_HL], r = (uint8_t)c->rf[ctl->rp_sel];
             bool sub = ctl->exec == EXEC_SBC16;
             uint16_t lo = (uint16_t)(sub ? l - r - ((z80_F(c) & Z80_CF) ? 1 : 0) : l + r + ((z80_F(c) & Z80_CF) ? 1 : 0));
+            wb_put(c, RFP_HL, 1, WB_NEXT, 1); WB_F(WB_NEXT, 3);   /* L: on this edge */
             do_adc16(c, sub);                    /* the latch: WZ = HL+1 */
             /* a cut on the next M1's T2: S Z C still from the low bytes, P/V
                their overflow XOR the high byte's bits 0-2 */
@@ -1017,12 +1047,14 @@ static void z80_exec_step(z80_t *c)
         else finish(c);
         break;
     case EXEC_NEG:
-        z80_setA(c, alu_res); z80_setF(c, alu_fout); finish(c); break;
+        WB_A(WB_NEXT, 3); WB_F(WB_NEXT, 3);
+        z80_setA(c, alu_res()); z80_setF(c, alu_fout()); finish(c); break;
     case EXEC_IM: c->im = ctl->aux; finish(c); break;
-    case EXEC_RETN:                           /* SP+1 in each read's T2 (wb_hooks) */
+    case EXEC_RETN:                           /* SP+1 in each read's T2.N: on its last edge */
         if (m == 1) z80_start_mcycle(c, BUSOP_MRD, z80_SP(c), 0, 0);
-        else if (m == 2) { c->tmpl = RB; z80_start_mcycle(c, BUSOP_MRD, z80_SP(c), 0, 0); }
-        else { uint16_t nn = z80_pair_hi_lo(RB, c->tmpl); z80_setPC(c, nn); c->rf[RFP_WZ] = nn;
+        else if (m == 2) { z80_setSP(c, (uint16_t)(z80_SP(c) + 1)); c->tmpl = RB; z80_start_mcycle(c, BUSOP_MRD, z80_SP(c), 0, 0); }
+        else { z80_setSP(c, (uint16_t)(z80_SP(c) + 1));
+               uint16_t nn = z80_pair_hi_lo(RB, c->tmpl); z80_setPC(c, nn); c->rf[RFP_WZ] = nn;
                /* IFF2 -> IFF1 after this boundary's INT decision, which still
                   sees the old IFF1: INT held in an NMI handler is taken one
                   instruction after RETN (perfectz80). IFF1 implies IFF2, so
@@ -1040,7 +1072,8 @@ static void z80_exec_step(z80_t *c)
         break;
     case EXEC_LD_A_IR:
         if (m == 1) z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 1);
-        else { z80_setA(c, alu_res); z80_setF(c, alu_fout); finish(c); }
+        else { WB_A(WB_NEXT, 3); WB_F(WB_NEXT, 3);
+               z80_setA(c, alu_res()); z80_setF(c, alu_fout()); finish(c); }
         break;
     case EXEC_LD_NNA_RP:
         if (m == 1) z80_start_mcycle(c, BUSOP_MRD, z80_pc_inc(c), 0, 0);
@@ -1059,16 +1092,19 @@ static void z80_exec_step(z80_t *c)
                            c->rf[RFP_WZ] = (uint16_t)(nn + 1);
                            z80_start_mcycle(c, BUSOP_MRD, nn, 0, 0); }
         else if (m == 4) { c->tmpl = RB;       /* the first byte into its register at its read */
+                           wb_put(c, ctl->rp_sel, 0, 5, 1);
                            c->rf[ctl->rp_sel] = (uint16_t)((c->rf[ctl->rp_sel] & 0xFF00) | RB);
                            z80_start_mcycle(c, BUSOP_MRD, (uint16_t)(c->tmp16 + 1), 0, 0); }
-        else { c->rf[ctl->rp_sel] = z80_pair_hi_lo(RB, c->tmpl); finish(c); }
+        else { wb_put(c, ctl->rp_sel, 1, WB_NEXT, 1);
+               c->rf[ctl->rp_sel] = z80_pair_hi_lo(RB, c->tmpl); finish(c); }
         break;
     case EXEC_IN_C:
         if (m == 1) { c->rf[RFP_WZ] = (uint16_t)(c->rf[RFP_BC] + 1);
                       z80_start_mcycle(c, BUSOP_IORD, c->rf[RFP_BC], 0, 0); }
         else {
+            wb_put_r(c, ctl->rf_dst, false, WB_NEXT, 3); WB_F(WB_NEXT, 3);
             if (ctl->rf_dst != REG_iHL) setr(c, ctl->rf_dst, RB);
-            z80_setF(c, alu_fout); finish(c);
+            z80_setF(c, alu_fout()); finish(c);
         }
         break;
     case EXEC_OUT_C:
@@ -1085,7 +1121,8 @@ static void z80_exec_step(z80_t *c)
             /* new_A and flags from z80_alu (FLAG_RRD/RLD set by the mux).
                new_mem is pure nibble routing — kept here as bus fabric
                until E1 lands the explicit db1/db2 segments. */
-            z80_setA(c, alu_res); z80_setF(c, alu_fout);
+            WB_A(WB_NEXT, 3); WB_F(WB_NEXT, 3);
+            z80_setA(c, alu_res()); z80_setF(c, alu_fout());
             uint8_t newMem = (ctl->exec == EXEC_RRD)
                 ? (uint8_t)((mem >> 4) | ((a & 0x0F) << 4))
                 : (uint8_t)(((mem << 4) & 0xF0) | (a & 0x0F));
@@ -1109,10 +1146,12 @@ static void z80_exec_step(z80_t *c)
            from z80_alu (FLAG_BLOCK_LD/CP/IO modes; inputs set by the mux). */
         if (cat == 0) {                     /* LDI/LDD/LDIR/LDDR */
             if (m == 1) z80_start_mcycle(c, BUSOP_MRD, c->rf[RFP_HL], 0, 0);
-            else if (m == 2) z80_start_mcycle(c, BUSOP_MWR, c->rf[RFP_DE], RB, 2); /* 5T write; HL stepped */
+            else if (m == 2) { c->rf[RFP_HL] = (uint16_t)(c->rf[RFP_HL] + (dec ? -1 : 1));  /* in the read's T2.N: on this edge */
+                               z80_start_mcycle(c, BUSOP_MWR, c->rf[RFP_DE], RB, 2); } /* 5T write */
             else if (m == 3) {                  /* DE stepped in this write's T3 (wb_hooks) */
+                ALU_EVAL();                 /* flags from BC before the IDU */
                 uint16_t bc = (uint16_t)(c->rf[RFP_BC] - 1); c->rf[RFP_BC] = bc;
-                z80_setF(c, alu_fout);
+                WB_F(WB_NEXT, 3); z80_setF(c, alu_fout());
                 if (rep && bc != 0) { z80_setPC(c, (uint16_t)(z80_PC(c) - 2));
                     c->rf[RFP_WZ] = (uint16_t)(z80_PC(c) + 1);
                     /* LDIR/LDDR Banks-2018 repeat-M-cycle flag fold-in:
@@ -1137,10 +1176,13 @@ static void z80_exec_step(z80_t *c)
         else if (cat == 1) {                /* CPI/CPD/CPIR/CPDR */
             if (m == 1) z80_start_mcycle(c, BUSOP_MRD, c->rf[RFP_HL], 0, 0);
             else if (m == 2) {
+                ALU_EVAL();                 /* flags from BC before the IDU */
+                c->rf[RFP_HL] = (uint16_t)(c->rf[RFP_HL] + (dec ? -1 : 1));  /* in the read's T2.N: on this edge */
+                wb_put2(c, RFP_BC, 3, 5); WB_F(WB_NEXT, 2);
                 uint16_t bc = (uint16_t)(c->rf[RFP_BC] - 1); c->rf[RFP_BC] = bc;
-                uint16_t wz0 = c->rf[RFP_WZ];   /* the internal cycle's address latch; HL stepped */
+                uint16_t wz0 = c->rf[RFP_WZ];   /* the internal cycle's address latch */
                 c->rf[RFP_WZ] = (uint16_t)(wz0 + (dec ? -1 : 1));
-                z80_setF(c, alu_fout);
+                z80_setF(c, alu_fout());
                 z80_start_mcycle(c, BUSOP_INTERNAL, wz0, 0, 5);
             }
             else if (m == 3) {
@@ -1169,8 +1211,10 @@ static void z80_exec_step(z80_t *c)
             else if (m == 3) { c->tmpl = RB;   /* data */
                                z80_start_mcycle(c, BUSOP_MWR, c->rf[RFP_HL], RB, 0); }
             else if (m == 4) {
-                uint8_t newB = getr(c, REG_B);  /* B-1 and HL+-1 came in the I/O read and the write (wb_hooks) */
-                z80_setF(c, alu_fout);
+                c->rf[RFP_HL] = (uint16_t)(c->rf[RFP_HL] + (dec ? -1 : 1));  /* in the write's T2.N: on this edge */
+                uint8_t newB = getr(c, REG_B);  /* B-1 came in the I/O read (wb_hooks) */
+                WB_F(WB_NEXT, (rep && newB != 0) ? 2 : 3);
+                z80_setF(c, alu_fout());
                 if (rep && newB != 0) { z80_setPC(c, (uint16_t)(z80_PC(c) - 2));
                     c->rf[RFP_WZ] = (uint16_t)(z80_PC(c) + 1);
                     /* INIR/INDR Banks-2018 repeat-M-cycle flag fold-in.
@@ -1220,14 +1264,15 @@ static void z80_exec_step(z80_t *c)
             if (m == 1) z80_start_mcycle(c, BUSOP_INTERNAL, z80_PC(c), 0, 1);
             else if (m == 2) z80_start_mcycle(c, BUSOP_MRD, c->rf[RFP_HL], 0, 0);
             else if (m == 3) {
-                c->tmpl = RB;                                  /* data from (HL) */
-                /* B-1 and HL+-1 came in this read (wb_hooks) */
+                c->rf[RFP_HL] = (uint16_t)(c->rf[RFP_HL] + (dec ? -1 : 1));  /* in this read's T2.N: on this edge */
+                c->tmpl = RB;                                  /* data from (HL); B-1 came in its T1.N (wb_hooks) */
                 c->rf[RFP_WZ] = (uint16_t)(c->rf[RFP_BC] + (dec ? -1 : 1));
                 z80_start_mcycle(c, BUSOP_IOWR, c->rf[RFP_BC], c->tmpl, 0); /* BC has new B */
             }
             else if (m == 4) {
                 uint8_t newB = getr(c, REG_B);
-                z80_setF(c, alu_fout);
+                WB_F(WB_NEXT, (rep && newB != 0) ? 2 : 3);
+                z80_setF(c, alu_fout());
                 if (rep && newB != 0) { z80_setPC(c, (uint16_t)(z80_PC(c) - 2));
                     c->rf[RFP_WZ] = (uint16_t)(z80_PC(c) + 1);
                     /* OTIR/OTDR Banks-2018 repeat-M-cycle flag fold-in.
@@ -1275,18 +1320,18 @@ static void z80_exec_step(z80_t *c)
     /* ---------- interrupt acceptance sequences ---------- */
     case EXEC_NMI:
         /* m1 was the 5T M1 ack (opcode discarded). push PC, jump to 0x0066. */
-        if (m == 1) { z80_setSP(c, (uint16_t)(z80_SP(c) - 1));
+        if (m == 1) { wb_put2(c, RFP_SP, 2, 1); z80_setSP(c, (uint16_t)(z80_SP(c) - 1));
                       z80_start_mcycle(c, BUSOP_MWR, z80_SP(c), (uint8_t)(z80_PC(c) >> 8), 0); }
-        else if (m == 2)   /* SP-1 came in this write's T2 (wb_hooks) */
-            z80_start_mcycle(c, BUSOP_MWR, z80_SP(c), (uint8_t)(z80_PC(c) & 0xFF), 0);
+        else if (m == 2) { z80_setSP(c, (uint16_t)(z80_SP(c) - 1));   /* in this write's T2.N: on this edge */
+                           z80_start_mcycle(c, BUSOP_MWR, z80_SP(c), (uint8_t)(z80_PC(c) & 0xFF), 0); }
         else { z80_setPC(c, 0x0066); c->rf[RFP_WZ] = 0x0066; finish(c); }
         break;
     case EXEC_INT:
         /* m1 was the INTA ack (bus byte in tmp8). push PC, then dispatch per IM. */
-        if (m == 1) { z80_setSP(c, (uint16_t)(z80_SP(c) - 1));
+        if (m == 1) { wb_put2(c, RFP_SP, 2, 1); z80_setSP(c, (uint16_t)(z80_SP(c) - 1));
                       z80_start_mcycle(c, BUSOP_MWR, z80_SP(c), (uint8_t)(z80_PC(c) >> 8), 0); }
-        else if (m == 2)   /* SP-1 came in this write's T2 (wb_hooks) */
-            z80_start_mcycle(c, BUSOP_MWR, z80_SP(c), (uint8_t)(z80_PC(c) & 0xFF), 0);
+        else if (m == 2) { z80_setSP(c, (uint16_t)(z80_SP(c) - 1));   /* in this write's T2.N: on this edge */
+                           z80_start_mcycle(c, BUSOP_MWR, z80_SP(c), (uint8_t)(z80_PC(c) & 0xFF), 0); }
         else if (m == 3) {
             if (c->im == 2) {
                 c->tmp16 = (uint16_t)(((uint16_t)c->reg_i << 8) | c->tmp8); /* vector table addr */
@@ -1305,10 +1350,37 @@ static void z80_exec_step(z80_t *c)
         finish(c);
         break;
     }
-    if (c->f_wr) {
-        uint8_t fc = fcut >= 0 ? (uint8_t)fcut : f_cut(c, f0, alu_fout, alu_a, alu_b, alu_res);
-        c->wb_fcut = (ctl->exec == EXEC_BLOCK) ? (uint8_t)((z80_F(c) & ~Z80_HF) | fc) : fc;
+    if (c->f_wr) {                           /* how this step formed F (wb_f_at_cut) */
+        if (fcut >= 0) { c->wb_fex = 0xFF; c->wb_fcut = (uint8_t)fcut; }
+        else { c->wb_fex = (uint8_t)ctl->exec;
+               c->wb_fm = (uint8_t)(m | ctl->idx << 4 | (ctl->use_disp ? 0x40 : 0)); }
     }
+    (void)alu_ia; (void)alu_ib;
+#undef alu_res
+#undef alu_fout
+#undef ALU_EVAL
+}
+
+/* F as a cut that ends on the next M1's (INTA's) T2 leaves it: f_cut() of
+   the step that wrote F (wb_fex / wb_fm) -- its ALU's operands and result
+   again, from the registers as the step found them, the log's old values;
+   the ALU's flags come from F as it wrote them */
+static uint8_t wb_f_at_cut(const z80_t *c)
+{
+    if (c->wb_fex == 0xFF) return c->wb_fcut;
+    z80_t s = *c;
+    for (unsigned i = 0; i < 2 * RFP_COUNT; i++)
+        if ((s.wb_next | s.wb_inst) >> i & 1) {
+            uint8_t sh = (uint8_t)(8 * (i & 1));
+            s.rf[i / 2] = (uint16_t)((s.rf[i / 2] & ~(0xFFu << sh)) | ((uint16_t)s.wb_old[i] << sh));
+        }
+    s.ctl.exec = (z80_exec_t)c->wb_fex;
+    s.ctl.idx = (uint8_t)(c->wb_fm >> 4 & 3);
+    s.ctl.use_disp = (c->wb_fm & 0x40) != 0;
+    uint8_t r, fo, a, b;
+    alu_eval(&s, (uint8_t)(c->wb_fm & 15), &r, &fo, &a, &b);
+    uint8_t fc = f_cut(&s, z80_F(&s), z80_F(c), a, b, r);
+    return (s.ctl.exec == EXEC_BLOCK) ? (uint8_t)((z80_F(c) & ~Z80_HF) | fc) : fc;
 }
 
 /* =========================================================================
@@ -1347,60 +1419,140 @@ static bool is_wait_sample_phase(const z80_t *c)
 
 static bool is_latch_phase(const z80_t *c)
 {
-    /* Read-data latch phase: captures the input data bus AT THE FALLING EDGE
-       of the last T-state's high half (= our T_last.phi=0 sampling point,
-       just before MREQ/IORQ deassert at T_last.phi=1). This matches the
-       gate-level transition observed in perfectz80 / Visual Z80 traces. */
+    /* Read-data latch: the step into the phase named here takes data_in,
+       which is still the bus of the half-cycle before it (z80_sys_phase).
+       The die (perfectz80; event sweep `latch`, docs/timing.md "The data
+       latch") takes
+         - an opcode at the rising edge that ends T2 -- or the last Tw --
+           from the bus in its low half: the step into T3.P;
+         - an INTA byte the same way at the end of the second automatic
+           Tw (t_state 4): the step into T3.P, t_state 5;
+         - read data at the falling edge of T3 from the bus in T3's high
+           half: the step into T3.N (t_state 3 of an MRD, 4 of an IORD,
+           whose automatic Tw is t_state 3).
+       The RTL's latch_pos / latch_neg (z80_core.v) are the same edges. */
     switch (c->bus_op) {
-        case BUSOP_M1:   return c->t_state == 2 && c->phi == 1; /* M1 opcode latched at T2.N */
-        case BUSOP_INTA: return c->t_state == 4 && c->phi == 1;
-        case BUSOP_MRD:  return c->t_state == 3 && c->phi == 0; /* MRD data at T3.P */
-        case BUSOP_IORD: return c->t_state == 4 && c->phi == 0; /* IORD data at T4.P */
+        case BUSOP_M1:   return c->t_state == 3 && c->phi == 0;
+        case BUSOP_INTA: return c->t_state == 5 && c->phi == 0;
+        case BUSOP_MRD:  return c->t_state == 3 && c->phi == 1;
+        case BUSOP_IORD: return c->t_state == 4 && c->phi == 1;
         default:         return false;
     }
+}
+
+/* The rising edge that ends the refresh -- T4 of an M1, the second refresh
+   T-state of an INTA: R steps (low 7 bits) there, so the refresh address
+   shows I:R from before the step, as on silicon (perfectz80). advance()
+   steps it before the execute step, so LD R,A's write wins. */
+static bool is_refresh_end(const z80_t *c)
+{
+    return (c->bus_op == BUSOP_M1 && c->t_state == 4) ||
+           (c->bus_op == BUSOP_INTA && c->t_state == 6);
+}
+
+/* Internal T-states drive no new address: the bus keeps the last one -- the
+   refresh address after an M1, the operand address after a read
+   (perfectz80; the Spectrum's contention tables, "ir:1", "hl:1") -- and so
+   do the T-states an M1 or INTA runs past its refresh (an M1's T5 / T6, IM1
+   / IM2's seventh). m_addr still carries the IDU / EA work. */
+static bool is_addr_held(const z80_t *c)
+{
+    return c->bus_op == BUSOP_INTERNAL ||
+           (c->bus_op == BUSOP_M1 && c->t_state >= 5) ||
+           (c->bus_op == BUSOP_INTA && c->t_state >= 7);
+}
+
+/* ---- the phase's timing ROM entries ----
+   The predicates above, like the timing module's pins (z80_timing_rom),
+   depend on (bus_op, t_state, phi) alone: tpoint_rom tabulates them under
+   the same index (built by z80_reset), so a phase reads one byte for its
+   timing points and one ROM entry for its pins. */
+enum { TP_WAIT_SAMPLE = 1, TP_LATCH = 2, TP_ADDR_HELD = 4 };
+static uint8_t tpoint_rom[Z80_TIMING_ROM_SIZE];
+static bool    tpoint_rom_built;
+
+static void tpoint_rom_init(void)
+{
+    if (tpoint_rom_built) return;
+    z80_t t;
+    memset(&t, 0, sizeof t);
+    for (unsigned op = 0; op < 8; op++)
+        for (unsigned ts = 0; ts < 16; ts++)
+            for (unsigned phi = 0; phi < 2; phi++) {
+                t.bus_op = (uint8_t)op; t.t_state = (uint8_t)ts; t.phi = (uint8_t)phi;
+                tpoint_rom[Z80_TIMING_ROM_INDEX(op, ts, phi)] = (uint8_t)
+                    ((is_wait_sample_phase(&t) ? TP_WAIT_SAMPLE : 0) |
+                     (is_latch_phase(&t) ? TP_LATCH : 0) |
+                     (is_addr_held(&t) ? TP_ADDR_HELD : 0));
+            }
+    tpoint_rom_built = true;
+}
+
+static inline unsigned rom_index(const z80_t *c)
+{
+    return Z80_TIMING_ROM_INDEX(c->bus_op, c->t_state > 15 ? 15 : c->t_state, c->phi);
+}
+
+/* The timing module's pins for the phase: z80_timing() of (bus_op, t_state,
+   phi, m_addr, m_wdata, I, R), read from its ROM. */
+static inline void drive_pins(z80_t *c, unsigned rom)
+{
+    const z80_timing_rom_t *e = &z80_timing_rom[rom];
+    memcpy((uint8_t *)&c->pins + Z80_TIMING_ROM_FIRST, e->lvl, Z80_TIMING_ROM_LEN);
+    c->pins.data_out = c->m_wdata;
+    c->pins.addr = e->refresh ? (uint16_t)((c->reg_i << 8) | c->reg_r) : c->m_addr;
+}
+
+/* The data latch of each bus cycle: the byte on D0-D7 at the cycle's latch
+   point (is_latch_phase). do_latch() picks the cycle's own. */
+static inline void latch_m1(z80_t *c)
+{
+    c->ir   = c->pins.data_in;
+    c->tmp8 = c->pins.data_in;
+    if (c->srst_m1) {
+        /* special reset (perfectz80): the fetch after the one whose T2
+           rising edge saw RESET runs as a NOP that leaves PC at 0000;
+           I, R, the IFFs and IM are kept */
+        c->srst_m1 = false;
+        c->ir = 0x00;
+        c->rf[RFP_PC] = 0x0000;
+        if (!c->suppress_decode) {
+            c->ctl = z80_pla_rom[c->prefix][c->ir];
+            c->decoded = true;
+        }
+        c->suppress_decode = false;
+    } else if (c->suppress_decode) {
+        c->suppress_decode = false;      /* ack M1: discard opcode, no PC++/decode */
+    } else {
+        (void)z80_pc_inc(c);             /* PC advances past opcode */
+        c->ctl = z80_pla_rom[c->prefix][c->ir];
+        c->decoded = true;
+    }
+}
+static inline void latch_inta(z80_t *c)  /* interrupt-ack: latch bus byte, refresh */
+{
+    c->tmp8 = c->pins.data_in;
+    if (c->im == 0) {
+        /* IM0: the device supplies the opcode, decoded without a fetch
+           / PC++; until it ends, PC stays (z80_pc_inc, EXEC_PREFIX) */
+        c->ir = c->pins.data_in;
+        c->ctl = z80_pla_rom[c->prefix][c->ir];
+        c->decoded = true; /* supplied opcode consumes no memory byte */
+        c->im0_ins = true;
+    }
+}
+static inline void latch_rd(z80_t *c)    /* MRD / IORD */
+{
+    c->tmp8 = c->pins.data_in;
 }
 
 static void do_latch(z80_t *c)
 {
     switch (c->bus_op) {
-    case BUSOP_M1:
-        c->ir   = c->pins.data_in;
-        c->tmp8 = c->pins.data_in;
-        if (c->srst_m1) {
-            /* special reset (perfectz80): the fetch after the one whose T2
-               rising edge saw RESET runs as a NOP that leaves PC at 0000;
-               I, R, the IFFs and IM are kept */
-            c->srst_m1 = false;
-            c->ir = 0x00;
-            c->rf[RFP_PC] = 0x0000;
-            if (!c->suppress_decode) {
-                c->ctl = z80_pla(c->prefix, c->ir);
-                c->decoded = true;
-            }
-            c->suppress_decode = false;
-        } else if (c->suppress_decode) {
-            c->suppress_decode = false;      /* ack M1: discard opcode, no PC++/decode */
-        } else {
-            (void)z80_pc_inc(c);             /* PC advances past opcode */
-            c->ctl = z80_pla(c->prefix, c->ir);
-            c->decoded = true;
-        }
-        break;
-    case BUSOP_INTA:                          /* interrupt-ack: latch bus byte, refresh */
-        c->tmp8 = c->pins.data_in;
-        if (c->im == 0) {
-            /* IM0: the device supplies the opcode, decoded without a fetch
-               / PC++; until it ends, PC stays (z80_pc_inc, EXEC_PREFIX) */
-            c->ir = c->pins.data_in;
-            c->ctl = z80_pla(c->prefix, c->ir);
-            c->decoded = true; /* supplied opcode consumes no memory byte */
-            c->im0_ins = true;
-        }
-        break;
+    case BUSOP_M1:   latch_m1(c);   break;
+    case BUSOP_INTA: latch_inta(c); break;
     case BUSOP_MRD:
-    case BUSOP_IORD:
-        c->tmp8 = c->pins.data_in;
-        break;
+    case BUSOP_IORD: latch_rd(c);   break;
     default: break;
     }
 }
@@ -1468,46 +1620,43 @@ static void begin_next(z80_t *c)
     c->srst_m1 = c->sres;
 }
 
-/* the work of the rising edge that ends a T-state: refresh step, next
-   T-state, and at the end of an M-cycle the execute step / next M-cycle */
+/* The end of an M-cycle: the sequencer sets up the next one or finishes the
+   instruction, and an instruction boundary decides what follows. Returns
+   the template of the M-cycle it set up, bus_op << 4 | m_len, with 0x80 when
+   wb_hooks() writes inside it (wb_mid) -- for cfast's steps. */
+static unsigned end_mcycle(z80_t *c)
+{
+    wb_retire(c);                            /* the log's entries made by now */
+    z80_exec_step(c);                        /* set up next M-cycle / finish */
+    if (c->instr_done) {
+        /* Commit Q: holds F if THIS instruction wrote F, else 0. SCF/CCF
+           in the NEXT instruction read it to derive X/Y from (A | Q).
+           Per Sean Young's "Undocumented Z80 Documented" §4.1: Q resets
+           to 0 after any instruction that does NOT modify F. Verified
+           against real-silicon CRC by ZEXALL's <daa,cpl,scf,ccf> test;
+           an earlier attempt to make Q persist across non-F-modifying
+           instructions broke that CRC (run 27650481834). */
+        c->q = c->f_modified ? z80_F(c) : 0;
+        c->f_modified = false;
+        c->instr_count++;
+        c->prefix = PFX_NONE;
+        begin_next(c);
+    }
+    return (wb_mid(c) ? 0x80u : 0u) | (unsigned)(c->bus_op & 7) << 4 | (c->m_len & 15);
+}
+
+/* the work of the rising edge that ends a T-state: a write the die makes
+   inside the M-cycle, refresh step, next T-state, and at the end of an
+   M-cycle the execute step / next M-cycle */
 static void end_tstate(z80_t *c)
 {
-    if (c->wb_n) wb_edge(c, c->t_state);     /* the die's writes this edge makes permanent */
-    wb_hooks(c, c->t_state);                 /* ... and those it makes inside an M-cycle */
-    /* refresh counter: R steps (low 7 bits) on the rising edge that ends the
-       refresh -- T4 of an M1, the second refresh T-state of an INTA -- so the
-       refresh address shows I:R from before the step, as on silicon
-       (perfectz80). Before the execute step, so LD R,A's write wins. */
-    if ((c->bus_op == BUSOP_M1 && c->t_state == 4) || (c->bus_op == BUSOP_INTA && c->t_state == 6))
+    if (c->t_state < c->m_len && wb_mid(c))
+        wb_hooks(c, c->t_state);
+    if (is_refresh_end(c))
         c->reg_r = (uint8_t)((c->reg_r & 0x80u) | ((c->reg_r + 1u) & 0x7Fu));
     c->t_state = (uint8_t)(c->t_state + 1);
-    if (c->t_state > c->m_len) {
-        uint16_t before[RFP_COUNT];
-        uint8_t ex = (uint8_t)c->ctl.exec, mc = c->m_cycle;
-        bool logs = wb_logs(ex);
-        if (logs) memcpy(before, c->rf, sizeof before);
-        z80_exec_step(c);                    /* set up next M-cycle / finish */
-        if (logs) wb_note(c, before, ex, mc);
-        if (c->instr_done) {
-            /* what the die writes within the instruction is written by its end */
-            uint8_t k = 0;
-            for (uint8_t i = 0; i < c->wb_n; i++)
-                if (c->wb[i].m == WB_NEXT) c->wb[k++] = c->wb[i];
-            c->wb_n = k;
-            /* Commit Q: holds F if THIS instruction wrote F, else 0. SCF/CCF
-               in the NEXT instruction read it to derive X/Y from (A | Q).
-               Per Sean Young's "Undocumented Z80 Documented" §4.1: Q resets
-               to 0 after any instruction that does NOT modify F. Verified
-               against real-silicon CRC by ZEXALL's <daa,cpl,scf,ccf> test;
-               an earlier attempt to make Q persist across non-F-modifying
-               instructions broke that CRC (run 27650481834). */
-            c->q = c->f_modified ? z80_F(c) : 0;
-            c->f_modified = false;
-            c->instr_count++;
-            c->prefix = PFX_NONE;
-            begin_next(c);
-        }
-    }
+    if (c->t_state > c->m_len)
+        end_mcycle(c);
 }
 
 /* RESET (perfectz80; docs/timing.md "RESET"): RES2 stopped the T-state ring
@@ -1518,7 +1667,7 @@ static void end_tstate(z80_t *c)
 static void enter_reset_idle(z80_t *c)
 {
     c->rst_idle = true;
-    c->wb_n = 0;
+    c->wb_next = c->wb_inst = 0;
     c->in_tw = false;
     c->rf[RFP_PC] = 0x0000;
     c->reg_i = 0; c->reg_r = 0;
@@ -1577,17 +1726,19 @@ static void advance(z80_t *c)
         }
         return;
     }
+    uint8_t tdone;                           /* a cut: the T-states of this M-cycle whose writes stand */
     if (c->bus_granted) {
         /* bus grant (DMA, perfectz80 / PS0178 Figure 10): the M-cycle after
            the grant is set up and held; BUSREQ seen high on this T-state's
            rising edge releases it here (BUSACK rose on its falling edge).
            The writes the die made in the low half of the M-cycle's last
            T-state, due on the held M-cycle's T1, are made by now. */
-        wb_edge(c, 1);
+        tdone = 1;
         if (!breq) c->bus_granted = false;
     } else if (!c->stalled) {                /* else hold this T-state as a Tw */
         bool last = c->t_state >= c->m_len;
         end_tstate(c);
+        tdone = last ? 0 : (uint8_t)(c->t_state - 1);
         /* BUSREQ seen low on the rising edge that started the M-cycle's last
            T-state: the bus goes to the DMA master after it, at any M-cycle
            boundary; the next M-cycle (or instruction, or interrupt
@@ -1596,16 +1747,21 @@ static void advance(z80_t *c)
            read): no boundary before it. */
         bool ext_next = c->bus_op == BUSOP_INTERNAL && c->m_len <= 2 && c->t_state == 1;
         if (last && breq && !ext_next) c->bus_granted = true;
-    } else if (res2 && c->t_state == 2) {
-        /* the cut ends on a T2 that WAIT held, or on a Tw after it: the die's
-           writes of T1's low half stand (below: and from a Tw on, T2's) */
-        wb_edge(c, 2); wb_hooks(c, 2);
+    } else {
+        tdone = (uint8_t)(c->t_state - 1);
+        if (res2 && c->t_state == 2) {
+            /* the cut ends on a T2 that WAIT held, or on a Tw after it: the
+               die's writes of T1's low half stand (below: and from a Tw on,
+               T2's) */
+            wb_hooks(c, 2);
+            tdone = 2;
+        }
     }
-    if (res2 && tw) { wb_edge(c, 3); wb_hooks(c, 3); }
+    if (res2 && tw) { wb_hooks(c, 3); tdone = 3; }
     /* the T-state this edge starts is a Tw: WAIT held the last one */
     c->in_tw = !c->bus_granted && c->stalled;
     if (res2) {                              /* this T-state was the last */
-        wb_undo(c, t2);                      /* writes the die hadn't made yet */
+        wb_undo(c, t2, tdone);               /* writes the die hadn't made yet */
         enter_reset_idle(c);
         c->rd_hold = cut_t1;
     }
@@ -1637,7 +1793,7 @@ static void reset_state(z80_t *c)
     c->phase_primed = false; c->stalled = false; c->wait_sampled = false;
     c->q = 0; c->f_modified = false;
     c->res_s = c->res2 = c->sres = c->rst_idle = c->srst_m1 = c->rd_hold = false;
-    c->wb_n = 0;
+    c->wb_next = c->wb_inst = 0;
     c->in_tw = false;
     c->busreq_s = false;
 
@@ -1665,6 +1821,9 @@ void z80_reset(z80_t *c)
      * docs/known-differences.md row 1. */
     for (int i = 0; i < RFP_COUNT; i++) c->rf[i] = 0x5555;
     reset_state(c);
+    z80_timing_rom_init();
+    tpoint_rom_init();
+    z80_pla_rom_init();
 }
 
 /* Seed the program counter from outside (e.g. loading a CP/M .com at 0x0100).
@@ -1722,13 +1881,15 @@ void z80_phase_step(z80_t *c)
        that single phase the latch falls to 0 so subsequent .N→.P advances
        run normally. This is the silicon's behavior: each Tw is decided by
        one falling-edge sample. */
-    if (!c->rst_idle && !c->bus_granted && is_wait_sample_phase(c))
+    unsigned rom = rom_index(c);
+    uint8_t  tp  = tpoint_rom[rom];
+    if (!c->rst_idle && !c->bus_granted && (tp & TP_WAIT_SAMPLE))
         c->wait_sampled = (c->pins.wait_n == 0);
     else
         c->wait_sampled = false;
     c->stalled = c->wait_sampled;
 
-    if (!c->rst_idle && !c->bus_granted && !c->stalled && is_latch_phase(c))
+    if (!c->rst_idle && !c->bus_granted && !c->stalled && (tp & TP_LATCH))
         do_latch(c);
 
     /* NMI / INT silicon sample point: rising edge of the last T-state of
@@ -1741,18 +1902,10 @@ void z80_phase_step(z80_t *c)
         c->int_sampled = !c->pins.int_n;
     }
 
-    /* Internal T-states and the reset idle drive no new address: the bus
-       keeps the last one -- the refresh address after an M1, the operand
-       address after a read (perfectz80; the Spectrum's contention tables,
-       "ir:1", "hl:1"), and so do the T-states an M1 or INTA runs past its
-       refresh (an M1's T5 / T6, IM1 / IM2's seventh). m_addr still carries
-       the IDU / EA work. */
+    /* the timing ROM's pins; the address the last phase drove stays on the
+       bus in the phases is_addr_held() names and in the reset idle */
     uint16_t held_addr = c->pins.addr;
-    z80_timing(c->bus_op, c->t_state, c->phi, c->m_len, c->m_addr, c->m_wdata,
-               c->reg_i, c->reg_r,
-               &c->pins.addr, &c->pins.data_out, &c->pins.data_drive,
-               &c->pins.m1_n, &c->pins.mreq_n, &c->pins.iorq_n,
-               &c->pins.rd_n, &c->pins.wr_n,   &c->pins.rfsh_n);
+    drive_pins(c, rom);
 
     if (hold_write_strobe) c->pins.wr_n = 0;
     /* ... except that a RESET cut in a long internal cycle's T1, with RES2
@@ -1763,8 +1916,7 @@ void z80_phase_step(z80_t *c)
        instruction changes it in JR's, DJNZ's, (IX+d)'s, CPI's and RLD's;
        PC before the -2 in a block repeat */
     bool int_cut = c->bus_op == BUSOP_INTERNAL && c->m_len > 2 && c->t_state == 1 && c->res2;
-    if ((c->bus_op == BUSOP_INTERNAL && !int_cut) || c->rst_idle ||
-        (c->bus_op == BUSOP_M1 && c->t_state >= 5) || (c->bus_op == BUSOP_INTA && c->t_state >= 7))
+    if (((tp & TP_ADDR_HELD) && !int_cut) || c->rst_idle)
         c->pins.addr = held_addr;
 
     /* RESET (perfectz80): the idle drives nothing. `res2` -- set on the
@@ -1854,4 +2006,27 @@ void z80_phase_step(z80_t *c)
        latch sets, and stays high (perfectz80) */
     bool halt_rst = res2_f || sres_f;
     c->pins.halt_n = ((c->halted || exec_halt_in_m1) && !halt_exit && !halt_rst) ? 0 : 1;
+}
+
+/* ---- pin word API ----
+   z80_phase_step() behind the 64-bit pin word: the requests and the data
+   byte of `pins` go to the input side of z80_pins_t, the phase runs, and
+   the driven side comes back as active-high bits. */
+uint64_t z80_tick(z80_t *c, uint64_t pins)
+{
+    c->pins.data_in  = Z80_GET_DATA(pins);
+    c->pins.wait_n   = !(pins & Z80_WAIT);
+    c->pins.int_n    = !(pins & Z80_INT);
+    c->pins.nmi_n    = !(pins & Z80_NMI);
+    c->pins.busreq_n = !(pins & Z80_BUSREQ);
+    c->pins.reset_n  = !(pins & Z80_RES);
+    z80_phase_step(c);
+    const z80_pins_t *p = &c->pins;
+    return (pins & ~Z80_OUT_PIN_MASK)
+         | p->addr | ((uint64_t)p->data_out << Z80_PIN_D0)
+         | (p->m1_n     ? 0 : Z80_M1)   | (p->mreq_n ? 0 : Z80_MREQ)
+         | (p->iorq_n   ? 0 : Z80_IORQ) | (p->rd_n   ? 0 : Z80_RD)
+         | (p->wr_n     ? 0 : Z80_WR)   | (p->halt_n ? 0 : Z80_HALT)
+         | (p->rfsh_n   ? 0 : Z80_RFSH) | (p->busack_n ? 0 : Z80_BUSACK)
+         | (p->data_drive ? Z80_DOE : 0);
 }

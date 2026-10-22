@@ -31,8 +31,9 @@ Phase-exact actions:
 - **T1.P**: `pin_addr ← PC`; `pin_m1_n ← 0`; `pin_rfsh_n ← 1`.
 - **T1.N**: `pin_mreq_n ← 0`; `pin_rd_n ← 0`.
 - **T2.N**: sample `pin_wait_n`. If asserted (low), insert `Tw` (repeat a T2-like
-  wait state) and re-sample at next .N. If not waited, latch `pin_data_in → IR`
-  (the fetched opcode).
+  wait state) and re-sample at next .N. If not waited, the byte on the bus in
+  this T2.N is the opcode: `IR` takes it at the rising edge that ends T2 ("The
+  data latch" below).
 - **T3.P**: `pin_m1_n ← 1`; `pin_rd_n ← 1`; `pin_mreq_n ← 1`; `pin_addr ← {I,R}`;
   `pin_rfsh_n ← 0`. (Refresh address presented.)
 - **T3.N**: `pin_mreq_n ← 0` (refresh memory request).
@@ -59,7 +60,8 @@ displacement and the CB opcode as **operand reads** (not M1) after the two prefi
 - **T1.P**: `pin_addr ← <effective address>`.
 - **T1.N**: `pin_mreq_n ← 0`; `pin_rd_n ← 0`.
 - **T2.N**: sample `pin_wait_n`; insert `Tw` if asserted.
-- **T3.P**: latch `pin_data_in` (read window: data must be valid by here).
+- **T3.P**: the byte on the bus in T3.P is the data, taken at T3's falling
+  edge ("The data latch").
 - **T3.N**: `pin_rd_n ← 1`; `pin_mreq_n ← 1`. (Deasserted on the falling-edge
   transition — matches the gate-level / perfectz80 trace and decouples the
   latch phase from the deassert phase.)
@@ -103,7 +105,8 @@ the following transaction. The write-strobe hold does not change this rule.
 - **T2.P**: `pin_iorq_n ← 0`; `pin_rd_n ← 0`.
 - **Tw.N**: sample `pin_wait_n` (the automatic Tw is always present; further Tw if
   WAIT held).
-- **T3.P**: latch `pin_data_in`.
+- **T3.P**: the byte on the bus in T3.P is the data, taken at T3's falling
+  edge.
 - **T3.N**: `pin_iorq_n ← 1`; `pin_rd_n ← 1`.
 
 (In the C model and RTL the IORD cycle is `m_len=4`, counting Tw as T3 and the
@@ -168,6 +171,34 @@ response, from its M1's T1 to the last T-state of the second push: an NMI fallin
 edge there is lost, even when NMI then stays low (perfectz80). An edge from the
 handler's first T-state on starts a nested NMI. An NMI edge during an INT response
 is kept and taken right after it.
+
+## The data latch
+
+Which half-cycle's byte each read takes, from perfectz80 with the right
+byte on the bus in one half-cycle only and a decoy in every other (the
+event sweep's `latch` group, docs/event-sweep.md):
+
+| read | the byte on the bus in | taken at |
+|---|---|---|
+| opcode fetch (M1): an opcode, a prefix, the opcode after a prefix | T2.N, or the last Tw.N | the rising edge that starts T3 |
+| memory read: (HL), an operand, POP, an index displacement, DD CB's d and op | T3.P | T3's falling edge |
+| I/O read: IN A,(n), IN r,(C), INI | T3.P | T3's falling edge |
+| INTA: the IM2 vector, the IM0 opcode | the second automatic Tw.N, or the last Tw.N | the rising edge that starts T3 |
+
+In any other half-cycle of the read, T1.P to T3.N, the byte doesn't
+matter: the die takes the decoy there. A Tw moves the edge one T-state
+later. So a memory or device has until the half-cycle before that edge to
+put its byte on the bus (the datasheet's setup times bound how late within
+it) and may change it from the next half-cycle; an opcode fetch's byte is
+gone by the time MREQ and RD rise at T3.P, a read's by T3.N.
+
+The RTL takes the same edges: `latch_pos` the live bus at the rising edge
+that ends T2 of an M1 (the fourth T-state of an INTA), `latch_neg`
+`data_in_neg` -- `z80_top`'s falling-edge copy -- in T3 of a memory read (T4
+of an I/O read, whose automatic Tw is its T3). The C model's step into a
+phase takes the bus of the half-cycle before it, so `is_latch_phase` names
+the phase after the one read from: T3.P for an opcode, T3.N for read data
+(cmodel/z80_core.c).
 
 ## HALT
 
@@ -356,19 +387,35 @@ followed by an INT or NMI response, and with WAIT and BUSREQ around it):
 Both models compute most results earlier, on an M-cycle's last edge, and
 keep a write-back log: each byte written before the die's edge, its old
 value and the edge it becomes permanent on; a RESET cut before that edge
-puts it back (cmodel `wb_rule` / `wb_note`, rtl `z80_regfile`'s two slots
-and the pending exchanges; the RTL puts the bytes back through its byte
-write, one an edge, on the edges after the cut, where nothing else writes
-or reads them) -- F after a cut on the next M1's T2 as the flag latches
-hold it (cmodel `f_cut()`, rtl `z80_core`'s `f_cut`). The
-writes the die makes before the models' M-cycle ends are made on the die's
-edge (cmodel `wb_hooks`, the RTL's mid-M-cycle micro-ops): DJNZ's, INI's
-and OUTI's B-1, the block pointer steps, the stack's SP steps, EX (SP),HL's,
-ADC / SBC HL's sum at the first internal M-cycle's end. A cut that ends on
-a T2 that WAIT held, or on a Tw after it, makes the T2 writes then (the C
+puts it back -- F after a cut on the next M1's T2 as the flag latches
+hold it (cmodel `f_cut()`, rtl `z80_core`'s `f_cut`). The writes the die
+makes before the models' M-cycle ends are made on the die's edge (cmodel
+`wb_hooks`, the RTL's mid-M-cycle micro-ops): DJNZ's, INI's and OUTI's
+B-1, the block pointer steps, the stack's SP steps, EX (SP),HL's, ADC /
+SBC HL's sum at the first internal M-cycle's end. A cut that ends on a T2
+that WAIT held, or on a Tw after it, makes the T2 writes then (the C
 model's stall path in `advance()`, the RTL's `stall_cut` / `tw_cut`).
 Nothing changes at an instruction boundary: only what a RESET part-way
 through leaves.
+
+The C model logs a byte where its exec step writes it early (`wb_put`,
+with the die's edge), in a slot per register byte: `wb_next` marks those
+waiting for the next M1 or INTA cycle, `wb_inst` those waiting inside the
+instruction -- always in the M-cycle after the step that logs them. So
+the end of each M-cycle drops `wb_inst`, the end of an M1 or INTA cycle
+`wb_next` too (`wb_retire`), and only a cut looks at the T-state: it puts
+back the bytes whose edge is after the T-state it ends on (`wb_undo`).
+The exec step that writes F only notes how it formed it (`wb_fex`,
+`wb_fm`); a cut on the next M1's T2 forms F from that, the ALU run again
+on the registers as the step found them (`wb_f_at_cut`). The writes on an
+M-cycle's last edge the exec step makes at its start; `wb_hooks` makes
+those before it, in the M-cycles `wb_mid` names, at their edge -- cfast
+(cfast/gen_fast.py) runs those M-cycles in step variants that call it
+there, and runs everything else on an M-cycle's last edge through the
+model's own `end_mcycle`, so its steps keep the same log. The RTL keeps
+two pair slots and the pending exchanges in `z80_regfile`, and puts the
+bytes back through its byte write, one an edge, on the edges after the
+cut, where nothing else writes or reads them.
 
 ## Pad drivers (bus float)
 

@@ -5,7 +5,7 @@
 
    Usage: event_sweep_c [-e events] [-r run_T] [-m marker] [-i]
                         [-a int_at] [-H hold_addr -T hold_T] [-v vec]
-                        [-o ops] [-B] [-W] prog.hex
+                        [-o ops] [-B] [-W] [-D r0,r1,w,vv,dd] prog.hex
 
    The model advances whole half-cycles: every pin transition inside a
    half-cycle is applied, in time order, before the step into the next
@@ -16,7 +16,8 @@
    (the die's NMI flip-flop, set by the pin's falling edge itself), which
    holds NMI low for the model until the next rising edge has seen it.
    The interrupting device (-v, -o) is the one in event_sweep_pz80.c; an IN
-   reads what an OUT wrote to its address, FF before. */
+   reads what an OUT wrote to its address, FF before. -D is its data
+   window: data_in is dd in half-cycles r0 .. r1, vv in half-cycle w. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -72,8 +73,9 @@ int main(int argc, char **argv) {
     const char *events = NULL;
     int run = 100, marker = 0x0200, inta_release = 0, int_at = -1, hold = -1, hold_t = 0, vec = 0xff, opt;
     int busreq_walk = 0, wait_walk = 0;   /* -B, -W: as in event_sweep_pz80.c */
+    int dw_r0 = -1, dw_r1 = -1, dw_w = -1; unsigned dw_v = 0, dw_d = 0;   /* -D */
     uint8_t ops[8]; int n_ops = 0;
-    while ((opt = getopt(argc, argv, "e:r:m:ia:H:T:v:o:BW")) != -1) {
+    while ((opt = getopt(argc, argv, "e:r:m:ia:H:T:v:o:BWD:")) != -1) {
         switch (opt) {
         case 'e': events = optarg; break;
         case 'r': run = atoi(optarg); break;
@@ -85,6 +87,11 @@ int main(int argc, char **argv) {
         case 'v': vec = (int)strtol(optarg, NULL, 16) & 0xff; break;
         case 'B': busreq_walk = 1; break;
         case 'W': wait_walk = 1; break;
+        case 'D':
+            if (sscanf(optarg, "%d,%d,%d,%x,%x", &dw_r0, &dw_r1, &dw_w, &dw_v, &dw_d) != 5) {
+                fprintf(stderr, "bad -D\n"); return 2;
+            }
+            break;
         case 'o':
             for (n_ops = 0; n_ops < 8 && optarg[2 * n_ops] && optarg[2 * n_ops + 1]; n_ops++) {
                 char b[3] = {optarg[2 * n_ops], optarg[2 * n_ops + 1], 0};
@@ -135,6 +142,8 @@ int main(int argc, char **argv) {
         if (!found && !p->m1_n && p->addr == (unsigned)marker) { found = 1; mark = clk ? h : h - 1; }
         if (found) {
             int rel = h - mark;
+            if (dw_r0 >= 0 && rel >= dw_r0 && rel <= dw_r1)    /* -D: this half-cycle's byte */
+                p->data_in = (uint8_t)(rel == dw_w ? dw_v : dw_d);
             /* reactive pins, from the pins of this half-cycle */
             if (inta_release && !p->m1_n && !p->iorq_n) p->int_n = true;
             if (int_at >= 0 && !p->m1_n && !p->mreq_n && p->addr == (unsigned)int_at) p->int_n = false;
