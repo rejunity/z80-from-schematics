@@ -357,8 +357,10 @@ Both models compute most results earlier, on an M-cycle's last edge, and
 keep a write-back log: each byte written before the die's edge, its old
 value and the edge it becomes permanent on; a RESET cut before that edge
 puts it back (cmodel `wb_rule` / `wb_note`, rtl `z80_regfile`'s two slots
-and the pending exchanges) -- F after a cut on the next M1's T2 as the
-flag latches hold it (cmodel `f_cut()`, rtl `z80_core`'s `f_cut`). The
+and the pending exchanges; the RTL puts the bytes back through its byte
+write, one an edge, on the edges after the cut, where nothing else writes
+or reads them) -- F after a cut on the next M1's T2 as the flag latches
+hold it (cmodel `f_cut()`, rtl `z80_core`'s `f_cut`). The
 writes the die makes before the models' M-cycle ends are made on the die's
 edge (cmodel `wb_hooks`, the RTL's mid-M-cycle micro-ops): DJNZ's, INI's
 and OUTI's B-1, the block pointer steps, the stack's SP steps, EX (SP),HL's,
