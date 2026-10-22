@@ -11,6 +11,7 @@
 #ifndef Z80_H
 #define Z80_H
 
+#include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -121,6 +122,23 @@ void z80_timing(uint8_t bus_op, uint8_t t_state, uint8_t phi, uint8_t m_len,
                 uint16_t *addr, uint8_t *data_out, bool *data_drive,
                 bool *m1_n, bool *mreq_n, bool *iorq_n,
                 bool *rd_n,  bool *wr_n,   bool *rfsh_n);
+
+/* The timing ROM: z80_timing() tabulated over (bus_op, t_state, phi) by
+   z80_timing_rom_init() (z80_reset calls it). The core drives its pins from
+   it; z80_timing() remains the source of truth. lvl[] holds the pins as the
+   bytes of z80_pins_t from data_drive through rfsh_n; refresh selects I:R
+   over m_addr for the address bus. t_state saturates at 15. */
+typedef struct {
+    uint8_t lvl[7];
+    uint8_t refresh;
+} z80_timing_rom_t;
+#define Z80_TIMING_ROM_SIZE 256
+#define Z80_TIMING_ROM_INDEX(op, t, phi) \
+    ((((unsigned)(op) & 7u) << 5) | (((unsigned)(t) & 15u) << 1) | ((unsigned)(phi) & 1u))
+#define Z80_TIMING_ROM_FIRST offsetof(z80_pins_t, data_drive)
+#define Z80_TIMING_ROM_LEN   (offsetof(z80_pins_t, rfsh_n) + 1 - Z80_TIMING_ROM_FIRST)
+extern z80_timing_rom_t z80_timing_rom[Z80_TIMING_ROM_SIZE];
+void z80_timing_rom_init(void);
 
 /* ---------------------------------------------------------------------------
  * Control word (PLA output). Conceptual fields; see docs/pla.md.
@@ -362,6 +380,73 @@ void z80_reset(z80_t *cpu);
 void z80_phase_step(z80_t *cpu);   /* advance one phase (half T-state)        */
 void z80_set_pc(z80_t *cpu, uint16_t pc); /* seed PC + pending M1 fetch addr  */
 
+/* ---------------------------------------------------------------------------
+ * Pin word API: the same phase engine, its pins packed in one 64-bit word so
+ * a system's bus logic runs in the caller's loop, without callbacks:
+ *
+ *     uint64_t pins = 0;
+ *     for (;;) {
+ *         pins = z80_tick(&cpu, pins);                  // one phase
+ *         uint16_t a = Z80_GET_ADDR(pins);
+ *         uint8_t  d = 0;                               // undriven bus reads 0
+ *         if ((pins & (Z80_MREQ|Z80_WR)) == (Z80_MREQ|Z80_WR)) mem[a] = Z80_GET_DATA(pins);
+ *         if ((pins & (Z80_MREQ|Z80_RD)) == (Z80_MREQ|Z80_RD)) d = mem[a];
+ *         ...                                           // I/O, INTA (M1|IORQ)
+ *         Z80_SET_DATA(pins, d);
+ *     }
+ *
+ * One tick is one phase (half T-state), the granularity of z80_phase_step()
+ * and of the RTL: tick n drives exactly the pins z80_phase_step's n-th call
+ * leaves in z80_pins_t, and the data byte the caller sets after tick n is
+ * what the core latches on tick n+1. Bits are active high (1 = asserted, the
+ * pin low). Positions follow floooh's chips z80.h where the pins are shared.
+ * ------------------------------------------------------------------------- */
+#define Z80_PIN_A0      0   /* A0..A15 out: address bus                      */
+#define Z80_PIN_D0     16   /* D0..D7: in, the byte the system drives (read  */
+                            /* data, INTA vector); out, the core's data-out  */
+                            /* latch, on the bus while DOE                   */
+#define Z80_PIN_M1     24   /* out                                           */
+#define Z80_PIN_MREQ   25   /* out                                           */
+#define Z80_PIN_IORQ   26   /* out                                           */
+#define Z80_PIN_RD     27   /* out                                           */
+#define Z80_PIN_WR     28   /* out                                           */
+#define Z80_PIN_HALT   29   /* out                                           */
+#define Z80_PIN_INT    30   /* in                                            */
+#define Z80_PIN_RES    31   /* in: RESET                                     */
+#define Z80_PIN_NMI    32   /* in                                            */
+#define Z80_PIN_WAIT   33   /* in                                            */
+#define Z80_PIN_RFSH   34   /* out                                           */
+#define Z80_PIN_BUSREQ 35   /* in                                            */
+#define Z80_PIN_BUSACK 36   /* out                                           */
+#define Z80_PIN_DOE    39   /* out: the core drives D0..D7 (data_drive)      */
+
+#define Z80_M1     (1ULL << Z80_PIN_M1)
+#define Z80_MREQ   (1ULL << Z80_PIN_MREQ)
+#define Z80_IORQ   (1ULL << Z80_PIN_IORQ)
+#define Z80_RD     (1ULL << Z80_PIN_RD)
+#define Z80_WR     (1ULL << Z80_PIN_WR)
+#define Z80_HALT   (1ULL << Z80_PIN_HALT)
+#define Z80_INT    (1ULL << Z80_PIN_INT)
+#define Z80_RES    (1ULL << Z80_PIN_RES)
+#define Z80_NMI    (1ULL << Z80_PIN_NMI)
+#define Z80_WAIT   (1ULL << Z80_PIN_WAIT)
+#define Z80_RFSH   (1ULL << Z80_PIN_RFSH)
+#define Z80_BUSREQ (1ULL << Z80_PIN_BUSREQ)
+#define Z80_BUSACK (1ULL << Z80_PIN_BUSACK)
+#define Z80_DOE    (1ULL << Z80_PIN_DOE)
+/* everything z80_tick drives; the other bits of the word pass through */
+#define Z80_OUT_PIN_MASK (0xFFFFFFULL | Z80_M1 | Z80_MREQ | Z80_IORQ | Z80_RD | \
+                          Z80_WR | Z80_HALT | Z80_RFSH | Z80_BUSACK | Z80_DOE)
+
+#define Z80_GET_ADDR(p)    ((uint16_t)(p))
+#define Z80_GET_DATA(p)    ((uint8_t)((p) >> Z80_PIN_D0))
+#define Z80_SET_DATA(p, d) ((p) = ((p) & ~0xFF0000ULL) | ((uint64_t)((d) & 0xFF) << Z80_PIN_D0))
+
+/* Advance one phase: the core samples D0..D7 and the INT / NMI / WAIT /
+   BUSREQ / RES requests of `pins`, and returns the pins it drives in this
+   phase, with the other bits of `pins` unchanged. */
+uint64_t z80_tick(z80_t *cpu, uint64_t pins);
+
 /* register-file byte accessors (docs/architecture.md) */
 uint8_t  z80_get_r8(const z80_t *cpu, z80_reg8_t r); /* (HL) returns 0; mem handled by seq */
 void     z80_set_r8(z80_t *cpu, z80_reg8_t r, uint8_t v);
@@ -375,6 +460,12 @@ z80_control_t z80_pla(z80_prefix_t prefix, uint8_t op);
 
 /* Back-compat wrapper for callers still spelling it z80_pla_decode. */
 z80_control_t z80_pla_decode(z80_prefix_t prefix, uint8_t opcode);
+
+/* The decode ROM: z80_pla() of every (prefix, opcode), built by
+   z80_pla_rom_init() (z80_reset calls it); the core's M1 latch reads it. */
+#define Z80_PLA_ROM_PREFIXES 7
+extern z80_control_t z80_pla_rom[Z80_PLA_ROM_PREFIXES][256];
+void z80_pla_rom_init(void);
 
 /* ---------------------------------------------------------------------------
  * Trace record (shared format, docs/timing.md / brief).

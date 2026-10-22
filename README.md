@@ -18,11 +18,15 @@ than being a high-level instruction interpreter.
 
 The C model is the fast executable reference; the Verilog RTL implements the *same
 conceptual architecture* and is checked against the C model phase-by-phase.
+For emulators, `cfast/` generates the model into a phase engine with the same pins
+every half clock; [its speed against other C Z80 emulators](cfast/BENCHMARK.md).
 
 
 ## Layout
 
     cmodel/    C99 hardware-like model
+    cfast/     the model generated into a fast phase engine for emulators
+               (its speed against other C Z80 emulators: cfast/BENCHMARK.md)
     rtl/       Verilog-2001 synthesizable RTL
     tests/     unit + instruction + timing-trace tests, ZEX suites, sim TBs
     scripts/   Python and C test generators, oracle runners, trace comparators
@@ -72,6 +76,7 @@ interactive controls (Enter, Backspace, Ctrl-C / Ctrl-Space = BREAK, Ctrl-\\ = e
     make prelim          # prelim.com CP/M instruction test
     make zexdoc          # full ZEXDOC                                 (~1  min)
     make zexall          # full ZEXALL                                 (~16 min)
+    make cfast_bench     # cfast against four other C emulators on ZEXDOC (cfast/BENCHMARK.md)
     make silicon_cycles  # per-opcode T-state check vs real KC85 silicon (sigrok)
     make silicon_async   # real CPU clock + sub-T-state pin offsets from 20 MHz capture
     make halt2int        # HALT-to-INT acceptance T-state timing probe (Brewer 2014 / Woodmass HALT2INT)
