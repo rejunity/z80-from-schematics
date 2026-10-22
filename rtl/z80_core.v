@@ -884,11 +884,13 @@ module z80_core (
                 f_cut = (fc_lo9[7:0] & F_S) | ((fc_lo9[7:0] == 8'h00) ? F_Z : 8'h00) | (fc_phi ? F_P : 8'h00)
                         | (fc_clo ? F_C : 8'h00) | (f_data & (F_XY | F_H | F_N));
             // every flag latched before the next M1 but H: LDI's from A + data,
-            // INI's from B-1 once more, OUTI's clear
+            // INI's from B-1 once more, OUTI's k's carry where B-1 borrowed
+            // from bit 4
             `EXEC_BLOCK:
                 f_cut = (f_data & ~F_H)
                         | ((aux_w[2:1] == 2'd0) ? (((alu_a[3:0] + tmp8[3:0]) & 5'h10) != 5'h00 ? F_H : 8'h00) :
-                           (aux_w[2:1] == 2'd2) ? ((alu_b[3:0] == 4'h0) ? F_H : 8'h00) : 8'h00);
+                           (aux_w[2:1] == 2'd2) ? ((alu_b[3:0] == 4'h0) ? F_H : 8'h00) :
+                           (aux_w[2:1] == 2'd3) ? ((alu_b[3:0] == 4'hF && bk_out[8]) ? F_H : 8'h00) : 8'h00);
             default:       f_cut = F_cur;
         endcase
     end

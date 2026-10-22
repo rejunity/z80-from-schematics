@@ -264,6 +264,8 @@ static uint8_t f_cut(const z80_t *c, uint8_t fo, uint8_t fn, uint8_t a, uint8_t 
         uint8_t cat = (uint8_t)((c->ctl.aux >> 1) & 3);   /* the step's end puts F around it */
         if (cat == 0) return (uint8_t)((((a & 0x0F) + (c->tmp8 & 0x0F)) & 0x10) ? Z80_HF : 0);  /* A + data */
         if (cat == 2) return (uint8_t)((b & 0x0F) ? 0 : Z80_HF);    /* B-1 once more */
+        if (cat == 3)                          /* OUTI: k's carry where B-1 borrowed from bit 4 */
+            return (uint8_t)(((b & 0x0F) == 0x0F && ((c->tmpl + (c->rf[RFP_HL] & 0xFF)) & 0x100)) ? Z80_HF : 0);
         return 0;
     }
     case EXEC_RRD: case EXEC_RLD: {            /* the bus: the byte written back */
