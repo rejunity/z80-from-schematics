@@ -165,9 +165,10 @@ static void finish(z80_t *c) { c->instr_done = true; c->im0_ins = false; }
    write is kept from the cut ending on the T-state after. This model writes
    on an M-cycle's last edge; wb_rule() gives, for each byte an exec step
    changed, the edge the die's write becomes permanent on, and the byte's old
-   value waits in c->wb until then -- a RESET cut before it restores it. The
-   writes the die makes before this model's exec step reach them are done
-   early instead (wb_hooks, and the exec cases marked "the die's edge"). */
+   value waits in c->wb until then -- a RESET cut before it restores it (F
+   after a cut on the next M1's T2: as the die's flag latches hold it,
+   f_cut()). The writes the die makes before this model's exec step reaches
+   them are made on the die's edge instead (wb_hooks). */
 #define WB_NEXT 0          /* wb m: the next M1 / INTA cycle */
 
 static void wb_rule(const z80_t *c, uint8_t ex, uint8_t mc, uint8_t pair, bool hi,
@@ -435,8 +436,6 @@ static void set_prefix_from_ir(z80_t *c)
 
 /* convenience for read-byte (the byte latched during the just-finished cycle) */
 #define RB (c->tmp8)
-
-static uint8_t f_cut(const z80_t *c, uint8_t fo, uint8_t fn, uint8_t a, uint8_t b, uint8_t res);
 
 static void z80_exec_step(z80_t *c)
 {

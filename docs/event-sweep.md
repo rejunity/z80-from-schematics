@@ -108,12 +108,13 @@ Instructions under test:
 | `im0_combo` | IM0 CALL 1234 after INC A; NMI, WAIT, BUSREQ or RESET (as in `im2_combo`) from every T-state of it |
 | `opcodes` | every opcode -- 1,841 programs: unprefixed, CB, ED, DD / FD and DD CB / FD CB, the flag-dependent ones also with F = 00 and FF, DJNZ also with B = 1, INIR / OTIR / INDR / OTDR with B = 2 -- each plain, with the BUSREQ walk, with the WAIT walk, with INT from the marker's T4 (EI) and with a 1 T NMI at its T1 |
 | `classes` | one opcode of each of the 68 timing classes the instructions above don't cover (`CLASS_REPS`): 1 T NMI, INT until INTA, 1 T and 4 T BUSREQ, 1 T and 3 T WAIT from every T-state |
-| `classes_reset` | 4 T RESET from every T-state of the same 68 (run by name: `--groups classes_reset`; known difference 19) |
+| `classes_reset` | 4 T RESET from every T-state of the same 68 |
 | `fuzz` | 2,000 random cases (seed 1): 3-10 instructions drawn from every opcode program, a random F and BC, IM0 (an RST byte), IM1 or IM2 (vector 40, 41 or FF), EI or not, and one to three NMI / INT / WAIT / BUSREQ pulses of random widths in the first 40 T-states, 200 T run |
-| `fuzz_reset` | the same with RESET among the pins (run by name; known difference 19) |
+| `fuzz_reset` | the same with RESET among the pins |
 | `reset_m1wait` | 4 T RESET at every quarter T-state while 1, 2 or 4 T of WAIT stretch the M1 of INC A and LD A,(HL) (known difference 25) |
 | `reset_busreq` | 4 T RESET at every quarter T-state around a 2 T and a 6 T BUSREQ from the T1 of INC A, LD A,(HL) and PUSH BC (known difference 26) |
-| `reset_nmi` | a 1 T NMI at every quarter T-state from 2 T before RESET's release to 8 T after it, RESET 3, 4 and 6 T (run by name; known differences 27 and 19) |
+| `reset_nmi` | a 1 T NMI at every quarter T-state from 2 T before RESET's release to 8 T after it, RESET 3, 4 and 6 T (known difference 27) |
+| `opcodes_reset` | 4 T RESET from every T-state of every opcode program of `opcodes`, one position per T-state (run by name: `--groups opcodes_reset`; known difference 19) |
 
 The timing classes: the `opcodes` group's programs grouped by perfectz80's
 control pins in their plain run and their BUSREQ and WAIT walks, 86 of
@@ -264,7 +265,9 @@ RTL testbench answering every IN with FF where perfectz80's harness and the
 C system return what an OUT wrote. `fuzz_reset` (with RESET) then found three
 RESET rules the targeted groups had missed -- a Tw after an M1's T2, a bus
 grant, an NMI right after the release (known differences 25-27) -- each
-swept since by a group of its own; what it still shows is row 19.
+swept since by a group of its own; then, with row 19, a cut on the Tw of a
+write that WAIT stretched (a push's second SP-1, made in that write's T2)
+and the RTL's Q after DD CB RES / SET (an NMI-only case).
 
 ## perfectz80's recorded traces
 

@@ -239,8 +239,8 @@ Notes for each row:
      pulses at every T-state of 24 instructions, diffed per half-cycle
      against perfectz80, the address and BUSACK included. **5879 of 5905
      cases match (2026-10-20)**; the 26 in `tests/event_sweep/baseline.txt`
-     are row 19 (RESET in ADD HL,BC / INC BC's write-back), and CI fails on
-     any other difference. RESET is the die's sampled RESET with the special
+     were row 19 (RESET in ADD HL,BC / INC BC's write-back), now resolved,
+     and CI fails on any difference. RESET is the die's sampled RESET with the special
      reset and registers kept (row 1); BUSREQ the die's grant (row 16).
 
  18. **Refresh and idle address bus vs perfectz80 — resolved
