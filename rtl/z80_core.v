@@ -686,7 +686,7 @@ module z80_core (
         .alu_op_w(alu_op_w), .cb_kind_w(cb_kind_w), .idx_w(idx_w),
         .use_disp_w(use_disp_w), .aux_w(aux_w), .prefix(prefix), .ir(ir),
         .ddcb_kind(tmph[7:6]), .im(im), .im0_ins(im0_ins),
-        .cc_taken(cc_taken), .zf(alu_fout[6]), .bc_nz(r_bc != 16'd0),
+        .cc_taken(cc_taken), .zf(A_cur == tmp8), .bc_nz(r_bc != 16'd0),
         .b_nz(r_bc[15:8] != 8'd0), .b_dec_nz(b_dec != 8'd0), .tw_fix(tw_cut),
         .ctl_mstart(ctl_mstart), .ctl_m1(ctl_m1), .ctl_fin(ctl_fin),
         .ctl_bop(ctl_bop), .ctl_mx(ctl_mx), .ctl_al(ctl_al),

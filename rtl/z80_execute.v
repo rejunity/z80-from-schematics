@@ -45,7 +45,7 @@ module z80_execute (
     input  wire        im0_ins,         // IM0: the device's instruction; PC doesn't move
     // conditions from the datapath
     input  wire        cc_taken,        // cc[y] holds in F
-    input  wire        zf,              // CPI's Z (the ALU's, at M3)
+    input  wire        zf,              // CPI's Z at M3: A == the byte in tmp8
     input  wire        bc_nz,           // BC != 0
     input  wire        b_nz,            // B != 0
     input  wire        b_dec_nz,        // B-1 != 0
