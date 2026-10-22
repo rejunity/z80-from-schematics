@@ -427,10 +427,11 @@ edge.
   second's; in the C model the block pointers on their bus cycle's last
   edge (`wb_hooks` before it), LDI / CPI's BC at M3's end, where the
   repeat reads it. A read straight into its register lands on that read's
-  last edge unless a cut ends there (C `cut_now`, RTL `rd_cls`), as does
-  ADD HL's H. A cut that ends on a T2 that WAIT held, or on a Tw after it,
-  makes the T2 writes then (the C model's stall path in `advance()`, the
-  RTL's `stall_cut` / `tw_cut`).
+  last edge unless a cut ends there (C `cut_now`, RTL `rd_cls`), as do
+  ADD HL's H and a push's first SP-1 (C `push_sp`, RTL `push_cut`) on the
+  last edge of the M-cycle before the write. A cut that ends on a T2 that
+  WAIT held, or on a Tw after it, makes the T2 writes then (the C model's
+  stall path in `advance()`, the RTL's `stall_cut` / `tw_cut`).
 
 The registers as the program sees them, with the next M1's writes made:
 `z80_arch()` in the C model (zexrunner, fuse_runner, z80test_runner,
