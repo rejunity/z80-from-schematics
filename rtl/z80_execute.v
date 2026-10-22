@@ -45,7 +45,7 @@ module z80_execute (
     input  wire        im0_ins,         // IM0: the device's instruction; PC doesn't move
     // conditions from the datapath
     input  wire        cc_taken,        // cc[y] holds in F
-    input  wire        zf,              // F.Z
+    input  wire        zf,              // CPI's Z (the ALU's, at M3)
     input  wire        bc_nz,           // BC != 0
     input  wire        b_nz,            // B != 0
     input  wire        b_dec_nz,        // B-1 != 0
@@ -660,11 +660,10 @@ module z80_execute (
                     if (m_cycle == 3'd1) at_pair(`BUSOP_MRD, RI_HL, 4'd0);
                     else if (m_cycle == 3'd2) begin
                         // HL and BC stepped at M2 T1 / T2; WZ steps at M3 T1
-                        wr_flags(FS_ALU);
                         int_wz(4'd5);
-                    end else if (m_cycle == 3'd3) begin
-                        if (aux_w[3] && bc_nz && !zf) blk_repeat(FS_BCP);
-                        else ctl_fin = 1'b1;
+                    end else if (m_cycle == 3'd3) begin       // the flags, from the byte in tmp8
+                        if (aux_w[3] && bc_nz && !zf) blk_repeat(FS_BLD);
+                        else begin wr_flags(FS_ALU); ctl_fin = 1'b1; end
                     end else ctl_fin = 1'b1;
                 end
                 2'd2: begin                                   // INI IND INIR INDR
