@@ -308,8 +308,10 @@ Notes for each row:
      chip build 3,742 (3,667; 4,344), and the Z80 clock's Fmax up, 8.7 and
      12.1 MHz (main 7.2 and 7.9) -- a byte read no longer reaches the ALU
      in the half-cycle it is latched; F after a cut on T2 (`f_cut`) is
-     about 15-18 of the LCs. The C model runs ZEXDOC at 3.4 Minstr/s (main
-     3.8), cfast's z80f_run at 27.5 (main 34.6; the log's 27.6).
+     about 15-18 of the LCs. The iCEBreaker and iCESugar chip builds meet
+     their 8 MHz again (11.8, 12.5 MHz). The C model runs ZEXDOC about 10 %
+     slower than main (3.5 against 3.9 Minstr/s), cfast's z80f_run about
+     20 % (27.8 against 35.4; the log's 27.6).
  20. **IM0: the instruction from the interrupting device — resolved
      2026-10-21.** Found by the event sweep's `im0` group (twenty
      instructions handed over in INTA, perfectz80). On the die PC doesn't
