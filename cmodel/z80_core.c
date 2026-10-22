@@ -277,6 +277,25 @@ static uint8_t f_cut(const z80_t *c, uint8_t fo, uint8_t fn, uint8_t a, uint8_t 
     }
 }
 
+/* the classes wb_rule() gives a later edge for something */
+static bool wb_logs(uint8_t ex)
+{
+    switch (ex) {
+    case EXEC_LD_R_R: case EXEC_LD_R_N: case EXEC_LD_R_M: case EXEC_ALU_R: case EXEC_ALU_N:
+    case EXEC_ALU_M: case EXEC_INC_R: case EXEC_DEC_R: case EXEC_INC_M: case EXEC_DEC_M:
+    case EXEC_ROT_A: case EXEC_DAA: case EXEC_CPL: case EXEC_SCF: case EXEC_CCF: case EXEC_NEG:
+    case EXEC_CB_R: case EXEC_CB_M: case EXEC_DDCB: case EXEC_IN_C: case EXEC_RRD: case EXEC_RLD:
+    case EXEC_LD_A_IR: case EXEC_EX_AF: case EXEC_EXX: case EXEC_EX_DE_HL: case EXEC_LD_A_NN:
+    case EXEC_LD_A_RP: case EXEC_IN_A_N: case EXEC_LD_RP_NN: case EXEC_LD_RP_NNA:
+    case EXEC_LD_HL_NN: case EXEC_POP: case EXEC_INC_RP: case EXEC_DEC_RP: case EXEC_LD_SP_HL:
+    case EXEC_ADD_HL_RP: case EXEC_ADC16: case EXEC_SBC16: case EXEC_PUSH: case EXEC_RST:
+    case EXEC_CALL: case EXEC_CALL_CC: case EXEC_NMI: case EXEC_INT: case EXEC_BLOCK:
+        return true;
+    default:
+        return false;
+    }
+}
+
 /* log each byte this exec step changed that the die writes on a later edge */
 static void wb_note(z80_t *c, const uint16_t *before, uint8_t ex, uint8_t mc)
 {
@@ -284,6 +303,7 @@ static void wb_note(z80_t *c, const uint16_t *before, uint8_t ex, uint8_t mc)
                                      RFP_HL2, RFP_IX, RFP_IY, RFP_SP };
     for (unsigned i = 0; i < sizeof pairs; i++) {
         uint8_t p = pairs[i];
+        if (before[p] == c->rf[p] && !(p == RFP_AF && c->f_wr)) continue;
         for (int hi = 0; hi < 2; hi++) {
             uint8_t old = (uint8_t)(before[p] >> (8 * hi)), now = (uint8_t)(c->rf[p] >> (8 * hi));
             if (old == now && !(p == RFP_AF && !hi && c->f_wr)) continue;   /* F: written */
@@ -302,7 +322,7 @@ static void wb_note(z80_t *c, const uint16_t *before, uint8_t ex, uint8_t mc)
 }
 
 /* the writes that become permanent on this edge (the end of T-state t) */
-static void wb_edge(z80_t *c, uint8_t t)
+static inline void wb_edge(z80_t *c, uint8_t t)
 {
     bool m1 = c->bus_op == BUSOP_M1 || c->bus_op == BUSOP_INTA;
     uint8_t k = 0;
@@ -331,16 +351,19 @@ static void wb_undo(z80_t *c, bool t2)
 /* the die's writes inside an M-cycle, on the edge ending T-state t: a
    write in T_k's low half on the edge ending T_k+1 -- in a bus cycle the T2
    writes on the edge after T2, which WAIT can make a Tw's */
-static void wb_hooks(z80_t *c, uint8_t t)
+static inline void wb_hooks(z80_t *c, uint8_t t)
 {
     uint8_t m = c->m_cycle;
+    if (t < 2) {                               /* T1's: EX (SP),HL only */
+        if (c->ctl.exec == EXEC_EX_SP_HL && m == 4) z80_setSP(c, (uint16_t)(z80_SP(c) + 1));
+        return;
+    }
     switch (c->ctl.exec) {
     case EXEC_DJNZ:                            /* B-1 in the offset read's T1.N */
         if (m == 3 && t == 2) setr(c, REG_B, (uint8_t)(getr(c, REG_B) - 1));
         break;
-    case EXEC_EX_SP_HL:                        /* SP steps up for the read of (SP+1) and back */
-        if (m == 4 && t == 1) z80_setSP(c, (uint16_t)(z80_SP(c) + 1));
-        else if (m == 4 && t == 3) z80_setSP(c, (uint16_t)(z80_SP(c) - 1));
+    case EXEC_EX_SP_HL:                        /* SP steps up for the read of (SP+1) (above) and back */
+        if (m == 4 && t == 3) z80_setSP(c, (uint16_t)(z80_SP(c) - 1));
         break;
     /* a push's second SP-1 in the first write's T2.N, a pop's SP+1 in each read's */
     case EXEC_PUSH: case EXEC_RST:
@@ -561,7 +584,8 @@ static void z80_exec_step(z80_t *c)
     z80_alu(alu_md, (uint8_t)ctl->alu_op, alu_rot, alu_bit, alu_xy,
             alu_a, alu_b, z80_F(c), c->q,
             &alu_res, &alu_fout);
-    uint8_t fcut = f_cut(c, z80_F(c), alu_fout, alu_a, alu_b, alu_res);   /* if this step writes F */
+    uint8_t f0 = z80_F(c);
+    int fcut = -1;                     /* set by the steps whose F f_cut() can't form */
 
     switch (ctl->exec) {
 
@@ -1281,8 +1305,10 @@ static void z80_exec_step(z80_t *c)
         finish(c);
         break;
     }
-    if (c->f_wr)
-        c->wb_fcut = (ctl->exec == EXEC_BLOCK) ? (uint8_t)((z80_F(c) & ~Z80_HF) | fcut) : fcut;
+    if (c->f_wr) {
+        uint8_t fc = fcut >= 0 ? (uint8_t)fcut : f_cut(c, f0, alu_fout, alu_a, alu_b, alu_res);
+        c->wb_fcut = (ctl->exec == EXEC_BLOCK) ? (uint8_t)((z80_F(c) & ~Z80_HF) | fc) : fc;
+    }
 }
 
 /* =========================================================================
@@ -1446,7 +1472,7 @@ static void begin_next(z80_t *c)
    T-state, and at the end of an M-cycle the execute step / next M-cycle */
 static void end_tstate(z80_t *c)
 {
-    wb_edge(c, c->t_state);                  /* the die's writes this edge makes permanent */
+    if (c->wb_n) wb_edge(c, c->t_state);     /* the die's writes this edge makes permanent */
     wb_hooks(c, c->t_state);                 /* ... and those it makes inside an M-cycle */
     /* refresh counter: R steps (low 7 bits) on the rising edge that ends the
        refresh -- T4 of an M1, the second refresh T-state of an INTA -- so the
@@ -1458,9 +1484,10 @@ static void end_tstate(z80_t *c)
     if (c->t_state > c->m_len) {
         uint16_t before[RFP_COUNT];
         uint8_t ex = (uint8_t)c->ctl.exec, mc = c->m_cycle;
-        memcpy(before, c->rf, sizeof before);
+        bool logs = wb_logs(ex);
+        if (logs) memcpy(before, c->rf, sizeof before);
         z80_exec_step(c);                    /* set up next M-cycle / finish */
-        wb_note(c, before, ex, mc);
+        if (logs) wb_note(c, before, ex, mc);
         if (c->instr_done) {
             /* what the die writes within the instruction is written by its end */
             uint8_t k = 0;

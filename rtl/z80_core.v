@@ -822,6 +822,15 @@ module z80_core (
             default: bw_data = b_dec;
         endcase
     end
+    // the byte the byte write replaces (the write-back log keeps it)
+    reg  [15:0] bw_cur;
+    always @* begin
+        case (bw_pair)
+            `RFP_BC: bw_cur = r_bc;  `RFP_DE: bw_cur = r_de;  `RFP_AF: bw_cur = r_af;
+            `RFP_IX: bw_cur = r_ix;  `RFP_IY: bw_cur = r_iy;  `RFP_SP: bw_cur = r_sp;
+            default: bw_cur = r_hl;
+        endcase
+    end
     // flag port
     reg  [7:0]  f_data;
     always @* begin
@@ -1001,7 +1010,8 @@ module z80_core (
         .wb_m(m_cycle), .wb_t(t_state),
         .wb_m1((bus_op == `BUSOP_M1) || (bus_op == `BUSOP_INTA)),
         .pw_log_lo(pw_log_lo), .pw_log_hi(pw_log_hi), .pw_due_lo(pw_due_lo), .pw_due_hi(pw_due_hi),
-        .bw_log(bw_log), .bw_due(bw_due), .f_log(1'b1), .f_due(f_due), .sp_log(sp_log), .sp_due(sp_due)
+        .pw_old((ctl_pws == PW_A16) ? rf_hlp : abus),     // the IDU's input, or HL / IX / IY
+        .bw_log(bw_log), .bw_old(bw_hi ? bw_cur[15:8] : bw_cur[7:0]), .bw_due(bw_due), .f_log(1'b1), .f_due(f_due), .sp_log(sp_log), .sp_due(sp_due)
     );
 
     // =======================================================================

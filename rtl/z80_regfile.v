@@ -73,8 +73,10 @@ module z80_regfile (
     input  wire [3:0]  wb_t,
     input  wire        wb_m1,           // ... in an M1 or INTA cycle
     input  wire        pw_log_lo, pw_log_hi,
+    input  wire [15:0] pw_old,          // the pair written, before this edge (the core has it)
     input  wire [7:0]  pw_due_lo, pw_due_hi,
     input  wire        bw_log,
+    input  wire [7:0]  bw_old,          // the byte written, before this edge (the core has it)
     input  wire [7:0]  bw_due,
     input  wire        f_log,           // F waits ...
     input  wire [7:0]  f_due,           // ... for the next M1's T3 (or T2)
@@ -135,17 +137,35 @@ module z80_regfile (
     wire       xaf_n   = xaf   ^ (ex_en & ex_af);
     wire [1:0] xdh_n   = xdh   ^ ((ex_en & ex_dehl) ? (xbank ? 2'b10 : 2'b01) : 2'b00);
 
+    // A RESET cut's restores (the write-back log below) go through the byte
+    // write, one byte an edge on the edges after the cut -- the reset idle
+    // and the restart's first T-states, where nothing else writes and nothing
+    // reads them yet: slot 0's low and high byte, then slot 1's.
+    reg        r_lo [0:1], r_hi [0:1];          // byte to put back
+    reg  [3:0] s_p  [0:1];                      // the slot's physical pair
+    reg [15:0] s_old[0:1];                      // ... and old value
+    wire       rs_0l = r_lo[0], rs_0h = r_hi[0] && !rs_0l;
+    wire       rs_1l = r_lo[1] && !r_lo[0] && !r_hi[0], rs_1h = r_hi[1] && !r_lo[0] && !r_hi[0] && !r_lo[1];
+    wire       rs_we = (rs_0l || rs_0h || rs_1l || rs_1h) && !(we && bw_we);
+    wire [3:0] rs_p  = (rs_0l || rs_0h) ? s_p[0] : s_p[1];
+    wire       rs_hi = rs_0h || rs_1h;
+    wire [7:0] rs_d  = rs_0l ? s_old[0][7:0] : rs_0h ? s_old[0][15:8] : rs_1l ? s_old[1][7:0] : s_old[1][15:8];
+    wire       bw_e  = (we && bw_we) || rs_we;
+    wire [3:0] bw_pe = rs_we ? rs_p : bw_phys;
+    wire       bw_he = rs_we ? rs_hi : bw_hi;
+    wire [7:0] bw_de = rs_we ? rs_d : bw_d;
+
     always @* begin
         for (i = 0; i < 13; i = i + 1) rf_n[i] = rf[i];
-        if (we) begin
-            for (i = 0; i < 13; i = i + 1) begin
-                if (pw_we && pw_phys == i) rf_n[i] = pw_d;
-                if (bw_we && bw_phys == i) begin
-                    if (bw_hi) rf_n[i][15:8] = bw_d;
-                    else       rf_n[i][7:0]  = bw_d;
-                end
-                if (f_we && af_phys == i) rf_n[i][7:0] = f_d;
+        for (i = 0; i < 13; i = i + 1) begin
+            if (we && pw_we && pw_phys == i) rf_n[i] = pw_d;
+            if (bw_e && bw_pe == i) begin
+                if (bw_he) rf_n[i][15:8] = bw_de;
+                else       rf_n[i][7:0]  = bw_de;
             end
+            if (we && f_we && af_phys == i) rf_n[i][7:0] = f_d;
+        end
+        if (we) begin
             if (pc_we) rf_n[`RFP_PC] = pc_d;
             if (sp_we) rf_n[`RFP_SP] = sp_d;
             if (wz_we) rf_n[`RFP_WZ] = wz_d;
@@ -156,9 +176,7 @@ module z80_regfile (
     assign f_next  = xaf_n ? rf_n[7][7:0] : rf_n[3][7:0];
 
     // ---- write-back log: two pair slots, a due per byte; the exchanges ----
-    reg        s_vl [0:1], s_vh [0:1];       // byte waiting
-    reg  [3:0] s_p  [0:1];                    // its physical pair
-    reg [15:0] s_old[0:1];
+    reg        s_vl [0:1], s_vh [0:1];       // byte waiting (s_p, s_old above)
     reg  [7:0] s_dl [0:1], s_dh [0:1];        // due {next, m, t}
     reg        x_af, x_bank;                  // EX AF / EXX waiting (next M1's T2 / T3)
     reg  [1:0] x_dh;                          // EX DE,HL waiting (T3), per bank
@@ -169,7 +187,7 @@ module z80_regfile (
     reg        x_af_n, x_bank_n; reg [1:0] x_dh_n;
     reg        s_f [0:1], s_f_n [0:1];       // the low byte waiting is F
     reg  [7:0] fc, fc_n;                      // ... and for a cut on the next M1's T2 this
-    reg [15:0] rf_w   [0:12];                 // rf_n with a cut's restores
+    reg        r_lo_n [0:1], r_hi_n [0:1];
     reg        xbank_w, xaf_w; reg [1:0] xdh_w;
     integer    k, q;
 
@@ -178,24 +196,24 @@ module z80_regfile (
         due_now = (d[3:0] == t) && (d[7] ? m1 : (d[6:4] == m));
     endfunction
 
-    // log one byte of physical pair p (old byte o, due d) into the slots
-    task log_byte; input [3:0] p; input hi; input [7:0] o; input [7:0] d; input f;
-        reg done;
+    // log the low (ml) and / or high (mh) byte of physical pair p -- old
+    // value o, dues dl / dh -- into the slots (f: the low byte is F)
+    task log_pair; input [3:0] p; input ml; input mh; input [15:0] o; input [7:0] dl; input [7:0] dh; input f;
+        reg done, hit;
         begin
             done = 1'b0;
-            for (q = 0; q < 2; q = q + 1)
-                if (!done && (s_vl_n[q] || s_vh_n[q]) && s_p_n[q] == p) begin
-                    if (hi) begin if (!s_vh_n[q]) s_old_n[q][15:8] = o; s_vh_n[q] = 1'b1; s_dh_n[q] = d; end
-                    else    begin if (!s_vl_n[q]) s_old_n[q][7:0]  = o; s_vl_n[q] = 1'b1; s_dl_n[q] = d; s_f_n[q] = f; end
+            for (q = 0; q < 2; q = q + 1) begin
+                // the slot that holds p, else a free one (not one a restore uses)
+                hit = !done && (((s_vl_n[q] || s_vh_n[q]) && s_p_n[q] == p) ||
+                                (!s_vl_n[q] && !s_vh_n[q] && !r_lo_n[q] && !r_hi_n[q] &&
+                                 !((s_vl_n[1 - q] || s_vh_n[1 - q]) && s_p_n[1 - q] == p)));
+                if (hit) begin
+                    if (!s_vl_n[q] && !s_vh_n[q]) s_p_n[q] = p;
+                    if (mh) begin if (!s_vh_n[q]) s_old_n[q][15:8] = o[15:8]; s_vh_n[q] = 1'b1; s_dh_n[q] = dh; end
+                    if (ml) begin if (!s_vl_n[q]) s_old_n[q][7:0]  = o[7:0];  s_vl_n[q] = 1'b1; s_dl_n[q] = dl; s_f_n[q] = f; end
                     done = 1'b1;
                 end
-            for (q = 0; q < 2; q = q + 1)
-                if (!done && !s_vl_n[q] && !s_vh_n[q]) begin
-                    s_p_n[q] = p;
-                    if (hi) begin s_old_n[q][15:8] = o; s_vh_n[q] = 1'b1; s_dh_n[q] = d; end
-                    else    begin s_old_n[q][7:0]  = o; s_vl_n[q] = 1'b1; s_dl_n[q] = d; s_f_n[q] = f; end
-                    done = 1'b1;
-                end
+            end
         end
     endtask
 
@@ -204,6 +222,10 @@ module z80_regfile (
             s_vl_n[k] = s_vl[k]; s_vh_n[k] = s_vh[k]; s_p_n[k] = s_p[k];
             s_old_n[k] = s_old[k]; s_dl_n[k] = s_dl[k]; s_dh_n[k] = s_dh[k]; s_f_n[k] = s_f[k];
         end
+        // the restore byte written on this edge is done
+        r_lo_n[0] = r_lo[0] && !rs_0l; r_hi_n[0] = r_hi[0] && !rs_0h;
+        r_lo_n[1] = r_lo[1] && !rs_1l; r_hi_n[1] = r_hi[1] && !rs_1h;
+        if (!rs_we) begin r_lo_n[0] = r_lo[0]; r_hi_n[0] = r_hi[0]; r_lo_n[1] = r_lo[1]; r_hi_n[1] = r_hi[1]; end
         x_af_n = x_af; x_bank_n = x_bank; x_dh_n = x_dh;
         fc_n = fc;
         // 1. what the die makes permanent on this edge; an instruction's end
@@ -222,35 +244,31 @@ module z80_regfile (
         end
         // 2. this edge's writes that the die makes later
         if (we) begin
-            if (pw_we && pw_log_lo) log_byte(pw_phys, 1'b0, rf[pw_phys][7:0],  pw_due_lo, 1'b0);
-            if (pw_we && pw_log_hi) log_byte(pw_phys, 1'b1, rf[pw_phys][15:8], pw_due_hi, 1'b0);
-            if (bw_we && bw_log)    log_byte(bw_phys, bw_hi, bw_hi ? rf[bw_phys][15:8] : rf[bw_phys][7:0], bw_due, 1'b0);
+            if (pw_we && (pw_log_lo || pw_log_hi))
+                log_pair(pw_phys, pw_log_lo, pw_log_hi, pw_old, pw_due_lo, pw_due_hi, 1'b0);
+            if (bw_we && bw_log) log_pair(bw_phys, !bw_hi, bw_hi, {bw_old, bw_old}, bw_due, bw_due, 1'b0);
             if (f_we && f_log) begin
-                log_byte(af_phys, 1'b0, rf[af_phys][7:0], f_due, 1'b1);
+                log_pair(af_phys, 1'b1, 1'b0, {8'h00, rf[af_phys][7:0]}, f_due, 8'h00, 1'b1);
                 fc_n = f_cut;
             end
-            if (sp_we && sp_log) begin
-                log_byte(`RFP_SP, 1'b0, rf[`RFP_SP][7:0],  sp_due, 1'b0);
-                log_byte(`RFP_SP, 1'b1, rf[`RFP_SP][15:8], sp_due, 1'b0);
-            end
+            if (sp_we && sp_log) log_pair(`RFP_SP, 1'b1, 1'b1, rf[`RFP_SP], sp_due, sp_due, 1'b0);
         end
         if (ex_en) begin
             if (ex_af)   x_af_n   = ~x_af_n;
             if (exx)     x_bank_n = ~x_bank_n;
             if (ex_dehl) x_dh_n   = x_dh_n ^ (xbank ? 2'b10 : 2'b01);
         end
-        // 3. a RESET cut: put back what the die hadn't written
-        for (k = 0; k < 13; k = k + 1) rf_w[k] = rf_n[k];
+        // 3. a RESET cut: put back what the die hadn't written -- the bytes
+        //    waiting become restores, made on the following edges (above);
+        //    F after a cut on the next M1's T2 as the die's flag latches hold it
         xbank_w = xbank_n; xaf_w = xaf_n; xdh_w = xdh_n;
         if (wb_cut) begin
-            for (k = 0; k < 13; k = k + 1)
-                for (q = 0; q < 2; q = q + 1)
-                    if (s_p_n[q] == k) begin
-                        if (s_vl_n[q]) rf_w[k][7:0]  = (wb_t2 && s_dl_n[q][7] && s_f_n[q]) ? fc_n : s_old_n[q][7:0];
-                        if (s_vh_n[q]) rf_w[k][15:8] = s_old_n[q][15:8];
-                    end
+            for (k = 0; k < 2; k = k + 1) begin
+                if (wb_t2 && s_vl_n[k] && s_dl_n[k][7] && s_f_n[k]) s_old_n[k][7:0] = fc_n;
+                r_lo_n[k] = r_lo_n[k] || s_vl_n[k]; r_hi_n[k] = r_hi_n[k] || s_vh_n[k];
+                s_vl_n[k] = 1'b0; s_vh_n[k] = 1'b0;
+            end
             xbank_w = xbank_n ^ x_bank_n; xaf_w = xaf_n ^ x_af_n; xdh_w = xdh_n ^ x_dh_n;
-            for (k = 0; k < 2; k = k + 1) begin s_vl_n[k] = 1'b0; s_vh_n[k] = 1'b0; end
             x_af_n = 1'b0; x_bank_n = 1'b0; x_dh_n = 2'b00;
         end
     end
@@ -264,15 +282,17 @@ module z80_regfile (
             xbank <= 1'b0; xaf <= 1'b0; xdh <= 2'b00;
             for (ri = 0; ri < 2; ri = ri + 1) begin
                 s_vl[ri] <= 1'b0; s_vh[ri] <= 1'b0; s_p[ri] <= 4'd0; s_f[ri] <= 1'b0;
+                r_lo[ri] <= 1'b0; r_hi[ri] <= 1'b0;
                 s_old[ri] <= 16'h0000; s_dl[ri] <= 8'h00; s_dh[ri] <= 8'h00;
             end
             x_af <= 1'b0; x_bank <= 1'b0; x_dh <= 2'b00;
             fc <= 8'h00;
         end else begin
-            for (ri = 0; ri < 13; ri = ri + 1) rf[ri] <= rf_w[ri];
+            for (ri = 0; ri < 13; ri = ri + 1) rf[ri] <= rf_n[ri];
             xbank <= xbank_w; xaf <= xaf_w; xdh <= xdh_w;
             for (ri = 0; ri < 2; ri = ri + 1) begin
                 s_vl[ri] <= s_vl_n[ri]; s_vh[ri] <= s_vh_n[ri]; s_p[ri] <= s_p_n[ri]; s_f[ri] <= s_f_n[ri];
+                r_lo[ri] <= r_lo_n[ri]; r_hi[ri] <= r_hi_n[ri];
                 s_old[ri] <= s_old_n[ri]; s_dl[ri] <= s_dl_n[ri]; s_dh[ri] <= s_dh_n[ri];
             end
             x_af <= x_af_n; x_bank <= x_bank_n; x_dh <= x_dh_n;
