@@ -211,12 +211,15 @@ jobs:
   event-sweep:
     name: Pin sweep, every opcode and timing class (RTL + C vs perfectz80) ${{ matrix.shard }}/4
     runs-on: ubuntu-latest
-    # ~33,000 cases in four shards (docs/event-sweep.md): RESET / INT / NMI
+    # ~33,500 cases in four shards (docs/event-sweep.md): RESET / INT / NMI
     # / BUSREQ / WAIT at every T-state of the targets and of one opcode of
-    # every timing class, and every opcode with BUSREQ and WAIT walked
-    # through it. Each runs through the RTL and the C model; perfectz80's
-    # side comes from its recorded traces (tests/event_sweep/pz80/), and
-    # runs only for a case they don't have.
+    # every timing class, every opcode with BUSREQ and WAIT walked through
+    # it, and the data latch of every kind of read. Each runs through the
+    # RTL and the C model; perfectz80's side comes from its recorded traces
+    # (tests/event_sweep/pz80/), and runs only for a case they don't have.
+    # Shard 0 also runs 50 recorded cases through perfectz80 live and fails
+    # on any difference from the recording (a harness change that needed
+    # HARNESS_VERSION bumped).
     strategy:
       fail-fast: false
       matrix:
@@ -234,7 +237,7 @@ jobs:
         # tests/event_sweep/baseline.txt, or that changed. After an
         # intended RTL change: make event_sweep EVENT_SWEEP_ARGS=--update-baseline
         # and review the baseline diff (docs/event-sweep.md).
-        run: make event_sweep EVENT_SWEEP_ARGS="--shard ${{ matrix.shard }}/4"
+        run: make event_sweep EVENT_SWEEP_ARGS="--shard ${{ matrix.shard }}/4 ${{ matrix.shard == 0 && '--verify-recorded 50' || '' }}"
       - name: Fuzz with fresh seeds (the nightly run)
         # 500 cases nobody has run before -- random code, interrupt modes and
         # pin events (docs/event-sweep.md), perfectz80 live -- in the
