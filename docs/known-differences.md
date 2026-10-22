@@ -26,8 +26,8 @@ Status legend:
 | 9  | HALT PC convention                            | undocumented / convention | resolved |
 | 10 | `IN A,(n)` / `IN r,(C)` port-input value      | reference ambiguity       | resolved |
 | 11 | `DD 36` / `FD 36` cycle count                 | timing                    | resolved |
-| 12 | `INI` / `IND` / `INIR` / `INDR` flag set      | undocumented / flag       | watching |
-| 13 | `LDIR` / `LDDR` Q-leak into next instruction  | undocumented / flag       | watching |
+| 12 | `INI` / `IND` / `INIR` / `INDR` flag set      | undocumented / flag       | resolved |
+| 13 | `LDIR` / `LDDR` Q-leak into next instruction  | undocumented / flag       | resolved |
 | 14 | Pin-scenario vs perfectz80                    | timing                    | resolved |
 | 15 | RTL clocking: reset / BUSREQ settle vs C model | timing                    | resolved |
 | 16 | BUSREQ / BUSACK vs the NMOS Z80               | timing / bus              | resolved |
@@ -42,6 +42,7 @@ Status legend:
 | 25 | RESET in an M1's wait states                  | timing / reset            | resolved |
 | 26 | RESET in a bus grant                          | timing / reset / bus      | resolved |
 | 27 | NMI after RESET's release                     | timing / reset / interrupt | resolved |
+| 28 | The data latch                                | timing / bus              | resolved |
 
 Notes for each row:
 
