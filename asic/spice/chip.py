@@ -373,14 +373,39 @@ def load(dat):
     return [x * 1e9 for x in w["time"]], {p: w[f"v({node(p)})"] for p in PINS if p not in ("VDD", "VSS")}, w["v(men)"]
 
 
+def slope(t, v, k):
+    """v's tangent at timepoint k for a monotone cubic through the
+    timepoints (Fritsch-Carlson: flat where v turns)"""
+    d0 = (v[k] - v[k - 1]) / (t[k] - t[k - 1]) if k > 0 else None
+    d1 = (v[k + 1] - v[k]) / (t[k + 1] - t[k]) if k + 1 < len(t) else None
+    if d0 is None or d1 is None:
+        return d1 if d0 is None else d0
+    if d0 * d1 <= 0:
+        return 0.0
+    h0, h1 = t[k] - t[k - 1], t[k + 1] - t[k]
+    return 3 * (h0 + h1) / ((2 * h1 + h0) / d0 + (h1 + 2 * h0) / d1)
+
+
 def crossing(t, v, level, rising, after, within=150.0):
     """the first time in (after, after + within] that v passes level
-    upwards (rising) or downwards"""
+    upwards (rising) or downwards, on the monotone cubic through the
+    timepoints around it: on a slow pin edge ngspice takes steps up to TMAX,
+    and a straight line across one put the crossing up to 0.6 ns off the
+    fine runs' (2 ns steps), the cubic within 0.25 ns"""
     k = max(bisect.bisect_right(t, after), 1)
     while k < len(t) and t[k] <= after + within:
         a, b = v[k - 1] - level, v[k] - level
         if (rising and a < 0 <= b) or (not rising and a > 0 >= b):
-            return t[k - 1] + (t[k] - t[k - 1]) * (-a) / (b - a) if b != a else t[k]
+            if b == a:
+                return t[k]
+            h, m0, m1 = t[k] - t[k - 1], slope(t, v, k - 1), slope(t, v, k)
+            f = lambda s: ((2 * s ** 3 - 3 * s ** 2 + 1) * a + (s ** 3 - 2 * s ** 2 + s) * h * m0
+                           + (3 * s ** 2 - 2 * s ** 3) * b + (s ** 3 - s ** 2) * h * m1)
+            lo, hi = 0.0, 1.0           # f(0) = a and f(1) = b straddle 0: bisect
+            for _ in range(40):
+                mid = (lo + hi) / 2
+                lo, hi = (lo, mid) if (f(mid) >= 0) == rising else (mid, hi)
+            return t[k - 1] + h * (lo + hi) / 2
         k += 1
     return None
 
