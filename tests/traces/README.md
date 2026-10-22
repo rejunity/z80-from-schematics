@@ -108,6 +108,7 @@ the pin, `<pin>` is one of `nmi`, `int`, `wait`, `busreq`, `reset`, and
 | `prog20_block_int.hex`        | INT during a block move — `LDIR` of 16 bytes. INT pulsed mid-iteration; expects the current iteration to complete, PC to be **rewound** to the LDIR opcode (so the block-op resumes after the ISR), then INTA + RST 38h. |
 | `prog21_wait_ldir.hex`        | WAIT on the T2 sample of `LDIR`'s write M-cycle (two Tw) — the T-state on whose edge the RTL's incrementer does BC-1; BC / DE / HL pushed at the end. |
 | `prog22_wait_cpir.hex`        | WAIT on the T2 sample of `CPIR`'s read M-cycle (two Tw), the RTL's BC-1 edge; stops on a match, pushes BC / HL / AF. |
+| `prog23_wb_irq.hex`           | Register write-back across an interrupt response — prefixed instructions whose writes the die makes in the next M1 (`INC IXL`, `NEG`, `RLC B`, `LD IYL,A`, `LD A,I`, `RLC (IX+5)`, `LD A,(IX+5)`, `LD IXH,n`), each followed by an INTA (INT held low, `EI` before each) and the last (`DEC IXL`) by an NMI response; the handlers load through IX, IY, BC, DE, HL and AF so the registers show on the address bus. Runs 3600 phases. |
 
 `scripts/compare_signal_timing.py` now also compares `addr` (where
 `mreq`||`iorq` is low on both sides) and `data_o` (where `wr` is low on

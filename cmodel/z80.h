@@ -372,8 +372,8 @@ typedef struct {
        SBC HL's F (pf_val, after a cut on that T2 pf_cut; their H waits in
        ph_val for the second internal M-cycle's end); WBP_EXAF (T1),
        WBP_EXX, WBP_EXDH (T2): the exchanges. wb_exec / wb_idx / wb_disp:
-       the deferred instruction's decode, which an interrupt response
-       overwrites (begin_next); wb_pv: LD A,I / R's P/V, the boundary's
+       the deferred instruction's decode while an interrupt response's
+       stands in ctl (WBP_DEC); wb_pv: LD A,I / R's P/V, the boundary's
        IFF2 decision; wb_rep: the block instruction repeated (Banks' X / Y).
        cut_now: a RESET cut ends on this edge -- a read straight into its
        register in its T3.N is blocked (the exec step). z80_arch() shows the

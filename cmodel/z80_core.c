@@ -193,7 +193,8 @@ static void finish(z80_t *c) { c->instr_done = true; c->im0_ins = false; }
    ADD / ADC / SBC HL's L in the first internal M-cycle's T3.N, H in the
    second's; the block pointers in their bus cycle's T2.N, B in its T1.N,
    LDI / CPI's BC in the third M-cycle's T4.N. */
-enum { WBP_ALU = 1, WBP_F1 = 2, WBP_F16 = 4, WBP_EXAF = 8, WBP_EXX = 16, WBP_EXDH = 32 };
+enum { WBP_ALU = 1, WBP_F1 = 2, WBP_F16 = 4, WBP_EXAF = 8, WBP_EXX = 16, WBP_EXDH = 32,
+       WBP_DEC = 64 };     /* an interrupt response's decode stands in ctl: theirs in wb_* */
 
 /* F as the die writes it after a cut that ends on the next M1's T2: its
    flag latches as they stand in that M1's T1 (perfectz80). S and Z take
@@ -1132,17 +1133,18 @@ static uint8_t blk_rep_f(const z80_t *c, uint8_t f)
 }
 
 /* the pending instruction's writes (WBP_ALU at T2, WBP_F1 at T1): its decode
-   back (wb_exec / wb_idx / wb_disp), the ALU again from the operands as it
-   left them -- the registers and F, the byte read in tmp8. A cut ending on
-   this edge blocks them, but F at T2: f_cut. Q is the F written, or 0. As
-   z80_core.v's fire / fire1. */
+   (back from wb_exec / wb_idx / wb_disp after an interrupt response's,
+   WBP_DEC), the ALU again from the operands as it left them -- the
+   registers and F, the byte read in tmp8. A cut ending on this edge blocks
+   them, but F at T2: f_cut. Q is the F written, or 0. As z80_core.v's
+   fire / fire1. */
 static void wb_fire_op(z80_t *c, bool f1, bool cut)
 {
     z80_control_t *ctl = &c->ctl;
     z80_exec_t ex = ctl->exec;
     uint8_t ix = ctl->idx;
-    bool dp = ctl->use_disp;
-    ctl->exec = (z80_exec_t)c->wb_exec; ctl->idx = c->wb_idx; ctl->use_disp = c->wb_disp;
+    bool dp = ctl->use_disp, dec = (c->wbp & WBP_DEC) != 0;
+    if (dec) { ctl->exec = (z80_exec_t)c->wb_exec; ctl->idx = c->wb_idx; ctl->use_disp = c->wb_disp; }
     uint8_t r = 0, fn = 0, a = 0, b = 0, fo = z80_F(c);
     bool ld = ctl->exec == EXEC_LD_R_R || ctl->exec == EXEC_LD_R_N || ctl->exec == EXEC_LD_R_M;
     if (!ld) alu_eval(c, &r, &fn, &a, &b);   /* the loads don't use it */
@@ -1197,7 +1199,7 @@ static void wb_fire_op(z80_t *c, bool f1, bool cut)
         z80_setF(c, f);
     }
     if (!cut) c->q = fw ? fn : 0;
-    ctl->exec = ex; ctl->idx = ix; ctl->use_disp = dp;
+    if (dec) { ctl->exec = ex; ctl->idx = ix; ctl->use_disp = dp; }
 }
 
 /* the pending writes on the edge that ends T-state t (1, 2) of the next M1
@@ -1211,6 +1213,7 @@ static void wb_fire(z80_t *c, uint8_t t, bool cut)
             uint16_t x = c->rf[RFP_AF]; c->rf[RFP_AF] = c->rf[RFP_AF2]; c->rf[RFP_AF2] = x;
         }
         c->wbp = (uint8_t)(p & ~(WBP_F1 | WBP_EXAF));
+        if (!(c->wbp & ~WBP_DEC)) c->wbp = 0;
         return;
     }
     if (p & WBP_ALU) wb_fire_op(c, false, cut);
@@ -1402,9 +1405,21 @@ static void do_latch(z80_t *c)
     }
 }
 
+/* an interrupt response's (or a halt's) decode replaces the instruction's,
+   which the writes it left pending still need (wb_fire_op): it waits in
+   wb_exec / wb_idx / wb_disp. The RTL keeps the opcode and prefix it
+   decodes from until the fire. */
+static inline void wb_keep_decode(z80_t *c)
+{
+    if (c->wbp && !(c->wbp & WBP_DEC)) {
+        c->wb_exec = (uint8_t)c->ctl.exec; c->wb_idx = c->ctl.idx; c->wb_disp = c->ctl.use_disp;
+        c->wbp |= WBP_DEC;
+    }
+}
 /* set up a synthetic M1-style cycle for an interrupt/HALT sequence */
 static void start_seq_m1(z80_t *c, z80_exec_t exec, uint8_t len, bool suppress)
 {
+    wb_keep_decode(c);
     c->ctl.exec = exec; c->ctl.idx = 0; c->ctl.use_disp = false;
     c->decoded = true; c->instr_done = false;
     c->bus_op = BUSOP_M1; c->m_addr = c->rf[RFP_PC]; c->m_wdata = 0; c->m_len = len;
@@ -1413,6 +1428,7 @@ static void start_seq_m1(z80_t *c, z80_exec_t exec, uint8_t len, bool suppress)
 }
 static void start_seq_inta(z80_t *c, uint8_t len)
 {
+    wb_keep_decode(c);
     c->ctl.exec = EXEC_INT; c->ctl.idx = 0; c->ctl.use_disp = false;
     c->decoded = true; c->instr_done = false;
     c->bus_op = BUSOP_INTA; c->m_addr = c->rf[RFP_PC]; c->m_wdata = 0; c->m_len = len;
@@ -1496,10 +1512,10 @@ static inline void wb_defer(z80_t *c)
     }
     if (k) {
         c->wbp |= k;
-        c->wb_exec = (uint8_t)c->ctl.exec; c->wb_idx = c->ctl.idx; c->wb_disp = c->ctl.use_disp;
         /* LD A,I / R: the boundary's decision, from the T_last.P samples
            (alu_eval) -- before begin_next takes the INT */
-        c->wb_pv = (c->iff2 && !(c->int_sampled && c->iff1 && !c->nmi_sampled)) ? 1u : 0u;
+        if (c->ctl.exec == EXEC_LD_A_IR)
+            c->wb_pv = (c->iff2 && !(c->int_sampled && c->iff1 && !c->nmi_sampled)) ? 1u : 0u;
     } else if (!(c->wbp & WBP_F16))
         c->q = (c->wbp & WBP_EXAF) ? (uint8_t)c->rf[RFP_AF2] : 0;
 }
