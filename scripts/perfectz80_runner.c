@@ -93,6 +93,11 @@ int main(int argc, char **argv) {
 
     void* st = cpu_initAndResetChip();
     /* After initAndReset, perfectz80 is past reset. We dump from here. */
+    /* The interrupt-acknowledge byte: 00, the byte tracegen (z80_sim.c),
+       tb_z80.v, tb_z80_netlist.v and the Verilator harness see whenever
+       nothing is read (perfectz80's own default is E0), so an IM2 table
+       read lands on {I, 00} in every harness. */
+    cpu_setIntVec(0x00);
     /* Every input starts high and keeps the level of its last event, as
        in the C tracegen and the RTL testbenches (+<pin>_lo / +<pin>_hi):
        "30 wait 0" then "38 wait 1" holds WAIT low from phase 30 to 37. */

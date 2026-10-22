@@ -1,4 +1,7 @@
 /* ============================================================================
+ * SPDX-FileCopyrightText: 2026 ReJ aka Renaldas Zioma
+ * SPDX-License-Identifier: MIT
+ *
  * z80.h - public types and API for the schematic-faithful Z80 C model.
  *
  * This header is the in-code half of the shared design contract (see
@@ -46,6 +49,8 @@ typedef struct {
     bool     rfsh_n;      /* refresh address valid                          */
     bool     halt_n;      /* 0 => halted                                    */
     bool     busack_n;    /* 0 => bus acknowledged                          */
+    bool     addr_drive;  /* the die drives the address pads                */
+    bool     ctl_drive;   /* ... and MREQ IORQ RD WR (data: data_drive)     */
 } z80_pins_t;
 
 /* ---------------------------------------------------------------------------
@@ -272,6 +277,9 @@ typedef struct {
     bool         halted;
     bool         nmi_pending;   /* sticky latch: any falling edge on NMI seen */
     bool         prev_nmi_n;    /* for edge detection                        */
+    bool         nmi_resp;      /* in the NMI response (M1 + pushes): the
+                                   chip holds its NMI flip-flop clear, so an
+                                   NMI edge there is lost (perfectz80)       */
     /* NMI / INT silicon sample latches. Per Zilog UM0080, both are sampled at
        the rising edge of the last T-state of the last M-cycle (= T_last.P in
        our phase model). nmi_sampled freezes nmi_pending's value at that
@@ -283,6 +291,8 @@ typedef struct {
     bool         int_sampled;
     bool         ei_delay;      /* suppress INT for one instruction after EI  */
     bool         suppress_decode;/* ack-cycle M1: latch but don't decode/PC++ */
+    bool         im0_ins;       /* IM0: the instruction came from the interrupting
+                                   device; PC doesn't move until it ends   */
     bool         bus_granted;   /* BUSACK active (DMA owns the bus)           */
 
     /* micro-step bookkeeping (filled by control sequencer) */
@@ -320,21 +330,23 @@ typedef struct {
     uint8_t      q;
     bool         f_modified;
 
-    /* Reset state machine (matches perfectz80 prog17_reset trace).
-       Zilog UM0080 spec: reset_n must be held low for "≥ 3 clock periods"
-       to be recognized. The chip continues executing during the filter
-       window (including starting fresh M-cycles), then enters frozen-idle
-       hold. On reset_n rising edge: ~4-phase settle before the post-reset
-       M1 fetch at PC=0 begins. See docs/perfect-branch.md for the
-       trace-derived analysis. */
-    uint8_t      reset_assert_filter;   /* phases of reset_n=0 before hold      */
-    uint8_t      reset_release_filter;  /* phases of reset_n=1 before unfreeze  */
-    bool         in_reset_hold;         /* true => frozen at idle pins, PC=0    */
+    /* RESET, as the die does it (perfectz80; docs/timing.md "RESET"):
+       the pin is sampled on every rising edge (res_s); the full reset res2
+       takes that sample on the falling edge in the middle of each T-state,
+       except in the low half of an M1's T2, where it holds and the special-
+       reset latch sres takes it instead. While res2 was set on the previous
+       falling edge, no T-state follows the current one (rst_idle); T1 of an
+       M1 at 0000 comes once it clears. srst_m1 marks the opcode fetch the
+       special reset replaces; rd_hold keeps RD low after a cut T1 (through
+       the idle T.P, and into a restart that follows at once). z80_reset()
+       is the power-on reset. */
+    bool         res_s, res2, sres, rst_idle, srst_m1, rd_hold;
+    bool         in_tw;       /* this T-state is a Tw (WAIT held the last): not T2 */
 
-    /* BUSREQ release filter: pz80 settles for ~2 phases between busreq_n=1
-       and the post-grant M1 fetch (prog15_busreq_m1 trace). Bus_granted
-       entry edge is not filtered (pz80 enters bus grant promptly). */
-    uint8_t      busreq_release_filter; /* phases of busreq_n=1 during grant    */
+    /* BUSREQ, as sampled on the rising edge that started this T-state (true
+       = requested): in an M-cycle's last T-state it decides the grant, in a
+       granted T-state the release (perfectz80; PS0178 Figure 10). */
+    bool         busreq_s;
 } z80_t;
 
 typedef enum {

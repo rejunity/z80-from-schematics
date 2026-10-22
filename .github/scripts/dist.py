@@ -33,6 +33,7 @@ import json
 import os
 import re
 import shutil
+import struct
 import sys
 from datetime import datetime, timezone
 
@@ -637,17 +638,37 @@ CHIP_FIGURES = (('fetch', 'opcode fetch (M1)'), ('mread', 'memory read'), ('mwri
 CODE_SPICE = f'{SERVER}/{REPO}/blob/main/asic/spice'
 
 
+def img_wh(path):
+    """' width="W" height="H"' of an SVG or PNG file, '' when unknown: the page keeps each figure's place
+    while the images load lazily, so a link to a section lands on it"""
+    try:
+        if path.endswith('.svg'):
+            tag = re.search(r'<svg\b[^>]*>', open(path, 'rb').read(4096).decode('utf-8', 'replace'))
+            tag = tag.group(0) if tag else ''
+            w = re.search(r'\swidth=["\']([\d.]+)(?:px)?["\']', tag)
+            h = re.search(r'\sheight=["\']([\d.]+)(?:px)?["\']', tag)
+            vb = re.search(r'\sviewBox=["\'][-\d.]+[\s,]+[-\d.]+[\s,]+([\d.]+)[\s,]+([\d.]+)', tag)
+            wh = (w.group(1), h.group(1)) if w and h else vb.groups() if vb else None
+        else:
+            b = open(path, 'rb').read(24)
+            wh = struct.unpack('>II', b[16:24]) if b[:8] == b'\x89PNG\r\n\x1a\n' else None
+    except OSError:
+        wh = None
+    return f' width="{round(float(wh[0]))}" height="{round(float(wh[1]))}"' if wh else ''
+
+
 def spice_helpers(base):
-    """there / fig / grid / links over a page's spice/ directory (base), linked as spice/..."""
+    """there / fig / grid / links / wh over a page's spice/ directory (base), linked as spice/..."""
     e = html.escape
     there = lambda p: os.path.isfile(os.path.join(base, p))
+    wh = lambda p: img_wh(os.path.join(base, p))
 
     def fig(path, caption, wide=False):
         if not there(path):
             return ''
         cls = ' class="wide"' if wide else ''
-        return (f'<figure{cls}><a href="spice/{path}"><img src="spice/{path}" alt="{e(caption)}" loading="lazy"></a>'
-                f'<figcaption>{caption}</figcaption></figure>')
+        return (f'<figure{cls}><a href="spice/{path}"><img src="spice/{path}"{wh(path)} alt="{e(caption)}" '
+                f'loading="lazy"></a><figcaption>{caption}</figcaption></figure>')
 
     def grid(*figs, two=False):   # one figure a row, at a readable size; two for thumbnails
         figs = [f for f in figs if f]
@@ -655,10 +676,10 @@ def spice_helpers(base):
 
     def links(items):
         return ' · '.join(f'<a href="spice/{p}">{label}</a>' for p, label in items if there(p))
-    return there, fig, grid, links
+    return there, fig, grid, links, wh
 
 
-def switched(there, slots, default='tt'):
+def switched(there, slots, default='tt', wh=lambda p: ''):
     """Figures that change corner in place: a switch (slow, typical, fast) over a grid whose every image
     holds each corner's figure (data-<corner>, spice/...); SWITCH_JS swaps them, every switch on the page
     together. slots: [(caption, wide, {corner: path under spice/})]. One corner: no switch."""
@@ -675,7 +696,7 @@ def switched(there, slots, default='tt'):
         first = ok.get(default) or next(iter(ok.values()))
         data = ''.join(f' data-{c}="spice/{p}"' for c, p in ok.items())
         attrs = (' class="wide"' if wide else '') + ('' if default in ok else ' hidden')
-        figs.append(f'<figure{attrs}><a href="spice/{first}"><img class="sw" src="spice/{first}"{data} '
+        figs.append(f'<figure{attrs}><a href="spice/{first}"><img class="sw" src="spice/{first}"{wh(first)}{data} '
                     f'alt="{e(caption)}" loading="lazy"></a><figcaption>{caption}, '
                     f'<span class="cname">{default}</span></figcaption></figure>')
     grid = f'<div class="figs">{"".join(figs)}</div>'
@@ -696,7 +717,7 @@ def whole_chip(base, pdk, how='hours, so run now and then and committed'):
     the other corners' in <corner>/): its pins against the RTL and the AC parameters at every corner, and
     the figures, under a switch between the corners. how: where the runs come from."""
     e = html.escape
-    there, fig, grid, links = spice_helpers(base)
+    there, fig, grid, links, wh = spice_helpers(base)
     code = CODE_SPICE
     ns = lambda x: '–' if x is None else f'{x:.1f} ns'
     d = f'chip/{pdk}'
@@ -762,7 +783,8 @@ over every cycle that has them</summary><div class="scroll"><table>
 
     # the whole run, then each cycle as the manual draws it; every corner's, switched in place
     g = switched(there, [(caption, k == 'program', {r.get('corner'): f'{rd}/{k}.svg' for r, rd in runs})
-                         for k, caption in [('program', 'power-up, RESET, and the program at 4 MHz')] + list(CHIP_FIGURES)])
+                         for k, caption in [('program', 'power-up, RESET, and the program at 4 MHz')] + list(CHIP_FIGURES)],
+                 wh=wh)
     shown = ("each corner's: the switch over them changes the corner in place, the dimensions too"
              if len(runs) > 1 else f"{e(res.get('corner', ''))}'s")
     name = PDKS.get(pdk, pdk)
@@ -794,7 +816,7 @@ def transistor(src, out):
     base = os.path.join(out, 'spice')
     shutil.copytree(os.path.join(src, 'spice'), base, dirs_exist_ok=True)
     e = html.escape
-    there, fig, grid, links = spice_helpers(base)
+    there, fig, grid, links, wh = spice_helpers(base)
     code = CODE_SPICE
     ns = lambda x: '–' if x is None else f'{x:.1f} ns'
     parts = []
@@ -844,7 +866,7 @@ replace the PDKs' own in the chips' pin-timing checks
                         f"<td>{ns(a.get('held_low_ns'))}</td><td>{figs}</td></tr>")
         g = switched(there, [('the six cases', True, {c: f'nmi/nmi_{c}.svg' for c in corners})]
                      + [(f'{k}: {e(about.get(k, ""))}', False, {c: f'nmi/nmi_{k}_{c}.svg' for c in corners})
-                        for k in nmi[main_c]['cases']], default=main_c)
+                        for k in nmi[main_c]['cases']], default=main_c, wh=wh)
         parts.append(f"""<h3 class="sec">The NMI pulse catcher</h3>
 <p class="muted">The NMOS Z80 takes an NMI pulse of any width -- TwNMI, 80 ns at 4 MHz, is under half a
 clock -- not only one a clock edge sees: a flip-flop clocked by the NMI pin itself catches it and holds it
@@ -941,6 +963,50 @@ stays on the <a href="{SERVER}/{REPO}/actions/workflows/transistor.yml">Actions<
     return True
 
 
+def md_inline(text):
+    """the Markdown inside a table cell -- [links](url) and `code` -- as HTML"""
+    t = html.escape(text, quote=False)
+    t = re.sub(r'\[([^\]]+)\]\(([^)\s]+)\)', lambda m: f'<a href="{html.escape(m.group(2))}">{m.group(1)}</a>', t)
+    return re.sub(r'`([^`]+)`', r'<code>\1</code>', t)
+
+
+def cfast_bench(src, out):
+    """The C model's speed: ci.yml's latest cfast-bench artifact (scripts/cfast_bench.py's bench.json and
+    bench.svg, in <src>/cfast-bench/), its chart at <out>/cfast-bench.svg -- a fixed address, which
+    cfast/BENCHMARK.md shows -- and its table. '' when there is none."""
+    d = os.path.join(src, 'cfast-bench')
+    if not os.path.isfile(os.path.join(d, 'bench.json')):
+        return ''
+    e = html.escape
+    b = json.load(open(os.path.join(d, 'bench.json')))
+    m, res = b['machine'], b['results']
+    if os.path.isfile(os.path.join(d, 'bench.svg')):
+        shutil.copy(os.path.join(d, 'bench.svg'), os.path.join(out, 'cfast-bench.svg'))
+    base = next((r for r in res if r['binary'] == 'zexfast'), res[0])
+    rows = ''.join(
+        f"<tr><td class=\"nw\">{'<strong>' + e(r['name']) + '</strong>' if r is base else e(r['name'])}</td>"
+        f"<td>{e(r['steps'])}</td><td>{r['minstr']:.1f}</td><td>{r['mhz']:.0f} MHz</td>"
+        f"<td>{r['minstr'] / base['minstr']:.2f}×</td><td class=\"muted\">{md_inline(r.get('about', ''))}</td></tr>"
+        for r in res)
+    ref = m.get('ref') or 'main'
+    run = (f'<a href="{SERVER}/{REPO}/actions/runs/{m["run"]}">ci.yml run</a>' if m.get('run') else 'ci.yml')
+    commit = (f'<a href="{SERVER}/{REPO}/commit/{m["commit"]}">{e(m["ref"]) + " @ " if m.get("ref") else ""}'
+              f'{e(m["commit"])}</a>') if m.get('commit') else ''
+    return f"""<h2 id="cfast">The C model, for emulators</h2>
+<p class="muted">cfast is the C model generated into a phase engine: every half clock the same pins as the model
+and the RTL (make cfast_identity), at the speed an emulator needs. Here it runs against four other C Z80
+emulators on the same {b['instructions'] / 1e6:g} million ZEXDOC instructions, the best of {b['rounds']}
+rounds of CPU time on GitHub's runner ({e(m.get('cpu', ''))}): the latest {run}{' on ' + commit if commit else ''},
+{e(m.get('date', ''))}. Every push runs it; how, and what the columns mean:
+<a href="{SERVER}/{REPO}/blob/{e(ref)}/cfast/BENCHMARK.md">cfast/BENCHMARK.md</a>.</p>
+<div class="figs"><figure><img src="cfast-bench.svg"{img_wh(os.path.join(out, 'cfast-bench.svg'))} alt="ZEXDOC million instructions a second, per emulator"
+loading="lazy"></figure></div>
+<div class="scroll"><table>
+<thead><tr><th>Emulator</th><th>Sees every</th><th>ZEXDOC Minstr/s</th><th>Z80 clock</th><th>Against cfast</th>
+<th>What it is</th></tr></thead>
+<tbody>{rows}</tbody></table></div>"""
+
+
 SITE_CSS = ''':root { --bg: #f7f7f5; --fg: #1c1c1a; --muted: #6a6a64; --card: #fff; --line: #e2e1dc; --link: #1f55c0; }
 @media (prefers-color-scheme: dark) {
   :root { --bg: #141414; --fg: #ebeae6; --muted: #a2a19b; --card: #1d1d1c; --line: #34332f; --link: #8fb1ff; }
@@ -953,16 +1019,28 @@ h2 { font-size: 19px; margin: 36px 0 6px; }
 h3 { font-size: 16px; margin: 0; }
 p { margin: 0 0 12px; }
 a { color: var(--link); }
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+/* the section bar under the title: sticks to the top once the page scrolls past it; --navh is its
+   height (set by NAV_JS), which anchored headings and the corner switch keep clear of */
+.withnav { --navh: 42px; }
+.sitenav { position: sticky; top: 0; z-index: 3; display: flex; flex-wrap: wrap; align-items: baseline;
+  gap: 2px 10px; margin: 10px 0 14px; padding: 8px 0; background: var(--bg); border-bottom: 1px solid var(--line);
+  font-size: 15px; }
+.sitenav a { font-weight: 600; text-decoration: none; }
+.sitenav a:hover { text-decoration: underline; }
+.sitenav span { color: var(--muted); }
+@media (max-width: 480px) { .sitenav { font-size: 13.5px; column-gap: 6px; } }   /* one line from 375 px */
+h2[id] { scroll-margin-top: calc(var(--navh, 0px) + 12px); }
 .muted, .size { color: var(--muted); }
 .size { font-size: 12px; }
 .pdk { background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
   margin: 0 0 16px; }
 .pics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--line); }
 figure { margin: 0; position: relative; background: #0d1117; }
-figure img, .noimg { display: block; width: 100%; aspect-ratio: 1; object-fit: contain; }
+figure img, .noimg { display: block; width: 100%; height: auto; object-fit: contain; }
+.pics figure:not(.wide) img, .noimg { aspect-ratio: 1; }
 .noimg { display: grid; place-items: center; color: #888; }
 .pics .wide { grid-column: 1 / -1; }
-.pics .wide img { aspect-ratio: auto; }
 figcaption { position: absolute; left: 8px; top: 8px; padding: 1px 7px; border-radius: 4px; font-size: 12px;
   color: #d6dbe1; background: rgba(13, 17, 23, .75); }
 .body { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 4px 28px;
@@ -976,7 +1054,6 @@ h4 { font-size: 13px; color: var(--muted); font-weight: 600; margin: 2px 0 6px; 
 .figs.two { grid-template-columns: repeat(2, 1fr); }
 .figs figure { background: #fff; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .figs .wide { grid-column: 1 / -1; }
-.figs figure img { aspect-ratio: auto; height: auto; }
 .figs figcaption { position: static; display: block; border-radius: 0; padding: 5px 10px; font-size: 13px;
   color: var(--muted); background: var(--card); border-top: 1px solid var(--line); }
 h3.sec { margin: 26px 0 4px; }
@@ -998,7 +1075,7 @@ footer { color: var(--muted); font-size: 13px; margin-top: 36px; }
 [hidden] { display: none !important; }
 .cornerset { margin: 8px 0 18px; }
 .cornerset .figs { margin: 0; }
-.cornersw { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 0;
+.cornersw { position: sticky; top: var(--navh, 0px); z-index: 2; display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 0;
   background: var(--bg); }
 .cornersw button { font: inherit; font-size: 14px; padding: 4px 12px; border: 1px solid var(--line);
   border-radius: 999px; background: var(--card); color: var(--fg); cursor: pointer; }
@@ -1064,6 +1141,19 @@ SWITCH_JS = '''<script>
 </script>'''
 
 
+# the section bar's height as --navh (a CSS fallback covers no script)
+NAV_JS = '''<script>
+(function () {
+  var nav = document.querySelector('.sitenav');
+  if (!nav) return;
+  function fit() { document.body.style.setProperty('--navh', nav.offsetHeight + 'px'); }
+  fit();
+  if (window.ResizeObserver) new ResizeObserver(fit).observe(nav);
+  else window.addEventListener('resize', fit);
+})();
+</script>'''
+
+
 def site(src, out):
     os.makedirs(out, exist_ok=True)
     ci_page(src, out)
@@ -1091,8 +1181,8 @@ def site(src, out):
         def wide(f, caption):   # a logic analyser's view, under the three pictures
             if f not in p['files']:
                 return ''
-            return (f'<figure class="wide"><a href="{f}"><img src="{f}" alt="{e(p["name"])}: {caption}" '
-                    f'loading="lazy"></a><figcaption>{caption}</figcaption></figure>')
+            return (f'<figure class="wide"><a href="{f}"><img src="{f}"{img_wh(os.path.join(out, f))} '
+                    f'alt="{e(p["name"])}: {caption}" loading="lazy"></a><figcaption>{caption}</figcaption></figure>')
 
         def legend(title, table, counts):
             items = ''.join(f'<li><span class="swatch" style="background: rgb{colour}"></span>{e(name)}'
@@ -1138,6 +1228,12 @@ def site(src, out):
         rows.append(f"""<tr><td><strong>{e(b['name'])}</strong><br><span class="muted">{e(b['device'])}</span>
 · <a href="{readme_url('fpga', b['board'])}">README</a></td>{''.join(cells)}</tr>""")
 
+    at_transistor, c_model = transistor(src, out), cfast_bench(src, out)
+    sections = [('asic', 'ASIC'), ('transistor', 'Transistor-level sim', at_transistor), ('core', 'Core'),
+                ('fpga', 'FPGA'), ('cfast', 'C', c_model)]
+    nav = '<span aria-hidden="true">|</span>'.join(f'<a href="#{i}">{name}</a>' for i, name, *there in sections
+                                                   if all(there))
+
     page = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -1147,13 +1243,14 @@ def site(src, out):
 <style>
 {SITE_CSS}</style>
 </head>
-<body>
+<body class="withnav">
 <main>
 <h1>rz80 builds</h1>
+<nav class="sitenav" aria-label="Sections">{nav}</nav>
 <p class="muted">The Z80 core of <a href="{SERVER}/{REPO}">{e(REPO)}</a> on every ASIC PDK and FPGA board,
 from the latest {run} on main where all of them passed: {commit}, published {when}.</p>
 
-<h2>ASIC chip layouts</h2>
+<h2 id="asic">ASIC chip layouts</h2>
 <p class="muted">The core as a chip: z80_top, hardened on its own, as a hard macro in a ring of I/O pads,
 each pin's pad on the side of the die where the Z80 has its own. The layout shows the metal stack, bottom
 metal blue to top metal yellow; the clock and power picture the clock in green -- the CLK pad, every clock
@@ -1164,15 +1261,15 @@ to transistors and wires and run in ngspice (<a href="{SERVER}/{REPO}/tree/main/
 -- its pins are shown under it as a logic analyser shows them.</p>
 {chr(10).join(chip_cards) or '<p>none in this build</p>'}
 
-{transistor(src, out)}
+{at_transistor}
 
-<h2>ASIC core layouts</h2>
+<h2 id="core">ASIC core layouts</h2>
 <p class="muted">The bare core (no pad ring), RTL to GDS with LibreLane. The pictures are drawn from the GDS
 and the DEF: the layout shows the cell rows and the metal stack, bottom metal blue to top metal yellow; the
 two cell maps show every standard cell, coloured by kind and by the Z80 block it was synthesized in.</p>
 {chr(10).join(core_cards) or '<p>none in this build</p>'}
 
-<h2>FPGA bitstreams</h2>
+<h2 id="fpga">FPGA bitstreams</h2>
 <p class="muted">BASIC computer: NASCOM BASIC 4.7 on the board's serial console. Tiny BASIC: the same computer
 with 1K Tiny BASIC. Chip: the board as a Z80 replacement, the bus on its pins. Each board's README says how to program it.</p>
 <div class="scroll"><table>
@@ -1182,11 +1279,14 @@ with 1K Tiny BASIC. Chip: the board as a Z80 replacement, the bus on its pins. E
 </tbody>
 </table></div>
 
+{c_model}
+
 <footer>Published by <a href="{SERVER}/{REPO}/blob/main/.github/workflows/pages.yml">pages.yml</a> after
 <a href="{SERVER}/{REPO}/blob/main/.github/workflows/targets.yml">targets.yml</a> (every push to main and nightly)
 or <a href="{SERVER}/{REPO}/blob/main/.github/workflows/transistor.yml">transistor.yml</a> (by hand). Every run, failed ones included, also keeps its bitstreams, GDS and logs
 as artifacts on the <a href="{SERVER}/{REPO}/actions/workflows/targets.yml">Actions</a> tab for 14 days.</footer>
 </main>
+{NAV_JS}
 </body>
 </html>
 """

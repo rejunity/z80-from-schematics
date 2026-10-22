@@ -31,13 +31,16 @@ Phase-exact actions:
 - **T1.P**: `pin_addr ← PC`; `pin_m1_n ← 0`; `pin_rfsh_n ← 1`.
 - **T1.N**: `pin_mreq_n ← 0`; `pin_rd_n ← 0`.
 - **T2.N**: sample `pin_wait_n`. If asserted (low), insert `Tw` (repeat a T2-like
-  wait state) and re-sample at next .N. If not waited, latch `pin_data_in → IR`
-  (the fetched opcode) and run `R` increment.
+  wait state) and re-sample at next .N. If not waited, the byte on the bus in
+  this T2.N is the opcode: `IR` takes it at the rising edge that ends T2 ("The
+  data latch" below).
 - **T3.P**: `pin_m1_n ← 1`; `pin_rd_n ← 1`; `pin_mreq_n ← 1`; `pin_addr ← {I,R}`;
   `pin_rfsh_n ← 0`. (Refresh address presented.)
 - **T3.N**: `pin_mreq_n ← 0` (refresh memory request).
 - **T4.P**: (decode continues; this is where decoded control begins driving datapath).
-- **T4.N**: `pin_mreq_n ← 1`.
+- **T4.N**: `pin_mreq_n ← 1`. `R` steps (low 7 bits) on the rising edge that
+  ends T4, so the refresh address is I:R from before the step, as on silicon
+  (an INTA steps it at the end of its second refresh T-state).
 - After T4.N the next M-cycle of the instruction begins (or the next M1).
 
 Note: M1 deasserts at T3.P in our model. Verified against the perfectz80 gate-level
@@ -57,7 +60,8 @@ displacement and the CB opcode as **operand reads** (not M1) after the two prefi
 - **T1.P**: `pin_addr ← <effective address>`.
 - **T1.N**: `pin_mreq_n ← 0`; `pin_rd_n ← 0`.
 - **T2.N**: sample `pin_wait_n`; insert `Tw` if asserted.
-- **T3.P**: latch `pin_data_in` (read window: data must be valid by here).
+- **T3.P**: the byte on the bus in T3.P is the data, taken at T3's falling
+  edge ("The data latch").
 - **T3.N**: `pin_rd_n ← 1`; `pin_mreq_n ← 1`. (Deasserted on the falling-edge
   transition — matches the gate-level / perfectz80 trace and decouples the
   latch phase from the deassert phase.)
@@ -77,7 +81,10 @@ not part of the read window.
 
 The data outlives `/WR` by the clock-low half of T3 (Zilog PS0178
 Figure 6: TdWRr(D) data stable from WR rise, TdCr(Dz) float from the next
-clock rise); perfectz80's data bus floats at the next T1.P too.
+clock rise); perfectz80's data bus floats at the next T1.P too. A write
+M-cycle longer than 3 T (EX (SP),HL's last write, LDI / LDD / LDIR /
+LDDR's: 5 T) drives the data through its T4 and T5 as well, to the next
+T1.P (perfectz80's data pads).
 
 Inserted Tw states hold `/WR` continuously low, together with `/MREQ` and
 stable address/data. Internally Tw reuses `t_state=2`; its rising half must
@@ -98,7 +105,8 @@ the following transaction. The write-strobe hold does not change this rule.
 - **T2.P**: `pin_iorq_n ← 0`; `pin_rd_n ← 0`.
 - **Tw.N**: sample `pin_wait_n` (the automatic Tw is always present; further Tw if
   WAIT held).
-- **T3.P**: latch `pin_data_in`.
+- **T3.P**: the byte on the bus in T3.P is the data, taken at T3's falling
+  edge.
 - **T3.N**: `pin_iorq_n ← 1`; `pin_rd_n ← 1`.
 
 (In the C model and RTL the IORD cycle is `m_len=4`, counting Tw as T3 and the
@@ -131,18 +139,66 @@ M1-like cycle with **two automatic wait states** ([Zilog UM0080, Figure 9](https
 - The implementation counts T1, T2, Tw, Tw, T3, T4 as states 1–6. Thus WAIT
   capture is state 4.N, data is consumed before advancing to state 5.P, and
   refresh uses states 5/6. IM1/IM2 append one internal state (7) before pushing PC.
-- IM0 decodes the supplied opcode without incrementing PC: RST pushes the
-  interrupted PC; CALL/JP read their operands from memory at that PC. The 6T
-  acknowledge replaces the normal 4T opcode fetch. IM1 ignores the byte and
-  enters `0038h`; IM2 reads the handler pointer from `{I, vector}`.
+- IM0 (perfectz80): the device's byte is the opcode, decoded without a
+  fetch, and PC doesn't move until that instruction ends. The 6T acknowledge
+  replaces the opcode fetch; the instruction's own extra M1 T-states follow
+  (RST and PUSH one, INC rr two). Its operands are memory reads at the
+  interrupted PC -- a CALL's two operand reads show the same address, so the
+  device, not memory, has to answer them -- and the opcode after a prefix
+  (CB, DD, ED, FD) comes in another 6T acknowledge cycle; a DD CB
+  instruction reads d and the opcode as operands. So RST and CALL push the
+  interrupted PC, JR jumps relative to it, LD A,n carries on at it, and a
+  HALT handed over halts there, the HALT pin falling in the acknowledge's
+  last T-state.
+- IM1 ignores the byte and enters `0038h`. IM2 reads the handler pointer at
+  `{I, vector}` and `{I, vector}+1` with all eight bits of the vector: an odd
+  vector reads it at an odd address (perfectz80).
 
 `make bus_controls` exercises IM0 RST/CALL/JP/NOP, IM1, and IM2 with a nonzero
-vector, with and without WAIT and on HALT exit. The
-interrupt device drives data only during acknowledge. `test_int_ack.c` checks
-the same cases against the C model.
+vector, with and without WAIT and on HALT exit; the device drives the
+acknowledge byte and, for IM0 CALL / JP, the operand reads. `test_int_ack.c`
+checks the same cases against the C model. The event sweep's `im2`,
+`im2_combo`, `im0` and `im0_combo` groups compare IM2 with vectors 40, 41 and
+FF, and twenty instructions handed over in IM0, with perfectz80, pins and
+address in every half-cycle (docs/event-sweep.md).
 
 NMI: similar to M1 but no data fetch used for vector; pushes PC and jumps to `0066h`;
-copies `IFF1→IFF2`, clears `IFF1`.
+clears `IFF1` and leaves `IFF2` as EI / DI / RETN set it (perfectz80) -- it holds
+IFF1's value from before the NMI, since only an NMI parts the two, and a nested NMI
+keeps it, so the RETNs bring back the enable from before the first NMI (the usual
+`IFF2 = IFF1` on every NMI would lose it). The NMI edge latch is held clear for the whole
+response, from its M1's T1 to the last T-state of the second push: an NMI falling
+edge there is lost, even when NMI then stays low (perfectz80). An edge from the
+handler's first T-state on starts a nested NMI. An NMI edge during an INT response
+is kept and taken right after it.
+
+## The data latch
+
+Which half-cycle's byte each read takes, from perfectz80 with the right
+byte on the bus in one half-cycle only and a decoy in every other (the
+event sweep's `latch` group, docs/event-sweep.md):
+
+| read | the byte on the bus in | taken at |
+|---|---|---|
+| opcode fetch (M1): an opcode, a prefix, the opcode after a prefix | T2.N, or the last Tw.N | the rising edge that starts T3 |
+| memory read: (HL), an operand, POP, an index displacement, DD CB's d and op | T3.P | T3's falling edge |
+| I/O read: IN A,(n), IN r,(C), INI | T3.P | T3's falling edge |
+| INTA: the IM2 vector, the IM0 opcode | the second automatic Tw.N, or the last Tw.N | the rising edge that starts T3 |
+
+In any other half-cycle of the read, T1.P to T3.N, the byte doesn't
+matter: the die takes the decoy there. A Tw moves the edge one T-state
+later. So a memory or device has until the half-cycle before that edge to
+put its byte on the bus (the datasheet's setup times bound how late within
+it) and may change it from the next half-cycle; an opcode fetch's byte is
+gone by the time MREQ and RD rise at T3.P, a read's by T3.N.
+
+The RTL takes the same edges: `latch_pos` the live bus at the rising edge
+that ends T2 of an M1 (the fourth T-state of an INTA), `latch_neg`
+`data_in_neg` -- `z80_top`'s falling-edge copy -- in T3 of a memory read (T4
+of an I/O read, whose automatic Tw is its T3). The C model's step into a
+phase takes the bus of the half-cycle before it, so `is_latch_phase` names
+the phase after the one read from: T3.P for an opcode, T3.N for read data
+(cmodel/z80_core.c).
 
 ## HALT
 
@@ -157,7 +213,13 @@ copies `IFF1→IFF2`, clears `IFF1`.
     each re-fetching at PC (= post-HALT-byte). PC is NOT incremented
     further during the loop.
   - `pin_halt_n` asserts low while halted; refresh continues every NOP
-    M1.
+    M1. It falls in the low half of T4 of the HALT M1 and rises in the
+    low half of T4 of the NOP M1 whose end accepts an INT or NMI; when
+    the interrupt is already pending at the end of HALT, it never falls
+    (perfectz80). Only a HALT that runs lowers it: the fetch of an NMI
+    response discards its opcode, so an NMI taken just before a HALT
+    byte (say at the top of an interrupt handler) leaves the pin high
+    (`prog19_nmi_in_int`).
   - INT / NMI sampled at the rising edge of the last T-state of each
     NOP M-cycle. When sampled active (and IFF1=1 for INT), the next
     M-cycle is the ack (IM1/IM2 INTA = 7 T, NMI ack = 5 T). PC stays put —
@@ -173,11 +235,119 @@ both side with silicon.
 
 ## BUSREQ / BUSACK
 
-`pin_busreq_n` sampled at the rising edge of the last phase of any M-cycle. When
-granted, after the current M-cycle the core asserts `pin_busack_n ← 0` and tri-states
-(in RTL: stops driving — `pin_data_drive=0`, address/control released to high-Z model
-via a `bus_release` mux/enable) until BUSREQ deasserts. No internal tri-states; the
-release is modeled with output-enable lines on the pin mux.
+As the NMOS die does it (perfectz80; PS0178 Figure 10):
+
+- BUSREQ is sampled on the rising edge that starts each T-state (`z80_top`
+  `busreq_rise`), like INT.
+- **Grant**: when it was low at the start of an M-cycle's last T-state, the bus
+  goes to the DMA master after that M-cycle -- at any M-cycle boundary, inside
+  an instruction too. The next M-cycle (the next one of the instruction, the
+  next instruction, or an interrupt response) is set up and held. BUSACK falls
+  on the rising edge that ends the M-cycle; the strobes idle, the data bus is
+  not driven, and the address keeps its last value (the chip's pads float it on
+  BUSACK).
+- **Release**: in each granted T-state, BUSREQ high at its rising edge makes it
+  the last: BUSACK rises on its falling edge and the held M-cycle starts T1 on
+  the next rising edge. The shortest grant is one T-state.
+- **M-cycle boundaries** are the die's, internal cycles included: ADD HL,rr and
+  ADC / SBC HL,rr run internal M-cycles of 4 and 3 T-states; the 1- and 2-T
+  internal states after an M1 or a read (an M1's T5 / T6, CALL's 4-T operand
+  read) belong to that M-cycle and are no boundary.
+- INT and NMI are not sampled while the bus is granted; at an instruction
+  boundary the interrupt decision is taken first and the response waits for
+  the release.
+
+No internal tri-states; the release is modeled with output-enable lines on the
+pin mux. The event sweep's `busreq` group pins all of this.
+
+## RESET
+
+The NMOS die treats RESET as a sampled input, not as an asynchronous reset.
+This is how perfectz80 behaves, traced through its netlist (perfectz80 node
+numbers in parentheses); the C model and the RTL follow it, and the event
+sweep's 544 RESET cases match.
+
+- **Sample.** A master-slave flip-flop (132 / 136) takes the pin on every
+  rising edge. A pulse that covers no rising edge is ignored. (`res_s`,
+  `z80_top.res_rise`.)
+- **Full reset (RES2; 95 / 197).** It takes the sample on the falling edge in
+  the middle of each T-state, except in the low half of an M1's T2 (INTA's
+  too), where it holds -- that T2 only: in the wait states WAIT adds after
+  it RES2 takes the sample again.
+- **Stop.** While RES2 was set on the previous falling edge, no T-state
+  follows the current one: the CPU finishes the T-state in hand and the one
+  after it, then idles with every strobe high. A cycle cut short releases its
+  strobes as follows:
+  - cut after T1: MREQ and RD fall in T1.N as in an opcode fetch, even in a
+    write, I/O or long internal cycle; MREQ rises on the next rising edge, RD
+    on the falling edge after it, or RD stays low into a restart that follows
+    at once;
+  - cut after T2: MREQ and RD release in T2.N, WR never falls, and an I/O
+    cycle asserts nothing at all;
+  - cut after an I/O cycle's Tw: IORQ and RD / WR release in Tw.N;
+  - the 1- and 2-T internal cycles are extensions of an M1 or a read on the
+    die (ring states T5 / T6) and drive nothing; when RES2 rises on the T1.N
+    of a longer internal cycle, MREQ falls there and holds through T2.P;
+  - in a bus grant nothing: the bus is the DMA master's. RES2 set in a
+    granted T-state releases it as BUSREQ would -- BUSACK rises in that
+    T-state's low half -- and the reset idle follows.
+- **NMI.** An NMI edge while RES2 is set is lost; the pin is still followed,
+  so an NMI that falls then and stays low isn't an edge later. Once RES2
+  clears, the last idle T-state before the restart takes an edge.
+- **Clears.** PC, I, R, IFF1 / IFF2, IM and the HALT state; the HALT pin
+  rises on the falling edge where RES2 or the special-reset latch sets. Every
+  other register (AF, BC, DE, HL, IX, IY, SP and the alternates), WZ and the
+  exchange flip-flops are kept. The SP-1 of a push's first byte, which the die
+  does on the falling edge that ends the cycle before the write, is lost when
+  the reset stops the ring there.
+- **Restart.** T1 of an M1 at 0000 follows once RES2 was clear on the
+  previous falling edge: the third rising edge after RESET is released.
+- **Special reset (157 / 172).** In the low half of an M1's T2 a second latch
+  takes the sample instead of RES2. A pulse that covers that rising edge only
+  (low in T1, high again before T3) lets the instruction finish; the next
+  opcode fetch then runs as a NOP that leaves PC at 0000, and I, R, the IFFs,
+  IM and every register are kept (Brewer 2014). RES2 clears the latch, so a
+  pulse covering two or more rising edges is a normal reset.
+- **Power-on** is `z80_top.por_n`, not a Z80 pin: every flop to its power-up
+  value, the register file to 5555 as perfectz80 comes up, and the core in
+  the reset idle until RESET is seen high.
+
+Not modelled: the die finishes some results in the next M1's T1-T3 (A and F
+after INC A, A after LD A,(HL), DE after POP DE, the EX DE,HL swap), which a
+RESET that stops that M1 early loses and RZ80 keeps; RZ80 runs some long
+internal M-cycles as one where the die has two (ADD HL,rr's 4 + 3 T), so a cut
+inside them is approximate (docs/known-differences.md row 19).
+
+## Pad drivers (bus float)
+
+Which pins the die drives in each half-cycle, from perfectz80: every
+output pad has pull-ups to VCC gated by one internal node and pull-downs to
+GND gated by another, and floats while both gates are low
+(`scripts/pz80_pads.c` reads them; the event sweep compares them in every
+half-cycle). `z80_top` exports the same as `addr_drive`, `ctl_drive` and
+`data_drive`, and the chips' pads and the FPGA chip builds use them:
+
+- **Address A0-A15** (`addr_drive`): floats in a bus grant -- from the first
+  half-cycle with BUSACK low to the rising edge that starts the held
+  M-cycle, half a T-state after BUSACK rises -- and in the RESET idle:
+  the M-cycle RESET cuts still drives it, the idle T-states don't, and T1
+  of the restart at 0000 drives it again. (Not the RESET pin: the bus
+  floats neither as the pin falls nor after it rises, until the restart.)
+- **MREQ IORQ RD WR** (`ctl_drive`): float in a bus grant only, over the
+  same half-cycles as the address; in RESET they are driven, inactive.
+- **D0-D7** (`data_drive`): driven in a write from T1.N to the next T1.P
+  (above), in an I/O write likewise; never in a read, an INTA, a grant or
+  the RESET idle.
+- **M1 RFSH HALT BUSACK**: always driven.
+
+## Address bus in internal T-states
+
+Internal T-states drive no new address: the bus keeps the last one -- the
+refresh address after an M1 (the Spectrum's contention tables' "ir:1"), the
+operand address after a read ("hl:1", "pc+1:1"). The same holds through an
+M1's T5 / T6, IM1 / IM2's seventh INTA T-state, the RESET idle and a bus
+grant (perfectz80, every half-cycle). The address latch (`m_addr`) still
+carries the IDU / EA work of those T-states; the pins take the held value.
 
 ## WAIT summary
 

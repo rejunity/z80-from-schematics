@@ -87,12 +87,12 @@ interactive controls (Enter, Backspace, Ctrl-C / Ctrl-Space = BREAK, Ctrl-\\ = e
     make basic_netlist_tests # same canned-script regression on synthesised gates (~9 min)
     make z80test             # Patrik Rak z80test (doc / memptr / full) baseline
     make zexall_subset_c     # curated 14-test ZEXALL slice via C model         (~90 s)
-    make zexall_subset_rtl   # same 14-test slice via Verilator                 (~15-25 min)
+    make zexall_subset_rtl   # same 14-test slice via Verilator                 (~25-55 min)
     make zexall_rtl          # full ZEXALL via Verilator (local-only; not in CI — known fails)
     make pin_scenarios          # INT/NMI/WAIT/BUSREQ/RESET scenarios — C tracegen path
     make pin_scenarios_rtl      # same scenarios — iverilog RTL path
     make pin_scenarios_netlist  # same scenarios — LibreLane gate-level netlist path
-    make event_sweep            # RESET / INT / NMI at every T-state of 13 instructions vs perfectz80 (~2 min)
+    make event_sweep            # RESET / INT / NMI / BUSREQ / WAIT at every T-state of 31 instructions, IM0/1/2, vs perfectz80
     make all-tests           # every gate above in sequence
     make clean
 
@@ -120,7 +120,7 @@ fossi-foundation substituter configured (see [docs/librelane-flow.md](docs/libre
 | ✅  | C unit tests (267 checks across 11 binaries; incl. per-T-state pin sequence) | PASS                   |
 | ✅  | ZEXDOC                                                          | 67 / 67                             |
 | ✅  | ZEXALL                                                          | 67 / 67                             |
-| ✅  | ZEXALL 14-test subset via Verilator RTL (main + nightly)        | 14 / 14 (~17 min)                   |
+| ✅  | ZEXALL 14-test subset via Verilator RTL (main + nightly)        | 14 / 14 (~25-55 min)                |
 | ✅  | FUSE corpus, C model                                            | **1348 / 1356 + 8 known-FUSE-wrong** (100 %) |
 | ✅  | FUSE corpus, through RTL (iverilog)                             | **1348 / 1356 + 8 known-FUSE-wrong** (100 %) |
 | ✅  | Patrik Rak z80test (doc / memptr / full)                        | **160 / 160 / 160** (100 %)         |
@@ -132,11 +132,11 @@ fossi-foundation substituter configured (see [docs/librelane-flow.md](docs/libre
 | ✅  | Real KC85 silicon — sync   capture (`make silicon_cycles`)      | 50 / 50 OK,  0 emu mismatches       |
 | ✅  | Real KC85 silicon — 20 MHz capture (`make silicon_async`)       | CPU ≈ 1.767 MHz, pins ✓             |
 | ✅  | HALT-to-INT T-state timing (`make halt2int`)                    | 10/10 sweep samples in silicon range (Brewer 2014 / Woodmass HALT2INT 2021) |
-| ✅  | Gate-level vs perfectz80 — **C model** path                     | 12/12 PASS; ctrl pins 100 %; `addr` 100 % on 10/12 (reset-init informational on 2); `data_o` informational on `prog_rnd_04` |
+| ✅  | Gate-level vs perfectz80 — **C model** path                     | 13/13 PASS: control pins and the address in every half-cycle (transfers, refresh, internal T-states); `data_o` 100 % |
 | ✅  | Gate-level vs perfectz80 — **iverilog RTL** path                | 12/12 PASS, same 12 programs        |
 | ✅  | Gate-level vs perfectz80 — **LibreLane sky130 netlist** path    | 12/12 PASS, same 12 programs ("ultimate test") |
-| 🚧  | Pin-scenario programs vs perfectz80 (12 INT/NMI/WAIT/BUSREQ/RESET scenarios) | 5/12 PASS clean (`prog9, 12, 16, 18, 20`); 7/12 have HALT-pin / WAIT-insertion / BUSREQ / RESET timing diffs vs gate-level (informational; functional behavior verified by Rak + FUSE + HALT2INT probe) |
-| 🚧  | RESET / INT / NMI timing sweep vs perfectz80 (`make event_sweep`, [docs/event-sweep.md](docs/event-sweep.md)) | 1698 / 2287 cases pin-identical; the rest are listed in a baseline that CI holds them to (NMI during the NMI response, RETN→INT, HALT pin, RESET) |
+| ✅  | Pin-scenario programs vs perfectz80 (14 INT/NMI/WAIT/BUSREQ/RESET scenarios) | 14/14 in the C model and the RTL, the address included in every phase |
+| ✅  | RESET / INT / NMI / BUSREQ / WAIT timing sweep vs perfectz80 (`make event_sweep`, [docs/event-sweep.md](docs/event-sweep.md)) | 8181 / 8207 cases pin-identical in every half-cycle (address and BUSACK included), the C model identical to the RTL in all; the 26 others are RESET in ADD HL,BC / INC BC's write-back (known difference 19) |
 
 Legend: ✅ pass / 100 % &nbsp; 🟡 ≥ 95 % (close, known artifacts) &nbsp; 🚧 < 95 % (work in progress).
 
@@ -203,3 +203,20 @@ and perfectz80's pins (`perfectz80.*` scope) — open with GTKWave /
 Surfer to inspect side-by-side from one file. Disable with `EMIT_VCD=0`.
 
 The brief that this project follows: [z80_core_project_BRIEF.md](z80_core_project_BRIEF.md).
+
+
+## License
+
+The project's original **C model, support software, and documentation are
+MIT-licensed**. Its original **RTL and hardware implementation sources in
+`rtl/` and `librelane/` use CERN-OHL-W-2.0**. These are licenses for separate
+components, not a choice of either license for every file.
+
+Commercial use is welcome under the applicable terms. Hardware manufacturers
+may sell compliant products without paying a royalty to the project author;
+retain the required notices and make the required source available. See
+[LICENSE](LICENSE) and [HARDWARE_NOTICE.md](HARDWARE_NOTICE.md).
+
+Third-party reference emulators, ROMs, tests, and netlists keep their upstream
+terms. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), including its
+unresolved provenance items, and [CONTRIBUTING.md](CONTRIBUTING.md).

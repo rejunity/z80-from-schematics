@@ -1,4 +1,9 @@
 // ===========================================================================
+// SPDX-FileCopyrightText: 2026 ReJ aka Renaldas Zioma
+// SPDX-License-Identifier: CERN-OHL-W-2.0
+// Source Location: https://github.com/rejunity/z80-from-schematics
+// See HARDWARE_NOTICE.md for the section 4.1 Product notice.
+//
 // z80_regfile.v - the register file: BC DE HL AF, BC' DE' HL' AF', IX IY
 // SP PC WZ as 16-bit pairs.
 //
@@ -14,12 +19,16 @@
 // Ports: one 16-bit pair write, one byte write (high or low half of a
 // pair), the flag port (F), and PC / SP / WZ loads, all taking logical
 // pair names. Writes land on `we` edges; the exchanges on `ex_en` edges.
+// Only power-on (por_n) resets the file; the RESET pin keeps every pair,
+// WZ and the exchange flip-flops and clears just PC (pc_clr), as on the
+// NMOS die (perfectz80).
 // ===========================================================================
 `include "z80_defs.vh"
 
 module z80_regfile (
     input  wire        clk,
-    input  wire        reset_n,
+    input  wire        por_n,           // power-on reset
+    input  wire        pc_clr,          // RESET / special reset: PC = 0 on this edge
     input  wire        we,              // register loads on this edge
     input  wire        ex_en,           // exchanges on this edge
     input  wire        ex_dehl,         // EX DE,HL
@@ -116,14 +125,15 @@ module z80_regfile (
             if (sp_we) rf_n[`RFP_SP] = sp_d;
             if (wz_we) rf_n[`RFP_WZ] = wz_d;
         end
+        if (pc_clr) rf_n[`RFP_PC] = 16'h0000;
     end
     assign pc_next = rf_n[`RFP_PC];
     assign f_next  = xaf_n ? rf_n[7][7:0] : rf_n[3][7:0];
 
     // 0x5555 matches perfectz80's gate-level Visual-Z80 netlist boot
     // pattern (see cmodel/z80_core.c z80_reset()); PC resets to 0.
-    always @(posedge clk or negedge reset_n) begin
-        if (!reset_n) begin
+    always @(posedge clk or negedge por_n) begin
+        if (!por_n) begin
             for (ri = 0; ri < 13; ri = ri + 1) rf[ri] <= 16'h5555;
             rf[`RFP_PC] <= 16'h0000;
             xbank <= 1'b0; xaf <= 1'b0; xdh <= 2'b00;

@@ -1,16 +1,23 @@
-# RESET / INT / NMI timing sweep
+# RESET / INT / NMI / BUSREQ / WAIT timing sweep
 
-`make event_sweep` drives RESET, INT and NMI pulses into the iverilog RTL and
-into the perfectz80 transistor-level netlist at every T-state of a set of
-instructions. It compares the two half-cycle by half-cycle. CI runs it on
-every push; it takes about 45 s on 10 cores and about 2 minutes on a GitHub
-runner.
+`make event_sweep` drives RESET, INT, NMI, BUSREQ and WAIT pulses into the
+iverilog RTL and into the perfectz80 transistor-level netlist at every
+T-state of a set of instructions, in IM1, IM2 and IM0, and of one opcode of
+every timing class the die has; it runs every opcode with BUSREQ and WAIT
+walked through it, and drives the data bus itself to find which half-cycle's
+byte each kind of read takes. It compares the two half-cycle by half-cycle
+-- the pins, the address and which pads the die drives -- and runs every
+case through the C model too, which must match the RTL in every half-cycle.
+CI runs it on every push, in four shards, from perfectz80's recorded traces.
 
 Files:
 
 - `scripts/event_sweep.py`: case list, program, runner, comparison, report
 - `tests/iverilog/tb_event_sweep.v`: RTL side (1/16-T event resolution)
 - `scripts/event_sweep_pz80.c`: perfectz80 side
+- `scripts/pz80_pads.c`: which of perfectz80's pads the die drives
+- `tests/event_sweep/pz80/`: perfectz80's recorded traces, one file per group
+- `scripts/event_sweep_c.c`: C model side (`--c-model`)
 - `tests/event_sweep/baseline.txt`: cases where the RTL differs today
 
 ## How a case works
@@ -20,24 +27,72 @@ Every case runs the same small program:
 | address | code |
 |---|---|
 | 0000 | stores SP, BC, DE, HL, I, AF and R at 7000.., then `JP 0100` |
-| 0038 | IM1 handler: counts in 6000, `EI; RETI` |
+| 0038 | INT handler: counts in 6000, `EI; RETI` |
 | 0066 | NMI handler: counts in 6001, optional NOPs, `RETN` |
 | 0100 | `DI`, SP=9000, IMn, BC=3 DE=8300 HL=8000 IX=8200 I=3F A=42, optional `EI` |
 | 0200 | marker NOP, the instruction under test, 24 NOPs, `HALT` |
+| 3800 | `JP 0038` |
+| 3F00 | IM2 table: 0038 at every even address, so an odd vector (and FF, which reads 3FFF and 4000) finds 3800 |
+
+The interrupting device puts its byte on the bus in INTA: FF unless the
+case gives one (the IM2 vector, or the opcode in IM0). In IM0 it can hand
+over more bytes, one per INTA cycle or memory read until it has none left,
+as the die takes them: the opcode after a prefix in another INTA cycle, the
+operands as memory reads at the interrupted PC. An opcode fetch from memory
+ends its instruction. An IN reads what an OUT wrote to its address (FF
+before).
 
 Times are counted from the rising edge that starts the marker fetch's T1.
 A pulse is placed at T-state `n` of the target (`M4` is the marker's T4, `T1`
 is the target's T1), `j`/16 of a clock after that T-state's rising edge.
-Both sides then dump `mreq iorq rd wr m1 rfsh halt busack`, the address and
-the data bus for every half-cycle from the marker on.
+Both sides then dump `mreq iorq rd wr m1 rfsh halt busack`, the address,
+the data bus and the pads driven for every half-cycle from the marker on.
+The pads driven are, on perfectz80, every output pad whose pull-up or
+pull-down gate is high (the address pads, the data pads, and MREQ IORQ RD
+WR M1 RFSH HALT BUSAK), and on RZ80 `z80_top`'s `addr_drive`, `data_drive`
+and `ctl_drive` (docs/timing.md "Pad drivers").
+
+Two cases react to the pins, the same way on every side:
+- the BUSREQ walk: BUSREQ low from the marker on; when BUSACK is seen low,
+  BUSREQ goes high for the release and low again once BUSACK is high, so
+  the instruction is granted at every M-cycle end where the die grants;
+- the WAIT walk: WAIT low for the three half-cycles from each fall of MREQ
+  (not a refresh) or IORQ, so every bus cycle gets the wait states its
+  sampling edges see.
+
+### The data window (`latch`)
+
+Every other case puts a read's byte on the bus for the whole read. A
+`latch` case puts it there in one half-cycle only and a decoy in every
+other half-cycle of the read, from its T1.P to its T3.N: the same window
+on every side (`-D r0,r1,w,vv,dd` on perfectz80 and the C model,
+`+dwin=...` on the RTL; half-cycles counted from the marker's T1 like the
+pulses). The decoy changes what the program does -- ADD A,C for LD A,(HL),
+another stored byte, another IM2 table entry, a NOP for IM0's RST 38 -- so
+a side that takes it shows other pins. perfectz80's own bus writes a read's
+byte after each rising edge; inside a window the harness sets the byte it
+would write -- memory, I/O or the INTA vector at the read's address -- to the
+window's before that edge, so the bus never carries another byte for a
+moment. The reads, each also with one Tw (WAIT low across the edge that
+samples it):
+
+- opcode fetch: LD A,(HL); a DD prefix; the opcode after it;
+- memory read: LD A,(HL); LD A,n's operand; POP BC's two bytes; LD
+  A,(IX+d)'s displacement; DD CB d op's d and op (read, not fetched);
+- I/O read: IN A,(n); IN D,(C); INI;
+- INTA: the IM2 vector (40, decoy BF); the IM0 opcode (RST 38, decoy NOP).
+
+The report has a grid per kind of read: the half-cycle whose byte
+perfectz80 takes, and `!` where the RTL takes another (docs/timing.md
+"The data latch" has the result).
 
 A case matches when:
 - every control pin agrees in every half-cycle;
-- the address agrees wherever both sides transfer data (MREQ or IORQ with RD
-  or WR);
-- the data agrees wherever both sides drive WR.
-
-Refresh and idle addresses are don't-care, as in `compare_signal_timing.py`.
+- the address agrees in every half-cycle: transfers, refreshes (I:R), and
+  the internal and idle T-states, where the bus keeps its last address;
+- BUSACK is one of the control pins;
+- the data agrees wherever both sides drive WR;
+- the same pads are driven in every half-cycle.
 
 Instructions under test:
 - INC A (no memory access)
@@ -53,18 +108,45 @@ Instructions under test:
 - RLC (HL)
 - LDIR
 - HALT
+- LD A,I and LD A,R (P/V from IFF2)
+- ADD HL,BC and ADC HL,BC (internal M-cycles of 4 + 3 T)
+- EX (SP),HL, DJNZ (taken), RLD, INC BC
+- IN A,(n), OUT (n),A, INI
+- EI EI EI; EI DI (INT waits for the instruction after the last EI)
+- DD DD + LD IX,nn; FD DD + LD IX,nn; DD before NEG and before NOP;
+  RLC (IX+5) (no interrupt between a prefix and its opcode)
 
 | group | pulses |
 |---|---|
-| `int` | INT from every T-state of five instructions until INTA (IM1, EI) |
-| `nmi` | 1 T NMI pulse at every T-state of all 13 instructions |
+| `int` | INT from every T-state of eighteen instructions until INTA (IM1, EI) |
+| `nmi` | 1 T NMI pulse at every T-state of all 31 instructions |
 | `nmi_short` | 1/16 T and 1/4 T NMI pulses at every 1/16 T of INC A, LD A,(HL), LD (HL),A, INC (HL) |
 | `nmi_reentry` | NMI held low; two pulses before acceptance; a second pulse during the response; nested; RETN with INT pending |
-| `reset` | 4 T RESET at every T-state of six instructions |
+| `reset` | 4 T RESET at every T-state of ten instructions |
 | `reset_release` | release swept over a clock, 3 and 4 T after assertion |
 | `reset_wait` | RESET while a read is held by WAIT |
 | `reset_short` | 1/4 to 2 T RESET around M1 (the special-reset window) |
-| `combo` | RESET during an INT or NMI response; an NMI edge while RESET is low; NMI or INT held across RESET |
+| `combo` | RESET during an INT or NMI response; an NMI edge while RESET is low; NMI or INT held across RESET; BUSREQ at the boundary of an INT, an NMI and HALT ending on INT |
+| `busreq` | 1 T and 4 T BUSREQ at every T-state of all 31 instructions: grant, BUSACK, resume |
+| `wait` | 1 T and 3 T WAIT at every T-state of all 31 instructions |
+| `im2` | INT in IM2 from every T-state of INC A, LD A,(HL), LD (HL),A, INC (HL) and HALT, with vectors 40, 41 and FF |
+| `im2_combo` | IM2 response after INC A (vector 40); NMI, 1 T and 3 T WAIT, 1 T and 4 T BUSREQ, or 4 T RESET from every T-state of it, its table reads and the handler's first fetch |
+| `im0` | twenty instructions handed over in IM0: RST 38 / 00 / 08, CALL, JP, LD A,n, LD A,(nn), JR, INC BC, PUSH BC, HALT, EI, EX (SP),HL, RETI, LD IX,nn, LD (IX+d),n, RLC A, RLC (IX+d), JP (IX), LDIR |
+| `im0_combo` | IM0 CALL 1234 after INC A; NMI, WAIT, BUSREQ or RESET (as in `im2_combo`) from every T-state of it |
+| `opcodes` | every opcode -- 1,841 programs: unprefixed, CB, ED, DD / FD and DD CB / FD CB, the flag-dependent ones also with F = 00 and FF, DJNZ also with B = 1, INIR / OTIR / INDR / OTDR with B = 2 -- each plain, with the BUSREQ walk, with the WAIT walk, with INT from the marker's T4 (EI) and with a 1 T NMI at its T1 |
+| `classes` | one opcode of each of the 68 timing classes the instructions above don't cover (`CLASS_REPS`): 1 T NMI, INT until INTA, 1 T and 4 T BUSREQ, 1 T and 3 T WAIT from every T-state |
+| `classes_reset` | 4 T RESET from every T-state of the same 68 (run by name: `--groups classes_reset`; known difference 19) |
+| `fuzz` | 2,000 random cases (seed 1): 3-10 instructions drawn from every opcode program, a random F and BC, IM0 (an RST byte), IM1 or IM2 (vector 40, 41 or FF), EI or not, and one to three NMI / INT / WAIT / BUSREQ pulses of random widths in the first 40 T-states, 200 T run |
+| `fuzz_reset` | the same with RESET among the pins (run by name; known difference 19) |
+| `reset_m1wait` | 4 T RESET at every quarter T-state while 1, 2 or 4 T of WAIT stretch the M1 of INC A and LD A,(HL) (known difference 25) |
+| `reset_busreq` | 4 T RESET at every quarter T-state around a 2 T and a 6 T BUSREQ from the T1 of INC A, LD A,(HL) and PUSH BC (known difference 26) |
+| `reset_nmi` | a 1 T NMI at every quarter T-state from 2 T before RESET's release to 8 T after it, RESET 3, 4 and 6 T (run by name; known differences 27 and 19) |
+| `latch` | the data window: the right byte in one half-cycle of fifteen reads -- opcode fetches, memory and I/O reads, INTA in IM2 and IM0 -- from T1.P to T3.N, without and with a Tw; and each read with the byte all through it (268 cases) |
+
+The timing classes: the `opcodes` group's programs grouped by perfectz80's
+control pins in their plain run and their BUSREQ and WAIT walks, 86 of
+them; the 31 instructions above cover 18. `scripts/event_sweep.py
+--classes` prints the table from the recorded traces.
 
 ### What a simulation can and can't tell
 
@@ -85,74 +167,95 @@ that half sees the pulse. The sweep therefore shows whether the chip's
 input logic can catch such a pulse; it does not test the data sheet's
 minimum widths, which depend on analog timing.
 
-## Results (rejunity `main`, 20 October 2026)
+## Results (rejunity `sweep-all`, 21 October 2026; `latch`, 22 October)
 
 | group | cases | match | differ |
 |---|---|---|---|
-| int | 86 | 74 | 12 |
-| nmi | 430 | 418 | 12 |
+| int | 488 | 488 | 0 |
+| nmi | 984 | 984 | 0 |
 | nmi_short | 1184 | 1184 | 0 |
-| nmi_reentry | 43 | 22 | 21 |
-| reset | 112 | 0 | 112 |
-| reset_release | 64 | 0 | 64 |
-| reset_wait | 32 | 0 | 32 |
-| reset_short | 240 | 0 | 240 |
-| combo | 96 | 0 | 96 |
+| nmi_reentry | 43 | 43 | 0 |
+| reset | 206 | 180 | 26 |
+| reset_release | 64 | 64 | 0 |
+| reset_wait | 32 | 32 | 0 |
+| reset_short | 240 | 240 | 0 |
+| combo | 132 | 132 | 0 |
+| busreq | 1968 | 1968 | 0 |
+| wait | 1968 | 1968 | 0 |
+| im2 | 258 | 258 | 0 |
+| im2_combo | 300 | 300 | 0 |
+| im0 | 40 | 40 | 0 |
+| im0_combo | 300 | 300 | 0 |
+| opcodes | 9205 | 9205 | 0 |
+| classes | 13260 | 13260 | 0 |
+| classes_reset (run by name) | 2210 | 2040 | 170 |
+| fuzz | 2000 | 2000 | 0 |
+| reset_m1wait | 264 | 264 | 0 |
+| reset_busreq | 312 | 312 | 0 |
+| reset_nmi (run by name) | 120 | 48 | 72 |
+| fuzz_reset (run by name) | 2000 | 1935 | 65 |
+| latch | 268 | 268 | 0 |
 
-1698 of 2287 cases match. When the sweep was written (main `ec3c5d2`) 809
-did. Since then `e60d06e` latches INT on the rising edge that starts the
-last T-state and catches an NMI pulse of any width, as perfectz80 does:
-that fixed the two largest groups, INT and NMI taken half a clock early
-(a pulse in the high half of the last T-state) and NMI pulses that span no
-falling edge.
+The default run, 33,516 cases, matches perfectz80 in all but 26 -- the
+pads driven included -- and the C model matches the RTL in every
+half-cycle of all of them. The 26 in the baseline are RESET stopping
+ADD HL,BC or INC BC in the T-states where the die still writes their
+result (docs/known-differences.md row 19): the register dump after reset
+differs, the pins do not. `classes_reset`, RESET at every T-state of the
+68 classes, shows how far row 19 reaches: 170 cases in 27 classes (LD
+rr,nn, LD rr,(nn), JR, DJNZ, RST, IN r,(C), the DD / FD index forms, LDI /
+CPI / INI / OUTI and their repeats) store other registers after the reset
+than the die, and in 84 of them the C model and the RTL differ from each
+other too -- each writes some results at another T-state. It joins the
+default run when row 19 is fixed.
+
+When the sweep was written (main `ec3c5d2`, 2287 cases) 809 differed.
+Since then:
+- `e60d06e` latches INT on the rising edge that starts the last T-state and
+  catches an NMI pulse of any width, as perfectz80 does: INT and NMI were
+  taken half a clock early (a pulse in the high half of the last T-state),
+  and NMI pulses that span no falling edge were missed.
+- The HALT pin rises in the low half of the last T4 when an INT or NMI ends
+  HALT, and stays high when the interrupt is already pending at the end of
+  HALT itself (24 cases).
+- A second NMI edge during the NMI response, from its M1's T1 to the end of
+  its two pushes, is lost, as in perfectz80, even when NMI then stays low
+  (20 cases).
+- INT held in an NMI handler is taken one instruction after RETN: RETN
+  copies IFF2 to IFF1 after its boundary's INT decision (1 case).
+- An INT accepted at the end of LD A,I or LD A,R leaves P/V = 0 in the
+  pushed F, the NMOS race; an NMI there keeps P/V = IFF2 (the LD A,I /
+  LD A,R cases came with the fix).
+- RESET is the die's sampled RESET (544 cases): sampled on rising edges, a
+  full reset taken on falling edges except in an M1's T2, the T-state ring
+  stopped after one more T-state with the strobe patterns of a cut cycle,
+  registers kept, T1 at 0000 on the third rising edge after release, and
+  the special reset. docs/timing.md "RESET" has the details.
+- The address is compared in every half-cycle: internal T-states keep the
+  last address on the bus.
+- BUSREQ is the die's (the `busreq`, `wait` and BUSREQ combo cases came with
+  it): sampled like INT, a grant after any M-cycle with the next one held,
+  BUSACK falling on the next rising edge and rising on the falling edge of
+  the T-state that sees the release, the die's internal M-cycle boundaries
+  (ADD / ADC HL,rr: 4 + 3 T). docs/timing.md "BUSREQ / BUSACK".
+- IM2 (vectors 40, 41, FF, with NMI, WAIT, BUSREQ and RESET through the
+  response and its table reads) and the EI and prefix runs matched when
+  they were added.
+- IM0 is the die's (`im0`, 26 cases): PC doesn't move until the
+  instruction the device hands over ends, its operands are reads at that
+  PC, and the opcode after a prefix comes in another INTA cycle
+  (docs/timing.md "Interrupt acknowledge").
+- With the C model beside the RTL, one case differed: an NMI edge caught by
+  the rising edge that ends the NMI response's second push, which the die
+  and the RTL lose and the C model kept (`nmir_entry_gap12_p12`); it loses
+  it now.
+- The data latch (`latch`): perfectz80 and the RTL take an opcode or INTA
+  byte from the bus in T2.N (the last Tw.N) and read data from T3.P; the C
+  model took each half a clock earlier, which no other group could see
+  (known difference 28). It takes the die's edges now.
 
 `build/event_sweep/report.md` has the per-instruction grids.
 `build/event_sweep/diff/` has a side-by-side trace for every differing case.
-
-Where the RTL matches perfectz80:
-- INT and NMI are taken at the right instruction boundary from every
-  position, for every instruction tried.
-- NMI pulses of 1/16 T and 1/4 T are taken from every 1/16 T position.
-- The stacked PC and the response cycles are the same, including LDIR
-  between iterations, CALL, JR and prefixed instructions.
-- NMI held low, two pulses before acceptance, and nested NMIs all match.
-
-The differences left fall into four groups.
-
-1. **NMI during the NMI response.** A second NMI edge arriving during the
-   NMI response (from the response M1 to the end of its two pushes) is lost
-   in perfectz80: there is one NMI and the program resumes. RZ80 latches it
-   and enters the handler a second time before running the handler's first
-   instruction. A pulse after the response starts a nested NMI in both.
-
-2. **RETN with INT pending.** INT is held low from the NMI handler's first
-   fetch, and EI was in effect before the NMI. perfectz80 runs one
-   instruction after RETN before acknowledging the INT. RZ80 acknowledges
-   it right after RETN.
-
-3. **HALT pin.** When an INT or NMI ends HALT, perfectz80 releases HALT in
-   the low half of the last T4. RZ80 releases it half a clock later.
-   If the interrupt is already pending at the HALT fetch, perfectz80 never
-   asserts HALT; RZ80 drives it low for one half-cycle.
-
-4. **RESET.** perfectz80 treats RESET as a sampled input. RZ80 resets
-   asynchronously:
-   - **Assertion.** perfectz80 samples RESET at rising edges. It finishes
-     the bus cycle in progress and goes idle 0–8 half-cycles after RESET
-     falls, and it ignores a pulse that covers no rising edge. RZ80 drops
-     every strobe at once and resets on any pulse.
-   - **Restart.** The first T1 at 0000 comes 3 rising edges after release
-     in perfectz80, at every release phase. In RZ80 it comes after 1.
-   - **Registers.** perfectz80 keeps SP, BC, DE and HL across reset. An SP
-     half-decremented by an interrupted PUSH or interrupt response
-     (8FFF/8FFE/8FFD) is kept too. RZ80 sets them to 5555 (known
-     difference 1).
-   - **Special reset.** RESET can cover only the rising edge that starts T2
-     of an M1 cycle: low somewhere in T1, high again before T3. Then
-     perfectz80 restarts at 0000 with I kept (3F), the "special reset"
-     (`reset_short`, 36 of 240 cases). A pulse that covers only the rising
-     edge into T3 or T4 gives a normal reset, and so does any pulse covering
-     two or more rising edges. RZ80 has no special reset.
 
 ## The baseline
 
@@ -180,7 +283,57 @@ git diff tests/event_sweep/baseline.txt
 Review the baseline diff with `build/event_sweep/diff/<case>.txt` before
 committing it.
 
+## The fuzz
+
+The groups above place one or two events where they were written to; the
+fuzz puts random code, modes and pins together (`fuzz_cases()`): case i of
+a seed is always the same, so a difference reproduces with
+`--groups fuzz --fuzz-seed S --fuzz-n N --match fuzz_sS_0000i`. The default
+run has seed 1's 2,000 cases, from perfectz80's recorded traces; CI's
+nightly run also tries 500 cases of a fresh seed (its run id), perfectz80
+live, and fails on any difference. When it was added, seed 1 found two
+things nothing else had: a nested NMI's IFF2 (known difference 24) and the
+RTL testbench answering every IN with FF where perfectz80's harness and the
+C system return what an OUT wrote. `fuzz_reset` (with RESET) then found three
+RESET rules the targeted groups had missed -- a Tw after an M1's T2, a bus
+grant, an NMI right after the release (known differences 25-27) -- each
+swept since by a group of its own; what it still shows is row 19.
+
+## perfectz80's recorded traces
+
+perfectz80 is the slow side: a transistor-level netlist, about 10,000
+half-cycles a second. `tests/event_sweep/pz80/<group>.txt.xz` holds its
+output for every case of the group, keyed by what the run depends on:
+perfectz80's sources (`scripts/refs/perfectz80/`), `pz80_pads.c`, the
+harness's version (`HARNESS_VERSION` in `event_sweep_pz80.c`), the
+program's bytes, the options and the pulses as perfectz80 resolves them
+(whole half-cycles). A run takes a recorded trace where one exists and runs
+perfectz80 for the rest: CI runs only the RTL and the C model. A new or
+changed case has none:
+
+```
+make event_sweep EVENT_SWEEP_ARGS=--record      # rewrites the files of the groups run
+```
+
+The harness's own source isn't part of the key: an option only new cases
+use, like the data window, leaves every recorded trace valid. A change that
+alters what an existing case prints must bump `HARNESS_VERSION`, which
+makes every recorded trace stale -- record every group again.
+`--verify-recorded N` runs N of the run's recorded cases through perfectz80
+live and fails if any prints something else than its recording, which
+catches a forgotten bump: CI's shard 0 checks 50 random ones on every push
+(the seed is printed; `--verify-seed S` repeats a sample). The data window
+came in this way: 50 recorded cases from all 23 groups printed their
+recordings byte for byte with the new harness, and the recordings were
+re-keyed, not run again.
+
+`--no-cache` runs perfectz80 for every case.
+
 Useful options (`scripts/event_sweep.py --help`):
 - `--groups nmi,reset` and `--match inc_hl` run a subset.
+- `--shard K/N` runs every Nth case from the Kth (CI's four jobs).
+- `--record` writes perfectz80's traces; `--no-cache` ignores them.
+- `--verify-recorded N` runs N recorded cases live and fails on a difference.
+- `--classes` prints the opcodes' timing classes.
 - `--phases 16` runs the full 1/16-T grid.
 - `--jobs N` sets the parallelism.

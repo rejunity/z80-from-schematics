@@ -1,9 +1,11 @@
 # The GitHub Pages site, https://rejunity.github.io/z80-from-schematics/,
 # from the latest runs on main: Targets' bitstreams, GDS, layout renders and
 # pads at transistor level (targets.yml), and the whole chip at transistor
-# level when transistor.yml has run (its own page, transistor/). Pages
-# replaces the whole site on every deploy, so one job builds it from both,
-# after either finishes on main, and by hand.
+# level when transistor.yml has run (its own page, transistor/), and the
+# latest cfast benchmark (ci.yml's cfast-bench: from main, or from the
+# branch cmodel-fast until cfast is on main). Pages replaces the whole site
+# on every deploy, so one job builds it from all of them, after Targets or
+# Transistor finishes on main, and by hand.
 name: Pages
 
 on:
@@ -62,6 +64,19 @@ jobs:
           else
             echo "no transistor.yml run on main yet" | tee -a "$GITHUB_STEP_SUMMARY"
           fi
+
+      - name: The latest cfast benchmark, if there is one
+        run: |
+          for b in main cmodel-fast; do
+            for id in $(gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --branch "$b" --limit 10 \
+                          --json databaseId -q '.[].databaseId'); do
+              if gh run download "$id" -R "$GITHUB_REPOSITORY" -n cfast-bench -D dist/cfast-bench 2>/dev/null; then
+                echo "cfast-bench from ci.yml run $id ($b)" >> "$GITHUB_STEP_SUMMARY"
+                exit 0
+              fi
+            done
+          done
+          echo "no cfast-bench artifact on main or cmodel-fast" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Build the site
         run: python3 .github/scripts/dist.py site dist site

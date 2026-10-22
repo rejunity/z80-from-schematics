@@ -1,4 +1,9 @@
 // ===========================================================================
+// SPDX-FileCopyrightText: 2026 ReJ aka Renaldas Zioma
+// SPDX-License-Identifier: CERN-OHL-W-2.0
+// Source Location: https://github.com/rejunity/z80-from-schematics
+// See HARDWARE_NOTICE.md for the section 4.1 Product notice.
+//
 // z80_top.v - the chip-level wrapper: one clock, one clock domain.
 //
 // Everything that *thinks* (z80_core: sequencer, PLA, ALU, register file)
@@ -36,16 +41,25 @@
 // (gf180mcu_fd_sc_mcu{7,9}t5v0__dffnq / dffnrnq / dffnsnq); check the
 // mapped netlist for them. See docs/clocking.md.
 //
-// Reset: active-low async assert. While reset_n is low the former sits at
-// the idle pin pattern (strobes high, bus not driven, BUSACK high) and the
-// core holds. The first rising edge after release starts T1 of the first
-// M1 at PC=0000.
+// Two resets:
+//  - por_n, the power-on reset: active-low async assert of every flop to
+//    its power-up value (the register file to 5555, as perfectz80 comes
+//    up). Not a Z80 pin: testbenches pulse it at time 0, FPGA tops drive
+//    it from their power-on logic, the ASIC chip ties it off (registers
+//    come up random, like the NMOS part's).
+//  - reset_n, the RESET pin: sampled on every rising edge, as the die
+//    does (a master-slave flip-flop), and acted on by the core
+//    synchronously -- it finishes the T-state in hand and one more, keeps
+//    the registers, and starts T1 of an M1 at 0000 on the third rising
+//    edge after release (z80_core "RESET"; docs/timing.md). Power-on
+//    leaves the core in that reset until the pin is seen high.
 // ===========================================================================
 `include "z80_defs.vh"
 
 module z80_top (
     input  wire        clk,
-    input  wire        reset_n,
+    input  wire        por_n,           // power-on reset (not a Z80 pin)
+    input  wire        reset_n,         // the RESET pin
     // bus
     output wire [15:0] addr,
     input  wire [7:0]  data_in,
@@ -59,6 +73,11 @@ module z80_top (
     output wire        rfsh_n,
     output wire        halt_n,
     output wire        busack_n,
+    // the die's pad enables: the address pads, and MREQ IORQ RD WR (both
+    // float in a bus grant, the address also in the reset idle); the data
+    // pads follow data_drive. M1 RFSH HALT BUSACK are always driven.
+    output wire        addr_drive,
+    output wire        ctl_drive,
     // control inputs
     input  wire        wait_n,
     input  wire        int_n,
@@ -81,8 +100,8 @@ module z80_top (
         if (nmi_hold_clr) nmi_hold <= 1'b0;
         else              nmi_hold <= 1'b1;
     end
-    always @(posedge clk or negedge reset_n) begin
-        if (!reset_n) nmi_hold_clr <= 1'b1;
+    always @(posedge clk or negedge por_n) begin
+        if (!por_n) nmi_hold_clr <= 1'b1;
         else          nmi_hold_clr <= nmi_hold;
     end
     wire nmi_n_held = nmi_n & ~nmi_hold;
@@ -92,8 +111,8 @@ module z80_top (
     // (GF180 dffnsnq); data resets to 0 (dffnrnq).
     reg [7:0] data_in_neg;
     reg       nmi_n_neg, wait_n_neg;
-    always @(negedge clk or negedge reset_n) begin
-        if (!reset_n) begin
+    always @(negedge clk or negedge por_n) begin
+        if (!por_n) begin
             data_in_neg <= 8'h00;
             nmi_n_neg   <= 1'b1;
             wait_n_neg  <= 1'b1;
@@ -104,19 +123,38 @@ module z80_top (
         end
     end
 
+    // RESET: the level at the rising edge that starts a T-state (the die's
+    // master-slave flip-flop, perfectz80 nodes 132 / 136), 1 = in reset.
+    // Power-on holds it until the pin has been seen high.
+    reg res_rise;
+    always @(posedge clk or negedge por_n) begin
+        if (!por_n) res_rise <= 1'b1;
+        else        res_rise <= ~reset_n;
+    end
+
+    // BUSREQ: the level at the rising edge that starts a T-state (PS0178
+    // TsBUSREQ / ThBUSREQ; perfectz80): in an M-cycle's last T-state it
+    // decides the grant, in a granted T-state the release.
+    reg busreq_rise;
+    always @(posedge clk or negedge por_n) begin
+        if (!por_n) busreq_rise <= 1'b1;
+        else        busreq_rise <= busreq_n;
+    end
+
     // INT: the level at the rising edge that starts a T-state, which the
     // core reads at the rising edge that ends it -- in the last T-state,
     // the datasheet's sample point.
     reg int_n_rise;
-    always @(posedge clk or negedge reset_n) begin
-        if (!reset_n) int_n_rise <= 1'b1;
+    always @(posedge clk or negedge por_n) begin
+        if (!por_n) int_n_rise <= 1'b1;
         else          int_n_rise <= int_n;
     end
 
     // ---- the posedge-only core -----------------------------------------
-    // Pin images, packed {addr, data_out, data_drive, m1_n, mreq_n, iorq_n,
-    // rd_n, wr_n, rfsh_n, halt_n, busack_n} -- see PIN_* below.
-    localparam PW = 16 + 8 + 1 + 8;
+    // Pin images, packed {addr_drive, ctl_drive, addr, data_out, data_drive,
+    // m1_n, mreq_n, iorq_n, rd_n, wr_n, rfsh_n, halt_n, busack_n} -- see the
+    // assigns below.
+    localparam PW = 2 + 16 + 8 + 1 + 8;
     wire [15:0] addr_pos,  addr_neg;
     wire [7:0]  dout_pos,  dout_neg;
     wire        drive_pos, drive_neg;
@@ -128,12 +166,14 @@ module z80_top (
     wire        rfsh_pos,  rfsh_neg;
     wire        halt_pos,  halt_neg;
     wire        busack_pos, busack_neg;
+    wire        aen_pos,   aen_neg;
+    wire        cen_pos,   cen_neg;
 
     z80_core u_core (
-        .clk(clk), .reset_n(reset_n),
+        .clk(clk), .por_n(por_n), .res_s(res_rise),
         // rising-edge inputs (live) + falling-edge-sampled copies
         .data_in(data_in),   .data_in_neg(data_in_neg),
-        .busreq_n(busreq_n),
+        .busreq_n(busreq_rise),
         .int_n_rise(int_n_rise), .wait_n_neg(wait_n_neg),
         .nmi_n(nmi_n_held),  .nmi_n_neg(nmi_n_neg),
         // pin images: clock-high half of the next T-state / clock-low half
@@ -149,29 +189,34 @@ module z80_top (
         .rfsh_n_pos(rfsh_pos),     .rfsh_n_neg(rfsh_neg),
         .halt_n_pos(halt_pos),     .halt_n_neg(halt_neg),
         .busack_n_pos(busack_pos), .busack_n_neg(busack_neg),
+        .addr_drive_pos(aen_pos),  .addr_drive_neg(aen_neg),
+        .ctl_drive_pos(cen_pos),   .ctl_drive_neg(cen_neg),
         .dbg_t(dbg_t), .dbg_m(dbg_m)
     );
 
     // ---- 2. dual-edge output former -------------------------------------
-    wire [PW-1:0] pins_pos = {addr_pos, dout_pos, drive_pos, m1_pos, mreq_pos,
+    wire [PW-1:0] pins_pos = {aen_pos, cen_pos, addr_pos, dout_pos, drive_pos, m1_pos, mreq_pos,
                               iorq_pos, rd_pos, wr_pos, rfsh_pos, halt_pos, busack_pos};
-    wire [PW-1:0] pins_neg = {addr_neg, dout_neg, drive_neg, m1_neg, mreq_neg,
+    wire [PW-1:0] pins_neg = {aen_neg, cen_neg, addr_neg, dout_neg, drive_neg, m1_neg, mreq_neg,
                               iorq_neg, rd_neg, wr_neg, rfsh_neg, halt_neg, busack_neg};
-    // idle pattern: addr 0, data 0, not driving, all active-low strobes high
-    localparam [PW-1:0] PINS_IDLE = {16'h0000, 8'h00, 1'b0, 8'b1111_1111};
+    // idle pattern (power-on: the reset idle): the address floating, the
+    // strobes driven high, addr 0, data 0, the data bus not driven
+    localparam [PW-1:0] PINS_IDLE = {1'b0, 1'b1, 16'h0000, 8'h00, 1'b0, 8'b1111_1111};
 
     reg [PW-1:0] pin_a;     // rising-edge half of the former
     reg [PW-1:0] pin_b;     // falling-edge half of the former
-    always @(posedge clk or negedge reset_n) begin
-        if (!reset_n) pin_a <= PINS_IDLE;
+    always @(posedge clk or negedge por_n) begin
+        if (!por_n) pin_a <= PINS_IDLE;
         else          pin_a <= pins_pos ^ pin_b;
     end
-    always @(negedge clk or negedge reset_n) begin
-        if (!reset_n) pin_b <= {PW{1'b0}};
+    always @(negedge clk or negedge por_n) begin
+        if (!por_n) pin_b <= {PW{1'b0}};
         else          pin_b <= pins_neg ^ pin_a;
     end
     wire [PW-1:0] pins = pin_a ^ pin_b;
 
+    assign addr_drive = pins[34];
+    assign ctl_drive  = pins[33];
     assign addr       = pins[32:17];
     assign data_out   = pins[16:9];
     assign data_drive = pins[8];

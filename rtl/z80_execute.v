@@ -1,4 +1,9 @@
 // ===========================================================================
+// SPDX-FileCopyrightText: 2026 ReJ aka Renaldas Zioma
+// SPDX-License-Identifier: CERN-OHL-W-2.0
+// Source Location: https://github.com/rejunity/z80-from-schematics
+// See HARDWARE_NOTICE.md for the section 4.1 Product notice.
+//
 // z80_execute.v - the execute block: the Z80's random control logic.
 //
 // Given where the sequencer is (instruction class from the PLA, M-cycle,
@@ -37,6 +42,7 @@ module z80_execute (
     input  wire [7:0]  ir,
     input  wire [1:0]  ddcb_kind,       // DDCB opcode class (tmph[7:6])
     input  wire [1:0]  im,
+    input  wire        im0_ins,         // IM0: the device's instruction; PC doesn't move
     // conditions from the datapath
     input  wire        cc_taken,        // cc[y] holds in F
     input  wire        zf,              // F.Z
@@ -107,10 +113,11 @@ module z80_execute (
     task mstart; input [2:0] bop; input [2:0] al; input [3:0] extra;
         begin ctl_mstart = 1'b1; ctl_bop = bop; ctl_al = al; ctl_mx = extra; end
     endtask
-    // read the next operand byte: MRD (PC), PC <- PC+1
+    // read the next operand byte: MRD (PC), PC <- PC+1 (in IM0 the device
+    // supplies it at PC, which stays: perfectz80)
     task op_fetch; input [3:0] extra;
         begin
-            ctl_ab = AB_REG; ctl_ri = RI_PC; ctl_inc = INC_P1; ctl_pc = PC_IDU;
+            ctl_ab = AB_REG; ctl_ri = RI_PC; ctl_inc = INC_P1; ctl_pc = im0_ins ? PC_HOLD : PC_IDU;
             mstart(`BUSOP_MRD, AL_ABUS, extra);
         end
     endtask
@@ -311,8 +318,12 @@ module z80_execute (
                     ctl_ab = AB_REG; ctl_ri = RI_HLP; ctl_inc = INC_P1; ctl_wz = WZ_IDU;  // WZ = HL+1
                     ctl_pw = 1'b1; ctl_pwi = RI_HLP; ctl_pws = PW_A16;
                     wr_flags(FS_A16);
-                    mstart(`BUSOP_INTERNAL, AL_A16, 4'd7);
-                end else ctl_fin = 1'b1;
+                    at_pair(`BUSOP_INTERNAL, RI_HLP, 4'd4);         // the latch holds HL
+                end
+                // the die's M2 and M3: internal M-cycles of 4 and 3 T (BUSREQ
+                // can take the bus between them; perfectz80)
+                else if (m_cycle == 3'd2) at_pair(`BUSOP_INTERNAL, RI_HLP, 4'd3);
+                else ctl_fin = 1'b1;
             end
 
             `EXEC_LD_R_N: begin
@@ -543,8 +554,9 @@ module z80_execute (
             end
 
             // ---------- ED page (non-block) ----------
-            `EXEC_ADC16, `EXEC_SBC16: begin
-                if (m_cycle == 3'd1) at_pair(`BUSOP_INTERNAL, RI_HL, 4'd7);
+            `EXEC_ADC16, `EXEC_SBC16: begin                   // internal 4 + 3 T, as ADD
+                if (m_cycle == 3'd1) at_pair(`BUSOP_INTERNAL, RI_HL, 4'd4);
+                else if (m_cycle == 3'd2) at_pair(`BUSOP_INTERNAL, RI_HL, 4'd3);
                 else begin
                     ctl_ab = AB_REG; ctl_ri = RI_HL; ctl_inc = INC_P1; ctl_wz = WZ_IDU;  // WZ = HL+1
                     ctl_pw = 1'b1; ctl_pwi = RI_HL; ctl_pws = PW_A16;
