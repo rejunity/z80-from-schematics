@@ -40,7 +40,7 @@ static int boundary(const z80_t *c)
 {
     if (++count >= max_instr) { hit_limit = 1; return 1; }
     if (c->rf[RFP_PC] == 0x0000) return 1;
-    if (c->rf[RFP_PC] == 0x0005) bdos(c);
+    if (c->rf[RFP_PC] == 0x0005) bdos(z80_arch(c));   /* the writes of the next M1 made */
     return 0;
 }
 

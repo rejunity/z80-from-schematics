@@ -34,11 +34,12 @@ static z80f_t fast_core;
 
 static void bdos(z80_system_t *s)
 {
-    uint8_t c = (uint8_t)(s->cpu.rf[RFP_BC] & 0xFF);   /* function number in C */
+    const z80_t *a = z80_arch(&s->cpu);                 /* the writes of the next M1 made */
+    uint8_t c = (uint8_t)(a->rf[RFP_BC] & 0xFF);        /* function number in C */
     if (c == 2) {                                       /* console out: char in E */
-        putchar((int)(s->cpu.rf[RFP_DE] & 0xFF));
+        putchar((int)(a->rf[RFP_DE] & 0xFF));
     } else if (c == 9) {                                /* print '$'-terminated string at DE */
-        uint16_t de = s->cpu.rf[RFP_DE];
+        uint16_t de = a->rf[RFP_DE];
         for (int guard = 0; guard < 65536; guard++) {
             uint8_t ch = s->mem[de++];
             if (ch == '$') break;

@@ -384,38 +384,59 @@ followed by an INT or NMI response, and with WAIT and BUSREQ around it):
   second read's T4, back in the first write's T2, HL in the last write's
   T4.
 
-Both models compute most results earlier, on an M-cycle's last edge, and
-keep a write-back log: each byte written before the die's edge, its old
-value and the edge it becomes permanent on; a RESET cut before that edge
-puts it back -- F after a cut on the next M1's T2 as the flag latches
-hold it (cmodel `f_cut()`, rtl `z80_core`'s `f_cut`). The writes the die
-makes before the models' M-cycle ends are made on the die's edge (cmodel
-`wb_hooks`, the RTL's mid-M-cycle micro-ops): DJNZ's, INI's and OUTI's
-B-1, the block pointer steps, the stack's SP steps, EX (SP),HL's, ADC /
-SBC HL's sum at the first internal M-cycle's end. A cut that ends on a T2
-that WAIT held, or on a Tw after it, makes the T2 writes then (the C
-model's stall path in `advance()`, the RTL's `stall_cut` / `tw_cut`).
-Nothing changes at an instruction boundary: only what a RESET part-way
-through leaves.
+Where the die holds a result until then shows in perfectz80's nodes: the
+ALU's operand latches. The B latch takes its operand in the instruction's
+last half-cycle -- M1's T4.N for a register, the read's T3.N for a byte
+from memory -- and the A latch follows A; the ALU forms the low nibble in
+the next M1's T1 and the high nibble in its T2 (the ALU bus carries the
+result in T2.P), the register file's write strobes (rh_wr / rl_wr) fire in
+T2.N and F's in T3.N. The next instruction first reads a register in its
+own T4, after them. The exchange flip-flops flip in T1.N (EX AF,AF') and
+T2.N (EXX, EX DE,HL); INC / DEC rr write through the register bit lines in
+M1's T5.N, a read into its register in the read's T3.N. (The probes read
+the active bank: reg_bb, reg_cc .. with ex_bcdehl = 1; reg_b shows the
+other one.)
 
-The C model logs a byte where its exec step writes it early (`wb_put`,
-with the die's edge), in a slot per register byte: `wb_next` marks those
-waiting for the next M1 or INTA cycle, `wb_inst` those waiting inside the
-instruction -- always in the M-cycle after the step that logs them. So
-the end of each M-cycle drops `wb_inst`, the end of an M1 or INTA cycle
-`wb_next` too (`wb_retire`), and only a cut looks at the T-state: it puts
-back the bytes whose edge is after the T-state it ends on (`wb_undo`).
-The exec step that writes F only notes how it formed it (`wb_fex`,
-`wb_fm`); a cut on the next M1's T2 forms F from that, the ALU run again
-on the registers as the step found them (`wb_f_at_cut`). The writes on an
-M-cycle's last edge the exec step makes at its start; `wb_hooks` makes
-those before it, in the M-cycles `wb_mid` names, at their edge -- cfast
-(cfast/gen_fast.py) runs those M-cycles in step variants that call it
-there, and runs everything else on an M-cycle's last edge through the
-model's own `end_mcycle`, so its steps keep the same log. The RTL keeps
-two pair slots and the pending exchanges in `z80_regfile`, and puts the
-bytes back through its byte write, one an edge, on the edges after the
-cut, where nothing else writes or reads them.
+Both models do the same, with no log and nothing to put back: a result
+waits where the die holds it and goes into the register file on the die's
+edge.
+
+- **The next M1's writes.** The instruction ends with them pending -- the C
+  model's `wbp` (`wb_defer`), the RTL's `pend`, `pend1`, `pf16`, `pex_*`.
+  Their operands stay where they are: the registers, which nothing writes
+  before that edge, F, the byte read in `tmp8`; so does the decode (the RTL
+  keeps `ir` and the prefix until T2's end, the C model `wb_exec` /
+  `wb_idx` / `wb_disp` through an interrupt response's). On the edge that
+  ends the next M1's (INTA's) T2 the ALU runs again and the register and F
+  take its result (C `wb_fire`, RTL `fire`); a RESET cut ending on that T2
+  blocks the register and F takes `f_cut`, the flag latches as above. F of
+  CPI, and of INI / OUTI when they repeat, every flag latched before the
+  M1, goes in at T1's end (`fire1`); ADD / ADC / SBC HL's, formed with the
+  sum, waits in `pf_val` (`pf_cut` after a cut on T2) for T2's end. EX
+  AF,AF' flips at T1's end, EXX and EX DE,HL at T2's. Q, which SCF / CCF
+  read, is committed with the F write -- 0 when the instruction writes
+  none.
+- **Inside the instruction**, on the die's edge or on the next one when
+  nothing reads the register in between: a write in T_k.N on the edge
+  that ends T_k, which a cut ending there blocks (the RTL's block pointer
+  steps in their bus cycle's T2, `ctl_pw_late`; LDI / CPI's BC in M3's
+  T4), or on the edge after it, which such a cut never reaches: INC / DEC
+  rr's and LD SP,HL's at the end of M1's extension; ADD / ADC / SBC HL's L
+  at the first internal M-cycle's end, H (held in `ph_val`) at the
+  second's; in the C model the block pointers on their bus cycle's last
+  edge (`wb_hooks` before it), LDI / CPI's BC at M3's end, where the
+  repeat reads it. A read straight into its register lands on that read's
+  last edge unless a cut ends there (C `cut_now`, RTL `rd_cls`), as does
+  ADD HL's H. A cut that ends on a T2 that WAIT held, or on a Tw after it,
+  makes the T2 writes then (the C model's stall path in `advance()`, the
+  RTL's `stall_cut` / `tw_cut`).
+
+The registers as the program sees them, with the next M1's writes made:
+`z80_arch()` in the C model (zexrunner, fuse_runner, z80test_runner,
+pinhash, lockstep and the unit tests read through it), `rfl` in the RTL
+(the testbenches). cfast makes the writes in its M1 steps' T1 and T2 edges
+(cfast/gen_fast.py), and the writes inside an M-cycle in the variants of
+the M-cycles `wb_mid` names, as the model does.
 
 ## Pad drivers (bus float)
 

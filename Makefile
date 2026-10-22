@@ -600,9 +600,11 @@ zexall: zexrunner
 PHASE_REF  ?= HEAD
 PHASE_ARGS ?=
 # pinhash also hashes the die's pad drivers when the model has them
-# (z80_pins_t addr_drive / ctl_drive); phase_identity.py decides it the same
-# way for the reference
-PINHASH_DEFS := $(if $(shell grep -l addr_drive $(CMODEL)/z80.h 2>/dev/null),-DPINHASH_DRIVES)
+# (z80_pins_t addr_drive / ctl_drive), and reads the registers as the
+# program sees them when it has z80_arch; phase_identity.py decides both
+# the same way for the reference
+PINHASH_DEFS := $(if $(shell grep -l addr_drive $(CMODEL)/z80.h 2>/dev/null),-DPINHASH_DRIVES) \
+                $(if $(shell grep -l z80_arch $(CMODEL)/z80.h 2>/dev/null),-DPINHASH_ARCH)
 pinhash: cmodel $(BIN)/pinhash
 $(BIN)/pinhash: $(SCRIPTS)/pinhash.c $(CMODEL_LIB) $(CMODEL_HDRS)
 	@mkdir -p $(BIN)

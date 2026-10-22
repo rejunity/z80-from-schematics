@@ -17,7 +17,9 @@
 # wb_mid(): an IDU step the die makes inside the M-cycle, docs/timing.md
 # "Register write-back") runs in a variant of its template, key | 0x80,
 # whose step for that edge calls wb_hooks(); the M-cycle's last edge is the
-# model's own (end_mcycle). A
+# model's own (end_mcycle). The edges that end an M1's T1 and T2 make the
+# writes the last instruction left for them (wb_fire: the die's write-back
+# in the next M1; fast mode never sees a RESET cut there). A
 # step is straight-line code with the phase's constants folded in: the pins
 # (the timing ROM, z80_timing), whether it latches data (the bus cycle's
 # latch_*(), as do_latch() picks it), samples INT (Tlast.P) or ends the
@@ -104,6 +106,9 @@ def main():
                 body.append(f"bus = {a} | (uint64_t)c->m_wdata << Z80_PIN_D0; ZF_SAVE_BUS();")
             else:
                 body.append(f"ZF_CLOCK({t}, {phi});")
+                if name == "M1" and phi == 0 and t in (2, 3):
+                    # the edge that ends T(t-1): the last instruction's writes
+                    body.append(f"if (c->wbp) wb_fire(c, {t - 1}, false);")
                 if phi == 0 and hook == t - 1:
                     # the edge that ends T(t-1): the die's register write in it
                     body.append(f"wb_hooks(c, {hook});")

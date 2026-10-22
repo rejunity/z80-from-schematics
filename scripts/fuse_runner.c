@@ -175,7 +175,6 @@ int main(int argc, char** argv) {
         /* FUSE convention: Q (the F value left by the "previous" instruction
            used by SCF/CCF X/Y) is taken to be the initial F. */
         s->cpu.q = (uint8_t)(tin.af & 0xFF);
-        s->cpu.f_modified = false;
         s->cpu.cycle = 0;
         for (int i=0; i<tin.nmem; i++)
             for (int j=0; j<tin.mem[i].n; j++)
@@ -187,30 +186,31 @@ int main(int argc, char** argv) {
             z80_sys_step_instr(s);
         }
 
+        const z80_t *ar = z80_arch(&s->cpu);   /* the writes of the next M1 made */
         int ok = 1; char diff[1024] = "";
         #define CHK(field, e, a, fmt) \
             if ((unsigned)(e) != (unsigned)(a)) { ok=0; \
                 int L=(int)strlen(diff); \
                 snprintf(diff+L, sizeof diff-L, " " field "=" fmt "/" fmt, (unsigned)(e), (unsigned)(a)); }
-        CHK("AF", texp.af, s->cpu.rf[RFP_AF], "%04x");
-        CHK("BC", texp.bc, s->cpu.rf[RFP_BC], "%04x");
-        CHK("DE", texp.de, s->cpu.rf[RFP_DE], "%04x");
-        CHK("HL", texp.hl, s->cpu.rf[RFP_HL], "%04x");
-        CHK("AF'", texp.af2, s->cpu.rf[RFP_AF2], "%04x");
-        CHK("BC'", texp.bc2, s->cpu.rf[RFP_BC2], "%04x");
-        CHK("DE'", texp.de2, s->cpu.rf[RFP_DE2], "%04x");
-        CHK("HL'", texp.hl2, s->cpu.rf[RFP_HL2], "%04x");
-        CHK("IX", texp.ix, s->cpu.rf[RFP_IX], "%04x");
-        CHK("IY", texp.iy, s->cpu.rf[RFP_IY], "%04x");
-        CHK("SP", texp.sp, s->cpu.rf[RFP_SP], "%04x");
-        CHK("PC", texp.pc, s->cpu.rf[RFP_PC], "%04x");
-        CHK("WZ", texp.memptr, s->cpu.rf[RFP_WZ], "%04x");
-        CHK("I", texp.i, s->cpu.reg_i, "%02x");
-        CHK("R", texp.r, s->cpu.reg_r, "%02x");
-        CHK("IFF1", texp.iff1, s->cpu.iff1, "%u");
-        CHK("IFF2", texp.iff2, s->cpu.iff2, "%u");
-        CHK("IM", texp.im, s->cpu.im, "%u");
-        CHK("HALTED", texp.halted, s->cpu.halted, "%u");
+        CHK("AF", texp.af, ar->rf[RFP_AF], "%04x");
+        CHK("BC", texp.bc, ar->rf[RFP_BC], "%04x");
+        CHK("DE", texp.de, ar->rf[RFP_DE], "%04x");
+        CHK("HL", texp.hl, ar->rf[RFP_HL], "%04x");
+        CHK("AF'", texp.af2, ar->rf[RFP_AF2], "%04x");
+        CHK("BC'", texp.bc2, ar->rf[RFP_BC2], "%04x");
+        CHK("DE'", texp.de2, ar->rf[RFP_DE2], "%04x");
+        CHK("HL'", texp.hl2, ar->rf[RFP_HL2], "%04x");
+        CHK("IX", texp.ix, ar->rf[RFP_IX], "%04x");
+        CHK("IY", texp.iy, ar->rf[RFP_IY], "%04x");
+        CHK("SP", texp.sp, ar->rf[RFP_SP], "%04x");
+        CHK("PC", texp.pc, ar->rf[RFP_PC], "%04x");
+        CHK("WZ", texp.memptr, ar->rf[RFP_WZ], "%04x");
+        CHK("I", texp.i, ar->reg_i, "%02x");
+        CHK("R", texp.r, ar->reg_r, "%02x");
+        CHK("IFF1", texp.iff1, ar->iff1, "%u");
+        CHK("IFF2", texp.iff2, ar->iff2, "%u");
+        CHK("IM", texp.im, ar->im, "%u");
+        CHK("HALTED", texp.halted, ar->halted, "%u");
         CHK("TS", texp.end_tstates, s->cpu.cycle / 2, "%u");
         for (int i=0; i<texp.nmem; i++)
             for (int j=0; j<texp.mem[i].n; j++) {

@@ -660,7 +660,7 @@ module z80_execute (
                 2'd1: begin                                   // CPI CPD CPIR CPDR
                     if (m_cycle == 3'd1) at_pair(`BUSOP_MRD, RI_HL, 4'd0);
                     else if (m_cycle == 3'd2) begin
-                        // HL and BC stepped at M2 T1 / T2; WZ steps at M3 T1
+                        // HL stepped at M2 T2, WZ at M3 T1, BC at M3 T4
                         int_wz(4'd5);
                     end else if (m_cycle == 3'd3) begin       // F in the next M1
                         if (aux_w[3] && bc_nz && !zf) blk_repeat(FS_BLD);

@@ -275,12 +275,15 @@ Notes for each row:
      register file after RESET at every T-state of every opcode, also
      followed by an INT or NMI response, and with WAIT and BUSREQ: a write in
      a T-state's low half is kept by a cut ending on the next T-state or
-     later (a Tw after T2 is that T-state for T2's writes). Both models now
-     keep a write-back log -- each byte written before the die's edge, its
-     old value and that edge -- and a RESET cut puts back what the die
-     hadn't written; the writes the die makes before the models' M-cycle
-     ends are made on its edges, and a cut on a WAIT-held T2 or a Tw after
-     it makes T2's then. F after a cut on the next M1's T2 (RESET in an
+     later (a Tw after T2 is that T-state for T2's writes). The die's
+     nodes show where a result waits: in the ALU's operand latches, loaded
+     in the instruction's last half-cycle; the ALU runs again in the next
+     M1's T1 and T2, the register takes the result in T2.N, F in T3.N.
+     Both models now do the same -- the instruction ends with its writes
+     pending, its operands and decode where they are, and they land on the
+     edge that ends the next M1's T2 (CPI's F, EX AF,AF' on T1's), the
+     writes inside an instruction on the die's edges; nothing is written
+     early or put back. F after a cut on the next M1's T2 (RESET in an
      instruction's last T-state) is neither the old flags nor the new: the
      die writes its flag latches into F in the restart's first M1 as the cut
      left them -- S old, Z preset to 1, P/V the parity of the result's bits

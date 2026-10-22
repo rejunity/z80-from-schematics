@@ -43,7 +43,10 @@
  * busack) plus data_drive, and -- in a build against a model that has them,
  * -DPINHASH_DRIVES (the Makefile and phase_identity.py set it from
  * cmodel/z80.h) -- the die's other pad drivers, addr_drive and ctl_drive,
- * read from the model's pins in every front end.
+ * read from the model's pins in every front end. -DPINHASH_ARCH (set the
+ * same way when cmodel/z80.h has z80_arch): the checkpoints' registers and
+ * the console hooks' as the program sees them, the writes the model makes
+ * in the next M1 made (docs/timing.md "Register write-back").
  * ==========================================================================*/
 #include <stdio.h>
 #include <stdlib.h>
@@ -61,6 +64,11 @@
 #endif
 #ifdef Z80_FAST
 static z80f_t fast_core;
+#endif
+#ifdef PINHASH_ARCH
+#define ARCH(c) z80_arch(c)
+#else
+#define ARCH(c) (c)
 #endif
 
 enum { PROG_COM, PROG_TAP, PROG_HEX, PROG_RAND };
@@ -300,7 +308,7 @@ static void dump_line(const cols_t *k)
 
 static void checkpoint(char tag, uint64_t ph, uint64_t h)
 {
-    const z80_t *c = &S->cpu;
+    const z80_t *c = ARCH(&S->cpu);
     printf("%c %llu %016llx ic=%llu cy=%llu pc=%04x sp=%04x af=%04x bc=%04x de=%04x hl=%04x"
            " ix=%04x iy=%04x wz=%04x af'=%04x bc'=%04x de'=%04x hl'=%04x i=%02x r=%02x"
            " iff=%u%u im=%u halt=%u q=%02x\n",
@@ -382,8 +390,9 @@ static void load_rand(uint64_t seed)
 
 static void console(void)
 {
-    const z80_t *c = &S->cpu;
     if (quiet) return;
+    const z80_t *c = &S->cpu;
+    if (c->rf[RFP_PC] == 0x0005 || c->rf[RFP_PC] == 0x0010) c = ARCH(c);
     if (prog_kind == PROG_COM && c->rf[RFP_PC] == 0x0005) {
         uint8_t fn = (uint8_t)c->rf[RFP_BC];
         if (fn == 2) putc((int)(c->rf[RFP_DE] & 0xFF), stderr);

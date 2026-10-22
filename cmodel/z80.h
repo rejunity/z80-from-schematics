@@ -342,12 +342,9 @@ typedef struct {
     uint64_t     instr_count;   /* completed-instruction counter             */
 
     /* Q register: holds F if the previous instruction wrote F, else 0. Used
-       by SCF/CCF X/Y derivation on NMOS silicon. f_modified tracks whether
-       z80_setF has been called during the currently-executing instruction;
-       at the instruction boundary it commits to q. */
+       by SCF/CCF X/Y derivation on NMOS silicon. Committed with the
+       instruction's F write (wb_fire), else at its end (wb_defer). */
     uint8_t      q;
-    bool         f_modified;
-    bool         f_wr;          /* ... and this execute step (wb_fex) */
 
     /* RESET, as the die does it (perfectz80; docs/timing.md "RESET"):
        the pin is sampled on every rising edge (res_s); the full reset res2
@@ -363,25 +360,28 @@ typedef struct {
     bool         in_tw;       /* this T-state is a Tw (WAIT held the last): not T2 */
 
     /* Register write-back as the die does it (docs/timing.md "Register
-       write-back"): the die writes a result in the low half of a T-state,
-       which a RESET cut ending on that T-state blocks, so a write is kept
-       by a cut that ends on the edge after that T-state or later. This
-       model writes most results earlier, on an M-cycle's last edge: each
-       byte written before the die's edge is logged here, by its index
-       2 * pair + (high byte): its old value and the edge it becomes
-       permanent on -- T-state wb_t of the next M1 or INTA cycle (wb_next),
-       or of the next M-cycle of this instruction (wb_inst) -- and a RESET
-       cut before that edge puts it back. */
-    uint32_t     wb_next, wb_inst;
-    uint8_t      wb_old[2 * RFP_COUNT], wb_t[2 * RFP_COUNT];
-    /* F after a cut that ends on the next M1's (INTA's) T2: the die has
-       begun F's write-back there and makes it in the restart's first M1,
-       from its flag latches as the cut left them (docs/timing.md "Register
-       write-back"). The exec step that writes F notes how it formed F --
-       its class, M-cycle and index prefix (wb_fex, wb_fm), or (wb_fex =
-       0xFF) the latches themselves (wb_fcut) -- and such a cut forms them
-       (wb_f_at_cut). */
-    uint8_t      wb_fex, wb_fm, wb_fcut;
+       write-back"): the die writes an 8-bit load's or ALU op's result in
+       the next M1's (INTA's) T2.N and F in its T3.N, from its ALU latches
+       -- a RESET cut ending before blocks them, one ending on that T2
+       leaves F from the half-loaded flag latches. So does this model: the
+       instruction ends with its writes pending (wbp), its decode and
+       operands left where they are -- the registers, the read byte in
+       tmp8 -- and they land on the die's edge (wb_fire). WBP_ALU: the
+       instruction's register and F writes, at the next M1's T2 end;
+       WBP_F1: a block instruction's F at its T1 end; WBP_F16: ADD / ADC /
+       SBC HL's F (pf_val, after a cut on that T2 pf_cut; their H waits in
+       ph_val for the second internal M-cycle's end); WBP_EXAF (T1),
+       WBP_EXX, WBP_EXDH (T2): the exchanges. wb_exec / wb_idx / wb_disp:
+       the deferred instruction's decode, which an interrupt response
+       overwrites (begin_next); wb_pv: LD A,I / R's P/V, the boundary's
+       IFF2 decision; wb_rep: the block instruction repeated (Banks' X / Y).
+       cut_now: a RESET cut ends on this edge -- a read straight into its
+       register in its T3.N is blocked (the exec step). z80_arch() shows the
+       registers as the program sees them, the pending writes made. */
+    uint8_t      wbp, wb_idx, wb_pv, wb_rep;
+    uint8_t      wb_exec;
+    bool         wb_disp, cut_now;
+    uint8_t      ph_val, pf_val, pf_cut;
 
     /* BUSREQ, as sampled on the rising edge that started this T-state (true
        = requested): in an M-cycle's last T-state it decides the grant, in a
@@ -401,6 +401,10 @@ void z80_init(z80_t *cpu);
 void z80_reset(z80_t *cpu);
 void z80_phase_step(z80_t *cpu);   /* advance one phase (half T-state)        */
 void z80_set_pc(z80_t *cpu, uint16_t pc); /* seed PC + pending M1 fetch addr  */
+/* the CPU as the program sees it: a copy with the register writes the die
+   makes in the next M1 already made (wbp). A harness reading registers at
+   an instruction boundary reads them here. Not reentrant (one static copy). */
+const z80_t *z80_arch(const z80_t *cpu);
 
 /* ---------------------------------------------------------------------------
  * Pin word API: the same phase engine, its pins packed in one 64-bit word so

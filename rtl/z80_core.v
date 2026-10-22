@@ -1101,8 +1101,8 @@ module z80_core (
         pex_af_n = pex_af; pex_x_n = pex_x; pex_dh_n = pex_dh;
         // the deferred writes land (a RESET cut ending here blocks them, but
         // F after a cut on T2): the decode held for them goes, and Q is the
-        // F they wrote
-        if (fire)  begin pend_n = 1'b0;  prefix_n = `PFX_NONE; if (fire_fw && !cut) reg_q_n = f_data; end
+        // F they wrote, or 0
+        if (fire)  begin pend_n = 1'b0;  prefix_n = `PFX_NONE; if (!cut) reg_q_n = fire_fw ? f_data : 8'h00; end
         if (fire1) begin pend1_n = 1'b0; prefix_n = `PFX_NONE; if (!cut) reg_q_n = f_data; end
         if (fire16) begin pf16_n = 1'b0; if (!cut) reg_q_n = pf_val; end
         if (e1) pex_af_n = 1'b0;

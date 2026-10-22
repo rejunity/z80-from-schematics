@@ -42,6 +42,9 @@ def sh(cmd, **kw):
 def has_drives(src_dir):
     """The model's pins carry the die's pad drivers (addr_drive, ctl_drive)."""
     return "addr_drive" in open(os.path.join(src_dir, "z80.h")).read()
+def has_arch(src_dir):
+    """The model shows the registers as the program sees them (z80_arch)."""
+    return "z80_arch" in open(os.path.join(src_dir, "z80.h")).read()
 
 
 def build(src_dir, out_dir):
@@ -50,7 +53,8 @@ def build(src_dir, out_dir):
     srcs = sorted(glob.glob(os.path.join(src_dir, "*.c")))
     srcs = [s for s in srcs if not s.endswith("z80_main.c")]
     exe = os.path.join(out_dir, "pinhash")
-    drives = ["-DPINHASH_DRIVES"] if has_drives(src_dir) else []
+    drives = (["-DPINHASH_DRIVES"] if has_drives(src_dir) else []) + \
+             (["-DPINHASH_ARCH"] if has_arch(src_dir) else [])
     sh([CC] + CFLAGS + drives + ["-I" + src_dir, os.path.join(ROOT, "scripts", "pinhash.c")]
        + srcs + ["-o", exe])
     return exe
