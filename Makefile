@@ -58,7 +58,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
-.PHONY: cfast cfast_bench cfast_identity cfast_single cfast_single_identity pinhash phase_identity zexrunner_tick timing_sdc timing_sdc_check equiv all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist event_sweep basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test verilator_z80test z80test_rtl halt2int halt2int_probe
+.PHONY: speccy speccy_rom cfast cfast_bench cfast_identity cfast_single cfast_single_identity pinhash phase_identity zexrunner_tick timing_sdc timing_sdc_check equiv all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist event_sweep basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test verilator_z80test z80test_rtl halt2int halt2int_probe
 
 all: cmodel ctest
 
@@ -679,6 +679,19 @@ $(BIN)/zexfast_single: $(CFAST)/zexfast.c $(CFAST_SINGLE)
 $(BIN)/pinhash_single: $(SCRIPTS)/pinhash.c $(CFAST_SINGLE)
 	@mkdir -p $(BIN)
 	$(CC) $(CFLAGS) $(PINHASH_DEFS) -DZ80_FAST_RUN -DZ80_SINGLE -I$(CMODEL) -I$(CFAST_GEN) $< $(CMODEL)/z80_sim.c -o $@
+
+# speccy/: a 48K ZX Spectrum on cfast, in a terminal (speccy/README.md).
+# make speccy_rom fetches the ROM (FUSE's copy) next to the binary.
+SPECCY      := speccy
+SPECCY_SRC  := $(wildcard $(SPECCY)/*.c)
+SPECCY_HDR  := $(wildcard $(SPECCY)/*.h)
+speccy: $(BIN)/speccy
+$(BIN)/speccy: $(SPECCY_SRC) $(SPECCY_HDR) $(CFAST_SINGLE)
+	@mkdir -p $(BIN)
+	$(CC) -std=gnu11 -O2 -g -Wall -I$(CFAST_GEN) $(SPECCY_SRC) -o $@ -lm
+speccy_rom: $(BIN)/48.rom
+$(BIN)/48.rom:
+	$(PYTHON) $(SPECCY)/get_rom.py $@
 
 cfast_single_identity: cfast_single pinhash
 	@$(PYTHON) $(SCRIPTS)/phase_identity.py --ref $(PHASE_REF) --new-exe $(BIN)/pinhash \
