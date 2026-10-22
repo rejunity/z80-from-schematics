@@ -25,6 +25,79 @@
 
 #include "z80_fast_enum.h"
 
+/* The writes an instruction leaves for the next M1 land on the edges that
+   end its T1 and T2 (the model's wb_fire, the die's write-back): the ALU
+   runs again from the operands where they stand, the register takes the
+   result, F the flags. On the T2 edge, for the classes most code runs --
+   the 8-bit loads, the ALU ops, INC / DEC, the rotates of A, DAA, CPL,
+   NEG, SCF / CCF, the CB ops on a register, INC / DEC (HL) -- the steps
+   form the writes and store them in one go, the ALU's inputs taken as
+   the model's alu_eval() takes them, where wb_fire_op() would dispatch
+   twice more on the instruction for the same writes. The rest -- a block
+   instruction's F, DD CB and the CB ops on (HL), IN r,(C), LD A,I / R,
+   RRD / RLD, ADD / ADC / SBC HL's F, the exchanges, and a decode an
+   interrupt response replaced (WBP_DEC) -- goes through wb_fire(). Fast
+   mode never sees a RESET cut, which the reference engine handles. */
+
+/* the ALU on the instruction's operation and flag mode (md): A and b, F and
+   Q as they stand, xy the bit ops' X / Y source; the result, F in *f */
+static inline uint8_t zf_alu(z80_t *c, uint8_t md, uint8_t b, uint8_t xy, uint8_t *f)
+{
+    const z80_control_t *ctl = &c->ctl;
+    uint8_t r;
+    z80_alu(md, (uint8_t)ctl->alu_op, ctl->rot_op, ctl->bit_index, xy, z80_A(c), b, z80_F(c), c->q, &r, f);
+    return r;
+}
+/* the writes due on the edge that ends the next M1's T2 */
+static inline void zf_fire2(z80_t *c)
+{
+    const z80_control_t *ctl = &c->ctl;
+    uint8_t md = (uint8_t)ctl->flag_mode, f, r;
+    if (c->wbp != WBP_ALU) { wb_fire(c, 2, false); return; }
+    switch (ctl->exec) {
+    case EXEC_LD_R_R:                        /* the loads: the byte, no F (Q 0) */
+        setri(c, ctl->rf_dst, getri(c, ctl->rf_src));
+        c->wbp = 0; c->q = 0; return;
+    case EXEC_LD_R_N: case EXEC_LD_R_M:
+        setri(c, ctl->rf_dst, c->tmp8);
+        c->wbp = 0; c->q = 0; return;
+    case EXEC_ALU_R: case EXEC_ALU_N: case EXEC_ALU_M:
+        r = zf_alu(c, md, ctl->exec == EXEC_ALU_R ? getri(c, ctl->rf_src) : c->tmp8, 0, &f);
+        if (ctl->alu_op != ALU_CP) z80_setA(c, r);
+        break;
+    case EXEC_INC_R: case EXEC_DEC_R:
+        setri(c, ctl->rf_dst, zf_alu(c, md, getri(c, ctl->rf_dst), 0, &f));
+        break;
+    case EXEC_INC_M: case EXEC_DEC_M:        /* F; the byte went to memory */
+        zf_alu(c, md, c->tmp8, 0, &f);
+        break;
+    case EXEC_SCF: case EXEC_CCF:
+        zf_alu(c, md, 0, 0, &f);
+        break;
+    case EXEC_ROT_A: case EXEC_DAA: case EXEC_CPL:
+        z80_setA(c, zf_alu(c, md, 0, 0, &f));
+        break;
+    case EXEC_NEG:
+        z80_setA(c, zf_alu(c, FLAG_NEG, 0, 0, &f));
+        break;
+    case EXEC_CB_R: {                        /* the bit unit: r, and F (not RES / SET) */
+        uint8_t v = getr(c, ctl->rf_src), bm = (uint8_t)(1u << ctl->bit_index);
+        if (ctl->cb_kind == CB_RES || ctl->cb_kind == CB_SET) {
+            setr(c, ctl->rf_dst, ctl->cb_kind == CB_RES ? (uint8_t)(v & ~bm) : (uint8_t)(v | bm));
+            c->wbp = 0; c->q = 0; return;
+        }
+        r = zf_alu(c, md, v, v, &f);
+        if (ctl->cb_kind == CB_ROT) setr(c, ctl->rf_dst, r);
+        break;
+    }
+    default:
+        wb_fire(c, 2, false);
+        return;
+    }
+    z80_setF(c, f);
+    c->wbp = 0; c->q = f;
+}
+
 /* inputs only the reference engine handles */
 #define ZF_SLOW_IN (Z80_RES | Z80_BUSREQ | Z80_WAIT | Z80_NMI)
 

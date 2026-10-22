@@ -18,8 +18,10 @@
 # "Register write-back") runs in a variant of its template, key | 0x80,
 # whose step for that edge calls wb_hooks(); the M-cycle's last edge is the
 # model's own (end_mcycle). The edges that end an M1's T1 and T2 make the
-# writes the last instruction left for them (wb_fire: the die's write-back
-# in the next M1; fast mode never sees a RESET cut there). A
+# writes the last instruction left for them (the die's write-back in the
+# next M1; fast mode never sees a RESET cut there): T1's those wb_fire()
+# makes there, T2's in zf_fire2() (cfast/z80_fast.c), which forms and stores
+# the common classes' in one go and hands the rest to wb_fire(). A
 # step is straight-line code with the phase's constants folded in: the pins
 # (the timing ROM, z80_timing), whether it latches data (the bus cycle's
 # latch_*(), as do_latch() picks it), samples INT (Tlast.P) or ends the
@@ -106,9 +108,12 @@ def main():
                 body.append(f"bus = {a} | (uint64_t)c->m_wdata << Z80_PIN_D0; ZF_SAVE_BUS();")
             else:
                 body.append(f"ZF_CLOCK({t}, {phi});")
-                if name == "M1" and phi == 0 and t in (2, 3):
-                    # the edge that ends T(t-1): the last instruction's writes
-                    body.append(f"if (c->wbp) wb_fire(c, {t - 1}, false);")
+                if name == "M1" and phi == 0 and t == 2:
+                    # the edge that ends T1: the last instruction's writes due there
+                    body.append("if (c->wbp & (WBP_F1 | WBP_EXAF | WBP_DEC)) wb_fire(c, 1, false);")
+                if name == "M1" and phi == 0 and t == 3:
+                    # the edge that ends T2: the rest of them
+                    body.append("if (c->wbp) zf_fire2(c);")
                 if phi == 0 and hook == t - 1:
                     # the edge that ends T(t-1): the die's register write in it
                     body.append(f"wb_hooks(c, {hook});")
