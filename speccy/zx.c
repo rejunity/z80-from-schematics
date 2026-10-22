@@ -8,64 +8,59 @@
 #include "zx.h"
 #include <string.h>
 
+/* T-states since power-on (the tape's clock) */
 static inline uint64_t now_t(const zx_t *z)
 {
-    return (uint64_t)z->ula.frames * ULA_FRAME_T + z->ula.tick / 2;
+    return ((uint64_t)z->ula.frames * ULA_V * ULA_C + (uint64_t)z->ula.v * ULA_C + z->ula.c) / 2;
 }
 
+/* the byte an IN gets at the edge that ends the ULA's last period (out of
+   the inlined path: rare) */
+#if defined(__GNUC__)
+__attribute__((noinline))
+#endif
 static uint8_t io_read(zx_t *z, uint16_t port)
 {
     if (!(port & 1)) {
-        /* the tape plays up to now: the EAR level the CPU reads */
+        /* the tape plays up to now; issue 3: EAR in is EAR out (port bit
+           4), toggled by the tape's signal */
         uint64_t t = now_t(z);
-        bool ear = tape_advance(&z->tape, (uint32_t)(t - z->tape_t));
+        bool tape = tape_advance(&z->tape, (uint32_t)(t - z->tape_t));
         z->tape_t = t;
         z->fe_reads++;
-        if (!z->tape.playing)                  /* issue 3: EAR in follows EAR out */
-            ear = z->ula.ear;
-        return ula_read_fe(&z->ula, port, z->keys, ear);
+        bool ear = (z->ula.port_fe >> 4 & 1) ^ (z->tape.playing && tape);
+        return ula_read_fe(port, z->keys, ear);
     }
     return ula_floating(&z->ula, z->mem);
 }
 
-/* the bus for the phase the CPU has just produced: memory, I/O and the
-   interrupt acknowledge; D0-D7 for its next phase */
+/* the memory the CPU's phase has just addressed: a write lands, a read's
+   byte goes on D0-D7 for its next phase (I/O reads wait for the ULA) */
 ULA_INLINE void serve_bus(zx_t *z, uint64_t *pp)
 {
     uint64_t p = *pp;
     uint16_t a = Z80_GET_ADDR(p);
-    uint8_t d = 0xFF;
-    bool iowr = false;
     if (p & Z80_MREQ) {
         if (p & Z80_RD)
-            d = z->mem[a];
+            Z80_SET_DATA(p, z->mem[a]);
         else if ((p & Z80_WR) && a >= 0x4000)
             z->mem[a] = Z80_GET_DATA(p);
-    } else if (p & Z80_IORQ) {
-        if (p & Z80_M1)
-            d = 0xFF;                          /* interrupt acknowledge */
-        else if (p & Z80_RD)
-            d = io_read(z, a);
-        else if (p & Z80_WR) {
-            iowr = true;
-            if (!z->iowr && !(a & 1))
-                ula_write_fe(&z->ula, Z80_GET_DATA(p));
-        }
+    } else if ((p & (Z80_IORQ | Z80_M1)) == (Z80_IORQ | Z80_M1)) {
+        Z80_SET_DATA(p, 0xFF);                   /* the idle bus: the IM 2 vector */
     }
-    z->iowr = iowr;
-    Z80_SET_DATA(p, d);
     *pp = p;
 }
 
-/* the ULA's pixel clocks up to the CPU's next phase, and that phase's INT
-   and RESET; true when a frame ended on the way */
+/* the ULA's pixel clocks up to the CPU's next phase, and that phase's
+   inputs: an I/O read's byte (the keyboard and EAR, or the floating bus,
+   as the edge that ends the last period sees it), INT and RESET; true when
+   the frame ended on the way (line 248, before INT) */
 ULA_INLINE bool to_next_phase(zx_t *z, uint64_t *pp)
 {
-    bool frame_end = false;
-    while (!ula_tick(&z->ula, z->mem, *pp))
-        frame_end |= z->ula.tick == 0;
-    frame_end |= z->ula.tick == 0;
+    bool frame_end = ula_phase(&z->ula, z->mem, *pp);
     uint64_t p = *pp & ~(Z80_INT | Z80_RES);
+    if ((p & (Z80_IORQ | Z80_RD | Z80_M1)) == (Z80_IORQ | Z80_RD))
+        Z80_SET_DATA(p, io_read(z, Z80_GET_ADDR(p)));
     if (ula_int(&z->ula))
         p |= Z80_INT;
     if (z->reset_phases > 0) {
@@ -125,6 +120,20 @@ void zx_frame(zx_t *z)
     z->tape_t = t;
     z->fe_reads_last = z->fe_reads;
     z->frames++;
+}
+
+void zx_sync(zx_t *z)
+{
+    to_next_phase(z, &z->in);
+}
+
+void zx_phase(zx_t *z)
+{
+    uint64_t p = z80f_tick(&z->fast, z->in);
+    z->pins = p;
+    serve_bus(z, &p);
+    to_next_phase(z, &p);
+    z->in = p;
 }
 
 void zx_tape_motor(zx_t *z)

@@ -160,6 +160,7 @@ static void usage(void)
          "  --keys K          auto, kitty, evdev, console, macos, windows or legacy\n"
          "  --no-autoload     don't type LOAD \"\" for a .tap\n"
          "  --turbo           run flat out (F12 toggles)\n"
+         "  --late            late ULA timing (INT a T-state earlier against the screen)\n"
          "  --frames N        headless: run N frames, then print the screen's text\n"
          "  --save-scr FILE   with --frames: also write the screen as a .scr\n"
          "keys: F10 or Ctrl-C quit, F5 reset, F12 full speed; Esc is BREAK, Tab\n"
@@ -172,7 +173,7 @@ int main(int argc, char **argv)
     term_opts_t topt = { 0 };
     int keys_want = KEYS_AUTO;
     long frames_headless = -1;
-    bool autoload = true, turbo = false;
+    bool autoload = true, turbo = false, late = false;
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
         const char *v = i + 1 < argc ? argv[i + 1] : NULL;
@@ -189,6 +190,7 @@ int main(int argc, char **argv)
         }
         else if (!strcmp(a, "--no-autoload")) autoload = false;
         else if (!strcmp(a, "--turbo")) turbo = true;
+        else if (!strcmp(a, "--late")) late = true;
         else if (!strcmp(a, "--frames") && v) { frames_headless = atol(v); i++; }
         else if (!strcmp(a, "--save-scr") && v) { save_scr = v; i++; }
         else if (!strcmp(a, "-h") || !strcmp(a, "--help")) { usage(); return 0; }
@@ -210,6 +212,7 @@ int main(int argc, char **argv)
     }
     static zx_t z;
     zx_init(&z, rom);
+    ula_set_late(&z.ula, late);
     if (tap && !tape_load(&z.tape, tap)) {
         fprintf(stderr, "speccy: %s: %s\n", tap, errno == EINVAL ? "not a .tap file" : strerror(errno));
         return 1;

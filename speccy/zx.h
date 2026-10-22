@@ -22,7 +22,6 @@ typedef struct {
     uint32_t fe_reads_last; /* ... in the last frame                     */
     uint32_t tape_idle;     /* frames since the program last read the tape */
     int      reset_phases;  /* RESET held for this many more phases      */
-    bool     iowr;          /* an I/O write seen in this cycle           */
     uint64_t frames;
 } zx_t;
 
@@ -31,6 +30,11 @@ void zx_init(zx_t *z, const uint8_t rom[16384]);
 void zx_reset(zx_t *z);
 /* Run one frame (69888 T-states of the ULA's time). */
 void zx_frame(zx_t *z);
+/* For tests: the ULA's pixel clocks up to the CPU's next phase (after
+   setting the ULA's counters by hand), and one CPU phase with its bus and
+   the ULA's clocks up to the next. */
+void zx_sync(zx_t *z);
+void zx_phase(zx_t *z);
 /* The tape motor: on while a program reads the tape -- port 0xFE read
    thousands of times a frame, or the PC in the ROM's tape routines -- and
    off 3 s after (the ROM sits a second in a delay loop when it first hears
