@@ -112,7 +112,6 @@ module z80_core (
     // =======================================================================
     reg [7:0]  reg_i, reg_r, ir;
     reg [7:0]  reg_q;          // Q: F left by the previous F-modifying instruction, else 0
-    reg        f_modified;     // set this instruction if anything wrote F
     reg [3:0]  t_state;
     reg [2:0]  m_cycle;
     reg [2:0]  bus_op;
@@ -166,7 +165,6 @@ module z80_core (
     reg        halted_n;
     reg [7:0]  tmp8_n, tmph_n;
     reg [7:0]  reg_q_n;
-    reg        f_modified_n;
     reg        nmi_pending_n, prev_nmi_n_n, ei_delay_n, suppress_decode_n, bus_granted_n;
     reg        nmi_sampled_n, int_sampled_n;
     reg        nmi_pending_mid;   // nmi_pending after the clock-high-half edge detect
@@ -1057,7 +1055,6 @@ module z80_core (
     assign rfl[`RFP_WZ]  = r_wz;
 
     wire [15:0] pc_next;        // PC after this edge (next M1 address)
-    wire [7:0]  f_next;         // F after this edge (Q commit)
     // every port but the deferred writes moves on an advancing edge (and on a
     // cut that ends inside a WAIT: the T2 micro-ops' writes stand)
     wire we_norm = wr_edge || stall_cut;
@@ -1076,7 +1073,7 @@ module z80_core (
         .bc(r_bc), .de(r_de), .hl(r_hl), .af(r_af),
         .bc2(r_bc2), .de2(r_de2), .hl2(r_hl2), .af2(r_af2),
         .ix(r_ix), .iy(r_iy), .sp(r_sp), .pc(r_pc), .wz(r_wz),
-        .pc_next(pc_next), .f_next(f_next)
+        .pc_next(pc_next)
     );
 
     // =======================================================================
@@ -1089,13 +1086,6 @@ module z80_core (
         prefix_n = prefix; iff1_n = iff1; iff2_n = iff2; im_n = im; halted_n = halted;
         tmp8_n = tmp8; tmph_n = tmph;
         reg_q_n = reg_q;
-        // Detect an F write this instruction (mirrors c->f_modified in
-        // cmodel/z80_core.c): the ALU is in a flag mode, so one of the
-        // execute paths commits alu_fout. Q at instruction-done is F if
-        // it was written -- even with an unchanged value -- else 0
-        // (Sean Young 4.1; z80full 007 SCF+CCF, 102/103 INIR/INDR->NOP').
-        // (not the deferred instruction's decode, held into the next M1)
-        f_modified_n = f_modified | ((alu_md != `FLAG_NONE) && !pend && !pend1);
         pend_n = pend; pend1_n = pend1; pend_rep_n = pend_rep; pend_pv_n = pend_pv;
         pf16_n = pf16; pf_val_n = pf_val; pf_cut_n = pf_cut; ph_val_n = ph_val;
         pex_af_n = pex_af; pex_x_n = pex_x; pex_dh_n = pex_dh;
@@ -1241,7 +1231,6 @@ module z80_core (
             if (ctl_halt)  halted_n = 1'b1;
             if (ctl_ld_i)  reg_i_n = A_cur;
             if (ctl_ld_r)  reg_r_n = A_cur;
-            if (ctl_ex_af) f_modified_n = 1'b1;   // Q sees the swapped-in F
 
             if (ctl_mstart) begin
                 bus_op_n  = ctl_bop;
@@ -1261,11 +1250,12 @@ module z80_core (
             if (ctl_fin) begin
                 // a deferred instruction keeps its decode and Q until fire
                 prefix_n = (defer_now || defer1_now) ? prefix : `PFX_NONE; im0_ins_n = 1'b0;
-                // Commit Q: F if THIS instruction wrote F, else 0 (Sean Young
-                // 4.1 + ZEXALL <daa,cpl,scf,ccf>); EX AF,AF': the F it swaps in
+                // Q: F if the instruction wrote F, else 0 (Sean Young 4.1; z80full
+                // 007 SCF+CCF, 102/103 INIR/INDR->NOP') -- the instructions that
+                // write F commit it with their F write (fire, fire1, fire16);
+                // EX AF,AF' the F it swaps in; the rest write none
                 reg_q_n = (defer_now || defer1_now || a16_now) ? reg_q :
-                          (fin_ok && ctl_ex_af) ? r_af2[7:0] : f_modified_n ? f_next : 8'h00;
-                f_modified_n = 1'b0;
+                          (fin_ok && ctl_ex_af) ? r_af2[7:0] : 8'h00;
                 if (defer_now)  begin pend_n = 1'b1; pend_pv_n = iff2 & ~ldair_int; pend_rep_n = blk_rep_fin; end
                 if (defer1_now) begin pend1_n = 1'b1; pend_rep_n = blk_rep_fin; end
                 if (a16_now) pf16_n = 1'b1;
@@ -1344,7 +1334,7 @@ module z80_core (
             prefix_n = `PFX_NONE; irq_seq_n = 2'd0; suppress_decode_n = 1'b0; im0_ins_n = 1'b0;
             ei_delay_n = 1'b0; nmi_sampled_n = 1'b0; int_sampled_n = 1'b0;
             nmi_pending_n = 1'b0; bus_granted_n = 1'b0; srst_m1_n = 1'b0;
-            f_modified_n = 1'b0; in_tw_n = 1'b0;
+            in_tw_n = 1'b0;
             pend_n = 1'b0; pend1_n = 1'b0; pf16_n = 1'b0; pex_af_n = 1'b0; pex_x_n = 1'b0; pex_dh_n = 1'b0;
         end
     end
@@ -1367,7 +1357,7 @@ module z80_core (
             nmi_pending <= 1'b0; prev_nmi_n <= 1'b1; ei_delay <= 1'b0;
             nmi_sampled <= 1'b0; int_sampled <= 1'b0;
             suppress_decode <= 1'b0; bus_granted <= 1'b0; irq_seq <= 2'd0; im0_ins <= 1'b0;
-            reg_q <= 8'h00; f_modified <= 1'b0;
+            reg_q <= 8'h00;
             pend <= 1'b0; pend1 <= 1'b0; pend_rep <= 1'b0; pend_pv <= 1'b0; pf16 <= 1'b0;
             pf_val <= 8'h00; pf_cut <= 8'h00; ph_val <= 8'h00;
             pex_af <= 1'b0; pex_x <= 1'b0; pex_dh <= 1'b0;
@@ -1388,7 +1378,7 @@ module z80_core (
             nmi_sampled <= nmi_sampled_n; int_sampled <= int_sampled_n;
             suppress_decode <= suppress_decode_n; bus_granted <= bus_granted_n; irq_seq <= irq_seq_n;
             im0_ins <= im0_ins_n;
-            reg_q <= reg_q_n; f_modified <= f_modified_n;
+            reg_q <= reg_q_n;
             pend <= pend_n; pend1 <= pend1_n; pend_rep <= pend_rep_n; pend_pv <= pend_pv_n; pf16 <= pf16_n;
             pf_val <= pf_val_n; pf_cut <= pf_cut_n; ph_val <= ph_val_n;
             pex_af <= pex_af_n; pex_x <= pex_x_n; pex_dh <= pex_dh_n;
