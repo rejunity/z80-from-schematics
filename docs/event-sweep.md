@@ -140,7 +140,7 @@ that half sees the pulse. The sweep therefore shows whether the chip's
 input logic can catch such a pulse; it does not test the data sheet's
 minimum widths, which depend on analog timing.
 
-## Results (rejunity `sweep-all`, 21 October 2026)
+## Results (rejunity `nmos-writeback`, 22 October 2026)
 
 | group | cases | match | differ |
 |---|---|---|---|
@@ -148,7 +148,7 @@ minimum widths, which depend on analog timing.
 | nmi | 984 | 984 | 0 |
 | nmi_short | 1184 | 1184 | 0 |
 | nmi_reentry | 43 | 43 | 0 |
-| reset | 206 | 180 | 26 |
+| reset | 206 | 206 | 0 |
 | reset_release | 64 | 64 | 0 |
 | reset_wait | 32 | 32 | 0 |
 | reset_short | 240 | 240 | 0 |
@@ -161,25 +161,23 @@ minimum widths, which depend on analog timing.
 | im0_combo | 300 | 300 | 0 |
 | opcodes | 9205 | 9205 | 0 |
 | classes | 13260 | 13260 | 0 |
-| classes_reset (run by name) | 2210 | 2040 | 170 |
+| classes_reset | 2210 | 2210 | 0 |
 | fuzz | 2000 | 2000 | 0 |
+| fuzz_reset | 2000 | 2000 | 0 |
 | reset_m1wait | 264 | 264 | 0 |
 | reset_busreq | 312 | 312 | 0 |
-| reset_nmi (run by name) | 120 | 48 | 72 |
-| fuzz_reset (run by name) | 2000 | 1935 | 65 |
+| reset_nmi | 120 | 120 | 0 |
+| opcodes_reset (run by name) | 27768 | 27768 | 0 |
 
-The default run, 33,248 cases, matches perfectz80 in all but 26 -- the
-pads driven included -- and the C model matches the RTL in every
-half-cycle of all of them. The 26 in the baseline are RESET stopping
-ADD HL,BC or INC BC in the T-states where the die still writes their
-result (docs/known-differences.md row 19): the register dump after reset
-differs, the pins do not. `classes_reset`, RESET at every T-state of the
-68 classes, shows how far row 19 reaches: 170 cases in 27 classes (LD
-rr,nn, LD rr,(nn), JR, DJNZ, RST, IN r,(C), the DD / FD index forms, LDI /
-CPI / INI / OUTI and their repeats) store other registers after the reset
-than the die, and in 84 of them the C model and the RTL differ from each
-other too -- each writes some results at another T-state. It joins the
-default run when row 19 is fixed.
+The default run, 37,578 cases, matches perfectz80 in every one -- the pads
+driven and, after a RESET, every register the reset keeps included -- and
+the C model matches the RTL in every half-cycle of all of them; so does
+`opcodes_reset`, RESET at every T-state of every opcode program (27,768
+cases). The baseline is empty. Until known difference 19 was resolved the
+26 cases of RESET stopping ADD HL,BC or INC BC in the T-states where the
+die still writes their result were in it, and `classes_reset` (170 of
+2,210 differing, 84 of them between the C model and the RTL too),
+`reset_nmi` (72) and `fuzz_reset` (65) ran by name.
 
 When the sweep was written (main `ec3c5d2`, 2287 cases) 809 differed.
 Since then:
@@ -221,6 +219,11 @@ Since then:
   the rising edge that ends the NMI response's second push, which the die
   and the RTL lose and the C model kept (`nmir_entry_gap12_p12`); it loses
   it now.
+- The register write-back (known difference 19): what a RESET part-way
+  through an instruction leaves -- the die's write edges, F after a cut on
+  the next M1's T2 from its flag latches, the address latch a cut shows in
+  a long internal M-cycle's T1, the T2 writes of a cycle WAIT stretches.
+  The RESET cases dump every register after the reset.
 
 `build/event_sweep/report.md` has the per-instruction grids.
 `build/event_sweep/diff/` has a side-by-side trace for every differing case.
