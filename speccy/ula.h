@@ -17,6 +17,14 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+/* the per-phase code inlined into each of cfast's run-frame steps, where
+   the strobe tests fold away */
+#if defined(__GNUC__)
+#define ULA_INLINE static inline __attribute__((always_inline))
+#else
+#define ULA_INLINE static inline
+#endif
+
 #define ULA_LINE_T     224
 #define ULA_LINES      312
 #define ULA_FRAME_T    (ULA_LINE_T * ULA_LINES)      /* 69888 */
@@ -38,9 +46,22 @@ typedef struct {
 } ula_t;
 
 void ula_init(ula_t *u);
+/* Draw the pixel of this pixel clock into fb. */
+void ula_pixel(ula_t *u, const uint8_t *mem);
+
 /* One pixel clock. mem is the 64K the CPU sees, pins the CPU's last pins.
    Returns whether the CPU clock moves on in this phase. */
-bool ula_tick(ula_t *u, const uint8_t *mem, uint64_t pins);
+ULA_INLINE bool ula_tick(ula_t *u, const uint8_t *mem, uint64_t pins)
+{
+    (void)pins;
+    if (u->draw)
+        ula_pixel(u, mem);
+    if (++u->tick == ULA_FRAME_TICKS) {
+        u->tick = 0;
+        u->frames++;
+    }
+    return true;                               /* TODO: contention */
+}
 /* INT is held now. */
 static inline bool ula_int(const ula_t *u) { return u->tick < 64; }
 /* A read of port 0xFE (A0 low): the keys of the half-rows A8-A15 select

@@ -25,10 +25,9 @@ static inline uint8_t paper_pixel(const ula_t *u, const uint8_t *mem, unsigned l
     return (uint8_t)((attr >> 3 & 8) | (on ? attr & 7 : attr >> 3 & 7));
 }
 
-bool ula_tick(ula_t *u, const uint8_t *mem, uint64_t pins)
+void ula_pixel(ula_t *u, const uint8_t *mem)
 {
-    (void)pins;
-    if (u->draw) {
+    {
         unsigned t = u->tick >> 1, half = u->tick & 1;
         unsigned line = t / ULA_LINE_T, lt = t % ULA_LINE_T;
         int row = -1, x = 0;
@@ -48,11 +47,6 @@ bool ula_tick(ula_t *u, const uint8_t *mem, uint64_t pins)
         if (row >= 0 && row < ULA_FB_H)
             u->fb[row][x] = c;
     }
-    if (++u->tick == ULA_FRAME_TICKS) {
-        u->tick = 0;
-        u->frames++;
-    }
-    return true;                               /* TODO: contention */
 }
 
 uint8_t ula_read_fe(const ula_t *u, uint16_t port, uint64_t keys, bool ear_in)

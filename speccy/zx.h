@@ -11,14 +11,13 @@
 typedef struct {
     z80_t    cpu;
     z80f_t   fast;
-    uint64_t pins;          /* the CPU's pins after its last phase       */
+    uint64_t pins;          /* the CPU's pins after its last frame       */
     uint64_t in;            /* the pin word its next phase gets          */
     uint8_t  mem[65536];    /* 0x0000-0x3FFF ROM, the rest RAM           */
     ula_t    ula;
     tape_t   tape;
     uint64_t keys;          /* the 40 keys down (keys.h numbering)       */
-    uint64_t t;             /* T-states since power-on                   */
-    uint64_t tape_t;        /* ... up to which the tape has played       */
+    uint64_t tape_t;        /* T-state up to which the tape has played   */
     uint32_t fe_reads;      /* port 0xFE reads this frame                */
     uint32_t fe_reads_last; /* ... in the last frame                     */
     uint32_t tape_idle;     /* frames since the program last read the tape */
