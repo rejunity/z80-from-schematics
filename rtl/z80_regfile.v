@@ -189,7 +189,7 @@ module z80_regfile (
     reg  [7:0] fc, fc_n;                      // ... and for a cut on the next M1's T2 this
     reg        r_lo_n [0:1], r_hi_n [0:1];
     reg        xbank_w, xaf_w; reg [1:0] xdh_w;
-    integer    k, q;
+    integer    k;
 
     function due_now;                          // does due d fall on this edge?
         input [7:0] d; input [2:0] m; input [3:0] t; input m1;
@@ -200,6 +200,7 @@ module z80_regfile (
     // value o, dues dl / dh -- into the slots (f: the low byte is F)
     task log_pair; input [3:0] p; input ml; input mh; input [15:0] o; input [7:0] dl; input [7:0] dh; input f;
         reg done, hit;
+        integer q;                             // a temporary (at module level yosys made it a latch)
         begin
             done = 1'b0;
             for (q = 0; q < 2; q = q + 1) begin
