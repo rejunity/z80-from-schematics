@@ -140,8 +140,8 @@ fossi-foundation substituter configured (see [docs/librelane-flow.md](docs/libre
 | ✅  | Gate-level vs perfectz80 — **C model** path                     | 13/13 PASS: control pins and the address in every half-cycle (transfers, refresh, internal T-states); `data_o` 100 % |
 | ✅  | Gate-level vs perfectz80 — **iverilog RTL** path                | 12/12 PASS, same 12 programs        |
 | ✅  | Gate-level vs perfectz80 — **LibreLane sky130 netlist** path    | 12/12 PASS, same 12 programs ("ultimate test") |
-| ✅  | Pin-scenario programs vs perfectz80 (14 INT/NMI/WAIT/BUSREQ/RESET scenarios) | 14/14 in the C model and the RTL, the address included in every phase |
-| ✅  | RESET / INT / NMI / BUSREQ / WAIT timing sweep vs perfectz80 (`make event_sweep`, [docs/event-sweep.md](docs/event-sweep.md)) | 8181 / 8207 cases pin-identical in every half-cycle (address and BUSACK included), the C model identical to the RTL in all; the 26 others are RESET in ADD HL,BC / INC BC's write-back (known difference 19) |
+| ✅  | Pin-scenario programs vs perfectz80 (15 INT/NMI/WAIT/BUSREQ/RESET scenarios) | 15/15 in the C model and the RTL, the address included in every phase |
+| ✅  | RESET / INT / NMI / BUSREQ / WAIT timing sweep vs perfectz80 (`make event_sweep`, [docs/event-sweep.md](docs/event-sweep.md)) | 37,846 / 37,846 cases pin-identical in every half-cycle (address, BUSACK and the pad drivers included; after a RESET, every register it keeps), the C model identical to the RTL in all; so is `opcodes_reset`, RESET at every T-state of every opcode (27,768 cases) |
 
 Legend: ✅ pass / 100 % &nbsp; 🟡 ≥ 95 % (close, known artifacts) &nbsp; 🚧 < 95 % (work in progress).
 
