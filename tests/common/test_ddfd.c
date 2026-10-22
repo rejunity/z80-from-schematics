@@ -31,9 +31,9 @@ static void test_functional(void)
     int n = 0; while (!s.cpu.halted && n < 100000) { z80_sys_step_instr(&s); n++; }
 
     CHECK_EQ_U(s.mem[0x9005], 0xAB, "(IX+5) after INC");
-    CHECK_EQ_U(s.cpu.rf[RFP_AF] >> 8, 0x55, "A after ADD A,(IX+5)");
-    CHECK_EQ_U(s.cpu.rf[RFP_IX], 0x1245, "IX after IXH/IXL/ADD");
-    CHECK_EQ_U(s.cpu.rf[RFP_HL], 0x1245, "HL after PUSH IX/POP HL");
+    CHECK_EQ_U(z80_arch(&s.cpu)->rf[RFP_AF] >> 8, 0x55, "A after ADD A,(IX+5)");
+    CHECK_EQ_U(z80_arch(&s.cpu)->rf[RFP_IX], 0x1245, "IX after IXH/IXL/ADD");
+    CHECK_EQ_U(z80_arch(&s.cpu)->rf[RFP_HL], 0x1245, "HL after PUSH IX/POP HL");
     CHECK(s.cpu.halted, "halted");
 }
 
@@ -47,7 +47,7 @@ static void test_iy(void)
     z80_system_t s; z80_sys_init(&s);
     z80_sys_load(&s, 0, prog, sizeof(prog));
     int n = 0; while (!s.cpu.halted && n < 100000) { z80_sys_step_instr(&s); n++; }
-    CHECK_EQ_U(s.cpu.rf[RFP_IY], 0x1235, "IY after LD/INC");
+    CHECK_EQ_U(z80_arch(&s.cpu)->rf[RFP_IY], 0x1235, "IY after LD/INC");
 }
 
 static void test_timing(void)

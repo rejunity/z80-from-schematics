@@ -112,7 +112,6 @@ module z80_core (
     // =======================================================================
     reg [7:0]  reg_i, reg_r, ir;
     reg [7:0]  reg_q;          // Q: F left by the previous F-modifying instruction, else 0
-    reg        f_modified;     // set this instruction if anything wrote F
     reg [3:0]  t_state;
     reg [2:0]  m_cycle;
     reg [2:0]  bus_op;
@@ -137,6 +136,21 @@ module z80_core (
     reg        res2, sres, rst_idle, srst_m1;
     reg        in_tw;    // this T-state is a Tw (WAIT held the last): not T2
     reg        rd_hold;        // RD still low from a T1 cut (one idle T-state)
+    // Register write-back on the die's edges (docs/timing.md "Register
+    // write-back"): the result of an 8-bit load or ALU instruction goes
+    // into its register in the next M1's (INTA's) T2.N, F in its T3.N --
+    // the die runs the ALU there, from its operand latches. pend: such an
+    // instruction ended; its decode (prefix, ir) and operands (the
+    // registers, the read byte in tmp8) stay until that T2's end, where the
+    // ALU runs again and the writes land (`fire`). pend1: the same for F
+    // in that M1's T1.N (the block compares, the I/O repeats; `fire1`);
+    // pend_rep: the block instruction repeated (Banks' X / Y). pend_pv:
+    // LD A,I / R's P/V, the boundary's IFF2 decision. pf16: ADD / ADC / SBC
+    // HL's F, held (pf_val; pf_cut, after a cut on that T2) -- their H
+    // waits in ph_val for the second internal M-cycle's end. pex_*: EX
+    // AF,AF' (the next M1's T1.N), EXX and EX DE,HL (its T2.N).
+    reg        pend, pend1, pend_rep, pend_pv, pf16, pex_af, pex_x, pex_dh;
+    reg  [7:0] pf_val, pf_cut, ph_val;
     reg [15:0] addr_hold;      // the address the last T-state's low half drove
 
     // ---- next state ----
@@ -151,7 +165,6 @@ module z80_core (
     reg        halted_n;
     reg [7:0]  tmp8_n, tmph_n;
     reg [7:0]  reg_q_n;
-    reg        f_modified_n;
     reg        nmi_pending_n, prev_nmi_n_n, ei_delay_n, suppress_decode_n, bus_granted_n;
     reg        nmi_sampled_n, int_sampled_n;
     reg        nmi_pending_mid;   // nmi_pending after the clock-high-half edge detect
@@ -159,6 +172,8 @@ module z80_core (
     reg        im0_ins_n;
     reg        allow_int;
     reg        res2_n, sres_n, rst_idle_n, srst_m1_n, in_tw_n;
+    reg        pend_n, pend1_n, pend_rep_n, pend_pv_n, pf16_n, pex_af_n, pex_x_n, pex_dh_n;
+    reg  [7:0] pf_val_n, pf_cut_n, ph_val_n;
 
     // =======================================================================
     // decode PLA
@@ -390,6 +405,43 @@ module z80_core (
     wire pc_clr  = res2 | (srst_m1 && latch_pos && !stall && (bus_op == `BUSOP_M1));
     wire wr_edge = !rst_idle && !bus_granted && !stall;
     wire ex_edge = wr_edge && m_end;
+    // RESET cuts a T2 that WAIT held, or a Tw after it: what the die wrote in
+    // T1's low half stands (the T2 micro-ops), from a Tw on what it wrote in
+    // T2's too -- on this edge, as the cut's last (docs/timing.md "Register
+    // write-back")
+    wire stall_cut = res2 && !rst_idle && !bus_granted && stall && (t_state == 4'd2);
+    wire tw_cut    = res2 && !rst_idle && !bus_granted && in_tw && (t_state == 4'd2);
+    // a block instruction's last step after a repeat (its internal M-cycle)
+    wire blk_rep_fin = (aux_w[2:1] <= 2'd1) ? (m_cycle == 3'd4) : (m_cycle == 3'd5);
+    // the classes whose register and / or F writes the die makes in the
+    // next M1's T2.N (F in T3.N): deferred to `fire`
+    wire defer_cls = (exec_w == `EXEC_LD_R_R) || (exec_w == `EXEC_LD_R_N) || (exec_w == `EXEC_LD_R_M) ||
+                     (exec_w == `EXEC_ALU_R)  || (exec_w == `EXEC_ALU_N)  || (exec_w == `EXEC_ALU_M)  ||
+                     (exec_w == `EXEC_INC_R)  || (exec_w == `EXEC_DEC_R)  || (exec_w == `EXEC_ROT_A)  ||
+                     (exec_w == `EXEC_DAA)    || (exec_w == `EXEC_CPL)    || (exec_w == `EXEC_SCF)    ||
+                     (exec_w == `EXEC_CCF)    || (exec_w == `EXEC_NEG)    || (exec_w == `EXEC_CB_R)   ||
+                     (exec_w == `EXEC_IN_C)   || (exec_w == `EXEC_LD_A_IR) ||
+                     (exec_w == `EXEC_INC_M)  || (exec_w == `EXEC_DEC_M)  || (exec_w == `EXEC_CB_M)   ||
+                     (exec_w == `EXEC_DDCB)   || (exec_w == `EXEC_RRD)    || (exec_w == `EXEC_RLD)    ||
+                     ((exec_w == `EXEC_BLOCK) && ((aux_w[2:1] == 2'd0) || (aux_w[2] && !blk_rep_fin)));
+    // ... in its T1.N: the block compares' F, and the I/O repeats' (every
+    // flag latched before that M1)
+    wire defer1_cls = (exec_w == `EXEC_BLOCK) && ((aux_w[2:1] == 2'd1) || (aux_w[2] && blk_rep_fin));
+    wire a16_cls = (exec_w == `EXEC_ADD_HL_RP) || (exec_w == `EXEC_ADC16) || (exec_w == `EXEC_SBC16);
+    // reads straight into a register: written in the read's T3.N, which a
+    // RESET cut ending on that T3 blocks
+    wire rd_cls  = (exec_w == `EXEC_LD_A_NN) || (exec_w == `EXEC_LD_A_RP) || (exec_w == `EXEC_IN_A_N) ||
+                   (exec_w == `EXEC_LD_RP_NN) || (exec_w == `EXEC_POP) || (exec_w == `EXEC_LD_RP_NNA) ||
+                   (exec_w == `EXEC_LD_HL_NN);
+    // the edges that end the next M1's (INTA's) T1 and T2 -- not a Tw after
+    // T2 (WAIT): the writes land there, a RESET cut ending on them blocks
+    // them -- but F after a cut on that T2: from the flag latches (f_cut)
+    wire m1_any = (bus_op == `BUSOP_M1) || (bus_op == `BUSOP_INTA);
+    wire e1     = !rst_idle && !bus_granted && m1_any && (t_state == 4'd1);
+    wire e2     = !rst_idle && !bus_granted && m1_any && (t_state == 4'd2) && !in_tw;
+    wire fire   = pend && e2;
+    wire fire1  = pend1 && e1;
+    wire fire16 = pf16 && e2;
 
     // =======================================================================
     // register file: read side
@@ -398,15 +450,6 @@ module z80_core (
     wire [15:0] r_ix, r_iy, r_sp, r_pc, r_wz;
     wire [7:0]  A_cur = r_af[15:8];
     wire [7:0]  F_cur = r_af[7:0];
-    // logical register view (RFP_* order) for testbenches
-    wire [15:0] rfl [0:12] /* verilator public_flat_rd */;
-    assign rfl[`RFP_BC]  = r_bc;  assign rfl[`RFP_DE]  = r_de;
-    assign rfl[`RFP_HL]  = r_hl;  assign rfl[`RFP_AF]  = r_af;
-    assign rfl[`RFP_BC2] = r_bc2; assign rfl[`RFP_DE2] = r_de2;
-    assign rfl[`RFP_HL2] = r_hl2; assign rfl[`RFP_AF2] = r_af2;
-    assign rfl[`RFP_IX]  = r_ix;  assign rfl[`RFP_IY]  = r_iy;
-    assign rfl[`RFP_SP]  = r_sp;  assign rfl[`RFP_PC]  = r_pc;
-    assign rfl[`RFP_WZ]  = r_wz;
 
     // HL / IX / IY pair of the current instruction
     wire [15:0] rf_hlp = (idx_w == 2'd1) ? r_ix : (idx_w == 2'd2) ? r_iy : r_hl;
@@ -564,46 +607,52 @@ module z80_core (
         alu_bit = bit_index_w;
         case (exec_w)
             `EXEC_ALU_R:           alu_b = getri_src_val;
-            `EXEC_ALU_N, `EXEC_ALU_M:alu_b = rbyte;
+            `EXEC_ALU_N, `EXEC_ALU_M:alu_b = tmp8;    // at fire (the read's latch)
             `EXEC_INC_R, `EXEC_DEC_R:alu_b = getri_dst_val;
-            `EXEC_INC_M, `EXEC_DEC_M:alu_b = rbyte;
+            `EXEC_INC_M, `EXEC_DEC_M:alu_b = tmp8;    // the 4 T read's: latched at T3
             `EXEC_CB_R: begin alu_b = r8_src;          alu_xy = r8_src; end
-            `EXEC_CB_M: begin alu_b = rbyte;           alu_xy = r_wz[15:8]; end
-            `EXEC_DDCB: begin alu_b = rbyte;           alu_xy = r_wz[15:8];
-                            alu_md = (tmph[7:6] == `CB_BIT) ? `FLAG_BIT : `FLAG_ROT;
+            `EXEC_CB_M: begin alu_b = tmp8;            alu_xy = r_wz[15:8]; end
+            `EXEC_DDCB: begin alu_b = tmp8;            alu_xy = r_wz[15:8];
+                            // flags from the (IX+d) read on, BIT and the
+                            // rotates only: RES / SET leave F (and Q) alone
+                            alu_md = (m_cycle != 3'd5 && !pend) ? `FLAG_NONE :
+                                     (tmph[7:6] == `CB_BIT) ? `FLAG_BIT :
+                                     (tmph[7:6] == `CB_ROT) ? `FLAG_ROT : `FLAG_NONE;
                             alu_rot = tmph[5:3]; alu_bit = tmph[5:3]; end
             `EXEC_NEG: begin alu_md = `FLAG_NEG; alu_a = A_cur; end
             `EXEC_LD_A_IR: begin alu_md = `FLAG_LD_A_I;
                               alu_b = aux_w[0] ? reg_r : reg_i;
-                              alu_bit = {2'b0, iff2 & ~ldair_int}; end
-            `EXEC_IN_C: begin alu_md = `FLAG_IN; alu_b = rbyte; end
+                              alu_bit = {2'b0, pend_pv}; end         // at fire
+            `EXEC_IN_C: begin alu_md = `FLAG_IN; alu_b = tmp8; end
             `EXEC_RRD, `EXEC_RLD: begin
                 alu_md = (exec_w == `EXEC_RRD) ? `FLAG_RRD : `FLAG_RLD;
-                alu_a = A_cur; alu_b = rbyte;
+                alu_a = A_cur; alu_b = tmp8;
             end
             `EXEC_BLOCK: begin
                 // (cat=aux_w[2:1], dec=aux_w[0]). The flag mode is live only
                 // in the M-cycle whose end commits the flags. tmp8 holds the
                 // byte LDI moved; rbyte is the byte CPI is reading.
+                // the flags are formed at fire, in the next M1: BC, B and
+                // HL are stepped, the byte is in tmp8, A is untouched
                 case (aux_w[2:1])
-                    2'd0: if (m_cycle == 3'd3) begin
+                    2'd0: begin
                         alu_md = `FLAG_BLOCK_LD; alu_a = A_cur; alu_b = tmp8;
-                        alu_bit = {2'b0, (r_bc != 16'd0)};    // BC-1 done at M3 T2
+                        alu_bit = {2'b0, (r_bc != 16'd0)};
                     end
-                    2'd1: if (m_cycle == 3'd2) begin
-                        alu_md = `FLAG_BLOCK_CP; alu_a = A_cur; alu_b = rbyte;
-                        alu_bit = {2'b0, (r_bc != 16'd0)};    // BC-1 done at M2 T2
+                    2'd1: begin
+                        alu_md = `FLAG_BLOCK_CP; alu_a = A_cur; alu_b = tmp8;
+                        alu_bit = {2'b0, (r_bc != 16'd0)};
                     end
-                    2'd2: if (m_cycle == 3'd4) begin
+                    2'd2: begin
                         alu_md = `FLAG_BLOCK_IO;
                         alu_a = tmp8;                      // data
-                        alu_b = r_bc[15:8] - 8'd1;         // newB
+                        alu_b = r_bc[15:8];                // newB
                         alu_xy = {4'b0, bk_ini[8], bk_ini[2:0]};
                     end
-                    default: if (m_cycle == 3'd4) begin   // 2'd3 = OUT
+                    default: begin                         // 2'd3 = OUT
                         alu_md = `FLAG_BLOCK_IO;
                         alu_a = tmp8;                      // data
-                        alu_b = r_bc[15:8];                // already-decremented B
+                        alu_b = r_bc[15:8];                // newB
                         alu_xy = {4'b0, bk_out[8], bk_out[2:0]};
                     end
                 endcase
@@ -648,9 +697,12 @@ module z80_core (
     wire        ctl_tmph;
     wire [1:0]  ctl_iff;
     wire        ctl_im, ctl_halt, ctl_ld_i, ctl_ld_r, ctl_prefix;
-    wire        ctl_cbx, ctl_cbr;
+    wire        ctl_cbx, ctl_cbr, ctl_pw_late;
     wire [2:0]  pfx_next;
     wire [7:0]  b_dec = r_bc[15:8] - 8'd1;      // B-1 (DJNZ, INI, OUTI)
+    // the last edge of a deferred class's instruction (not of an interrupt
+    // response, whose decode is stale): its register / F writes wait (fire)
+    wire fin_ok, defer_now, defer1_now, a16_now;
 
     z80_execute u_exec (
         .m_end(m_end), .latch_pos(latch_pos), .bus_op(bus_op),
@@ -659,8 +711,8 @@ module z80_core (
         .alu_op_w(alu_op_w), .cb_kind_w(cb_kind_w), .idx_w(idx_w),
         .use_disp_w(use_disp_w), .aux_w(aux_w), .prefix(prefix), .ir(ir),
         .ddcb_kind(tmph[7:6]), .im(im), .im0_ins(im0_ins),
-        .cc_taken(cc_taken), .zf(F_cur[6]), .bc_nz(r_bc != 16'd0),
-        .b_nz(r_bc[15:8] != 8'd0), .b_dec_nz(b_dec != 8'd0),
+        .cc_taken(cc_taken), .zf(A_cur == tmp8), .bc_nz(r_bc != 16'd0),
+        .b_nz(r_bc[15:8] != 8'd0), .b_dec_nz(b_dec != 8'd0), .tw_fix(tw_cut),
         .ctl_mstart(ctl_mstart), .ctl_m1(ctl_m1), .ctl_fin(ctl_fin),
         .ctl_bop(ctl_bop), .ctl_mx(ctl_mx), .ctl_al(ctl_al),
         .ctl_ab(ctl_ab), .ctl_ri(ctl_ri), .ctl_inc(ctl_inc),
@@ -673,9 +725,14 @@ module z80_core (
         .ctl_ex_dehl(ctl_ex_dehl), .ctl_ex_af(ctl_ex_af), .ctl_exx(ctl_exx),
         .ctl_tmph(ctl_tmph), .ctl_iff(ctl_iff), .ctl_im(ctl_im),
         .ctl_halt(ctl_halt), .ctl_ld_i(ctl_ld_i), .ctl_ld_r(ctl_ld_r),
-        .ctl_prefix(ctl_prefix), .ctl_cbx(ctl_cbx), .ctl_cbr(ctl_cbr),
+        .ctl_prefix(ctl_prefix), .ctl_cbx(ctl_cbx), .ctl_cbr(ctl_cbr), .ctl_pw_late(ctl_pw_late),
         .pfx_next(pfx_next)
     );
+
+    assign fin_ok     = ex_edge && ctl_fin && (irq_seq == 2'd0);
+    assign defer_now  = fin_ok && defer_cls;
+    assign defer1_now = fin_ok && defer1_cls;
+    assign a16_now    = fin_ok && a16_cls;
 
     // =======================================================================
     // address side
@@ -684,7 +741,7 @@ module z80_core (
     z80_addr u_addr (
         .pc(r_pc), .sp(r_sp), .wz(r_wz), .hl(r_hl), .de(r_de), .bc(r_bc),
         .hlp(rf_hlp), .rp(rf_rp), .rbyte(rbyte), .a(A_cur), .i_reg(reg_i),
-        .tmp8(tmp8), .b_dec(b_dec), .a16(a16),
+        .tmp8(tmp8), .b_dec(b_dec),
         .ctl_ab(ctl_ab), .ctl_ri(ctl_ri), .ctl_inc(ctl_inc),
         .ctl_ea_pc(ctl_ea_pc), .ctl_ea_d(ctl_ea_d), .ctl_al(ctl_al),
         .abus(abus), .idu(idu), .ea(ea), .al_in(al_in)
@@ -708,9 +765,10 @@ module z80_core (
            | (a16_c ? `Z80_CF : 8'h00));
 
     // bit-operation unit: CB rotates come from the ALU, RES / SET here
-    wire [1:0]  cb_kind = ctl_cbx ? tmph[7:6] : cb_kind_w;
-    wire [2:0]  cb_bit  = ctl_cbx ? tmph[5:3] : bit_index_w;
-    wire [7:0]  cb_in   = ctl_cbr ? r8_src : rbyte;
+    wire        cbx_e   = ctl_cbx || (pend && exec_w == `EXEC_DDCB);
+    wire [1:0]  cb_kind = cbx_e ? tmph[7:6] : cb_kind_w;
+    wire [2:0]  cb_bit  = cbx_e ? tmph[5:3] : bit_index_w;
+    wire [7:0]  cb_in   = (exec_w == `EXEC_CB_R) ? r8_src : tmp8;   // (HL) / (IX+d): the 4 T read's latch
     wire [7:0]  cb_mask = 8'h01 << cb_bit;
     reg  [7:0]  cbres;
     always @* begin
@@ -722,7 +780,7 @@ module z80_core (
         endcase
     end
     // RRD / RLD: the byte written back to (HL)
-    wire [7:0]  rrd_mem = (exec_w == `EXEC_RRD) ? {A_cur[3:0], rbyte[7:4]} : {rbyte[3:0], A_cur[3:0]};
+    wire [7:0]  rrd_mem = (exec_w == `EXEC_RRD) ? {A_cur[3:0], tmp8[7:4]} : {tmp8[3:0], A_cur[3:0]};
 
     // write-data latch input
     reg  [15:0] db_pair;
@@ -777,6 +835,39 @@ module z80_core (
             default: pw_data = r_wz;
         endcase
     end
+    // the deferred instruction's writes at fire -- its last step's, as
+    // z80_execute issues them -- and the selects in effect on this edge
+    reg         fire_bw, fire_fw;
+    reg  [3:0]  fire_bwd;
+    reg  [2:0]  fire_bws;
+    always @* begin
+        fire_bw = 1'b1; fire_fw = 1'b1; fire_bwd = BW_A; fire_bws = BS_ALU;
+        case (exec_w)
+            `EXEC_LD_R_R:  begin fire_bwd = BW_RI; fire_bws = BS_RI; fire_fw = 1'b0; end
+            `EXEC_LD_R_N, `EXEC_LD_R_M:
+                           begin fire_bwd = BW_RI; fire_bws = BS_RB; fire_fw = 1'b0; end
+            `EXEC_ALU_R, `EXEC_ALU_N, `EXEC_ALU_M:
+                           fire_bw = (alu_op_w != `ALU_CP);
+            `EXEC_INC_R, `EXEC_DEC_R: fire_bwd = BW_RI;
+            `EXEC_SCF, `EXEC_CCF:     fire_bw = 1'b0;
+            `EXEC_CB_R:    begin fire_bw = (cb_kind_w != `CB_BIT); fire_bwd = BW_R8; fire_bws = BS_CB;
+                                 fire_fw = (cb_kind_w == `CB_ROT) || (cb_kind_w == `CB_BIT); end
+            `EXEC_IN_C:    begin fire_bwd = BW_R8; fire_bws = BS_RB; end
+            `EXEC_INC_M, `EXEC_DEC_M, `EXEC_BLOCK: fire_bw = 1'b0;          // F
+            `EXEC_CB_M:    begin fire_bw = 1'b0; fire_fw = (cb_kind_w != `CB_RES) && (cb_kind_w != `CB_SET); end
+            // DD CB: F (BIT, the rotates), the copy to r[z] (all but BIT)
+            `EXEC_DDCB:    begin fire_bw = (tmph[7:6] != `CB_BIT); fire_bwd = BW_DDCB; fire_bws = BS_CB;
+                                 fire_fw = (tmph[7:6] == `CB_BIT) || (tmph[7:6] == `CB_ROT); end
+            default: ;                                   // ROT_A DAA CPL NEG LD_A_IR RRD RLD: A and F
+        endcase
+    end
+    // in the pend window (the next M1's T1 and T2) nothing else writes a
+    // byte or F: the deferred op's selects stand there throughout
+    wire [3:0]  bwd_e = pend ? fire_bwd : ctl_bwd;
+    wire [2:0]  bws_e = pend ? fire_bws : ctl_bws;
+    // a block instruction's F after a repeat: Banks' X / Y from PC (rewound)
+    wire [2:0]  fs_fire = (exec_w == `EXEC_BLOCK && pend_rep) ? ((aux_w[2:1] <= 2'd1) ? FS_BLD : FS_BIO) : FS_ALU;
+    wire [2:0]  fs_e  = (pend || pend1) ? fs_fire : ctl_fs;
     // byte write port: r[y]-style register code (IXH/IXL substitution for
     // BW_RI), A, B, the DDCB copy target, or a byte of HL/IX/IY
     reg  [2:0]  bw_code;
@@ -785,7 +876,7 @@ module z80_core (
     reg  [7:0]  bw_data;
     always @* begin
         bw_ix = 1'b0;
-        case (ctl_bwd)
+        case (bwd_e)
             BW_RI:   begin bw_code = rf_dst_w; bw_ix = 1'b1; end
             BW_A:    bw_code = 3'd7;
             BW_B:    bw_code = 3'd0;
@@ -800,22 +891,24 @@ module z80_core (
             3'd6:       begin bw_pair = `RFP_HL; bw_en = 1'b0; end     // (HL): not a register
             default:    begin bw_pair = `RFP_AF; bw_hi = 1'b1; end
         endcase
-        if (ctl_bwd == BW_HLPL) begin bw_pair = hlp; bw_hi = 1'b0; bw_en = 1'b1; end
-        if (ctl_bwd == BW_HLPH) begin bw_pair = hlp; bw_hi = 1'b1; bw_en = 1'b1; end
-        if (ctl_bwd == BW_RPL)  begin bw_pair = rp_sel_w; bw_hi = 1'b0; bw_en = 1'b1; end
-        if (ctl_bwd == BW_RPH)  begin bw_pair = rp_sel_w; bw_hi = 1'b1; bw_en = 1'b1; end
-        case (ctl_bws)
+        if (bwd_e == BW_HLPL) begin bw_pair = hlp; bw_hi = 1'b0; bw_en = 1'b1; end
+        if (bwd_e == BW_HLPH) begin bw_pair = hlp; bw_hi = 1'b1; bw_en = 1'b1; end
+        if (bwd_e == BW_RPL)  begin bw_pair = rp_sel_w; bw_hi = 1'b0; bw_en = 1'b1; end
+        if (bwd_e == BW_RPH)  begin bw_pair = rp_sel_w; bw_hi = 1'b1; bw_en = 1'b1; end
+        case (bws_e)
             BS_RI:   bw_data = getri_src_val;
             BS_ALU:  bw_data = alu_res;
-            BS_RB:   bw_data = rbyte;
+            BS_RB:   bw_data = pend ? tmp8 : rbyte;   // the read byte: deferred, its latch
             BS_CB:   bw_data = cbres;
+            BS_A16:  bw_data = a16[7:0];              // the 16-bit sum's low byte
+            BS_PH:   bw_data = ph_val;                // ... its high byte, held
             default: bw_data = b_dec;
         endcase
     end
     // flag port
     reg  [7:0]  f_data;
     always @* begin
-        case (ctl_fs)
+        case (fs_e)
             FS_ALU:  f_data = alu_fout;
             FS_A16:  f_data = a16_f;
             // Banks 2018 LDIR/LDDR repeat: YF / XF from PC.13 / PC.11
@@ -824,9 +917,66 @@ module z80_core (
             FS_BCP:  f_data = (F_cur & ~(`Z80_YF | `Z80_XF)) | (r_pc[15:8] & (`Z80_YF | `Z80_XF));
             // ... INIR/INDR/OTIR/OTDR repeat: full recompute (idu = PC-2)
             default: f_data = banks_io_rep_f(tmp8,
-                                  (aux_w[2:1] == 2'd2) ? b_dec : r_bc[15:8],
+                                  r_bc[15:8],          // B-1 came at M3 T2
                                   (aux_w[2:1] == 2'd2) ? bk_ini : bk_out,
-                                  idu[15:8]);
+                                  r_pc[15:8]);         // at fire: PC rewound
+        endcase
+    end
+
+    // F after a RESET cut that ends on the next M1's (INTA's) T2 (cmodel
+    // f_cut; docs/timing.md "Register write-back"): the die has begun F's
+    // write-back and makes it in the restart's first M1, from its flag
+    // latches as the cut left them -- S and Z wait for that T2 (Z preset),
+    // P/V holds the parity of the result's bits 0-2, X / Y the internal bus.
+    localparam [7:0] F_S = `Z80_SF, F_Z = `Z80_ZF, F_H = `Z80_HF, F_P = `Z80_PF,
+                     F_N = `Z80_NF, F_C = `Z80_CF, F_XY = `Z80_YF | `Z80_XF;
+    wire [7:0] fc_p3   = (alu_res[0] ^ alu_res[1] ^ alu_res[2]) ? 8'h00 : F_P;
+    wire       fc_mem  = (exec_w == `EXEC_INC_M) || (exec_w == `EXEC_DEC_M) ||
+                         (exec_w == `EXEC_CB_M) || (exec_w == `EXEC_DDCB);
+    wire       fc_bit  = (alu_md == `FLAG_BIT);
+    wire [7:0] fc_bitp = ((alu_b & (8'h01 << alu_bit) & 8'h07) != 8'h00) ? 8'h00 : F_P;
+    wire [7:0] fc_daa  = f_data[1] ? (alu_a - alu_res) : (alu_res - alu_a);      // the correction
+    // ADD / ADC / SBC HL: S Z C from the low bytes, P/V their overflow XOR the
+    // high byte's bits 0-2
+    wire [8:0] fc_lo9  = {1'b0, rf_hlp[7:0]} + {1'b0, a16_y[7:0]} + {8'd0, a16_cy};
+    wire       fc_clo  = fc_lo9[8] ^ a16_sub;
+    wire       fc_vlo  = a16_sub ? (((rf_hlp[7:0] ^ rf_rp[7:0]) & (rf_hlp[7:0] ^ fc_lo9[7:0])) >> 7)
+                                 : ((~(rf_hlp[7:0] ^ rf_rp[7:0]) & (rf_hlp[7:0] ^ fc_lo9[7:0])) >> 7);
+    wire       fc_phi  = fc_vlo ^ a16[8] ^ a16[9] ^ a16[10];
+    // ADD / ADC / SBC HL: F after a cut on the next M1's T2, formed with the
+    // sum (M2's end) and held: ADD's C still the low bytes'; ADC / SBC's S Z
+    // C the low byte's, P/V its overflow XOR the high byte's bits 0-2
+    wire [7:0] pf_cut_d = (exec_w == `EXEC_ADD_HL_RP) ? ((a16_f & ~F_C) | (fc_lo9[8] ? F_C : 8'h00))
+        : ((fc_lo9[7:0] & F_S) | ((fc_lo9[7:0] == 8'h00) ? F_Z : 8'h00) | (fc_phi ? F_P : 8'h00)
+           | (fc_clo ? F_C : 8'h00) | (a16_f & (F_XY | F_H | F_N)));
+    reg  [7:0] f_cut;
+    always @* begin
+        case (exec_w)
+            `EXEC_ALU_R, `EXEC_ALU_N, `EXEC_ALU_M:
+                f_cut = (F_cur & (F_S | F_C)) | F_Z | fc_p3 | (f_data & (F_H | F_N)) | (alu_b & F_XY);
+            `EXEC_INC_R, `EXEC_DEC_R, `EXEC_CB_R, `EXEC_INC_M, `EXEC_DEC_M, `EXEC_CB_M, `EXEC_DDCB:
+                f_cut = fc_bit ? ((F_cur & F_S) | F_Z | fc_bitp | (f_data & ~(F_S | F_Z | F_P)))
+                               : ((F_cur & F_S) | F_Z | fc_p3 | (f_data & (F_H | F_N | F_C))
+                                  | ((fc_mem ? alu_res : alu_b) & F_XY));
+            `EXEC_ROT_A:   f_cut = (f_data & ~F_XY) | (alu_a & F_XY);
+            `EXEC_DAA:     f_cut = (F_cur & F_S) | F_Z | fc_p3 | (f_data & (F_H | F_N | F_C)) | (fc_daa & F_XY);
+            `EXEC_CPL:     f_cut = (f_data & ~F_XY) | ((alu_a | F_cur) & F_XY);
+            `EXEC_SCF, `EXEC_CCF:
+                f_cut = (f_data & ~(F_H | F_C)) | (alu_a[3] ? F_H : 8'h00) | (F_cur & F_C);
+            `EXEC_IN_C:    f_cut = (F_cur & F_S) | F_Z | fc_p3 | (f_data & (F_XY | F_H | F_N | F_C));
+            `EXEC_NEG:     f_cut = (F_cur & (F_S | F_C)) | F_Z | fc_p3 | (f_data & (F_H | F_N)) | ((alu_a | F_cur) & F_XY);
+            `EXEC_RRD, `EXEC_RLD:
+                f_cut = (F_cur & F_S) | F_Z | fc_p3 | (f_data & (F_H | F_N | F_C)) | (rrd_mem & F_XY);
+            `EXEC_LD_A_IR: f_cut = (F_cur & F_S) | F_Z | fc_p3 | (f_data & (F_H | F_N | F_C)) | (aux_w[0] ? `Z80_XF : 8'h00);
+            // every flag latched before the next M1 but H: LDI's from A + data,
+            // INI's from B-1 once more, OUTI's k's carry where B-1 borrowed
+            // from bit 4
+            `EXEC_BLOCK:
+                f_cut = (f_data & ~F_H)
+                        | ((aux_w[2:1] == 2'd0) ? (((alu_a[3:0] + tmp8[3:0]) & 5'h10) != 5'h00 ? F_H : 8'h00) :
+                           (aux_w[2:1] == 2'd2) ? ((alu_b[3:0] == 4'h0) ? F_H : 8'h00) :
+                           (aux_w[2:1] == 2'd3) ? ((alu_b[3:0] == 4'hF && bk_out[8]) ? F_H : 8'h00) : 8'h00);
+            default:       f_cut = F_cur;
         endcase
     end
 
@@ -867,20 +1017,63 @@ module z80_core (
         endcase
     end
 
+    // logical register view (RFP_* order) for testbenches, as the program
+    // sees it: with the writes the die makes in the next M1 (pend) applied
+    // -- they land before anything reads them
+    reg  [15:0] rfl_bc, rfl_de, rfl_hl, rfl_af, rfl_ix, rfl_iy, rfl_bc2, rfl_de2, rfl_hl2, rfl_af2, rfl_t;
+    always @* begin
+        rfl_bc = r_bc; rfl_de = r_de; rfl_hl = r_hl; rfl_af = r_af; rfl_ix = r_ix; rfl_iy = r_iy; rfl_t = 16'h0000;
+        if (pend && fire_bw && bw_en) begin
+            case (bw_pair)
+                `RFP_BC: if (bw_hi) rfl_bc[15:8] = bw_data; else rfl_bc[7:0] = bw_data;
+                `RFP_DE: if (bw_hi) rfl_de[15:8] = bw_data; else rfl_de[7:0] = bw_data;
+                `RFP_HL: if (bw_hi) rfl_hl[15:8] = bw_data; else rfl_hl[7:0] = bw_data;
+                `RFP_AF: if (bw_hi) rfl_af[15:8] = bw_data; else rfl_af[7:0] = bw_data;
+                `RFP_IX: if (bw_hi) rfl_ix[15:8] = bw_data; else rfl_ix[7:0] = bw_data;
+                `RFP_IY: if (bw_hi) rfl_iy[15:8] = bw_data; else rfl_iy[7:0] = bw_data;
+                default: ;
+            endcase
+        end
+        if ((pend && fire_fw) || pend1) rfl_af[7:0] = f_data;
+        if (pf16) rfl_af[7:0] = pf_val;
+        rfl_bc2 = r_bc2; rfl_de2 = r_de2; rfl_hl2 = r_hl2; rfl_af2 = r_af2;
+        if (pex_dh) begin rfl_t = rfl_de; rfl_de = rfl_hl; rfl_hl = rfl_t; end
+        if (pex_x) begin
+            rfl_t = rfl_bc; rfl_bc = rfl_bc2; rfl_bc2 = rfl_t;
+            rfl_t = rfl_de; rfl_de = rfl_de2; rfl_de2 = rfl_t;
+            rfl_t = rfl_hl; rfl_hl = rfl_hl2; rfl_hl2 = rfl_t;
+        end
+        if (pex_af) begin rfl_t = rfl_af; rfl_af = rfl_af2; rfl_af2 = rfl_t; end
+    end
+    wire [15:0] rfl [0:12] /* verilator public_flat_rd */;
+    assign rfl[`RFP_BC]  = rfl_bc; assign rfl[`RFP_DE]  = rfl_de;
+    assign rfl[`RFP_HL]  = rfl_hl; assign rfl[`RFP_AF]  = rfl_af;
+    assign rfl[`RFP_BC2] = rfl_bc2; assign rfl[`RFP_DE2] = rfl_de2;
+    assign rfl[`RFP_HL2] = rfl_hl2; assign rfl[`RFP_AF2] = rfl_af2;
+    assign rfl[`RFP_IX]  = rfl_ix; assign rfl[`RFP_IY]  = rfl_iy;
+    assign rfl[`RFP_SP]  = r_sp;   assign rfl[`RFP_PC]  = r_pc;
+    assign rfl[`RFP_WZ]  = r_wz;
+
     wire [15:0] pc_next;        // PC after this edge (next M1 address)
-    wire [7:0]  f_next;         // F after this edge (Q commit)
+    // every port but the deferred writes moves on an advancing edge (and on a
+    // cut that ends inside a WAIT: the T2 micro-ops' writes stand)
+    wire we_norm = wr_edge || stall_cut;
     z80_regfile u_regs (
-        .clk(clk), .por_n(por_n), .pc_clr(pc_clr), .we(wr_edge), .ex_en(ex_edge),
-        .ex_dehl(ctl_ex_dehl), .ex_af(ctl_ex_af), .exx(ctl_exx),
-        .pw_we(ctl_pw), .pw_sel(pw_idx), .pw_d(pw_data),
-        .bw_we(ctl_bw && bw_en), .bw_sel(bw_pair), .bw_hi(bw_hi), .bw_d(bw_data),
-        .f_we(ctl_fw), .f_d(f_data),
-        .pc_we(pc_we), .pc_d(pc_d), .sp_we(sp_we), .sp_d(sp_d),
-        .wz_we(wz_we), .wz_d(wz_d),
+        .clk(clk), .por_n(por_n), .pc_clr(pc_clr), .we(we_norm || fire || fire1 || fire16), .ex_en(1'b1),
+        .ex_dehl(pex_dh && e2 && !cut), .ex_af(pex_af && e1 && !cut), .exx(pex_x && e2 && !cut),
+        .pw_we(ctl_pw && we_norm && !(ctl_pw_late && cut && !in_tw)), .pw_sel(pw_idx), .pw_d(pw_data),
+        .bw_we(fire ? (fire_bw && bw_en && !cut)
+                    : (ctl_bw && bw_en && we_norm && !defer_now &&
+                       !(cut && ex_edge && (irq_seq == 2'd0) && (rd_cls || (a16_cls && m_cycle == 3'd3))))),
+        .bw_sel(bw_pair), .bw_hi(bw_hi), .bw_d(bw_data),
+        .f_we(fire ? fire_fw : fire1 ? !cut : fire16 ? 1'b1 : (ctl_fw && we_norm && !defer_now)),
+        .f_d(fire16 ? (cut ? pf_cut : pf_val) : (fire && cut) ? f_cut : f_data),
+        .pc_we(pc_we && we_norm), .pc_d(pc_d), .sp_we(sp_we && we_norm), .sp_d(sp_d),
+        .wz_we(wz_we && we_norm), .wz_d(wz_d),
         .bc(r_bc), .de(r_de), .hl(r_hl), .af(r_af),
         .bc2(r_bc2), .de2(r_de2), .hl2(r_hl2), .af2(r_af2),
         .ix(r_ix), .iy(r_iy), .sp(r_sp), .pc(r_pc), .wz(r_wz),
-        .pc_next(pc_next), .f_next(f_next)
+        .pc_next(pc_next)
     );
 
     // =======================================================================
@@ -893,12 +1086,22 @@ module z80_core (
         prefix_n = prefix; iff1_n = iff1; iff2_n = iff2; im_n = im; halted_n = halted;
         tmp8_n = tmp8; tmph_n = tmph;
         reg_q_n = reg_q;
-        // Detect an F write this instruction (mirrors c->f_modified in
-        // cmodel/z80_core.c): the ALU is in a flag mode, so one of the
-        // execute paths commits alu_fout. Q at instruction-done is F if
-        // it was written -- even with an unchanged value -- else 0
-        // (Sean Young 4.1; z80full 007 SCF+CCF, 102/103 INIR/INDR->NOP').
-        f_modified_n = f_modified | (alu_md != `FLAG_NONE);
+        pend_n = pend; pend1_n = pend1; pend_rep_n = pend_rep; pend_pv_n = pend_pv;
+        pf16_n = pf16; pf_val_n = pf_val; pf_cut_n = pf_cut; ph_val_n = ph_val;
+        pex_af_n = pex_af; pex_x_n = pex_x; pex_dh_n = pex_dh;
+        // the deferred writes land (a RESET cut ending here blocks them, but
+        // F after a cut on T2): the decode held for them goes, and Q is the
+        // F they wrote, or 0
+        if (fire)  begin pend_n = 1'b0;  prefix_n = `PFX_NONE; if (!cut) reg_q_n = fire_fw ? f_data : 8'h00; end
+        if (fire1) begin pend1_n = 1'b0; prefix_n = `PFX_NONE; if (!cut) reg_q_n = f_data; end
+        if (fire16) begin pf16_n = 1'b0; if (!cut) reg_q_n = pf_val; end
+        if (e1) pex_af_n = 1'b0;
+        if (e2) begin pex_x_n = 1'b0; pex_dh_n = 1'b0; end
+        // ADD / ADC / SBC HL: the sum at the first internal M-cycle's end --
+        // L there, H at the second's end, F in the next M1
+        if (ex_edge && a16_cls && (m_cycle == 3'd2) && (irq_seq == 2'd0)) begin
+            ph_val_n = a16[15:8]; pf_val_n = a16_f; pf_cut_n = pf_cut_d;
+        end
         ei_delay_n = ei_delay; suppress_decode_n = suppress_decode;
         bus_granted_n = bus_granted; irq_seq_n = irq_seq; im0_ins_n = im0_ins;
         nmi_sampled_n = nmi_sampled; int_sampled_n = int_sampled;
@@ -1028,7 +1231,6 @@ module z80_core (
             if (ctl_halt)  halted_n = 1'b1;
             if (ctl_ld_i)  reg_i_n = A_cur;
             if (ctl_ld_r)  reg_r_n = A_cur;
-            if (ctl_ex_af) f_modified_n = 1'b1;   // Q sees the swapped-in F
 
             if (ctl_mstart) begin
                 bus_op_n  = ctl_bop;
@@ -1046,11 +1248,18 @@ module z80_core (
             end
 
             if (ctl_fin) begin
-                prefix_n = `PFX_NONE; im0_ins_n = 1'b0;
-                // Commit Q: F if THIS instruction wrote F, else 0 (Sean Young
-                // 4.1 + ZEXALL <daa,cpl,scf,ccf>).
-                reg_q_n = f_modified_n ? f_next : 8'h00;
-                f_modified_n = 1'b0;
+                // a deferred instruction keeps its decode and Q until fire
+                prefix_n = (defer_now || defer1_now) ? prefix : `PFX_NONE; im0_ins_n = 1'b0;
+                // Q: F if the instruction wrote F, else 0 (Sean Young 4.1; z80full
+                // 007 SCF+CCF, 102/103 INIR/INDR->NOP') -- the instructions that
+                // write F commit it with their F write (fire, fire1, fire16);
+                // EX AF,AF' the F it swaps in; the rest write none
+                reg_q_n = (defer_now || defer1_now || a16_now) ? reg_q :
+                          (fin_ok && ctl_ex_af) ? r_af2[7:0] : 8'h00;
+                if (defer_now)  begin pend_n = 1'b1; pend_pv_n = iff2 & ~ldair_int; pend_rep_n = blk_rep_fin; end
+                if (defer1_now) begin pend1_n = 1'b1; pend_rep_n = blk_rep_fin; end
+                if (a16_now) pf16_n = 1'b1;
+                if (fin_ok) begin pex_af_n = ctl_ex_af; pex_x_n = ctl_exx; pex_dh_n = ctl_ex_dehl; end
                 // begin_next: decide NMI / INT / HALT / next opcode
                 begin
                     allow_int = ~ei_delay_n;         // ei_delay_n reflects EI this cycle
@@ -1125,7 +1334,8 @@ module z80_core (
             prefix_n = `PFX_NONE; irq_seq_n = 2'd0; suppress_decode_n = 1'b0; im0_ins_n = 1'b0;
             ei_delay_n = 1'b0; nmi_sampled_n = 1'b0; int_sampled_n = 1'b0;
             nmi_pending_n = 1'b0; bus_granted_n = 1'b0; srst_m1_n = 1'b0;
-            f_modified_n = 1'b0; in_tw_n = 1'b0;
+            in_tw_n = 1'b0;
+            pend_n = 1'b0; pend1_n = 1'b0; pf16_n = 1'b0; pex_af_n = 1'b0; pex_x_n = 1'b0; pex_dh_n = 1'b0;
         end
     end
 
@@ -1147,7 +1357,10 @@ module z80_core (
             nmi_pending <= 1'b0; prev_nmi_n <= 1'b1; ei_delay <= 1'b0;
             nmi_sampled <= 1'b0; int_sampled <= 1'b0;
             suppress_decode <= 1'b0; bus_granted <= 1'b0; irq_seq <= 2'd0; im0_ins <= 1'b0;
-            reg_q <= 8'h00; f_modified <= 1'b0;
+            reg_q <= 8'h00;
+            pend <= 1'b0; pend1 <= 1'b0; pend_rep <= 1'b0; pend_pv <= 1'b0; pf16 <= 1'b0;
+            pf_val <= 8'h00; pf_cut <= 8'h00; ph_val <= 8'h00;
+            pex_af <= 1'b0; pex_x <= 1'b0; pex_dh <= 1'b0;
             res2 <= 1'b1; sres <= 1'b0; rst_idle <= 1'b1; srst_m1 <= 1'b0; rd_hold <= 1'b0;
             in_tw <= 1'b0;
             addr_hold <= 16'h0000;
@@ -1165,7 +1378,10 @@ module z80_core (
             nmi_sampled <= nmi_sampled_n; int_sampled <= int_sampled_n;
             suppress_decode <= suppress_decode_n; bus_granted <= bus_granted_n; irq_seq <= irq_seq_n;
             im0_ins <= im0_ins_n;
-            reg_q <= reg_q_n; f_modified <= f_modified_n;
+            reg_q <= reg_q_n;
+            pend <= pend_n; pend1 <= pend1_n; pend_rep <= pend_rep_n; pend_pv <= pend_pv_n; pf16 <= pf16_n;
+            pf_val <= pf_val_n; pf_cut <= pf_cut_n; ph_val <= ph_val_n;
+            pex_af <= pex_af_n; pex_x <= pex_x_n; pex_dh <= pex_dh_n;
         end
     end
 

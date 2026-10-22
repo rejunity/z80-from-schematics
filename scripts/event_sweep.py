@@ -108,12 +108,10 @@ IM0_SEQS = {
 BASIC = ["inc_a", "ld_a_hl", "ld_hl_a", "inc_hl"]
 GROUPS = ["int", "nmi", "nmi_short", "nmi_reentry", "reset", "reset_release",
           "reset_wait", "reset_short", "combo", "busreq", "wait", "im2", "im2_combo",
-          "im0", "im0_combo", "opcodes", "classes", "classes_reset", "fuzz", "fuzz_reset",
-          "reset_m1wait", "reset_busreq", "reset_nmi", "latch"]
-# run only when named (--groups): RESET at every T-state of the timing classes,
-# the fuzz with RESET and NMI after RESET's release, where the die's register
-# write-back timing still differs (known difference 19)
-EXPLICIT = {"classes_reset", "fuzz_reset", "reset_nmi"}
+          "im0", "im0_combo", "opcodes", "classes", "classes_reset", "opcodes_reset", "fuzz",
+          "fuzz_reset", "reset_m1wait", "reset_busreq", "reset_nmi", "latch"]
+# run only when named (--groups): RESET at every T-state of every opcode
+EXPLICIT = {"opcodes_reset"}
 FUZZ_N, FUZZ_SEED = 2000, 1     # the recorded fuzz cases; --fuzz-seed / --fuzz-n for others
 
 # ---- the data latch (the `latch` group) -------------------------------------
@@ -261,10 +259,13 @@ def all_opcodes():
     return out
 
 
-def program(target, im=1, ei=False, nmi_nops=0, setup=()):
+def program(target, im=1, ei=False, nmi_nops=0, setup=(), full_dump=False):
     """The sweep program as a 64K image (same layout as the hardware harness
     in hardesk's rp2350b_driver tests/event_sweep.cpp). setup: bytes run
-    after the register setup, before [EI and] the jump to the marker."""
+    after the register setup, before [EI and] the jump to the marker.
+    full_dump: the code at 0000 stores every register a RESET keeps --
+    A and F first (PUSH AF), IX, IY and the alternates too -- for the cases
+    with a RESET pulse."""
     ram = bytearray(0x10000)
     for i in range(0x100):
         ram[0x8000 + i] = (0x11 * (i + 1)) & 0xff
@@ -272,7 +273,22 @@ def program(target, im=1, ei=False, nmi_nops=0, setup=()):
     def put(at, data):
         ram[at:at + len(data)] = bytes(data)
     # 0000: register dump (what a reset left), then on to the setup
-    put(0x0000, [0xed, 0x73, 0x00, 0x70,          # LD (7000),SP
+    if full_dump:
+        put(0x0000, [0xf5,                        # PUSH AF: A and F as the reset left them
+                     0xed, 0x73, 0x00, 0x70,      # LD (7000),SP (after the push)
+                     0xed, 0x43, 0x02, 0x70,      # LD (7002),BC
+                     0xed, 0x53, 0x04, 0x70,      # LD (7004),DE
+                     0x22, 0x06, 0x70,            # LD (7006),HL (I and R: RESET clears them)
+                     0xdd, 0x22, 0x0a, 0x70,      # LD (700A),IX
+                     0xfd, 0x22, 0x0c, 0x70,      # LD (700C),IY
+                     0x08, 0xf5, 0x08,            # EX AF,AF'; PUSH AF; EX AF,AF'
+                     0xd9,                        # EXX
+                     0xed, 0x43, 0x10, 0x70,      # LD (7010),BC'
+                     0xed, 0x53, 0x12, 0x70,      # LD (7012),DE'
+                     0x22, 0x14, 0x70,            # LD (7014),HL'
+                     0xd9, 0xc3, 0x00, 0x01])     # EXX; JP 0100
+    else:
+      put(0x0000, [0xed, 0x73, 0x00, 0x70,        # LD (7000),SP
                  0xed, 0x43, 0x02, 0x70,          # LD (7002),BC
                  0xed, 0x53, 0x04, 0x70,          # LD (7004),DE
                  0x22, 0x06, 0x70,                # LD (7006),HL
@@ -318,7 +334,8 @@ def at(n, j):
 
 def case(name, group, target, pulses, run=None, **kw):
     """pulses: [(pin, lo, hi)] in sixteenths, hi=-1 never released. target:
-    a TARGETS name, or any name with code= (the bytes under test)."""
+    a TARGETS name, or any name with code= (the bytes under test). A case
+    with a RESET pulse gets the full register dump at 0000."""
     length = TARGETS[target][1] if target in TARGETS else 0
     c = {"name": name, "group": group, "target": target, "pulses": pulses,
          "run": run or (140 if target == "ldir" else 60 + length),
@@ -328,12 +345,13 @@ def case(name, group, target, pulses, run=None, **kw):
          "busreq_walk": False, "wait_walk": False, "dwin": None}
     c.update(kw)
     c["code"], c["setup"] = tuple(c["code"]), tuple(c["setup"])
+    c["full_dump"] = any(p == RESET for p, _, _ in pulses)
     return c
 
 
 def prog_id(c):
     """What the program image depends on."""
-    return (c["code"], c["setup"], c["im"], c["ei"], c["nmi_nops"])
+    return (c["code"], c["setup"], c["im"], c["ei"], c["nmi_nops"], c["full_dump"])
 
 
 def cases(groups, phases, fuzz=(FUZZ_N, FUZZ_SEED)):
@@ -553,6 +571,12 @@ def cases(groups, phases, fuzz=(FUZZ_N, FUZZ_SEED)):
     for g in ("fuzz", "fuzz_reset"):    # random code, modes and pin events
         if want(g):
             out += fuzz_cases(g, *fuzz)
+    if want("opcodes_reset"):  # RESET at every T-state of every opcode, one position per T-state
+        lengths = opcode_lengths()
+        for name, code, setup in all_opcodes():
+            for n in range(lengths[name] + 2):
+                out.append(case(f"opr_{name}_T{n}", "opcodes_reset", name, [(RESET, at(n, 4), at(n, 4) + 64)],
+                                code=code, setup=setup, run=300, meta={"n": n, "phase": 4}))
     if want("latch"):        # the data latch: the right byte in one half-cycle of a read
         for name, kind, code, t1, vv, dd, what in LATCH_READS:
             for nw in (0, 1):
@@ -1019,6 +1043,28 @@ def report(results, baseline, new, changed, fixed, path, latch=None):
         f.write("\n".join(out) + "\n")
 
 
+def opcode_lengths():
+    """{program: T-states} of the `opcodes` group's programs, from their
+    recorded plain traces: from the first opcode fetch to the next
+    instruction's"""
+    cache, hid = load_cache(), harness_id()
+    out = {}
+    for c in cases(["opcodes"], 2):
+        if c["meta"]["kind"] != "plain":
+            continue
+        c["prog_sha"] = hashlib.sha1(program(c["code"], c["im"], c["ei"], c["nmi_nops"], c["setup"],
+                                             c["full_dump"])).hexdigest()[:16]
+        text = cache.get(cache_key(c, hid))
+        if text is None:
+            sys.exit(f"{c['name']}: no recorded trace (run --groups opcodes --record first)")
+        rows = parse_rows(text, c["name"])
+        fetch = [r[H] for i, r in enumerate(rows) if r[H] >= 8 and not r[M1] and r[CLK] and r[MREQ]
+                 and r[IORQ] and rows[i - 1][M1]]
+        k = 2 if c["code"][0] in (0xcb, 0xed, 0xdd, 0xfd) else 1
+        out[c["target"]] = (fetch[k] - fetch[0]) // 2 if len(fetch) > k else 24
+    return out
+
+
 def timing_classes(cache, hid):
     """Group the `opcodes` group's programs by perfectz80's control pins
     (plain run, BUSREQ walk, WAIT walk) from the recorded traces: prints
@@ -1030,7 +1076,8 @@ def timing_classes(cache, hid):
     for c in todo:
         pid = prog_id(c)
         if pid not in shas:
-            shas[pid] = hashlib.sha1(program(c["code"], c["im"], c["ei"], c["nmi_nops"], c["setup"])).hexdigest()[:16]
+            shas[pid] = hashlib.sha1(program(c["code"], c["im"], c["ei"], c["nmi_nops"], c["setup"],
+                                             c["full_dump"])).hexdigest()[:16]
         c["prog_sha"] = shas[pid]
     pins = lambda rows: tuple((r[M1], r[MREQ], r[IORQ], r[RD], r[WR], r[RFSH], r[HALT], r[BUSACK]) for r in rows)
     runs = collections.defaultdict(dict)
@@ -1105,7 +1152,7 @@ def main():
     for c in todo:             # one program file per distinct image, named by its hash
         pid = prog_id(c)
         if pid not in progs:
-            ram = program(c["code"], c["im"], c["ei"], c["nmi_nops"], c["setup"])
+            ram = program(c["code"], c["im"], c["ei"], c["nmi_nops"], c["setup"], c["full_dump"])
             sha = hashlib.sha1(ram).hexdigest()[:16]
             path = os.path.join(work, f"prog_{sha}.hex")
             if not os.path.exists(path):

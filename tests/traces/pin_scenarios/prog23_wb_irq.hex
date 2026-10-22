@@ -1,0 +1,55 @@
+# The register write-back across an interrupt response: each target is a
+# prefixed instruction whose writes the die makes in the next M1 -- here the
+# INTA cycle (INT held low, EI before each target) or, for the last, the
+# NMI response's M1 -- so they land while the response's decode stands.
+# Each handler puts IX, IY, BC, DE, HL and AF on the address bus (loads
+# through them), where the gate compares them with perfectz80.
+@0000
+C3 00 01           # JP 0100h
+@0038
+E5                 # IM1 handler: PUSH HL
+F5                 # PUSH AF
+DD 7E 00           # LD A,(IX+0)   address IX
+FD 7E 00           # LD A,(IY+0)   address IY
+0A                 # LD A,(BC)     address BC
+1A                 # LD A,(DE)     address DE
+7E                 # LD A,(HL)     address HL
+E1                 # POP HL        HL = AF
+7E                 # LD A,(HL)     address AF
+E5 F1              # PUSH HL; POP AF   AF back
+E1                 # POP HL
+C9                 # RET (IFF1 stays clear: the next EI enables)
+@0066
+E5                 # NMI handler: the same dump
+F5
+DD 7E 00
+FD 7E 00
+0A
+1A
+7E
+E1
+7E
+E5 F1
+E1
+ED 45              # RETN
+@0100
+31 00 90           # LD SP,9000h
+ED 56              # IM 1
+DD 21 00 82        # LD IX,8200h
+FD 21 00 83        # LD IY,8300h
+01 34 12           # LD BC,1234h
+11 78 56           # LD DE,5678h
+21 BC 9A           # LD HL,9ABCh
+3E 5A              # LD A,5Ah
+ED 47              # LD I,A
+FB DD 2C           # EI; INC IXL      (DD: the index form)
+FB ED 44           # EI; NEG          (ED)
+FB CB 00           # EI; RLC B        (CB)
+FB FD 6F           # EI; LD IYL,A     (FD)
+FB ED 57           # EI; LD A,I       (P/V: the INT taken clears it)
+FB DD CB 05 06     # EI; RLC (IX+5)   (DD CB: F)
+FB DD 7E 05        # EI; LD A,(IX+5)  (DD, the byte read)
+FB DD 26 77        # EI; LD IXH,77h   (DD, the immediate)
+DD 2D              # DEC IXL          (the NMI pulse lands in it)
+00 00 00 00        # NOPs
+76                 # HALT

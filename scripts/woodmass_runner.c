@@ -155,7 +155,7 @@ int main(int argc, char **argv) {
     for (;;) {
         uint16_t pc = s->cpu.rf[RFP_PC];
         if (pc == 0x0010) {
-            unsigned char ch = (unsigned char)(s->cpu.rf[RFP_AF] >> 8);
+            unsigned char ch = (unsigned char)(z80_arch(&s->cpu)->rf[RFP_AF] >> 8);
             putchar((int)ch);
             if (cap_used < cap_sz - 1) captured[cap_used++] = (char)ch;
             hash ^= (uint32_t)ch;

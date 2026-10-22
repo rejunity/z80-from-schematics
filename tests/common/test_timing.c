@@ -226,7 +226,7 @@ static void test_ld_r_n(void) {
     CHECK(walk_m1_cycle(),  "LD A,n  : M1");
     CHECK(walk_mread_cycle(), "LD A,n : MREAD for n");
     CHECK(walk_m1_cycle(), "trailing NOP M1");
-    CHECK_EQ_U(z80_get_r8(&S.cpu, REG_A), 0x7C, "A holds the immediate byte");
+    CHECK_EQ_U(z80_get_r8(z80_arch(&S.cpu), REG_A), 0x7C, "A holds the immediate byte");
 }
 
 static void test_ld_hl_n(void) {
@@ -250,7 +250,7 @@ static void test_ld_a_hl(void) {
     CHECK(walk_m1_cycle(),    "LD A,(HL) : M1");
     CHECK(walk_mread_cycle(), "LD A,(HL) : MREAD");
     CHECK(walk_m1_cycle(), "trailing NOP M1");
-    CHECK_EQ_U(z80_get_r8(&S.cpu, REG_A), 0xA5, "A holds the loaded byte");
+    CHECK_EQ_U(z80_get_r8(z80_arch(&S.cpu), REG_A), 0xA5, "A holds the loaded byte");
 }
 
 static void test_ld_hl_r(void) {
@@ -273,7 +273,7 @@ static void test_ld_rp_nn(void) {
     CHECK(walk_mread_cycle(),  "LD BC,nn : MREAD low");
     CHECK(walk_mread_cycle(),  "LD BC,nn : MREAD high");
     CHECK(walk_m1_cycle(), "trailing NOP M1");
-    CHECK_EQ_U(S.cpu.rf[RFP_BC], 0x1234, "BC loaded from immediate");
+    CHECK_EQ_U(z80_arch(&S.cpu)->rf[RFP_BC], 0x1234, "BC loaded from immediate");
 }
 
 static void test_ld_nn_a(void) {
@@ -297,7 +297,7 @@ static void test_alu_r(void) {
     z80_set_r8(&S.cpu, REG_B, 0x20);
     CHECK(walk_m1_cycle(), "ADD A,B : M1 (no memory operand)");
     CHECK(walk_m1_cycle(), "trailing NOP M1");
-    CHECK_EQ_U(z80_get_r8(&S.cpu, REG_A), 0x30, "A = 0x10 + 0x20");
+    CHECK_EQ_U(z80_get_r8(z80_arch(&S.cpu), REG_A), 0x30, "A = 0x10 + 0x20");
 }
 
 static void test_halt(void) {
@@ -336,7 +336,7 @@ static void test_pop(void) {
     CHECK(walk_mread_cycle(), "POP BC : MREAD low");
     CHECK(walk_mread_cycle(), "POP BC : MREAD high");
     CHECK(walk_m1_cycle(), "trailing NOP M1");
-    CHECK_EQ_U(S.cpu.rf[RFP_BC], 0x1234, "BC popped from stack");
+    CHECK_EQ_U(z80_arch(&S.cpu)->rf[RFP_BC], 0x1234, "BC popped from stack");
 }
 
 static void test_jp_nn(void) {
@@ -359,7 +359,7 @@ static void test_jr_taken(void) {
     CHECK(walk_silent_t(5),    "JR e : 5-T internal (taken)");
     CHECK(walk_m1_cycle(), "trailing NOP M1 at target");
     /* JR +2 from PC=2 (after the displacement read) lands at 4. */
-    CHECK_EQ_U(S.cpu.rf[RFP_PC], 0x0005, "PC advanced by JR + trailing NOP");
+    CHECK_EQ_U(z80_arch(&S.cpu)->rf[RFP_PC], 0x0005, "PC advanced by JR + trailing NOP");
 }
 
 static void test_call_nn(void) {
@@ -394,7 +394,7 @@ static void test_ret(void) {
        3rd M-cycle; PC is updated to WZ at the start of the next M1.
        Walk a trailing M1 to commit the new PC. */
     CHECK(walk_m1_cycle(), "M1 at RET target");
-    CHECK_EQ_U(S.cpu.rf[RFP_PC], 0x0011, "PC at RET target + 1 after trailing NOP");
+    CHECK_EQ_U(z80_arch(&S.cpu)->rf[RFP_PC], 0x0011, "PC at RET target + 1 after trailing NOP");
 }
 
 static void test_rst(void) {
@@ -408,7 +408,7 @@ static void test_rst(void) {
     CHECK(walk_mwrite_cycle(), "RST 18h : MWRITE PCL");
     CHECK(walk_m1_cycle(), "M1 at RST vector");
     CHECK_EQ_U(S.mem[0xFFEE], 0x01, "stack[SP-2] = return PCL = 1");
-    CHECK_EQ_U(S.cpu.rf[RFP_PC], 0x0019, "PC at RST vector + 1 after trailing NOP");
+    CHECK_EQ_U(z80_arch(&S.cpu)->rf[RFP_PC], 0x0019, "PC at RST vector + 1 after trailing NOP");
 }
 
 static void test_in_a_n(void) {
@@ -424,7 +424,7 @@ static void test_in_a_n(void) {
     CHECK(walk_mread_cycle(),  "IN A,(n) : MREAD for n");
     CHECK(walk_ioread_cycle(), "IN A,(n) : IORD");
     CHECK(walk_m1_cycle(), "trailing NOP M1");
-    CHECK_EQ_U(z80_get_r8(&S.cpu, REG_A), 0xA5, "A holds the I/O input byte");
+    CHECK_EQ_U(z80_get_r8(z80_arch(&S.cpu), REG_A), 0xA5, "A holds the I/O input byte");
 }
 
 static void test_out_n_a(void) {
@@ -448,7 +448,7 @@ static void test_cb_r(void) {
     CHECK(walk_m1_cycle(), "RLC B : M1 (CB prefix)");
     CHECK(walk_m1_cycle(), "RLC B : M1 (opcode)");
     CHECK(walk_m1_cycle(), "trailing NOP M1");
-    CHECK_EQ_U(z80_get_r8(&S.cpu, REG_B), 0x03, "B = RLC(0x81)");
+    CHECK_EQ_U(z80_get_r8(z80_arch(&S.cpu), REG_B), 0x03, "B = RLC(0x81)");
 }
 
 static void test_cb_hl(void) {
@@ -473,7 +473,7 @@ static void test_ed_neg(void) {
     CHECK(walk_m1_cycle(), "NEG : M1 (ED prefix)");
     CHECK(walk_m1_cycle(), "NEG : M1 (opcode)");
     CHECK(walk_m1_cycle(), "trailing NOP M1");
-    CHECK_EQ_U(z80_get_r8(&S.cpu, REG_A), 0xFF, "A = NEG(0x01)");
+    CHECK_EQ_U(z80_get_r8(z80_arch(&S.cpu), REG_A), 0xFF, "A = NEG(0x01)");
 }
 
 static void test_ed_in_r_c(void) {
@@ -486,7 +486,7 @@ static void test_ed_in_r_c(void) {
     CHECK(walk_m1_cycle(),     "IN B,(C) : M1 (opcode)");
     CHECK(walk_ioread_cycle(), "IN B,(C) : IORD");
     CHECK(walk_m1_cycle(), "trailing NOP M1");
-    CHECK_EQ_U(z80_get_r8(&S.cpu, REG_B), 0xCC, "B holds the I/O input byte");
+    CHECK_EQ_U(z80_get_r8(z80_arch(&S.cpu), REG_B), 0xCC, "B holds the I/O input byte");
 }
 
 static void test_ed_ld_rp_nn(void) {
@@ -503,7 +503,7 @@ static void test_ed_ld_rp_nn(void) {
     CHECK(walk_mread_cycle(), "LD HL,(nn) : MREAD data low");
     CHECK(walk_mread_cycle(), "LD HL,(nn) : MREAD data high");
     CHECK(walk_m1_cycle(), "trailing NOP M1");
-    CHECK_EQ_U(S.cpu.rf[RFP_HL], 0x1234, "HL loaded from (nn)");
+    CHECK_EQ_U(z80_arch(&S.cpu)->rf[RFP_HL], 0x1234, "HL loaded from (nn)");
 }
 
 static void test_ed_adc_hl_rp(void) {
@@ -518,7 +518,7 @@ static void test_ed_adc_hl_rp(void) {
     CHECK(walk_m1_cycle(),  "ADC HL,DE : M1 (opcode)");
     CHECK(walk_silent_t(7), "ADC HL,DE : 7-T internal");
     CHECK(walk_m1_cycle(), "trailing NOP M1");
-    CHECK_EQ_U(S.cpu.rf[RFP_HL], 0x1234, "HL = HL + DE (carry clear)");
+    CHECK_EQ_U(z80_arch(&S.cpu)->rf[RFP_HL], 0x1234, "HL = HL + DE (carry clear)");
 }
 
 static void test_dd_ld_ix_nn(void) {
@@ -530,7 +530,7 @@ static void test_dd_ld_ix_nn(void) {
     CHECK(walk_mread_cycle(), "LD IX,nn : MREAD low");
     CHECK(walk_mread_cycle(), "LD IX,nn : MREAD high");
     CHECK(walk_m1_cycle(), "trailing NOP M1");
-    CHECK_EQ_U(S.cpu.rf[RFP_IX], 0x1234, "IX loaded from immediate");
+    CHECK_EQ_U(z80_arch(&S.cpu)->rf[RFP_IX], 0x1234, "IX loaded from immediate");
 }
 
 static void test_dd_ld_a_ixd(void) {
@@ -546,7 +546,7 @@ static void test_dd_ld_a_ixd(void) {
     CHECK(walk_silent_t(5),    "LD A,(IX+d) : 5-T internal IX+d compute");
     CHECK(walk_mread_cycle(),  "LD A,(IX+d) : MREAD data");
     CHECK(walk_m1_cycle(), "trailing NOP M1");
-    CHECK_EQ_U(z80_get_r8(&S.cpu, REG_A), 0xEE, "A holds data from (IX+d)");
+    CHECK_EQ_U(z80_get_r8(z80_arch(&S.cpu), REG_A), 0xEE, "A holds data from (IX+d)");
 }
 
 static void test_ddcb_bit(void) {

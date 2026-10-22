@@ -76,7 +76,6 @@ def emit_test(t):
     body.append(f'        `core.halted     = 1\'b{t["halted"]}; `core.halted_n  = 1\'b{t["halted"]};')
     # Q convention: F before the test was the Q value (last F-modifying instr's F).
     body.append(f'        `core.reg_q      = 8\'h{t["af"] & 0xFF:02x}; `core.reg_q_n = 8\'h{t["af"] & 0xFF:02x};')
-    body.append(f'        `core.f_modified = 1\'b0; `core.f_modified_n = 1\'b0;')
     # Minimal bus-state poke: m_addr alone, mirroring what z80_set_pc does on
     # the C side (cmodel/z80_core.c). Without this, the in-flight post-reset
     # M1 still has m_addr=0 (from reset) and reads mem[0] instead of mem[PC]

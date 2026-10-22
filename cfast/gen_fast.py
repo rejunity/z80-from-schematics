@@ -12,7 +12,14 @@
 # z80_fast_labels.h (computed goto), z80_fast_cases.h (switch).
 #
 # A bus-cycle template is a (bus_op, m_len) pair; it has one labelled step
-# per phase it produces, T1.P .. Tlast.N, and one for its M-cycle end. A
+# per phase it produces, T1.P .. Tlast.N, and one for its M-cycle end. An
+# M-cycle in which the model writes a register before its last edge (its
+# wb_mid(): an IDU step the die makes inside the M-cycle, docs/timing.md
+# "Register write-back") runs in a variant of its template, key | 0x80,
+# whose step for that edge calls wb_hooks(); the M-cycle's last edge is the
+# model's own (end_mcycle). The edges that end an M1's T1 and T2 make the
+# writes the last instruction left for them (wb_fire: the die's write-back
+# in the next M1; fast mode never sees a RESET cut there). A
 # step is straight-line code with the phase's constants folded in: the pins
 # (the timing ROM, z80_timing), whether it latches data (the bus cycle's
 # latch_*(), as do_latch() picks it), samples INT (Tlast.P) or ends the
@@ -43,8 +50,8 @@
 #   ZF_PHASE_CHK(next)   the same after an M1 opcode latch, which leaves
 #                        fast mode for a HALT
 #   ZF_SLOW_AT(step)     hand this phase to the reference engine
-#   ZF_GOTO_T1P(k)       continue with the T1.P of template k = bus_op << 4 | m_len
-#                        (end_mcycle() returns it)
+#   ZF_GOTO_T1P(k)       continue with the T1.P of template k = bus_op << 4 | m_len,
+#                        | 0x80 for the variant (end_mcycle() returns it)
 #
 # Fast mode never sees WAIT, BUSREQ, RESET or NMI asserted, a halt, an
 # interrupt acknowledge, the instruction an interrupting device hands over
@@ -65,22 +72,29 @@ def main():
     out = sys.argv[2]
     busops = tab["busops"]
     ph = {(p["op"], p["t"], p["phi"]): p for p in tab["phases"]}
+    # the M-cycles with a register write inside them: template -> the T-state
+    # whose end edge makes it
+    mid = {(m["op"], m["len"]): m["t"] for m in tab["wb_mid"]}
 
     templates = []
     for name in FAST_OPS:
         op, base = busops[name]
         for n in range(max(1, base), min(base + 8, 16)):
-            templates.append((name, op, n))
+            templates.append((name, op, n, None))
+            if (name, n) in mid:
+                templates.append((name, op, n, mid.pop((name, n))))
+    assert not mid, f"wb_mid templates fast mode doesn't run: {mid}"
 
     enum, code, t1p = ["FS_NONE = 0"], [], []
     tphi = [(0, 0)]                     # (t, phi) of the phase each step produces
-    for name, op, n in templates:
-        tid = f"{name}_{n}"
+    for name, op, n, hook in templates:
+        tid = f"{name}_{n}" + ("_W" if hook else "")
         seq = [(t, phi) for t in range(1, n + 1) for phi in (0, 1)]
         ids = [f"FS_{tid}_T{t}{'PN'[phi]}" for t, phi in seq] + [f"FS_{tid}_END"]
         enum += ids
         tphi += seq + [(n + 1, 0)]      # the M-cycle end produces the next T1.P
-        t1p.append((f"BUSOP_{name} << 4 | {n}", ids[0]))
+        t1p.append(((op << 4 | n) | (0x80 if hook else 0),
+                    f"BUSOP_{name} << 4 | {n}" + (" | 0x80" if hook else ""), ids[0]))
 
         for i, (t, phi) in enumerate(seq):
             p = ph[(op, t, phi)]
@@ -92,6 +106,12 @@ def main():
                 body.append(f"bus = {a} | (uint64_t)c->m_wdata << Z80_PIN_D0; ZF_SAVE_BUS();")
             else:
                 body.append(f"ZF_CLOCK({t}, {phi});")
+                if name == "M1" and phi == 0 and t in (2, 3):
+                    # the edge that ends T(t-1): the last instruction's writes
+                    body.append(f"if (c->wbp) wb_fire(c, {t - 1}, false);")
+                if phi == 0 and hook == t - 1:
+                    # the edge that ends T(t-1): the die's register write in it
+                    body.append(f"wb_hooks(c, {hook});")
                 pp = ph[(op, t, 0)] if phi else ph[(op, t - 1, 1)]   # the phase before
                 assert p["held"] or not pp["held"], (name, n, t, phi)
                 if p["held"] and not pp["held"]:
@@ -120,7 +140,8 @@ def main():
             body.append(f"pins = (pins & ~Z80_OUT_PIN_MASK) | {bits} | {busw};")
             mac = "ZF_PHASE_T1P" if (t, phi) == (1, 0) else "ZF_PHASE_CHK" if chk else "ZF_PHASE"
             body.append(f"{mac}({ids[i + 1]});")
-            code.append(f"ZF_LABEL({ids[i]}): /* {name} m_len {n}: T{t}.{'PN'[phi]} */\n    "
+            what = f"{name} m_len {n}{' (wb_mid)' if hook else ''}"
+            code.append(f"ZF_LABEL({ids[i]}): /* {what}: T{t}.{'PN'[phi]} */\n    "
                         + "\n    ".join(body))
         # the M-cycle end: the sequencer, then the T1.P of what it set up
         body = [f"if (c->int_sampled && c->iff1) ZF_SLOW_AT({ids[-1]});  /* INT accept */",
@@ -128,18 +149,20 @@ def main():
         if ph[(op, n, 1)]["refresh_end"]:
             body.append(R_STEP)
         body.append("ZF_GOTO_T1P(end_mcycle(c));")
-        code.append(f"ZF_LABEL({ids[-1]}): /* {name} m_len {n}: M-cycle end */\n    "
-                    + "\n    ".join(body))
+        code.append(f"ZF_LABEL({ids[-1]}): /* {name} m_len {n}{' (wb_mid)' if hook else ''}: "
+                    "M-cycle end */\n    " + "\n    ".join(body))
 
     hdr = ("/* generated by cfast/gen_fast.py from the reference model's timing "
            "tables -- do not edit */\n")
+    lab = {key: s for key, _, s in t1p}
     files = {
         # the steps and their order
         "z80_fast_enum.h":
             "enum {\n" + "".join(f"    {e},\n" for e in enum) + "    FS_COUNT\n};\n"
-            + "/* the T1.P step of each template, by bus_op << 4 | m_len */\n"
-            + "static const uint16_t zf_template[128] = {\n"
-            + "".join(f"    [{k}] = {s},\n" for k, s in t1p) + "};\n"
+            + "/* the T1.P step of each template, by bus_op << 4 | m_len (| 0x80: the\n"
+            + "   wb_mid variant) */\n"
+            + "static const uint16_t zf_template[256] = {\n"
+            + "".join(f"    [{k}] = {s},\n" for _, k, s in t1p) + "};\n"
             + "/* the phase each step produces: T-state, phi, and its offset in phases\n"
             + "   from the M-cycle's T1.P (an M-cycle end: the next T1.P) */\n"
             + "static const uint8_t zf_step_t[FS_COUNT] = {"
@@ -150,8 +173,10 @@ def main():
             + ",".join(str(2 * (t - 1) + p if t else 0) for t, p in tphi) + "};\n",
         # label address of every step (computed goto)
         "z80_fast_labels.h": "".join(f"    [{e}] = &&{e},\n" for e in enum[1:]),
-        # label address of each template's T1.P, by bus_op << 4 | m_len
-        "z80_fast_t1p_labels.h": "".join(f"    [{k}] = &&{e},\n" for k, e in t1p),
+        # label address of each template's T1.P, by bus_op << 4 | m_len (| 0x80),
+        # every key (none: zf_bad)
+        "z80_fast_t1p_labels.h": "".join(
+            f"    [{k}] = &&{lab.get(k, 'zf_bad')},\n" for k in range(256)),
         # switch dispatch to every step (without computed goto)
         "z80_fast_cases.h": "".join(f"    case {e}: goto {e};\n" for e in enum[1:]),
         # the steps

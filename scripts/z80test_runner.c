@@ -140,7 +140,7 @@ int main(int argc, char **argv)
         if (pc == 0x0000) break;
         if (pc == 0x0010) {
             /* RST 0x10 print: emit register A. */
-            unsigned char ch = (unsigned char)(s->cpu.rf[RFP_AF] >> 8);
+            unsigned char ch = (unsigned char)(z80_arch(&s->cpu)->rf[RFP_AF] >> 8);
             putchar((int)ch);
             if (cap_used < cap_sz - 1) captured[cap_used++] = (char)ch;
             fflush(stdout);

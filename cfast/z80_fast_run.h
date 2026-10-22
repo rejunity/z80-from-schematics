@@ -46,7 +46,7 @@ static uint64_t z80f_run(z80f_t *f, uint64_t pins)
         [FS_NONE] = &&zf_bad,
 #include "z80_fast_labels.h"
     };
-    static void *const t1p_label[128] = {
+    static void *const t1p_label[256] = {
 #include "z80_fast_t1p_labels.h"
     };
     if (!f->fast || (pins & ZF_SLOW_IN))

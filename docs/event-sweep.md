@@ -135,12 +135,13 @@ Instructions under test:
 | `im0_combo` | IM0 CALL 1234 after INC A; NMI, WAIT, BUSREQ or RESET (as in `im2_combo`) from every T-state of it |
 | `opcodes` | every opcode -- 1,841 programs: unprefixed, CB, ED, DD / FD and DD CB / FD CB, the flag-dependent ones also with F = 00 and FF, DJNZ also with B = 1, INIR / OTIR / INDR / OTDR with B = 2 -- each plain, with the BUSREQ walk, with the WAIT walk, with INT from the marker's T4 (EI) and with a 1 T NMI at its T1 |
 | `classes` | one opcode of each of the 68 timing classes the instructions above don't cover (`CLASS_REPS`): 1 T NMI, INT until INTA, 1 T and 4 T BUSREQ, 1 T and 3 T WAIT from every T-state |
-| `classes_reset` | 4 T RESET from every T-state of the same 68 (run by name: `--groups classes_reset`; known difference 19) |
+| `classes_reset` | 4 T RESET from every T-state of the same 68 |
 | `fuzz` | 2,000 random cases (seed 1): 3-10 instructions drawn from every opcode program, a random F and BC, IM0 (an RST byte), IM1 or IM2 (vector 40, 41 or FF), EI or not, and one to three NMI / INT / WAIT / BUSREQ pulses of random widths in the first 40 T-states, 200 T run |
-| `fuzz_reset` | the same with RESET among the pins (run by name; known difference 19) |
+| `fuzz_reset` | the same with RESET among the pins |
 | `reset_m1wait` | 4 T RESET at every quarter T-state while 1, 2 or 4 T of WAIT stretch the M1 of INC A and LD A,(HL) (known difference 25) |
 | `reset_busreq` | 4 T RESET at every quarter T-state around a 2 T and a 6 T BUSREQ from the T1 of INC A, LD A,(HL) and PUSH BC (known difference 26) |
-| `reset_nmi` | a 1 T NMI at every quarter T-state from 2 T before RESET's release to 8 T after it, RESET 3, 4 and 6 T (run by name; known differences 27 and 19) |
+| `reset_nmi` | a 1 T NMI at every quarter T-state from 2 T before RESET's release to 8 T after it, RESET 3, 4 and 6 T (known difference 27) |
+| `opcodes_reset` | 4 T RESET from every T-state of every opcode program of `opcodes`, one position per T-state (run by name: `--groups opcodes_reset`; known difference 19) |
 | `latch` | the data window: the right byte in one half-cycle of fifteen reads -- opcode fetches, memory and I/O reads, INTA in IM2 and IM0 -- from T1.P to T3.N, without and with a Tw; and each read with the byte all through it (268 cases) |
 
 The timing classes: the `opcodes` group's programs grouped by perfectz80's
@@ -167,7 +168,7 @@ that half sees the pulse. The sweep therefore shows whether the chip's
 input logic can catch such a pulse; it does not test the data sheet's
 minimum widths, which depend on analog timing.
 
-## Results (rejunity `sweep-all`, 21 October 2026; `latch`, 22 October)
+## Results (rejunity `nmos-writeback`, 22 October 2026)
 
 | group | cases | match | differ |
 |---|---|---|---|
@@ -175,7 +176,7 @@ minimum widths, which depend on analog timing.
 | nmi | 984 | 984 | 0 |
 | nmi_short | 1184 | 1184 | 0 |
 | nmi_reentry | 43 | 43 | 0 |
-| reset | 206 | 180 | 26 |
+| reset | 206 | 206 | 0 |
 | reset_release | 64 | 64 | 0 |
 | reset_wait | 32 | 32 | 0 |
 | reset_short | 240 | 240 | 0 |
@@ -188,26 +189,24 @@ minimum widths, which depend on analog timing.
 | im0_combo | 300 | 300 | 0 |
 | opcodes | 9205 | 9205 | 0 |
 | classes | 13260 | 13260 | 0 |
-| classes_reset (run by name) | 2210 | 2040 | 170 |
+| classes_reset | 2210 | 2210 | 0 |
 | fuzz | 2000 | 2000 | 0 |
+| fuzz_reset | 2000 | 2000 | 0 |
 | reset_m1wait | 264 | 264 | 0 |
 | reset_busreq | 312 | 312 | 0 |
-| reset_nmi (run by name) | 120 | 48 | 72 |
-| fuzz_reset (run by name) | 2000 | 1935 | 65 |
+| reset_nmi | 120 | 120 | 0 |
 | latch | 268 | 268 | 0 |
+| opcodes_reset (run by name) | 27768 | 27768 | 0 |
 
-The default run, 33,516 cases, matches perfectz80 in all but 26 -- the
-pads driven included -- and the C model matches the RTL in every
-half-cycle of all of them. The 26 in the baseline are RESET stopping
-ADD HL,BC or INC BC in the T-states where the die still writes their
-result (docs/known-differences.md row 19): the register dump after reset
-differs, the pins do not. `classes_reset`, RESET at every T-state of the
-68 classes, shows how far row 19 reaches: 170 cases in 27 classes (LD
-rr,nn, LD rr,(nn), JR, DJNZ, RST, IN r,(C), the DD / FD index forms, LDI /
-CPI / INI / OUTI and their repeats) store other registers after the reset
-than the die, and in 84 of them the C model and the RTL differ from each
-other too -- each writes some results at another T-state. It joins the
-default run when row 19 is fixed.
+The default run, 37,846 cases, matches perfectz80 in every one -- the pads
+driven and, after a RESET, every register the reset keeps included -- and
+the C model matches the RTL in every half-cycle of all of them; so does
+`opcodes_reset`, RESET at every T-state of every opcode program (27,768
+cases). The baseline is empty. Until known difference 19 was resolved the
+26 cases of RESET stopping ADD HL,BC or INC BC in the T-states where the
+die still writes their result were in it, and `classes_reset` (170 of
+2,210 differing, 84 of them between the C model and the RTL too),
+`reset_nmi` (72) and `fuzz_reset` (65) ran by name.
 
 When the sweep was written (main `ec3c5d2`, 2287 cases) 809 differed.
 Since then:
@@ -253,6 +252,11 @@ Since then:
   byte from the bus in T2.N (the last Tw.N) and read data from T3.P; the C
   model took each half a clock earlier, which no other group could see
   (known difference 28). It takes the die's edges now.
+- The register write-back (known difference 19): what a RESET part-way
+  through an instruction leaves -- the die's write edges, F after a cut on
+  the next M1's T2 from its flag latches, the address latch a cut shows in
+  a long internal M-cycle's T1, the T2 writes of a cycle WAIT stretches.
+  The RESET cases dump every register after the reset.
 
 `build/event_sweep/report.md` has the per-instruction grids.
 `build/event_sweep/diff/` has a side-by-side trace for every differing case.
@@ -297,7 +301,9 @@ RTL testbench answering every IN with FF where perfectz80's harness and the
 C system return what an OUT wrote. `fuzz_reset` (with RESET) then found three
 RESET rules the targeted groups had missed -- a Tw after an M1's T2, a bus
 grant, an NMI right after the release (known differences 25-27) -- each
-swept since by a group of its own; what it still shows is row 19.
+swept since by a group of its own; then, with row 19, a cut on the Tw of a
+write that WAIT stretched (a push's second SP-1, made in that write's T2)
+and the RTL's Q after DD CB RES / SET (an NMI-only case).
 
 ## perfectz80's recorded traces
 

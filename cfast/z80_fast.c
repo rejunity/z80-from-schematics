@@ -34,6 +34,14 @@
 #define ZF_GNU 0
 #endif
 
+/* the template the generated steps run the current M-cycle in:
+   bus_op << 4 | m_len, | 0x80 for an M-cycle with a register write inside
+   it (wb_mid) -- as end_mcycle() returns it */
+static inline unsigned zf_key(const z80_t *c)
+{
+    return (wb_mid(c) ? 0x80u : 0u) | (unsigned)(c->bus_op & 7) << 4 | c->m_len;
+}
+
 /* The state the generated steps assume: nothing pending that only
    z80_phase_step handles -- RESET's samples and idle, a bus grant or its
    request seen, a wait state (the steps don't update in_tw, which holds
@@ -47,7 +55,7 @@ static bool fast_ok(const z80_t *c)
            !c->halted && !c->nmi_resp && !c->nmi_pending && !c->nmi_sampled &&
            c->prev_nmi_n && !c->stalled && !c->wait_sampled && !c->suppress_decode &&
            !(c->ctl.exec == EXEC_HALT && c->bus_op == BUSOP_M1) &&
-           c->m_len < 16 && zf_template[(c->bus_op & 7) << 4 | c->m_len] &&
+           c->m_len < 16 && zf_template[zf_key(c)] &&
            c->t_state >= 1 && c->t_state <= c->m_len;
 }
 
@@ -60,8 +68,7 @@ static void resume(z80f_t *f)
         /* the pads are driven in every phase fast mode runs (never a bus
            grant or the reset idle): the steps leave the drivers as set */
         c->pins.addr_drive = c->pins.ctl_drive = true;
-        f->step = (uint16_t)(zf_template[(c->bus_op & 7) << 4 | c->m_len] +
-                             2 * (c->t_state - 1) + c->phi + 1);
+        f->step = (uint16_t)(zf_template[zf_key(c)] + 2 * (c->t_state - 1) + c->phi + 1);
         /* the address of the phases to come: the M-cycle's, or the one on
            the bus where the model holds it (is_addr_held) */
         unsigned t = c->t_state + c->phi, phi = !c->phi;
