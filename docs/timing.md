@@ -405,8 +405,9 @@ edge.
   model's `wbp` (`wb_defer`), the RTL's `pend`, `pend1`, `pf16`, `pex_*`.
   Their operands stay where they are: the registers, which nothing writes
   before that edge, F, the byte read in `tmp8`; so does the decode (the RTL
-  keeps `ir` and the prefix until T2's end, the C model `wb_exec` /
-  `wb_idx` / `wb_disp` through an interrupt response's). On the edge that
+  keeps `ir` and the prefix until T2's end; the C model saves it in
+  `wb_exec` / `wb_idx` / `wb_disp` when an interrupt response's or a halt's
+  replaces it, `WBP_DEC`). On the edge that
   ends the next M1's (INTA's) T2 the ALU runs again and the register and F
   take its result (C `wb_fire`, RTL `fire`); a RESET cut ending on that T2
   blocks the register and F takes `f_cut`, the flag latches as above. F of

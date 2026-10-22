@@ -299,8 +299,17 @@ Notes for each row:
      The sweep's RESET cases store every register after the reset (A and F,
      IX, IY, the alternates); `classes_reset`, `fuzz_reset` and `reset_nmi`
      run by default, `opcodes_reset` (RESET at every T-state of every
-     opcode) by name, and none of them differs. Nothing changes at an
-     instruction boundary.
+     opcode) by name, and none of them differs; pin scenario
+     `prog23_wb_irq` has the writes land in an INTA cycle and an NMI
+     response. Nothing changes at an instruction boundary that a program
+     can see (the C model's `z80_arch()` shows the registers with the next
+     M1's writes made). The cost, on the pico-ice (UP5K): the SBC build
+     4,664 LCs (main 4,469; the write-back log this replaced 5,268), the
+     chip build 3,742 (3,667; 4,344), and the Z80 clock's Fmax up, 8.7 and
+     12.1 MHz (main 7.2 and 7.9) -- a byte read no longer reaches the ALU
+     in the half-cycle it is latched; F after a cut on T2 (`f_cut`) is
+     about 15-18 of the LCs. The C model runs ZEXDOC at 3.4 Minstr/s (main
+     3.8), cfast's z80f_run at 27.5 (main 34.6; the log's 27.6).
  20. **IM0: the instruction from the interrupting device — resolved
      2026-10-21.** Found by the event sweep's `im0` group (twenty
      instructions handed over in INTA, perfectz80). On the die PC doesn't
