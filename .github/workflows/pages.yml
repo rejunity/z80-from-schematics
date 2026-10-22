@@ -66,9 +66,14 @@ jobs:
 
       - name: The latest cfast benchmark, if there is one
         run: |
-          for id in $(gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --branch main --limit 10 \
-                        --json databaseId -q '.[].databaseId'); do
-            if gh run download "$id" -R "$GITHUB_REPOSITORY" -n cfast-bench -D dist/cfast-bench 2>/dev/null; then
+          # Completed runs only, each tried in a directory of its own: a
+          # download that fails part-way leaves files behind, and gh never
+          # overwrites a file, so every later try would fail on them too
+          # (a run still in progress did that on 238a688).
+          for id in $(gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --branch main --status completed \
+                        --limit 10 --json databaseId -q '.[].databaseId'); do
+            if gh run download "$id" -R "$GITHUB_REPOSITORY" -n cfast-bench -D "dl/cfast-bench-$id"; then
+              mv "dl/cfast-bench-$id" dist/cfast-bench
               echo "cfast-bench from ci.yml run $id" >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
