@@ -291,17 +291,13 @@ int main(int argc, char **argv)
             static double shown_speed;
             if (speed > 0)
                 shown_speed = speed;
-            snprintf(title, sizeof title, "speccy%s%s%s | mode %d | keys: %s%s%s | F10 quit",
-                     tap ? " | tape " : "", tap ? (z.tape.playing ? "playing " : tape_done(&z.tape) ? "done " : "stopped ") : "",
-                     "", term_mode(), keys_mode_name(kmode), ff ? " | fast " : "", "");
-            if (ff && shown_speed > 0) {
-                size_t n = strlen(title);
-                snprintf(title + n, sizeof title - n, " x%.0f", shown_speed);
-            }
-            if (tap) {
-                size_t n = strlen(title);
-                snprintf(title + n, sizeof title - n, " | tape %d%%", tape_percent(&z.tape));
-            }
+            int n = snprintf(title, sizeof title, "speccy | mode %d | keys: %s", term_mode(), keys_mode_name(kmode));
+            if (tap)
+                n += snprintf(title + n, sizeof title - (size_t)n, " | tape %d%% %s", tape_percent(&z.tape),
+                              z.tape.playing ? "playing" : tape_done(&z.tape) ? "done" : "stopped");
+            if (ff && shown_speed > 0)
+                n += snprintf(title + n, sizeof title - (size_t)n, " | fast x%.0f", shown_speed);
+            snprintf(title + n, sizeof title - (size_t)n, " | F10 quit");
             term_title(title);
         }
         if (ff) {
