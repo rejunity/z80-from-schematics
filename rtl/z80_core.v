@@ -586,10 +586,10 @@ module z80_core (
             `EXEC_ALU_R:           alu_b = getri_src_val;
             `EXEC_ALU_N, `EXEC_ALU_M:alu_b = tmp8;    // at fire (the read's latch)
             `EXEC_INC_R, `EXEC_DEC_R:alu_b = getri_dst_val;
-            `EXEC_INC_M, `EXEC_DEC_M:alu_b = rbyte;
+            `EXEC_INC_M, `EXEC_DEC_M:alu_b = tmp8;    // the 4 T read's: latched at T3
             `EXEC_CB_R: begin alu_b = r8_src;          alu_xy = r8_src; end
-            `EXEC_CB_M: begin alu_b = rbyte;           alu_xy = r_wz[15:8]; end
-            `EXEC_DDCB: begin alu_b = rbyte;           alu_xy = r_wz[15:8];
+            `EXEC_CB_M: begin alu_b = tmp8;            alu_xy = r_wz[15:8]; end
+            `EXEC_DDCB: begin alu_b = tmp8;            alu_xy = r_wz[15:8];
                             // flags from the (IX+d) read on, BIT and the
                             // rotates only: RES / SET leave F (and Q) alone
                             alu_md = (m_cycle != 3'd5) ? `FLAG_NONE :
@@ -603,7 +603,7 @@ module z80_core (
             `EXEC_IN_C: begin alu_md = `FLAG_IN; alu_b = tmp8; end
             `EXEC_RRD, `EXEC_RLD: begin
                 alu_md = (exec_w == `EXEC_RRD) ? `FLAG_RRD : `FLAG_RLD;
-                alu_a = A_cur; alu_b = rbyte;
+                alu_a = A_cur; alu_b = tmp8;
             end
             `EXEC_BLOCK: begin
                 // (cat=aux_w[2:1], dec=aux_w[0]). The flag mode is live only
@@ -739,7 +739,7 @@ module z80_core (
     // bit-operation unit: CB rotates come from the ALU, RES / SET here
     wire [1:0]  cb_kind = ctl_cbx ? tmph[7:6] : cb_kind_w;
     wire [2:0]  cb_bit  = ctl_cbx ? tmph[5:3] : bit_index_w;
-    wire [7:0]  cb_in   = (ctl_cbr || pend) ? r8_src : rbyte;
+    wire [7:0]  cb_in   = (ctl_cbr || pend) ? r8_src : tmp8;   // (HL) / (IX+d): the 4 T read's latch
     wire [7:0]  cb_mask = 8'h01 << cb_bit;
     reg  [7:0]  cbres;
     always @* begin
@@ -751,7 +751,7 @@ module z80_core (
         endcase
     end
     // RRD / RLD: the byte written back to (HL)
-    wire [7:0]  rrd_mem = (exec_w == `EXEC_RRD) ? {A_cur[3:0], rbyte[7:4]} : {rbyte[3:0], A_cur[3:0]};
+    wire [7:0]  rrd_mem = (exec_w == `EXEC_RRD) ? {A_cur[3:0], tmp8[7:4]} : {tmp8[3:0], A_cur[3:0]};
 
     // write-data latch input
     reg  [15:0] db_pair;
