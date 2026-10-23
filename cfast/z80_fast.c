@@ -57,8 +57,10 @@
 
 #if defined(__GNUC__)
 #define ZF_INLINE inline __attribute__((always_inline))
+#define ZF_NOINLINE __attribute__((noinline))
 #else
 #define ZF_INLINE inline
+#define ZF_NOINLINE
 #endif
 
 /* register r as getr / setr (r) and getri / setri (ri) reach it, inlined
@@ -198,6 +200,21 @@ static ZF_INLINE void zf_fire_f16(z80_t *c)          /* ADD / ADC / SBC HL's F *
 {
     z80_setF(c, c->pf_val);
     c->wbp = 0; c->q = c->pf_val;
+}
+
+/* latch_m1() as fast mode meets it: no special reset's fetch (srst_m1 --
+   sres is false), no interrupt response's discarded opcode
+   (suppress_decode) and no IM0 instruction (im0_ins), which only the
+   reference engine runs: the opcode, PC past it, its decode. Out of line:
+   inlined into the M1 steps, GCC copies the decode with rep movs, and
+   ZEXDOC ran 138 against 113 cycles an instruction (i7-7700). */
+static ZF_NOINLINE void zf_latch_m1(z80_t *c)
+{
+    c->ir   = c->pins.data_in;
+    c->tmp8 = c->pins.data_in;
+    c->rf[RFP_PC] = (uint16_t)(c->rf[RFP_PC] + 1u);
+    c->ctl = z80_pla_rom[c->prefix][c->ir];
+    c->decoded = true;
 }
 
 /* begin_next() as fast mode meets it: the boundary starts an M1 of 4

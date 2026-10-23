@@ -155,7 +155,7 @@ def main():
                 body.append(R_STEP)
         chk = False
         if p["latch"]:
-            latch = {"M1": "latch_m1", "MRD": "latch_rd", "IORD": "latch_rd"}[name]
+            latch = {"M1": "zf_latch_m1", "MRD": "latch_rd", "IORD": "latch_rd"}[name]
             body.append(f"c->pins.data_in = Z80_GET_DATA(pins); {latch}(c);")
             if name == "M1":
                 body.append("if (c->ctl.exec == EXEC_HALT) f->fast = false;")
