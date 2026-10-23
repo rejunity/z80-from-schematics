@@ -46,7 +46,7 @@ static uint64_t z80f_run(z80f_t *f, uint64_t pins)
         [FS_NONE] = &&zf_bad,
 #include "z80_fast_labels.h"
     };
-    static void *const t1p_label[256] = {
+    static void *const t1p_label[256 + ZK_COUNT] = {
 #include "z80_fast_t1p_labels.h"
     };
     if (!f->fast || (pins & ZF_SLOW_IN))
@@ -79,6 +79,7 @@ static uint64_t z80f_run(z80f_t *f, uint64_t pins)
         if (__builtin_expect((pins & ZF_SLOW_IN) != 0 || !f->fast, 0)) { ZF_LEAVE(next); goto zf_slow; } } while (0)
 #define ZF_SLOW_AT(s)      do { ZF_SYNC((s) - 1); goto zf_slow; } while (0)
 #define ZF_GOTO_T1P(k)     goto *t1p_label[k]
+#define ZF_JUMP(s)         goto s
 #include "z80_fast_steps.h"
 #undef ZF_LABEL
 #undef ZF_CLOCK
@@ -89,6 +90,7 @@ static uint64_t z80f_run(z80f_t *f, uint64_t pins)
 #undef ZF_PHASE_CHK
 #undef ZF_SLOW_AT
 #undef ZF_GOTO_T1P
+#undef ZF_JUMP
 #undef ZF_LEAVE
 #undef ZF_SYNC_STATE
 /* the reference engine keeps the bookkeeping current itself */

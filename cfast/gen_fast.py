@@ -19,9 +19,12 @@
 # whose step for that edge calls wb_hooks(); the M-cycle's last edge is the
 # model's own (end_mcycle). The edges that end an M1's T1 and T2 make the
 # writes the last instruction left for them (the die's write-back in the
-# next M1; fast mode never sees a RESET cut there): T1's those wb_fire()
-# makes there, T2's in zf_fire2() (cfast/z80_fast.c), which forms and stores
-# the common classes' in one go and hands the rest to wb_fire(). A
+# next M1; fast mode never sees a RESET cut there), in a copy of the M1's
+# T1.P - T3.P steps for each kind of what it left (KINDS below): an
+# instruction's end (zf_end_mcycle, cfast/z80_fast.c) jumps to its kind's
+# copy, 256 + ZK_*, whose steps make the writes with nothing to test, and
+# whose T3.P goes on in the M1's own T3.N; the M1 templates themselves
+# test nothing (a prefix's M1 follows nothing pending). A
 # step is straight-line code with the phase's constants folded in: the pins
 # (the timing ROM, z80_timing), whether it latches data (the bus cycle's
 # latch_*(), as do_latch() picks it), samples INT (Tlast.P) or ends the
@@ -62,6 +65,35 @@
 # ===========================================================================
 import json, os, sys
 
+# What an instruction leaves for the next M1's edges (cfast/z80_fast.c's
+# zf_kind[] by its class), and the copy of that M1's T1.P - T3.P steps that
+# makes it: the code at T1.P (wbp stated for the model, Q committed where
+# its wb_defer() would), on the edge that ends T1 (the T2.P step) and on
+# the one that ends T2 (the T3.P step, before the opcode latch). ZK_NONE
+# is 0; ZK_MODEL tests wbp on both edges as wb_fire() does, the rare
+# classes' (the model's wb_defer() records theirs) and an M1 a resume
+# finds with writes pending (cfast/z80_fast.c, resume).
+KINDS = [
+    ("NONE",     "c->q = 0;",                       None, None),
+    ("MODEL",    None, "if (c->wbp & (WBP_F1 | WBP_EXAF | WBP_DEC)) wb_fire(c, 1, false);",
+                 "if (c->wbp) wb_fire(c, 2, false);"),
+    ("LD_RR",    "c->wbp = WBP_ALU;",               None, "zf_fire_ld_rr(c);"),
+    ("LD_RN",    "c->wbp = WBP_ALU;",               None, "zf_fire_ld_rn(c);"),
+    ("ALU_R",    "c->wbp = WBP_ALU;",               None, "zf_fire_alu_r(c);"),
+    ("ALU_N",    "c->wbp = WBP_ALU;",               None, "zf_fire_alu_n(c);"),
+    ("INCDEC_R", "c->wbp = WBP_ALU;",               None, "zf_fire_incdec_r(c);"),
+    ("INCDEC_M", "c->wbp = WBP_ALU;",               None, "zf_fire_incdec_m(c);"),
+    ("SCF_CCF",  "c->wbp = WBP_ALU;",               None, "zf_fire_scf_ccf(c);"),
+    ("ACC",      "c->wbp = WBP_ALU;",               None, "zf_fire_acc(c);"),
+    ("NEG",      "c->wbp = WBP_ALU;",               None, "zf_fire_neg(c);"),
+    ("CB_R",     "c->wbp = WBP_ALU;",               None, "zf_fire_cb_r(c);"),
+    ("EXDH",     "c->q = 0;",                       None, "zf_fire_exdh(c);"),
+    ("EXX",      "c->q = 0;",                       None, "zf_fire_exx(c);"),
+    ("EXAF",     "c->q = (uint8_t)c->rf[RFP_AF2];", "zf_fire_exaf(c);", None),
+    ("F16",      None,                              None, "zf_fire_f16(c);"),
+]
+M1K_SEQ = [(1, 0), (1, 1), (2, 0), (2, 1), (3, 0)]     # a copy's phases, T1.P - T3.P
+
 PINS = [("m1", "Z80_M1"), ("mreq", "Z80_MREQ"), ("iorq", "Z80_IORQ"),
         ("rd", "Z80_RD"), ("wr", "Z80_WR"), ("rfsh", "Z80_RFSH"), ("doe", "Z80_DOE")]
 FAST_OPS = ["M1", "MRD", "MWR", "IORD", "IOWR", "INTERNAL"]
@@ -89,6 +121,59 @@ def main():
 
     enum, code, t1p = ["FS_NONE = 0"], [], []
     tphi = [(0, 0)]                     # (t, phi) of the phase each step produces
+
+    def step(name, op, n, hook, t, phi, wb):
+        """The body of the step that produces phase (t, phi) of template
+        (name, n, hook), and the macro that ends it; wb: the kind's code at
+        T1.P and on the edges that end T1 and T2 (an M1's)"""
+        p = ph[(op, t, phi)]
+        body = []
+        if (t, phi) == (1, 0):
+            # entered from an M-cycle end: start_mcycle set t_state / phi;
+            # a held cycle keeps the address the last one drove
+            a = "c->pins.addr" if p["held"] else "c->m_addr"
+            body.append(f"bus = {a} | (uint64_t)c->m_wdata << Z80_PIN_D0; ZF_SAVE_BUS();")
+            if wb[0]:
+                body.append(wb[0])
+        else:
+            body.append(f"ZF_CLOCK({t}, {phi});")
+            if phi == 0 and t in (2, 3) and wb[t - 1]:
+                # the edge that ends T1 / T2: the last instruction's writes due there
+                body.append(wb[t - 1])
+            if phi == 0 and hook == t - 1:
+                # the edge that ends T(t-1): the die's register write in it
+                body.append(f"wb_hooks(c, {hook});")
+            pp = ph[(op, t, 0)] if phi else ph[(op, t - 1, 1)]   # the phase before
+            assert p["held"] or not pp["held"], (name, n, t, phi)
+            if p["held"] and not pp["held"]:
+                # the first held phase: what the phase before drove stays
+                body.append("bus = (bus & ~0xFFFFull) | c->pins.addr; ZF_SAVE_BUS();")
+            if phi == 0 and ph[(op, t - 1, 1)]["refresh_end"]:
+                body.append(R_STEP)
+        chk = False
+        if p["latch"]:
+            latch = {"M1": "latch_m1", "MRD": "latch_rd", "IORD": "latch_rd"}[name]
+            body.append(f"c->pins.data_in = Z80_GET_DATA(pins); {latch}(c);")
+            if name == "M1":
+                body.append("if (c->ctl.exec == EXEC_HALT) f->fast = false;")
+                chk = True
+        if t == n and phi == 0:
+            body.append("c->int_sampled = (pins & Z80_INT) != 0;")
+        bits = " | ".join(m for k, m in PINS if p[k]) or "0"
+        if p["refresh"]:
+            busw = "(bus & ~0xFFFFull) | (uint16_t)(c->reg_i << 8 | c->reg_r)"
+        else:
+            busw = "bus"
+        nxt = (t, 1) if phi == 0 else (t + 1, 0)
+        if not p["held"] and (nxt[0] > n or ph[(op, *nxt)]["held"]):
+            # a held phase may follow: its address stays on the bus
+            body.append(f"c->pins.addr = {HELD_IR if p['refresh'] else '(uint16_t)bus'};")
+        body.append(f"pins = (pins & ~Z80_OUT_PIN_MASK) | {bits} | {busw};")
+        mac = "ZF_PHASE_T1P" if (t, phi) == (1, 0) else "ZF_PHASE_CHK" if chk else "ZF_PHASE"
+        return body, mac
+
+    m1op = busops["M1"][0]
+    model_wb = next(k[1:] for k in KINDS if k[0] == "MODEL")
     for name, op, n, hook in templates:
         tid = f"{name}_{n}" + ("_W" if hook else "")
         seq = [(t, phi) for t in range(1, n + 1) for phi in (0, 1)]
@@ -97,65 +182,42 @@ def main():
         tphi += seq + [(n + 1, 0)]      # the M-cycle end produces the next T1.P
         t1p.append(((op << 4 | n) | (0x80 if hook else 0),
                     f"BUSOP_{name} << 4 | {n}" + (" | 0x80" if hook else ""), ids[0]))
-
+        # an M1 of 4 T-states follows an instruction in its kind's copy (below)
+        # or a prefix, with nothing pending; a longer one tests (fast mode
+        # doesn't run them)
+        wb = (None, None, None) if name != "M1" or n == 4 else model_wb
         for i, (t, phi) in enumerate(seq):
-            p = ph[(op, t, phi)]
-            body = []
-            if (t, phi) == (1, 0):
-                # entered from an M-cycle end: start_mcycle set t_state / phi;
-                # a held cycle keeps the address the last one drove
-                a = "c->pins.addr" if p["held"] else "c->m_addr"
-                body.append(f"bus = {a} | (uint64_t)c->m_wdata << Z80_PIN_D0; ZF_SAVE_BUS();")
-            else:
-                body.append(f"ZF_CLOCK({t}, {phi});")
-                if name == "M1" and phi == 0 and t == 2:
-                    # the edge that ends T1: the last instruction's writes due there
-                    body.append("if (c->wbp & (WBP_F1 | WBP_EXAF | WBP_DEC)) wb_fire(c, 1, false);")
-                if name == "M1" and phi == 0 and t == 3:
-                    # the edge that ends T2: the rest of them
-                    body.append("if (c->wbp) zf_fire2(c);")
-                if phi == 0 and hook == t - 1:
-                    # the edge that ends T(t-1): the die's register write in it
-                    body.append(f"wb_hooks(c, {hook});")
-                pp = ph[(op, t, 0)] if phi else ph[(op, t - 1, 1)]   # the phase before
-                assert p["held"] or not pp["held"], (name, n, t, phi)
-                if p["held"] and not pp["held"]:
-                    # the first held phase: what the phase before drove stays
-                    body.append("bus = (bus & ~0xFFFFull) | c->pins.addr; ZF_SAVE_BUS();")
-                if phi == 0 and ph[(op, t - 1, 1)]["refresh_end"]:
-                    body.append(R_STEP)
-            chk = False
-            if p["latch"]:
-                latch = {"M1": "latch_m1", "MRD": "latch_rd", "IORD": "latch_rd"}[name]
-                body.append(f"c->pins.data_in = Z80_GET_DATA(pins); {latch}(c);")
-                if name == "M1":
-                    body.append("if (c->ctl.exec == EXEC_HALT) f->fast = false;")
-                    chk = True
-            if t == n and phi == 0:
-                body.append("c->int_sampled = (pins & Z80_INT) != 0;")
-            bits = " | ".join(m for k, m in PINS if p[k]) or "0"
-            if p["refresh"]:
-                busw = "(bus & ~0xFFFFull) | (uint16_t)(c->reg_i << 8 | c->reg_r)"
-            else:
-                busw = "bus"
-            nxt = seq[i + 1] if i + 1 < len(seq) else None
-            if not p["held"] and (nxt is None or ph[(op, *nxt)]["held"]):
-                # a held phase may follow: its address stays on the bus
-                body.append(f"c->pins.addr = {HELD_IR if p['refresh'] else '(uint16_t)bus'};")
-            body.append(f"pins = (pins & ~Z80_OUT_PIN_MASK) | {bits} | {busw};")
-            mac = "ZF_PHASE_T1P" if (t, phi) == (1, 0) else "ZF_PHASE_CHK" if chk else "ZF_PHASE"
+            body, mac = step(name, op, n, hook, t, phi, wb)
             body.append(f"{mac}({ids[i + 1]});")
             what = f"{name} m_len {n}{' (wb_mid)' if hook else ''}"
             code.append(f"ZF_LABEL({ids[i]}): /* {what}: T{t}.{'PN'[phi]} */\n    "
                         + "\n    ".join(body))
-        # the M-cycle end: the sequencer, then the T1.P of what it set up
+        # the M-cycle end: the sequencer, then the T1.P of what it set up (at
+        # an instruction's end, its kind's copy of the next M1's first steps)
         body = [f"if (c->int_sampled && c->iff1) ZF_SLOW_AT({ids[-1]});  /* INT accept */",
                 f"ZF_MEND({n});"]
         if ph[(op, n, 1)]["refresh_end"]:
             body.append(R_STEP)
-        body.append("ZF_GOTO_T1P(end_mcycle(c));")
+        body.append("ZF_GOTO_T1P(zf_end_mcycle(c));")
         code.append(f"ZF_LABEL({ids[-1]}): /* {name} m_len {n}{' (wb_mid)' if hook else ''}: "
                     "M-cycle end */\n    " + "\n    ".join(body))
+
+    # the copies of an M1's T1.P - T3.P by what the last instruction left
+    # (KINDS); the T3.P step goes on in the M1's own T3.N
+    for kx, (kname, *wb) in enumerate(KINDS):
+        ids = [f"FS_M1K_{kname}_T{t}{'PN'[phi]}" for t, phi in M1K_SEQ]
+        enum += ids
+        tphi += M1K_SEQ
+        t1p.append((256 + kx, f"256 + ZK_{kname}", ids[0]))
+        for i, (t, phi) in enumerate(M1K_SEQ):
+            body, mac = step("M1", m1op, 4, None, t, phi, wb)
+            if i + 1 < len(ids):
+                body.append(f"{mac}({ids[i + 1]});")
+            else:
+                body.append(f"{mac}(FS_M1_4_T3N);")
+                body.append("ZF_JUMP(FS_M1_4_T3N);")
+            code.append(f"ZF_LABEL({ids[i]}): /* M1 m_len 4 after ZK_{kname}: "
+                        f"T{t}.{'PN'[phi]} */\n    " + "\n    ".join(body))
 
     hdr = ("/* generated by cfast/gen_fast.py from the reference model's timing "
            "tables -- do not edit */\n")
@@ -164,9 +226,12 @@ def main():
         # the steps and their order
         "z80_fast_enum.h":
             "enum {\n" + "".join(f"    {e},\n" for e in enum) + "    FS_COUNT\n};\n"
+            + "/* what an instruction leaves for the next M1 (gen_fast.py's KINDS) */\n"
+            + "enum {\n" + "".join(f"    ZK_{k[0]},\n" for k in KINDS) + "    ZK_COUNT\n};\n"
+            + f"#define ZF_M1K_STEPS {len(M1K_SEQ)}   /* the steps of a kind's M1 copy */\n"
             + "/* the T1.P step of each template, by bus_op << 4 | m_len (| 0x80: the\n"
-            + "   wb_mid variant) */\n"
-            + "static const uint16_t zf_template[256] = {\n"
+            + "   wb_mid variant), and of the M1 copies, by 256 + ZK_* */\n"
+            + "static const uint16_t zf_template[256 + ZK_COUNT] = {\n"
             + "".join(f"    [{k}] = {s},\n" for _, k, s in t1p) + "};\n"
             + "/* the phase each step produces: T-state, phi, and its offset in phases\n"
             + "   from the M-cycle's T1.P (an M-cycle end: the next T1.P) */\n"
@@ -181,7 +246,7 @@ def main():
         # label address of each template's T1.P, by bus_op << 4 | m_len (| 0x80),
         # every key (none: zf_bad)
         "z80_fast_t1p_labels.h": "".join(
-            f"    [{k}] = &&{lab.get(k, 'zf_bad')},\n" for k in range(256)),
+            f"    [{k}] = &&{lab.get(k, 'zf_bad')},\n" for k in range(256 + len(KINDS))),
         # switch dispatch to every step (without computed goto)
         "z80_fast_cases.h": "".join(f"    case {e}: goto {e};\n" for e in enum[1:]),
         # the steps
