@@ -323,7 +323,7 @@ uint64_t z80f_tick(z80f_t *f, uint64_t pins)
 #define ZF_MEND(n)         do { c->cycle++; c->phi = 0; c->t_state = (n) + 1; } while (0)
 #define ZF_SAVE_BUS()      (f->bus = bus)
 #define ZF_PHASE(next)     do { f->step = (next); return pins; } while (0)
-#define ZF_PHASE_T1P(next) ZF_PHASE(next)
+#define ZF_PHASE_BOUNDARY(next) ZF_PHASE(next)
 #define ZF_PHASE_CHK(next) ZF_PHASE(next)
 #define ZF_SLOW_AT(s)      return slow_tick(f, pins)
 #define ZF_GOTO_T1P(k)     ZF_GOTO_STEP(zf_template[k])
@@ -334,7 +334,7 @@ uint64_t z80f_tick(z80f_t *f, uint64_t pins)
 #undef ZF_MEND
 #undef ZF_SAVE_BUS
 #undef ZF_PHASE
-#undef ZF_PHASE_T1P
+#undef ZF_PHASE_BOUNDARY
 #undef ZF_PHASE_CHK
 #undef ZF_SLOW_AT
 #undef ZF_GOTO_T1P

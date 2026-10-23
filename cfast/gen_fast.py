@@ -50,8 +50,10 @@
 # A step ends with one of the frame's macros:
 #   ZF_PHASE(next)       the phase's pins are in `pins`; `next` produces the
 #                        following one (and next - 1 is this step)
-#   ZF_PHASE_T1P(next)   the same, for a T1.P (instruction boundaries
-#                        happen just before one)
+#   ZF_PHASE_BOUNDARY(next)  the same, for the T1.P of a kind's copy of an
+#                        M1: an instruction has just ended (in fast mode
+#                        only there; a T1.P step is only ever entered from
+#                        an M-cycle end)
 #   ZF_PHASE_CHK(next)   the same after an M1 opcode latch, which leaves
 #                        fast mode for a HALT
 #   ZF_SLOW_AT(step)     hand this phase to the reference engine
@@ -122,10 +124,11 @@ def main():
     enum, code, t1p = ["FS_NONE = 0"], [], []
     tphi = [(0, 0)]                     # (t, phi) of the phase each step produces
 
-    def step(name, op, n, hook, t, phi, wb):
+    def step(name, op, n, hook, t, phi, wb, boundary=False):
         """The body of the step that produces phase (t, phi) of template
         (name, n, hook), and the macro that ends it; wb: the kind's code at
-        T1.P and on the edges that end T1 and T2 (an M1's)"""
+        T1.P and on the edges that end T1 and T2 (an M1's); boundary: a
+        kind's copy, whose T1.P follows an instruction's end"""
         p = ph[(op, t, phi)]
         body = []
         if (t, phi) == (1, 0):
@@ -169,7 +172,8 @@ def main():
             # a held phase may follow: its address stays on the bus
             body.append(f"c->pins.addr = {HELD_IR if p['refresh'] else '(uint16_t)bus'};")
         body.append(f"pins = (pins & ~Z80_OUT_PIN_MASK) | {bits} | {busw};")
-        mac = "ZF_PHASE_T1P" if (t, phi) == (1, 0) else "ZF_PHASE_CHK" if chk else "ZF_PHASE"
+        mac = ("ZF_PHASE_BOUNDARY" if boundary and (t, phi) == (1, 0) else
+               "ZF_PHASE_CHK" if chk else "ZF_PHASE")
         return body, mac
 
     m1op = busops["M1"][0]
@@ -210,7 +214,7 @@ def main():
         tphi += M1K_SEQ
         t1p.append((256 + kx, f"256 + ZK_{kname}", ids[0]))
         for i, (t, phi) in enumerate(M1K_SEQ):
-            body, mac = step("M1", m1op, 4, None, t, phi, wb)
+            body, mac = step("M1", m1op, 4, None, t, phi, wb, boundary=True)
             if i + 1 < len(ids):
                 body.append(f"{mac}({ids[i + 1]});")
             else:
