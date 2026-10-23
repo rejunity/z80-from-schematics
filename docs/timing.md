@@ -436,9 +436,10 @@ edge.
 The registers as the program sees them, with the next M1's writes made:
 `z80_arch()` in the C model (zexrunner, fuse_runner, z80test_runner,
 pinhash, lockstep and the unit tests read through it), `rfl` in the RTL
-(the testbenches). cfast makes the writes in its M1 steps' T1 and T2 edges
-(cfast/gen_fast.py), and the writes inside an M-cycle in the variants of
-the M-cycles `wb_mid` names, as the model does.
+(the testbenches). cfast makes the writes on its M1 steps' T1 and T2 edges,
+in the copy of the M1's first steps for the kind of write the instruction
+left (cfast/gen_fast.py's `KINDS`), and the writes inside an M-cycle in the
+variants of the M-cycles `wb_mid` names, as the model does.
 
 ## Pad drivers (bus float)
 
