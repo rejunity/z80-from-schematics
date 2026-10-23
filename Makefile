@@ -29,11 +29,15 @@ PYTHON    ?= python3
 # Link-time optimisation (default on): the per-phase engine, the timing
 # generator and the runners' bus loops (z80_sys_phase) inline across
 # translation units -- ZEXDOC 2.8 -> 4.2 Minstr/s. Fat objects keep
-# build/libz80.a usable by links without -flto. LTO=0 for a plain build
-# (make clean when switching).
+# build/libz80.a usable by links without -flto, where the compiler makes
+# them; the probe asks with -flto and -Werror, since Apple clang takes
+# -ffat-lto-objects alone but refuses it next to -flto, and older clang
+# ignores it with a warning. LTO=0 for a plain build (make clean when
+# switching).
 LTO ?= 1
 ifeq ($(LTO),1)
-CFLAGS += -flto $(shell $(CC) -ffat-lto-objects -x c -c /dev/null -o /dev/null 2>/dev/null && echo -ffat-lto-objects)
+FAT_LTO := $(shell $(CC) -flto -ffat-lto-objects -Werror -x c -c /dev/null -o /dev/null 2>/dev/null && echo -ffat-lto-objects)
+CFLAGS += -flto $(FAT_LTO)
 endif
 
 # ---- layout ----
