@@ -200,6 +200,20 @@ static ZF_INLINE void zf_fire_f16(z80_t *c)          /* ADD / ADC / SBC HL's F *
     c->wbp = 0; c->q = c->pf_val;
 }
 
+/* begin_next() as fast mode meets it: the boundary starts an M1 of 4
+   T-states. Fast mode has no NMI sampled (an NMI goes to the reference
+   engine), no halt (an M1 that latches HALT leaves fast mode) and no INT to
+   take here: the M-cycle end steps leave before an INT with IFF1 set, and
+   the instructions that raise IFF1 -- EI, RETN -- block this boundary's
+   INT (ei_delay). nmi_resp and sres are false (fast_ok). */
+static ZF_INLINE void zf_begin_next(z80_t *c)
+{
+    c->nmi_resp = false;
+    c->ei_delay = false;
+    z80_start_m1(c);
+    c->srst_m1 = c->sres;
+}
+
 /* end_mcycle() for the steps: at an instruction's end, the kind of what it
    leaves for the next M1 picks that M1's steps, 256 + ZK_* (z80_fast_enum.h);
    only ZK_MODEL records it the model's way (wb_defer). In fast mode the
@@ -215,7 +229,7 @@ static unsigned zf_end_mcycle(z80_t *c)
         wb_defer(c);
     c->instr_count++;
     c->prefix = PFX_NONE;
-    begin_next(c);
+    zf_begin_next(c);
     return 256u + k;
 }
 
