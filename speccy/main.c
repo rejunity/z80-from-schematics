@@ -158,8 +158,10 @@ static void usage(void)
          "  --braille         braille dots instead of octants (the default in Terminal.app\n"
          "                    and VS Code, whose fonts have no octants)\n"
          "  --octants         octants even there (a font that has Unicode 16's octants)\n"
-         "  --quadrants       2x2 quadrants in modes 128 and 120: 96 rows, tall pixels\n"
-         "  --crisp           mode 80: no blended shades\n"
+         "  --quadrants[=R]   2x2 quadrants in modes 128 and 120: R 96, every pixel but twice\n"
+         "                    as tall as wide; R 48, half the rows (a quadrant two pixels\n"
+         "                    tall, blended; --crisp: the ink); default 96 if the window has them\n"
+         "  --crisp           mode 80 and half-height quadrants: no blended shades\n"
          "  --fullwidth       mode 80: double-width characters\n"
          "  --keys K          auto, kitty, evdev, console, macos, windows or legacy\n"
          "  --no-autoload     don't type LOAD \"\" for a .tap\n"
@@ -186,7 +188,14 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--colors") && v) { topt.colors = atoi(v); i++; }
         else if (!strcmp(a, "--braille")) topt.glyphs = GLYPHS_BRAILLE;
         else if (!strcmp(a, "--octants")) topt.glyphs = GLYPHS_OCTANTS;
-        else if (!strcmp(a, "--quadrants")) topt.glyphs = GLYPHS_QUADRANTS;
+        else if (!strncmp(a, "--quadrants", 11) && (!a[11] || a[11] == '=')) {
+            topt.glyphs = GLYPHS_QUADRANTS;
+            topt.quad_rows = a[11] ? atoi(a + 12) : 0;
+            if (topt.quad_rows && topt.quad_rows != 96 && topt.quad_rows != 48) {
+                fprintf(stderr, "speccy: --quadrants=96 or --quadrants=48\n");
+                return 2;
+            }
+        }
         else if (!strcmp(a, "--crisp")) topt.crisp = true;
         else if (!strcmp(a, "--fullwidth")) topt.fullwidth = true;
         else if (!strcmp(a, "--keys") && v) {

@@ -18,7 +18,8 @@
  *        above the other, in their own colours, 256x96. Exact, square.
  * Quadrants (U+2596.., in every font) draw modes 128 and 120 with 2x2
  * blocks instead, 128x96 or 120x96: exact, but the pixels are twice as
- * tall as wide.
+ * tall as wide; or, half-height, 128x48 like octants, a quadrant two
+ * pixels tall (blended, or crisp): square, half the rows.
  * The 2x4 blocks print as octants, or as braille dots (U+2800..) where the
  * terminal's font has no octants: speccy picks braille itself under
  * Terminal.app and VS Code (TERM_PROGRAM), or half blocks where the
@@ -42,6 +43,7 @@ typedef struct {
     int  mode;        /* 256, 128, 120, 80, or 0: the widest that fits        */
     int  colors;      /* 24 (bit), 256 or 16; 0: 24 if COLORTERM says so      */
     int  glyphs;      /* GLYPHS_*; AUTO: braille in Terminal.app and VS Code  */
+    int  quad_rows;   /* quadrants: 96, 48 (half-height); 0: 96 if they fit   */
     bool crisp;       /* mode 80: no blended shades                          */
     bool fullwidth;   /* mode 80: double-width characters                    */
 } term_opts_t;

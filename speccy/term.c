@@ -114,6 +114,7 @@ typedef struct { uint32_t ch, fg, bg; } cell_t;   /* ch 0: a wide glyph's right 
 static term_opts_t opt;
 static int cols = 80, rows = 24, mode;
 static bool glyphs_auto;                         /* glyphs picked by TERM_PROGRAM */
+static int qrows;                                /* quadrants: 96 or 48 rows */
 static int grid_w, grid_h, ox, oy;               /* the picture's cells, top-left */
 static cell_t *cur, *prev;
 static bool redraw = true;
@@ -215,6 +216,7 @@ void term_resize(void)
 {
     query_size();
     mode = opt.mode;
+    qrows = opt.quad_rows ? opt.quad_rows : rows >= 96 ? 96 : 48;
     if (!mode) {
         if (opt.glyphs == GLYPHS_QUADRANTS)
             mode = cols >= 128 ? 128 : 120;
@@ -234,7 +236,7 @@ int term_mode(void) { return mode; }
 static bool quads(void) { return opt.glyphs == GLYPHS_QUADRANTS && (mode == 128 || mode == 120); }
 const char *term_glyphs(void)
 {
-    return mode == 256 ? "half blocks" : quads() ? "quadrants"
+    return mode == 256 ? "half blocks" : quads() ? (qrows == 48 ? "half-height quadrants" : "quadrants")
          : opt.glyphs == GLYPHS_BRAILLE ? "braille" : "octants";
 }
 void term_size(int *c, int *r) { *c = cols; *r = rows; }
@@ -328,43 +330,57 @@ static cell_t half_block_cell(int top, int bottom)
     return c;
 }
 
-/* mode 80: 4x8 pixels as 2x4 blocks of 2x2 */
-static cell_t half_cell(int x0, int y0)
+/* Blocks of bw x bh pixels, two across and gy down, block (r, c) covering
+   xs[bw c ..], ys[bh r ..]: mode 80's 4x8 pixels as 2x4 blocks of 2x2
+   (octants), half-height quadrants' 2x4 pixels as 2x2 blocks of 1x2. A
+   block is its pixels' mean in linear light, and the cell the two shades
+   that fit its blocks best; crisp (or with 16 colours) a block is its
+   commonest colour, a tie going to the first, or with ink_ties to an ink
+   pixel's (a quadrant's two pixels: so a stroke one pixel tall stays). */
+static cell_t blend_cell(const int *xs, const int *ys, int gy, int bw, int bh, bool ink_ties)
 {
-    int v[8];
+    int n = 2 * gy, v[8];
     double l[8][3];
-    for (int r = 0; r < 4; r++)
+    bool crisp = opt.crisp || opt.colors == 16;
+    for (int r = 0; r < gy; r++)
         for (int c = 0; c < 2; c++) {
-            int q[4] = { pix(x0 + 2 * c, y0 + 2 * r), pix(x0 + 2 * c + 1, y0 + 2 * r),
-                         pix(x0 + 2 * c, y0 + 2 * r + 1), pix(x0 + 2 * c + 1, y0 + 2 * r + 1) };
-            int i = 2 * r + c;
-            if (opt.crisp || opt.colors == 16) {
-                /* the block's most common colour (the first on a tie) */
-                int best = q[0], bn = 0;
-                for (int a = 0; a < 4; a++) {
-                    int n = 0;
-                    for (int b = 0; b < 4; b++)
-                        n += q[b] == q[a];
-                    if (n > bn) { bn = n; best = q[a]; }
+            int q[4], ink[4], m = 0, k = 2 * r + c;
+            for (int j = 0; j < bh; j++)
+                for (int i = 0; i < bw; i++) {
+                    int raw = pixraw(xs[bw * c + i], ys[bh * r + j]);
+                    ink[m] = raw >> 7 & 1;
+                    q[m++] = raw & 15;
                 }
-                v[i] = best;
+            if (crisp) {
+                int best = q[0], bn = 0, bink = ink[0];
+                for (int a = 0; a < m; a++) {
+                    int same = 0;
+                    for (int t = 0; t < m; t++)
+                        same += q[t] == q[a];
+                    if (same > bn || (same == bn && ink_ties && ink[a] && !bink)) {
+                        bn = same;
+                        best = q[a];
+                        bink = ink[a];
+                    }
+                }
+                v[k] = best;
             } else {
                 for (int s = 0; s < 3; s++) {
                     double sum = 0;
-                    for (int a = 0; a < 4; a++)
+                    for (int a = 0; a < m; a++)
                         sum += lin(rgb_of(q[a]) >> (16 - 8 * s) & 255);
-                    l[i][s] = sum / 4;
+                    l[k][s] = sum / m;
                 }
             }
         }
-    if (opt.crisp || opt.colors == 16)
-        return index_cell(v, 8);
-    /* blended: the two shades that fit the eight blocks best (2-means in
-       linear light, from the two blocks furthest apart) */
+    if (crisp)
+        return index_cell(v, n);
+    /* blended: the two shades that fit the blocks best (2-means in linear
+       light, from the two blocks furthest apart) */
     int ia = 0, ib = 0;
     double far = -1;
-    for (int i = 0; i < 8; i++)
-        for (int j = i + 1; j < 8; j++) {
+    for (int i = 0; i < n; i++)
+        for (int j = i + 1; j < n; j++) {
             double d = 0;
             for (int s = 0; s < 3; s++)
                 d += (l[i][s] - l[j][s]) * (l[i][s] - l[j][s]);
@@ -377,7 +393,7 @@ static cell_t half_cell(int x0, int y0)
         double sa[3] = { 0 }, sb[3] = { 0 };
         int na = 0, nb = 0;
         p = 0;
-        for (int i = 0; i < 8; i++) {
+        for (int i = 0; i < n; i++) {
             double da = 0, db = 0;
             for (int s = 0; s < 3; s++) {
                 da += (l[i][s] - ca[s]) * (l[i][s] - ca[s]);
@@ -399,7 +415,7 @@ static cell_t half_cell(int x0, int y0)
     }
     uint32_t fa = srgb(ca[0]) << 16 | srgb(ca[1]) << 8 | srgb(ca[2]);
     uint32_t fb2 = srgb(cb[0]) << 16 | srgb(cb[1]) << 8 | srgb(cb[2]);
-    return block_cell(p, fb2, fa, 8);
+    return block_cell(p, fb2, fa, n);
 }
 
 /* Braille shows only its dots, so which colour is the dots is decided per
@@ -569,7 +585,7 @@ void term_frame(const uint8_t *fb, int w, int h, int px, int py, const uint8_t *
     g_h = h;
     bool q = quads();
     int pw = mode == 80 ? 4 : mode == 256 ? 1 : 2;                     /* pixels a cell */
-    int ph = mode == 80 ? 8 : mode == 256 || q ? 2 : 4;
+    int ph = mode == 80 ? 8 : mode == 256 || (q && qrows == 96) ? 2 : 4;
     int paper_w = mode == 256 ? 256 : mode == 128 ? 128 : mode == 120 ? 120 : 64, paper_h = 192 / ph;
     int bx = (cols - paper_w) / 2, by = (rows - paper_h) / 2;
     if (bx > px / pw) bx = px / pw;
@@ -622,9 +638,11 @@ void term_frame(const uint8_t *fb, int w, int h, int px, int py, const uint8_t *
                         continue;
                     }
                 }
-                *cell = dots ? braille_cell(colx[c], rowy[r], 2, 2) : half_cell(colx[c][0], rowy[r][0]);
+                *cell = dots ? braille_cell(colx[c], rowy[r], 2, 2) : blend_cell(colx[c], rowy[r], 4, 2, 2, false);
             } else if (dots) {
                 *cell = braille_cell(colx[c], rowy[r], 1, 1);
+            } else if (q && qrows == 48) {
+                *cell = blend_cell(colx[c], rowy[r], 2, 1, 2, true);
             } else {
                 int v[8];
                 for (int rr = 0; rr < ph; rr++)

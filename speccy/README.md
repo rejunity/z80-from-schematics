@@ -150,8 +150,14 @@ and paper). So a cell that stays inside one character loses nothing.
 | 256 | 256×96 | Half blocks (▀, in every font): a cell is two pixels, one above the other, each in its own colour. Exact, with square pixels, but it needs a small font. |
 
 `--quadrants` draws modes 128 and 120 with 2×2 quadrant blocks (▘▝▀▖▌▞▛▗▚▐▜▄▙▟█,
-in every font) instead of octants: 128×96 cells, every pixel exact, but
-twice as tall as wide, since a terminal cell is about 1:2.
+in every font) instead of octants, in one of two ways:
+- `--quadrants=96` (the default when the window has 96 rows): 128×96
+  cells, every pixel exact, but twice as tall as wide, since a terminal
+  cell is about 1:2.
+- `--quadrants=48`, half-height: the octants' 128×48 cells, each quadrant
+  two pixels tall. Where the two differ, the quadrant blends them in
+  linear light (`--crisp`: takes the ink's colour, bolder text but
+  blobbier sprites).
 
 - **Mode 120 and text:** columns 0 and 7 are blank in the ROM font's
   letters and digits, except the top-left pixel of T and Y.
