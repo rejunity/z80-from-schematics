@@ -171,6 +171,13 @@ bool term_open(const term_opts_t *o)
         const char *ct = getenv("COLORTERM");
         opt.colors = ct && (!strcmp(ct, "truecolor") || !strcmp(ct, "24bit")) ? 24 : 256;
     }
+    if (opt.glyphs == GLYPHS_AUTO) {
+        /* the fonts of Terminal.app and VS Code's terminal have no octants
+           (Unicode 16), and neither terminal draws them itself */
+        const char *tp = getenv("TERM_PROGRAM");
+        opt.glyphs = tp && (!strcmp(tp, "Apple_Terminal") || !strcmp(tp, "vscode")) ? GLYPHS_BRAILLE
+                                                                                    : GLYPHS_OCTANTS;
+    }
 #ifdef _WIN32
     HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
     DWORD m;
@@ -212,6 +219,7 @@ void term_resize(void)
 }
 
 int term_mode(void) { return mode; }
+bool term_braille(void) { return opt.glyphs == GLYPHS_BRAILLE; }
 void term_size(int *c, int *r) { *c = cols; *r = rows; }
 
 void term_title(const char *s)
@@ -232,26 +240,32 @@ static inline int pix(int x, int y)
     return g_fb[(size_t)y * (size_t)g_w + (size_t)x];
 }
 
-static int popcount8(unsigned p)
+static int dist2(uint32_t a, uint32_t b)
 {
-    int n = 0;
-    for (; p; p &= p - 1)
-        n++;
-    return n;
+    int d = 0;
+    for (int s = 0; s < 24; s += 8) {
+        int x = (int)(a >> s & 255) - (int)(b >> s & 255);
+        d += x * x;
+    }
+    return d;
 }
 
-static cell_t block_cell(unsigned p, uint32_t fg, uint32_t bg)
+/* p's blocks in fg, the rest in bg. Braille draws only the dots, so the
+   dots go to whichever colour is not the nearer to under (the cell's 8x8
+   character's commonest, NO_FG for none). */
+static cell_t block_cell(unsigned p, uint32_t fg, uint32_t bg, uint32_t under)
 {
     cell_t c;
+    bool dots = opt.glyphs == GLYPHS_BRAILLE;
     if (fg == bg)
         p = 0;
-    else if (opt.braille && popcount8(p) > 4) {            /* dots for the fewer */
+    else if (dots && under != NO_FG && dist2(fg, under) < dist2(bg, under)) {
         uint32_t t = fg; fg = bg; bg = t;
         p ^= 0xFF;
     }
     if (p == 0) { c.ch = ' '; c.fg = NO_FG; c.bg = bg; return c; }
     if (p == 0xFF) { c.ch = ' '; c.fg = NO_FG; c.bg = fg; return c; }
-    c.ch = opt.braille ? braille[p] : octant[p];
+    c.ch = dots ? braille[p] : octant[p];
     c.fg = fg;
     c.bg = bg;
     return c;
@@ -259,7 +273,7 @@ static cell_t block_cell(unsigned p, uint32_t fg, uint32_t bg)
 
 /* eight colour indices (2x4, bit order) -> a cell: two colours exact, more
    than two the two most common, the rest to the nearer of them */
-static cell_t index_cell(const int v[8])
+static cell_t index_cell(const int v[8], uint32_t under)
 {
     int count[16] = { 0 }, a = -1, b = -1;
     for (int i = 0; i < 8; i++)
@@ -275,30 +289,22 @@ static cell_t index_cell(const int v[8])
             b = c;
     }
     if (b < 0)
-        return block_cell(0, rgb_of(a), rgb_of(a));
+        return block_cell(0, rgb_of(a), rgb_of(a), under);
     uint32_t ra = rgb_of(a), rb = rgb_of(b);
     unsigned p = 0;
     for (int i = 0; i < 8; i++) {
         int c = v[i];
         bool to_b = c == b;
-        if (c != a && c != b) {
-            uint32_t rc = rgb_of(c);
-            int da = 0, db = 0;
-            for (int s = 0; s < 24; s += 8) {
-                int x = (int)(rc >> s & 255);
-                da += (x - (int)(ra >> s & 255)) * (x - (int)(ra >> s & 255));
-                db += (x - (int)(rb >> s & 255)) * (x - (int)(rb >> s & 255));
-            }
-            to_b = db < da;
-        }
+        if (c != a && c != b)
+            to_b = dist2(rgb_of(c), rb) < dist2(rgb_of(c), ra);
         if (to_b)
             p |= 1u << i;
     }
-    return block_cell(p, rb, ra);
+    return block_cell(p, rb, ra, under);
 }
 
 /* mode 80: 4x8 pixels as 2x4 blocks of 2x2 */
-static cell_t half_cell(int x0, int y0)
+static cell_t half_cell(int x0, int y0, uint32_t under)
 {
     int v[8];
     double l[8][3];
@@ -327,7 +333,7 @@ static cell_t half_cell(int x0, int y0)
             }
         }
     if (opt.crisp || opt.colors == 16)
-        return index_cell(v);
+        return index_cell(v, under);
     /* blended: the two shades that fit the eight blocks best (2-means in
        linear light, from the two blocks furthest apart) */
     int ia = 0, ib = 0;
@@ -368,7 +374,7 @@ static cell_t half_cell(int x0, int y0)
     }
     uint32_t fa = srgb(ca[0]) << 16 | srgb(ca[1]) << 8 | srgb(ca[2]);
     uint32_t fb2 = srgb(cb[0]) << 16 | srgb(cb[1]) << 8 | srgb(cb[2]);
-    return block_cell(p, fb2, fa);
+    return block_cell(p, fb2, fa, under);
 }
 
 /* mode 80: an 8x8 character cell that is a glyph of the font, or its
@@ -429,6 +435,10 @@ static bool text_cells(int x0, int y0, const uint8_t *font, cell_t *c0, cell_t *
    80) a cell; mode 120 draws the paper's character columns 3, 7, ... without
    their pixel columns 0 and 7 */
 static int colx[1024][4], rowy[512][8];
+/* braille: each 8x8 character's commonest colour, which its cells' dots
+   stand on (the paper's character grid, carried into the border) */
+#define UNDER_N 64
+static uint32_t under_of[UNDER_N][UNDER_N];
 
 void term_frame(const uint8_t *fb, int w, int h, int px, int py, const uint8_t *font)
 {
@@ -464,12 +474,37 @@ void term_frame(const uint8_t *fb, int w, int h, int px, int py, const uint8_t *
         for (int i = 0; i < ph; i++)
             rowy[r][i] = py - by * ph + r * ph + i;
 
+    /* braille: a cell's own commonest colour as the background would turn
+       the inkier cells of a letter into dark blocks with light dots; the
+       character's keeps the letter's dots in one colour (a tie goes to the
+       character's top-left pixel, paper in the ROM font) */
+    bool dots = opt.glyphs == GLYPHS_BRAILLE;
+    int gx0 = px - (px + 7) / 8 * 8, gy0 = py - (py + 7) / 8 * 8;
+    if (dots)
+        for (int j = 0; j < UNDER_N && gy0 + 8 * j < h; j++)
+            for (int i = 0; i < UNDER_N && gx0 + 8 * i < w; i++) {
+                int x0 = gx0 + 8 * i, y0 = gy0 + 8 * j, count[16] = { 0 }, best = pix(x0, y0);
+                for (int y = 0; y < 8; y++)
+                    for (int x = 0; x < 8; x++)
+                        count[pix(x0 + x, y0 + y)]++;
+                for (int k = 0; k < 16; k++)
+                    if (count[k] > count[best])
+                        best = k;
+                under_of[j][i] = rgb_of(best);
+            }
+
     /* the cells */
     for (int r = 0; r < grid_h; r++) {
         for (int c = 0; c < grid_w; c++) {
             if (r + oy >= rows || c + ox >= cols)
                 continue;
             cell_t *cell = &cur[(size_t)(r + oy) * (size_t)cols + (size_t)(c + ox)];
+            uint32_t under = NO_FG;
+            if (dots) {
+                int i = (colx[c][0] - gx0) / 8, j = (rowy[r][0] - gy0) / 8;
+                if (i >= 0 && j >= 0 && i < UNDER_N && j < UNDER_N)
+                    under = under_of[j][i];
+            }
             if (mode == 80) {
                 /* in the paper: text first */
                 int pc = c - bx, pr = r - by;
@@ -483,13 +518,13 @@ void term_frame(const uint8_t *fb, int w, int h, int px, int py, const uint8_t *
                         continue;
                     }
                 }
-                *cell = half_cell(colx[c][0], rowy[r][0]);
+                *cell = half_cell(colx[c][0], rowy[r][0], under);
             } else {
                 int v[8];
                 for (int rr = 0; rr < 4; rr++)
                     for (int cc = 0; cc < 2; cc++)
                         v[2 * rr + cc] = pix(colx[c][cc], rowy[r][rr]);
-                *cell = index_cell(v);
+                *cell = index_cell(v, under);
             }
         }
     }

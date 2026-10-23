@@ -157,8 +157,15 @@ and paper). So a cell that stays inside one character loses nothing.
   colours in one cell, the cell keeps the two most common.
 - **Updates:** each frame sends only the cells that changed, inside a
   synchronized update (mode 2026).
-- **Fallbacks:** `--braille` uses braille dots for terminals without
-  octants. `--colors 256` (the default without `COLORTERM=truecolor`)
+- **Braille:** octants need a terminal that draws them itself (Ghostty
+  and kitty do) or a font that has them. Terminal.app and VS Code's
+  terminal have neither and show boxes, so there (by `TERM_PROGRAM`)
+  speccy draws braille dots instead; `--braille` and `--octants` choose
+  either way. A braille cell's dots stand on the commonest colour of its
+  8×8 character, so a letter's dots all have one colour: a cell's own
+  commonest colour would show a letter's inkier cells as dark blocks
+  with light dots.
+- **Colours:** `--colors 256` (the default without `COLORTERM=truecolor`)
   is exact, because the xterm colour cube's levels 215 and 255 are the
   Spectrum's normal and bright intensities.
 
@@ -209,7 +216,7 @@ Tested here:
 - the kitty and legacy parsers on byte streams;
 - legacy mode in a pty.
 
-Not tested here: macOS, the Linux console and Windows.
+Not tested here: the macOS key paths, the Linux console and Windows.
 
 ## Testing
 
@@ -224,3 +231,8 @@ Z80 doc test        2012 RAXOFT
 001 SCF                       OK
 ...
 ```
+
+On macOS (Apple clang, the system's make 3.81 and Python 3.9), the
+`macOS` workflow builds speccy, runs `make speccy_test`, fetches the ROM
+and boots it headless; this branch runs it by hand,
+`gh workflow run macos.yml --ref speccy`.

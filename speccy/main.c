@@ -154,7 +154,9 @@ static void usage(void)
          "                    /usr/share/spectrum-roms, FUSE's share/fuse)\n"
          "  --mode M          128, 120 or 80 columns (default: the widest that fits)\n"
          "  --colors N        24, 256 or 16 (default: 24 if COLORTERM says so, else 256)\n"
-         "  --braille         braille dots instead of octants\n"
+         "  --braille         braille dots instead of octants (the default in Terminal.app\n"
+         "                    and VS Code, whose fonts have no octants)\n"
+         "  --octants         octants even there (a font that has Unicode 16's octants)\n"
          "  --crisp           mode 80: no blended shades\n"
          "  --fullwidth       mode 80: double-width characters\n"
          "  --keys K          auto, kitty, evdev, console, macos, windows or legacy\n"
@@ -180,7 +182,8 @@ int main(int argc, char **argv)
         if (!strcmp(a, "--rom") && v) { rom_opt = v; i++; }
         else if (!strcmp(a, "--mode") && v) { topt.mode = atoi(v); i++; }
         else if (!strcmp(a, "--colors") && v) { topt.colors = atoi(v); i++; }
-        else if (!strcmp(a, "--braille")) topt.braille = true;
+        else if (!strcmp(a, "--braille")) topt.glyphs = GLYPHS_BRAILLE;
+        else if (!strcmp(a, "--octants")) topt.glyphs = GLYPHS_OCTANTS;
         else if (!strcmp(a, "--crisp")) topt.crisp = true;
         else if (!strcmp(a, "--fullwidth")) topt.fullwidth = true;
         else if (!strcmp(a, "--keys") && v) {
@@ -294,7 +297,8 @@ int main(int argc, char **argv)
             static double shown_speed;
             if (speed > 0)
                 shown_speed = speed;
-            int n = snprintf(title, sizeof title, "speccy | mode %d | keys: %s", term_mode(), keys_mode_name(kmode));
+            int n = snprintf(title, sizeof title, "speccy | mode %d%s | keys: %s", term_mode(),
+                             term_braille() ? " braille" : "", keys_mode_name(kmode));
             if (tap)
                 n += snprintf(title + n, sizeof title - (size_t)n, " | tape %d%% %s", tape_percent(&z.tape),
                               z.tape.playing ? "playing" : tape_done(&z.tape) ? "done" : "stopped");
