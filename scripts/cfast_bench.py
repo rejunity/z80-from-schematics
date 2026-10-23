@@ -61,9 +61,20 @@ def run(exe, prog, n, cpu):
     return ru.ru_utime + ru.ru_stime, int(instr.group(1)), t, pc.group(1)
 
 
+def cpu_name():
+    """the CPU's model name: /proc/cpuinfo on Linux, sysctl on macOS"""
+    name = ""
+    if os.path.exists("/proc/cpuinfo"):
+        with open("/proc/cpuinfo") as f:
+            name = next((l.split(":", 1)[1].strip() for l in f if l.startswith("model name")), "")
+    elif sys.platform == "darwin":
+        name = subprocess.run(["/usr/sbin/sysctl", "-n", "machdep.cpu.brand_string"],
+                              capture_output=True, text=True).stdout.strip()
+    return name or platform.processor() or platform.machine()
+
+
 def machine():
-    cpu = next((l.split(":", 1)[1].strip() for l in open("/proc/cpuinfo") if l.startswith("model name")),
-               platform.processor() or platform.machine())
+    cpu = cpu_name()
     cc = subprocess.run([os.environ.get("CC", "cc"), "--version"], capture_output=True, text=True).stdout.split("\n")[0]
     where = (f"GitHub Actions ({os.environ.get('ImageOS', os.environ.get('RUNNER_OS', ''))})"
              if os.environ.get("GITHUB_ACTIONS") else platform.node())
