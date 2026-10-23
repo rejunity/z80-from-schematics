@@ -40,6 +40,22 @@ FAT_LTO := $(shell $(CC) -flto -ffat-lto-objects -Werror -x c -c /dev/null -o /d
 CFLAGS += -flto $(FAT_LTO)
 endif
 
+# Jumps padded off 32-byte boundaries (x86): the microcode for Intel's JCC
+# erratum (Skylake-derived cores: 6th to 10th generation Core, Xeon
+# Scalable up to Cascade Lake) keeps a 32-byte block with a jump that
+# crosses or ends on its boundary out of the decoded-uop cache, and
+# cfast's steps are mostly jumps (ZEXDOC on an i7-7700: z80f_run 121 ->
+# 111 cycles an instruction). The probe takes clang's option, else GNU
+# as's, else none (arm64); JCC_PAD= for none. The benchmark builds every
+# emulator with it.
+ifeq ($(origin JCC_PAD),undefined)
+JCC_PAD := $(shell $(CC) -mbranches-within-32B-boundaries -Werror -x c -c /dev/null -o /dev/null 2>/dev/null \
+  && echo -mbranches-within-32B-boundaries \
+  || ($(CC) -Wa,-mbranches-within-32B-boundaries -Werror -x c -c /dev/null -o /dev/null 2>/dev/null \
+  && echo -Wa,-mbranches-within-32B-boundaries))
+endif
+CFLAGS += $(JCC_PAD)
+
 # ---- layout ----
 BUILD     := build
 BIN       := $(BUILD)/bin
@@ -703,23 +719,24 @@ REDCODE_FLAGS := -I$(BENCH_REFS)/redcode_z80 -I$(BENCH_REFS)/redcode_z80/Zeta \
   -DZ80_WITH_UNOFFICIAL_RETI
 
 cfast_bench: cfast $(BIN)/zexrunner $(BENCH_BINS)
-	@$(PYTHON) $(SCRIPTS)/cfast_bench.py --bin $(BIN) --out $(BUILD)/bench $(CFAST_BENCH_ARGS)
+	@$(PYTHON) $(SCRIPTS)/cfast_bench.py --bin $(BIN) --out $(BUILD)/bench \
+	  $(if $(JCC_PAD),--jcc-pad) $(CFAST_BENCH_ARGS)
 
 $(BIN)/bench_chips: $(CFAST)/bench/bench_chips.c $(CFAST)/bench/bench_common.h
 	@mkdir -p $(BIN)
-	$(CC) -std=gnu11 -O2 -w -I$(BENCH_REFS) $< -o $@
+	$(CC) -std=gnu11 -O2 $(JCC_PAD) -w -I$(BENCH_REFS) $< -o $@
 
 $(BIN)/bench_superzazu: $(CFAST)/bench/bench_superzazu.c $(CFAST)/bench/bench_common.h
 	@mkdir -p $(BIN)
-	$(CC) -std=gnu11 -O2 -w -I$(BENCH_REFS) $< -o $@
+	$(CC) -std=gnu11 -O2 $(JCC_PAD) -w -I$(BENCH_REFS) $< -o $@
 
 $(BIN)/bench_redcode: $(CFAST)/bench/bench_redcode.c $(CFAST)/bench/bench_common.h
 	@mkdir -p $(BIN)
-	$(CC) -std=gnu11 -O2 -w $(REDCODE_FLAGS) $< $(BENCH_REFS)/redcode_z80/Z80.c -o $@
+	$(CC) -std=gnu11 -O2 $(JCC_PAD) -w $(REDCODE_FLAGS) $< $(BENCH_REFS)/redcode_z80/Z80.c -o $@
 
 $(BIN)/bench_suzukiplan: $(CFAST)/bench/bench_suzukiplan.cpp $(CFAST)/bench/bench_common.h
 	@mkdir -p $(BIN)
-	$(CXX) -std=gnu++17 -O2 -w -I$(BENCH_REFS) $< -o $@
+	$(CXX) -std=gnu++17 -O2 $(JCC_PAD) -w -I$(BENCH_REFS) $< -o $@
 
 # ----------------------------------------------------------------------------
 # full suite

@@ -27,6 +27,14 @@
  * It defines static uint64_t z80f_run(z80f_t *f, uint64_t pins): pins as
  * for z80f_tick; returns the last phase's pins after ZF_BUS; call it again
  * to go on.
+ *
+ * For Intel's Skylake-derived cores (6th to 10th generation Core, Xeon
+ * Scalable up to Cascade Lake), build it with jumps padded off 32-byte
+ * boundaries -- GCC: -Wa,-mbranches-within-32B-boundaries, clang:
+ * -mbranches-within-32B-boundaries. Their microcode for the JCC erratum
+ * keeps a 32-byte block whose jump crosses or ends on its boundary out of
+ * the decoded-uop cache, and the steps are mostly jumps: ZEXDOC on an
+ * i7-7700 ran 121 cycles an instruction unpadded, 111 padded.
  * ==========================================================================*/
 #if !ZF_GNU
 #error "z80_fast_run.h needs computed goto (GCC / Clang)"
