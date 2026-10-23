@@ -44,6 +44,29 @@
    that goes to the reference engine before the edge -- the same (31.1):
    the cost is the dispatch on the instruction, not where it happens. */
 
+#if defined(__GNUC__)
+#define ZF_INLINE inline __attribute__((always_inline))
+#else
+#define ZF_INLINE inline
+#endif
+
+/* register r as getr / setr (r) and getri / setri (ri) reach it, inlined
+   into the steps (the model's own are calls): its pair and byte */
+static ZF_INLINE uint8_t zf_pair(const z80_t *c, uint8_t r, bool ix)
+{
+    return (ix && c->ctl.idx && !c->ctl.use_disp && (r == REG_H || r == REG_L)) ? hl_pair(c) : r8_pair[r];
+}
+static ZF_INLINE uint8_t zf_get(const z80_t *c, uint8_t r, bool ix)
+{
+    uint16_t v = c->rf[zf_pair(c, r, ix)];
+    return r8_hi[r] ? (uint8_t)(v >> 8) : (uint8_t)v;
+}
+static ZF_INLINE void zf_set(z80_t *c, uint8_t r, bool ix, uint8_t v)
+{
+    uint8_t p = zf_pair(c, r, ix);
+    c->rf[p] = r8_hi[r] ? (uint16_t)((c->rf[p] & 0x00FF) | (unsigned)v << 8) : (uint16_t)((c->rf[p] & 0xFF00) | v);
+}
+
 /* the ALU on the instruction's operation and flag mode (md): A and b, F and
    Q as they stand, xy the bit ops' X / Y source; the result, F in *f */
 static inline uint8_t zf_alu(z80_t *c, uint8_t md, uint8_t b, uint8_t xy, uint8_t *f)
@@ -53,25 +76,50 @@ static inline uint8_t zf_alu(z80_t *c, uint8_t md, uint8_t b, uint8_t xy, uint8_
     z80_alu(md, (uint8_t)ctl->alu_op, ctl->rot_op, ctl->bit_index, xy, z80_A(c), b, z80_F(c), c->q, &r, f);
     return r;
 }
+/* the writes due on the edge that ends the next M1's T1: EX AF,AF' here,
+   a block instruction's F and a decode an interrupt replaced in wb_fire() */
+static ZF_INLINE void zf_fire1(z80_t *c)
+{
+    if (c->wbp == WBP_EXAF) {
+        uint16_t x = c->rf[RFP_AF]; c->rf[RFP_AF] = c->rf[RFP_AF2]; c->rf[RFP_AF2] = x;
+        c->wbp = 0;
+        return;
+    }
+    wb_fire(c, 1, false);
+}
+
 /* the writes due on the edge that ends the next M1's T2 */
-static inline void zf_fire2(z80_t *c)
+static ZF_INLINE void zf_fire2(z80_t *c)
 {
     const z80_control_t *ctl = &c->ctl;
     uint8_t md = (uint8_t)ctl->flag_mode, f, r;
-    if (c->wbp != WBP_ALU) { wb_fire(c, 2, false); return; }
+    if (c->wbp != WBP_ALU) {
+        if (c->wbp == WBP_EXDH) {            /* EX DE,HL */
+            uint16_t x = c->rf[RFP_DE]; c->rf[RFP_DE] = c->rf[RFP_HL]; c->rf[RFP_HL] = x;
+        } else if (c->wbp == WBP_EXX) {      /* EXX */
+            for (uint8_t i = RFP_BC; i <= RFP_HL; i++) {
+                uint16_t x = c->rf[i]; c->rf[i] = c->rf[i + RFP_BC2 - RFP_BC]; c->rf[i + RFP_BC2 - RFP_BC] = x;
+            }
+        } else {
+            wb_fire(c, 2, false);
+            return;
+        }
+        c->wbp = 0;
+        return;
+    }
     switch (ctl->exec) {
     case EXEC_LD_R_R:                        /* the loads: the byte, no F (Q 0) */
-        setri(c, ctl->rf_dst, getri(c, ctl->rf_src));
+        zf_set(c, ctl->rf_dst, true, zf_get(c, ctl->rf_src, true));
         c->wbp = 0; c->q = 0; return;
     case EXEC_LD_R_N: case EXEC_LD_R_M:
-        setri(c, ctl->rf_dst, c->tmp8);
+        zf_set(c, ctl->rf_dst, true, c->tmp8);
         c->wbp = 0; c->q = 0; return;
     case EXEC_ALU_R: case EXEC_ALU_N: case EXEC_ALU_M:
-        r = zf_alu(c, md, ctl->exec == EXEC_ALU_R ? getri(c, ctl->rf_src) : c->tmp8, 0, &f);
+        r = zf_alu(c, md, ctl->exec == EXEC_ALU_R ? zf_get(c, ctl->rf_src, true) : c->tmp8, 0, &f);
         if (ctl->alu_op != ALU_CP) z80_setA(c, r);
         break;
     case EXEC_INC_R: case EXEC_DEC_R:
-        setri(c, ctl->rf_dst, zf_alu(c, md, getri(c, ctl->rf_dst), 0, &f));
+        zf_set(c, ctl->rf_dst, true, zf_alu(c, md, zf_get(c, ctl->rf_dst, true), 0, &f));
         break;
     case EXEC_INC_M: case EXEC_DEC_M:        /* F; the byte went to memory */
         zf_alu(c, md, c->tmp8, 0, &f);
@@ -86,13 +134,13 @@ static inline void zf_fire2(z80_t *c)
         z80_setA(c, zf_alu(c, FLAG_NEG, 0, 0, &f));
         break;
     case EXEC_CB_R: {                        /* the bit unit: r, and F (not RES / SET) */
-        uint8_t v = getr(c, ctl->rf_src), bm = (uint8_t)(1u << ctl->bit_index);
+        uint8_t v = zf_get(c, ctl->rf_src, false), bm = (uint8_t)(1u << ctl->bit_index);
         if (ctl->cb_kind == CB_RES || ctl->cb_kind == CB_SET) {
-            setr(c, ctl->rf_dst, ctl->cb_kind == CB_RES ? (uint8_t)(v & ~bm) : (uint8_t)(v | bm));
+            zf_set(c, ctl->rf_dst, false, ctl->cb_kind == CB_RES ? (uint8_t)(v & ~bm) : (uint8_t)(v | bm));
             c->wbp = 0; c->q = 0; return;
         }
         r = zf_alu(c, md, v, v, &f);
-        if (ctl->cb_kind == CB_ROT) setr(c, ctl->rf_dst, r);
+        if (ctl->cb_kind == CB_ROT) zf_set(c, ctl->rf_dst, false, r);
         break;
     }
     default:

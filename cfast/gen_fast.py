@@ -110,7 +110,7 @@ def main():
                 body.append(f"ZF_CLOCK({t}, {phi});")
                 if name == "M1" and phi == 0 and t == 2:
                     # the edge that ends T1: the last instruction's writes due there
-                    body.append("if (c->wbp & (WBP_F1 | WBP_EXAF | WBP_DEC)) wb_fire(c, 1, false);")
+                    body.append("if (c->wbp & (WBP_F1 | WBP_EXAF | WBP_DEC)) zf_fire1(c);")
                 if name == "M1" and phi == 0 and t == 3:
                     # the edge that ends T2: the rest of them
                     body.append("if (c->wbp) zf_fire2(c);")
