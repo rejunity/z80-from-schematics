@@ -20,6 +20,12 @@
  * blocks instead, 128x96 or 120x96: exact, but the pixels are twice as
  * tall as wide; or, half-height, 128x48 like octants, a quadrant two
  * pixels tall (blended, or crisp): square, half the rows.
+ * Half-width bars draw them in the octants' 128x48 cells too, a cell four
+ * bars one above the other, a bar two pixels wide (blended, or crisp) and
+ * one tall: square, half the columns. Block Elements (U+2580, U+2584,
+ * U+2582, U+2586, in every font) have the patterns whose colour changes
+ * at most once down the cell, either way round; the other eight take the
+ * nearest of them.
  * The 2x4 blocks print as octants, or as braille dots (U+2800..) where the
  * terminal's font has no octants: speccy picks braille itself under
  * Terminal.app and VS Code (TERM_PROGRAM), or half blocks where the
@@ -38,13 +44,13 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-enum { GLYPHS_AUTO, GLYPHS_OCTANTS, GLYPHS_BRAILLE, GLYPHS_QUADRANTS };
+enum { GLYPHS_AUTO, GLYPHS_OCTANTS, GLYPHS_BRAILLE, GLYPHS_QUADRANTS, GLYPHS_BARS };
 typedef struct {
     int  mode;        /* 256, 128, 120, 80, or 0: the widest that fits        */
     int  colors;      /* 24 (bit), 256 or 16; 0: 24 if COLORTERM says so      */
     int  glyphs;      /* GLYPHS_*; AUTO: braille in Terminal.app and VS Code  */
     int  quad_rows;   /* quadrants: 96, 48 (half-height); 0: 96 if they fit   */
-    bool crisp;       /* mode 80: no blended shades                          */
+    bool crisp;       /* mode 80, half-height quadrants, bars: no blends     */
     bool fullwidth;   /* mode 80: double-width characters                    */
 } term_opts_t;
 
@@ -59,8 +65,9 @@ void term_resize(void);
 void term_frame(const uint8_t *fb, int w, int h, int px, int py, const uint8_t *font);
 /* The window title. */
 void term_title(const char *s);
-/* The mode in use, the glyphs it draws ("octants", "braille", "quadrants"
-   or "half blocks") and the terminal's size. */
+/* The mode in use, the glyphs it draws ("octants", "braille", "quadrants",
+   "half-height quadrants", "half-width bars" or "half blocks") and the
+   terminal's size. */
 int  term_mode(void);
 const char *term_glyphs(void);
 void term_size(int *cols, int *rows);

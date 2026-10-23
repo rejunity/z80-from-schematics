@@ -159,6 +159,17 @@ in every font) instead of octants, in one of two ways:
   linear light (`--crisp`: takes the ink's colour, bolder text but
   blobbier sprites).
 
+`--bars` draws modes 128 and 120 as half-width bars: the octants' 128×48
+cells, each four bars one above the other, a bar two pixels wide and one
+tall, so the pixels stay square and the columns are halved instead of the
+rows. Where a bar's two pixels differ, it blends them in linear light
+(`--crisp`: takes the ink's colour). The glyphs are ▀ ▄ ▂ ▆ (in every
+font), with the colours either way round: the 8 patterns whose colour
+changes at most once down the cell. The other 8 (a bar alone in the
+middle, bars that alternate) become the nearest of those, with the least
+squared error in linear light; on a tie, the colour with fewer bars keeps
+them, so a stroke one pixel tall is drawn two tall rather than dropped.
+
 - **Mode 120 and text:** columns 0 and 7 are blank in the ROM font's
   letters and digits, except the top-left pixel of T and Y.
 - **Choosing a mode:** without `--mode`, speccy picks the widest of 128,

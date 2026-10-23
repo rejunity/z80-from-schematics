@@ -28,6 +28,13 @@ static double lin(unsigned v)
     return x <= 0.04045 ? x / 12.92 : pow((x + 0.055) / 1.055, 2.4);
 }
 
+/* an RGB colour in linear light */
+static void lin3(uint32_t rgb, double *l)
+{
+    for (int s = 0; s < 3; s++)
+        l[s] = lin(rgb >> (16 - 8 * s) & 255);
+}
+
 static unsigned srgb(double l)
 {
     double v = l <= 0.0031308 ? l * 12.92 : 1.055 * pow(l, 1 / 2.4) - 0.055;
@@ -85,6 +92,11 @@ static uint32_t octant[256], braille[256];
 static const uint32_t quadrant[16] = {
     0x20, 0x2598, 0x259D, 0x2580, 0x2596, 0x258C, 0x259E, 0x259B,
     0x2597, 0x259A, 0x2590, 0x259C, 0x2584, 0x2599, 0x259F, 0x2588 };
+/* half-width bars: bit r the bar in row r, from the top. Block Elements
+   have the patterns whose colour changes at most once down the cell: the
+   upper and lower halves, the lower quarter and three quarters (bar[p],
+   p's bars in fg), and with fg and bg swapped the other four (bar[~p]) */
+static const uint32_t bar[16] = { [0x3] = 0x2580, [0xC] = 0x2584, [0x8] = 0x2582, [0xE] = 0x2586 };
 
 static void glyph_tables(void)
 {
@@ -218,7 +230,7 @@ void term_resize(void)
     mode = opt.mode;
     qrows = opt.quad_rows ? opt.quad_rows : rows >= 96 ? 96 : 48;
     if (!mode) {
-        if (opt.glyphs == GLYPHS_QUADRANTS)
+        if (opt.glyphs == GLYPHS_QUADRANTS || opt.glyphs == GLYPHS_BARS)
             mode = cols >= 128 ? 128 : 120;
         else if (glyphs_auto && opt.glyphs == GLYPHS_BRAILLE && cols >= 256 && rows >= 96)
             mode = 256;           /* no octants here, but room for half blocks */
@@ -234,10 +246,11 @@ void term_resize(void)
 
 int term_mode(void) { return mode; }
 static bool quads(void) { return opt.glyphs == GLYPHS_QUADRANTS && (mode == 128 || mode == 120); }
+static bool bars(void) { return opt.glyphs == GLYPHS_BARS && (mode == 128 || mode == 120); }
 const char *term_glyphs(void)
 {
     return mode == 256 ? "half blocks" : quads() ? (qrows == 48 ? "half-height quadrants" : "quadrants")
-         : opt.glyphs == GLYPHS_BRAILLE ? "braille" : "octants";
+         : bars() ? "half-width bars" : opt.glyphs == GLYPHS_BRAILLE ? "braille" : "octants";
 }
 void term_size(int *c, int *r) { *c = cols; *r = rows; }
 
@@ -287,9 +300,11 @@ static cell_t block_cell(unsigned p, uint32_t fg, uint32_t bg, int n)
     return c;
 }
 
-/* n colour indices (2x4 or 2x2, bit order) -> a cell: two colours exact,
-   more than two the two most common, the rest to the nearer of them */
-static cell_t index_cell(const int *v, int n)
+/* n colour indices (2x4, 2x2 or 1x4, bit order) -> the cell's colours, a
+   the commonest and b (-1: only a), and the pattern of the blocks in b:
+   two colours exact, more than two the two most common, the rest to the
+   nearer of them */
+static unsigned index_split(const int *v, int n, int *pa, int *pb)
 {
     int count[16] = { 0 }, a = -1, b = -1;
     for (int i = 0; i < n; i++)
@@ -304,8 +319,10 @@ static cell_t index_cell(const int *v, int n)
         if (c != a && (b < 0 || count[c] > count[b]))
             b = c;
     }
+    *pa = a;
+    *pb = b;
     if (b < 0)
-        return block_cell(0, rgb_of(a), rgb_of(a), n);
+        return 0;
     uint32_t ra = rgb_of(a), rb = rgb_of(b);
     unsigned p = 0;
     for (int i = 0; i < n; i++) {
@@ -316,7 +333,65 @@ static cell_t index_cell(const int *v, int n)
         if (to_b)
             p |= 1u << i;
     }
-    return block_cell(p, rb, ra, n);
+    return p;
+}
+
+/* n colour indices (2x4 or 2x2) -> a cell */
+static cell_t index_cell(const int *v, int n)
+{
+    int a, b;
+    unsigned p = index_split(v, n, &a, &b);
+    if (b < 0)
+        return block_cell(0, rgb_of(a), rgb_of(a), n);
+    return block_cell(p, rgb_of(b), rgb_of(a), n);
+}
+
+static bool bar_drawn(unsigned p) { return p == 0 || p == 15 || bar[p] || bar[~p & 15]; }
+
+/* half-width bars: p's bars in fg, the rest in bg. A pattern Block
+   Elements lack (a bar alone in the middle, bars that alternate) becomes
+   the one they have with the least squared error in linear light (l: the
+   bars' shades, lo and hi: bg's and fg's), a tie keeping the bars of the
+   colour that has fewer (a stroke one pixel tall stays, two tall). */
+static cell_t bar_cell(unsigned p, uint32_t fg, uint32_t bg, double l[][3], const double *lo, const double *hi)
+{
+    if (!bar_drawn(p)) {
+        int ones = (int)((p & 1) + (p >> 1 & 1) + (p >> 2 & 1) + (p >> 3 & 1));
+        double best = HUGE_VAL;
+        bool best_kept = false;
+        unsigned bq = 0;
+        for (unsigned q = 0; q < 16; q++) {
+            if (!bar_drawn(q))
+                continue;
+            double e = 0;
+            for (int r = 0; r < 4; r++) {
+                const double *s = q >> r & 1 ? hi : lo;
+                for (int k = 0; k < 3; k++)
+                    e += (l[r][k] - s[k]) * (l[r][k] - s[k]);
+            }
+            bool kept = ones < 2 ? (q & p) == p : ones > 2 && !(q & ~p & 15);
+            if (e < best || (e == best && kept && !best_kept)) {
+                best = e;
+                best_kept = kept;
+                bq = q;
+            }
+        }
+        p = bq;
+    }
+    cell_t c;
+    if (fg == bg)
+        p = 0;
+    if (p == 0 || p == 15) {
+        c.ch = ' ';
+        c.fg = NO_FG;
+        c.bg = p ? fg : bg;
+        return c;
+    }
+    bool swap = !bar[p];
+    c.ch = swap ? bar[~p & 15] : bar[p];
+    c.fg = swap ? bg : fg;
+    c.bg = swap ? fg : bg;
+    return c;
 }
 
 /* mode 256: the upper pixel in the upper half block, the lower one below */
@@ -330,21 +405,22 @@ static cell_t half_block_cell(int top, int bottom)
     return c;
 }
 
-/* Blocks of bw x bh pixels, two across and gy down, block (r, c) covering
+/* Blocks of bw x bh pixels, gx across and gy down, block (r, c) covering
    xs[bw c ..], ys[bh r ..]: mode 80's 4x8 pixels as 2x4 blocks of 2x2
-   (octants), half-height quadrants' 2x4 pixels as 2x2 blocks of 1x2. A
-   block is its pixels' mean in linear light, and the cell the two shades
-   that fit its blocks best; crisp (or with 16 colours) a block is its
-   commonest colour, a tie going to the first, or with ink_ties to an ink
-   pixel's (a quadrant's two pixels: so a stroke one pixel tall stays). */
-static cell_t blend_cell(const int *xs, const int *ys, int gy, int bw, int bh, bool ink_ties)
+   (octants), half-height quadrants' 2x4 pixels as 2x2 blocks of 1x2,
+   half-width bars' as 1x4 blocks of 2x1. A block is its pixels' mean in
+   linear light, and the cell the two shades that fit its blocks best;
+   crisp (or with 16 colours) a block is its commonest colour, a tie going
+   to the first, or with ink_ties to an ink pixel's (a quadrant's two
+   pixels: so a stroke one pixel tall stays; a bar's, one pixel wide). */
+static cell_t blend_cell(const int *xs, const int *ys, int gx, int gy, int bw, int bh, bool ink_ties)
 {
-    int n = 2 * gy, v[8];
+    int n = gx * gy, v[8];
     double l[8][3];
     bool crisp = opt.crisp || opt.colors == 16;
     for (int r = 0; r < gy; r++)
-        for (int c = 0; c < 2; c++) {
-            int q[4], ink[4], m = 0, k = 2 * r + c;
+        for (int c = 0; c < gx; c++) {
+            int q[4], ink[4], m = 0, k = gx * r + c;
             for (int j = 0; j < bh; j++)
                 for (int i = 0; i < bw; i++) {
                     int raw = pixraw(xs[bw * c + i], ys[bh * r + j]);
@@ -373,8 +449,20 @@ static cell_t blend_cell(const int *xs, const int *ys, int gy, int bw, int bh, b
                 }
             }
         }
-    if (crisp)
+    if (crisp && gx == 2)
         return index_cell(v, n);
+    if (crisp) {
+        int a, b;
+        unsigned p = index_split(v, n, &a, &b);
+        double la[3], lb[3];
+        if (b < 0)
+            b = a;
+        for (int k = 0; k < n; k++)
+            lin3(rgb_of(v[k]), l[k]);
+        lin3(rgb_of(a), la);
+        lin3(rgb_of(b), lb);
+        return bar_cell(p, rgb_of(b), rgb_of(a), l, la, lb);
+    }
     /* blended: the two shades that fit the blocks best (2-means in linear
        light, from the two blocks furthest apart) */
     int ia = 0, ib = 0;
@@ -415,6 +503,8 @@ static cell_t blend_cell(const int *xs, const int *ys, int gy, int bw, int bh, b
     }
     uint32_t fa = srgb(ca[0]) << 16 | srgb(ca[1]) << 8 | srgb(ca[2]);
     uint32_t fb2 = srgb(cb[0]) << 16 | srgb(cb[1]) << 8 | srgb(cb[2]);
+    if (gx == 1)
+        return bar_cell(p, fb2, fa, l, ca, cb);
     return block_cell(p, fb2, fa, n);
 }
 
@@ -583,7 +673,7 @@ void term_frame(const uint8_t *fb, int w, int h, int px, int py, const uint8_t *
     g_fb = fb;
     g_w = w;
     g_h = h;
-    bool q = quads();
+    bool q = quads(), hw = bars();
     int pw = mode == 80 ? 4 : mode == 256 ? 1 : 2;                     /* pixels a cell */
     int ph = mode == 80 ? 8 : mode == 256 || (q && qrows == 96) ? 2 : 4;
     int paper_w = mode == 256 ? 256 : mode == 128 ? 128 : mode == 120 ? 120 : 64, paper_h = 192 / ph;
@@ -638,11 +728,13 @@ void term_frame(const uint8_t *fb, int w, int h, int px, int py, const uint8_t *
                         continue;
                     }
                 }
-                *cell = dots ? braille_cell(colx[c], rowy[r], 2, 2) : blend_cell(colx[c], rowy[r], 4, 2, 2, false);
+                *cell = dots ? braille_cell(colx[c], rowy[r], 2, 2) : blend_cell(colx[c], rowy[r], 2, 4, 2, 2, false);
             } else if (dots) {
                 *cell = braille_cell(colx[c], rowy[r], 1, 1);
+            } else if (hw) {
+                *cell = blend_cell(colx[c], rowy[r], 1, 4, 2, 1, true);
             } else if (q && qrows == 48) {
-                *cell = blend_cell(colx[c], rowy[r], 2, 1, 2, true);
+                *cell = blend_cell(colx[c], rowy[r], 2, 2, 1, 2, true);
             } else {
                 int v[8];
                 for (int rr = 0; rr < ph; rr++)

@@ -161,7 +161,10 @@ static void usage(void)
          "  --quadrants[=R]   2x2 quadrants in modes 128 and 120: R 96, every pixel but twice\n"
          "                    as tall as wide; R 48, half the rows (a quadrant two pixels\n"
          "                    tall, blended; --crisp: the ink); default 96 if the window has them\n"
-         "  --crisp           mode 80 and half-height quadrants: no blended shades\n"
+         "  --bars            half-width bars in modes 128 and 120 (Block Elements, any font):\n"
+         "                    a cell four bars, each two pixels wide (blended; --crisp: the\n"
+         "                    ink) and one tall: square like octants, half the columns\n"
+         "  --crisp           mode 80, half-height quadrants and bars: no blended shades\n"
          "  --fullwidth       mode 80: double-width characters\n"
          "  --keys K          auto, kitty, evdev, console, macos, windows or legacy\n"
          "  --no-autoload     don't type LOAD \"\" for a .tap\n"
@@ -196,6 +199,7 @@ int main(int argc, char **argv)
                 return 2;
             }
         }
+        else if (!strcmp(a, "--bars")) topt.glyphs = GLYPHS_BARS;
         else if (!strcmp(a, "--crisp")) topt.crisp = true;
         else if (!strcmp(a, "--fullwidth")) topt.fullwidth = true;
         else if (!strcmp(a, "--keys") && v) {
@@ -216,8 +220,8 @@ int main(int argc, char **argv)
         fprintf(stderr, "speccy: --mode is 256, 128, 120 or 80\n");
         return 2;
     }
-    if (topt.glyphs == GLYPHS_QUADRANTS && (topt.mode == 80 || topt.mode == 256)) {
-        fprintf(stderr, "speccy: --quadrants draws modes 128 and 120\n");
+    if ((topt.glyphs == GLYPHS_QUADRANTS || topt.glyphs == GLYPHS_BARS) && (topt.mode == 80 || topt.mode == 256)) {
+        fprintf(stderr, "speccy: --%s draws modes 128 and 120\n", topt.glyphs == GLYPHS_BARS ? "bars" : "quadrants");
         return 2;
     }
 
