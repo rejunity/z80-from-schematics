@@ -1,0 +1,48 @@
+name: macOS
+
+# The C model and cfast built the way a Mac builds them out of the box:
+# Apple clang, the system's GNU Make 3.81 and Python 3.9 (/usr/bin/python3),
+# on arm64. ci.yml runs the full suites on Linux; this job checks that the
+# build works here and that cfast stays phase-identical to the model.
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', 'docs/**']
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  c-model:
+    name: C model and cfast (Apple clang, make 3.81, Python 3.9)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      PYTHON: /usr/bin/python3
+    steps:
+      - uses: actions/checkout@v5
+      - name: Toolchain
+        run: |
+          sw_vers
+          uname -m
+          make --version | head -1
+          cc --version | head -1
+          "$PYTHON" --version
+      - name: C unit tests (make ctest)
+        run: make ctest
+      - name: FUSE / Cringle 1356 cases through the C model
+        run: make fuse
+      - name: cfast phase by phase against the model (make cfast_identity)
+        run: make cfast_identity
+      - name: cfast as one header, phase by phase (make cfast_single_identity)
+        run: make cfast_single_identity
+      - name: Every emulator on ZEXDOC, on Apple silicon (make cfast_bench)
+        # no CPU pinning (macOS has no taskset); the table goes to the
+        # job's summary only -- the site's chart takes ci.yml's Linux runs
+        run: |
+          make cfast_bench CFAST_BENCH_ARGS="--rounds 5"
+          cat build/bench/bench.md >> "$GITHUB_STEP_SUMMARY"
