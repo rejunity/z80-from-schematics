@@ -16,8 +16,11 @@
  *        rest as octants at half resolution, blended or crisp.
  * The 2x4 blocks print as octants, or as braille dots (U+2800..) where the
  * terminal's font has no octants: speccy picks braille itself under
- * Terminal.app and VS Code (TERM_PROGRAM). The dots of a cell stand on
- * its 8x8 character's commonest colour, so a letter keeps one background.
+ * Terminal.app and VS Code (TERM_PROGRAM). Braille shows only its dots,
+ * so the dots are the ink pixels (the bitmap's 1s) on the paper's colour,
+ * as the Spectrum draws them, however much of a cell the ink covers --
+ * but the paper pixels in a character that is mostly ink of the colour of
+ * the paper around it (a road drawn in ink, its dashes left as paper).
  * The border shows as far as the terminal has room. A cell where the
  * picture has more than two colours (attributes or the border changed
  * within it) keeps the two most common. Each frame sends only the cells
@@ -41,8 +44,9 @@ bool term_open(const term_opts_t *o);
 void term_close(void);
 /* The terminal's size changed (or not): lay out again, redraw it all. */
 void term_resize(void);
-/* Draw the picture: fb holds w x h colour indices (bright << 3 | G R B),
-   the paper's top-left pixel at (px, py); font is the 96 glyphs (768
+/* Draw the picture: fb holds w x h pixels, each its colour index (bright <<
+   3 | G R B) in bits 0-3, its attribute's other colour (G R B) in 4-6 and
+   its bitmap bit in 7 (ula.h), the paper's top-left pixel at (px, py); font is the 96 glyphs (768
    bytes, codes 32-127) mode 80 matches text against, or NULL. */
 void term_frame(const uint8_t *fb, int w, int h, int px, int py, const uint8_t *font);
 /* The window title. */

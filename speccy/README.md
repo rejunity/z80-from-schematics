@@ -161,10 +161,13 @@ and paper). So a cell that stays inside one character loses nothing.
   and kitty do) or a font that has them. Terminal.app and VS Code's
   terminal have neither and show boxes, so there (by `TERM_PROGRAM`)
   speccy draws braille dots instead; `--braille` and `--octants` choose
-  either way. A braille cell's dots stand on the commonest colour of its
-  8×8 character, so a letter's dots all have one colour: a cell's own
-  commonest colour would show a letter's inkier cells as dark blocks
-  with light dots.
+  either way. Braille shows only its dots, so the dots are the ink
+  pixels, in their colour, on the paper's colour, however much of a cell
+  the ink covers: letters, sprites and solid shapes are all dots. The
+  ULA passes each pixel's bitmap bit and its attribute's other colour
+  along for this. The exception is a character that is mostly ink of the
+  colour of the paper around it (Horace's road: black ink with white
+  dashes left as paper, beside black paper); there the paper is the dots.
 - **Colours:** `--colors 256` (the default without `COLORTERM=truecolor`)
   is exact, because the xterm colour cube's levels 215 and 255 are the
   Spectrum's normal and bright intensities.

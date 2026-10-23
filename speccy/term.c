@@ -233,12 +233,15 @@ void term_title(const char *s)
 static const uint8_t *g_fb;
 static int g_w, g_h;
 
-static inline int pix(int x, int y)
+/* a pixel as it is stored (ula.h), and its colour */
+static inline int pixraw(int x, int y)
 {
     if (x < 0 || y < 0 || x >= g_w || y >= g_h)
         return 0;
     return g_fb[(size_t)y * (size_t)g_w + (size_t)x];
 }
+
+static inline int pix(int x, int y) { return pixraw(x, y) & 15; }
 
 static int dist2(uint32_t a, uint32_t b)
 {
@@ -250,22 +253,15 @@ static int dist2(uint32_t a, uint32_t b)
     return d;
 }
 
-/* p's blocks in fg, the rest in bg. Braille draws only the dots, so the
-   dots go to whichever colour is not the nearer to under (the cell's 8x8
-   character's commonest, NO_FG for none). */
-static cell_t block_cell(unsigned p, uint32_t fg, uint32_t bg, uint32_t under)
+/* octants: p's blocks in fg, the rest in bg */
+static cell_t block_cell(unsigned p, uint32_t fg, uint32_t bg)
 {
     cell_t c;
-    bool dots = opt.glyphs == GLYPHS_BRAILLE;
     if (fg == bg)
         p = 0;
-    else if (dots && under != NO_FG && dist2(fg, under) < dist2(bg, under)) {
-        uint32_t t = fg; fg = bg; bg = t;
-        p ^= 0xFF;
-    }
     if (p == 0) { c.ch = ' '; c.fg = NO_FG; c.bg = bg; return c; }
     if (p == 0xFF) { c.ch = ' '; c.fg = NO_FG; c.bg = fg; return c; }
-    c.ch = dots ? braille[p] : octant[p];
+    c.ch = octant[p];
     c.fg = fg;
     c.bg = bg;
     return c;
@@ -273,7 +269,7 @@ static cell_t block_cell(unsigned p, uint32_t fg, uint32_t bg, uint32_t under)
 
 /* eight colour indices (2x4, bit order) -> a cell: two colours exact, more
    than two the two most common, the rest to the nearer of them */
-static cell_t index_cell(const int v[8], uint32_t under)
+static cell_t index_cell(const int v[8])
 {
     int count[16] = { 0 }, a = -1, b = -1;
     for (int i = 0; i < 8; i++)
@@ -289,7 +285,7 @@ static cell_t index_cell(const int v[8], uint32_t under)
             b = c;
     }
     if (b < 0)
-        return block_cell(0, rgb_of(a), rgb_of(a), under);
+        return block_cell(0, rgb_of(a), rgb_of(a));
     uint32_t ra = rgb_of(a), rb = rgb_of(b);
     unsigned p = 0;
     for (int i = 0; i < 8; i++) {
@@ -300,11 +296,11 @@ static cell_t index_cell(const int v[8], uint32_t under)
         if (to_b)
             p |= 1u << i;
     }
-    return block_cell(p, rb, ra, under);
+    return block_cell(p, rb, ra);
 }
 
 /* mode 80: 4x8 pixels as 2x4 blocks of 2x2 */
-static cell_t half_cell(int x0, int y0, uint32_t under)
+static cell_t half_cell(int x0, int y0)
 {
     int v[8];
     double l[8][3];
@@ -333,7 +329,7 @@ static cell_t half_cell(int x0, int y0, uint32_t under)
             }
         }
     if (opt.crisp || opt.colors == 16)
-        return index_cell(v, under);
+        return index_cell(v);
     /* blended: the two shades that fit the eight blocks best (2-means in
        linear light, from the two blocks furthest apart) */
     int ia = 0, ib = 0;
@@ -374,7 +370,108 @@ static cell_t half_cell(int x0, int y0, uint32_t under)
     }
     uint32_t fa = srgb(ca[0]) << 16 | srgb(ca[1]) << 8 | srgb(ca[2]);
     uint32_t fb2 = srgb(cb[0]) << 16 | srgb(cb[1]) << 8 | srgb(cb[2]);
-    return block_cell(p, fb2, fa, under);
+    return block_cell(p, fb2, fa);
+}
+
+/* Braille shows only its dots, so which colour is the dots is decided per
+   8x8 character (the paper's grid, carried into the border): the ink
+   pixels (bit 7, ula.h), as the Spectrum draws a letter or a sprite, even
+   where ink covers most of a cell; but the paper pixels where the ink
+   covers most of the character and has the colour of the paper around it
+   (the commonest paper colour in the 5x5 characters of the paper centred
+   on it) -- a road drawn in black ink with its white dashes left as
+   paper, beside road that is black paper. Ink around a character (big
+   lettering, a large sprite) never makes it flip. */
+#define CH_N 64
+static int ch_x0, ch_y0;                 /* the top-left of character (0, 0) */
+static bool ch_flip[CH_N][CH_N];
+
+static int black0(int c) { return c & 7 ? c : 0; }      /* bright black is black */
+
+static void braille_chars(int w, int h, int px, int py)
+{
+    static uint16_t hist[CH_N][CH_N][16];      /* its paper pixels' colours */
+    static int8_t inkc[CH_N][CH_N];
+    static uint8_t inkn[CH_N][CH_N];
+    ch_x0 = px - (px + 7) / 8 * 8;
+    ch_y0 = py - (py + 7) / 8 * 8;
+    int nx = (w - ch_x0 + 7) / 8, ny = (h - ch_y0 + 7) / 8;
+    if (nx > CH_N) nx = CH_N;
+    if (ny > CH_N) ny = CH_N;
+    for (int j = 0; j < ny; j++)
+        for (int i = 0; i < nx; i++) {
+            int ink[16] = { 0 }, n = 0;
+            memset(hist[j][i], 0, sizeof hist[j][i]);
+            for (int y = 0; y < 8; y++)
+                for (int x = 0; x < 8; x++) {
+                    int v = pixraw(ch_x0 + 8 * i + x, ch_y0 + 8 * j + y), c = black0(v & 15);
+                    if (v & 0x80) { ink[c]++; n++; }
+                    else hist[j][i][c]++;
+                }
+            int best = 0;
+            for (int c = 1; c < 16; c++)
+                if (ink[c] > ink[best]) best = c;
+            inkn[j][i] = (uint8_t)n;
+            inkc[j][i] = (int8_t)(n ? best : -1);
+        }
+    /* around a character of the paper, the paper only: the border is not
+       the scene's background (the border has no ink, so no flips) */
+    int pi0 = (px - ch_x0) / 8, pj0 = (py - ch_y0) / 8;
+    for (int j = 0; j < ny; j++)
+        for (int i = 0; i < nx; i++) {
+            int around[16] = { 0 }, best = 0;
+            ch_flip[j][i] = false;
+            if (i < pi0 || j < pj0 || i >= pi0 + 32 || j >= pj0 + 24)
+                continue;
+            for (int b = j - 2; b <= j + 2; b++)
+                for (int a = i - 2; a <= i + 2; a++)
+                    if (a >= pi0 && b >= pj0 && a < pi0 + 32 && b < pj0 + 24 && a < nx && b < ny)
+                        for (int c = 0; c < 16; c++)
+                            around[c] += hist[b][a][c];
+            for (int c = 1; c < 16; c++)
+                if (around[c] > around[best]) best = c;
+            ch_flip[j][i] = inkn[j][i] > 32 && around[best] && inkc[j][i] == best;
+        }
+}
+
+/* Dot (r, c) covers pixels xs[sx c ..], ys[sy r ..]: one pixel, or 2x2 in
+   mode 80 (ink if half of them are). A cell with more than one ink or
+   paper colour takes the commonest of each. */
+static cell_t braille_cell(const int *xs, const int *ys, int sx, int sy)
+{
+    int inkn[16] = { 0 }, papern[16] = { 0 };
+    unsigned p = 0;
+    for (int r = 0; r < 4; r++)
+        for (int c = 0; c < 2; c++) {
+            int n = 0;
+            for (int j = 0; j < sy; j++)
+                for (int i = 0; i < sx; i++) {
+                    int v = pixraw(xs[sx * c + i], ys[sy * r + j]), shown = v & 15;
+                    int other = (v & 8) | (v >> 4 & 7);
+                    bool bit = v >> 7 & 1;
+                    n += bit;
+                    inkn[bit ? shown : other]++;
+                    papern[bit ? other : shown]++;
+                }
+            if (2 * n >= sx * sy)
+                p |= 1u << (2 * r + c);
+        }
+    int ink = 0, paper = 0;
+    for (int k = 1; k < 16; k++) {
+        if (inkn[k] > inkn[ink]) ink = k;
+        if (papern[k] > papern[paper]) paper = k;
+    }
+    int i = (xs[0] - ch_x0) / 8, j = (ys[0] - ch_y0) / 8;
+    if (i >= 0 && j >= 0 && i < CH_N && j < CH_N && ch_flip[j][i]) {
+        int t = ink; ink = paper; paper = t;
+        p ^= 0xFF;
+    }
+    cell_t cell;
+    cell.bg = rgb_of(paper);
+    if (p == 0 || black0(ink) == black0(paper)) { cell.ch = ' '; cell.fg = NO_FG; return cell; }
+    cell.ch = braille[p];
+    cell.fg = rgb_of(ink);
+    return cell;
 }
 
 /* mode 80: an 8x8 character cell that is a glyph of the font, or its
@@ -435,10 +532,6 @@ static bool text_cells(int x0, int y0, const uint8_t *font, cell_t *c0, cell_t *
    80) a cell; mode 120 draws the paper's character columns 3, 7, ... without
    their pixel columns 0 and 7 */
 static int colx[1024][4], rowy[512][8];
-/* braille: each 8x8 character's commonest colour, which its cells' dots
-   stand on (the paper's character grid, carried into the border) */
-#define UNDER_N 64
-static uint32_t under_of[UNDER_N][UNDER_N];
 
 void term_frame(const uint8_t *fb, int w, int h, int px, int py, const uint8_t *font)
 {
@@ -474,37 +567,15 @@ void term_frame(const uint8_t *fb, int w, int h, int px, int py, const uint8_t *
         for (int i = 0; i < ph; i++)
             rowy[r][i] = py - by * ph + r * ph + i;
 
-    /* braille: a cell's own commonest colour as the background would turn
-       the inkier cells of a letter into dark blocks with light dots; the
-       character's keeps the letter's dots in one colour (a tie goes to the
-       character's top-left pixel, paper in the ROM font) */
     bool dots = opt.glyphs == GLYPHS_BRAILLE;
-    int gx0 = px - (px + 7) / 8 * 8, gy0 = py - (py + 7) / 8 * 8;
     if (dots)
-        for (int j = 0; j < UNDER_N && gy0 + 8 * j < h; j++)
-            for (int i = 0; i < UNDER_N && gx0 + 8 * i < w; i++) {
-                int x0 = gx0 + 8 * i, y0 = gy0 + 8 * j, count[16] = { 0 }, best = pix(x0, y0);
-                for (int y = 0; y < 8; y++)
-                    for (int x = 0; x < 8; x++)
-                        count[pix(x0 + x, y0 + y)]++;
-                for (int k = 0; k < 16; k++)
-                    if (count[k] > count[best])
-                        best = k;
-                under_of[j][i] = rgb_of(best);
-            }
-
+        braille_chars(w, h, px, py);
     /* the cells */
     for (int r = 0; r < grid_h; r++) {
         for (int c = 0; c < grid_w; c++) {
             if (r + oy >= rows || c + ox >= cols)
                 continue;
             cell_t *cell = &cur[(size_t)(r + oy) * (size_t)cols + (size_t)(c + ox)];
-            uint32_t under = NO_FG;
-            if (dots) {
-                int i = (colx[c][0] - gx0) / 8, j = (rowy[r][0] - gy0) / 8;
-                if (i >= 0 && j >= 0 && i < UNDER_N && j < UNDER_N)
-                    under = under_of[j][i];
-            }
             if (mode == 80) {
                 /* in the paper: text first */
                 int pc = c - bx, pr = r - by;
@@ -518,13 +589,15 @@ void term_frame(const uint8_t *fb, int w, int h, int px, int py, const uint8_t *
                         continue;
                     }
                 }
-                *cell = half_cell(colx[c][0], rowy[r][0], under);
+                *cell = dots ? braille_cell(colx[c], rowy[r], 2, 2) : half_cell(colx[c][0], rowy[r][0]);
+            } else if (dots) {
+                *cell = braille_cell(colx[c], rowy[r], 1, 1);
             } else {
                 int v[8];
                 for (int rr = 0; rr < 4; rr++)
                     for (int cc = 0; cc < 2; cc++)
                         v[2 * rr + cc] = pix(colx[c][cc], rowy[r][rr]);
-                *cell = index_cell(v, under);
+                *cell = index_cell(v);
             }
         }
     }

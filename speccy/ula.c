@@ -41,8 +41,9 @@ void ula_video(ula_t *u, const uint8_t *mem)
         u->viden = paper;
     if ((c & 7) == 5)                           /* the attribute / border latch */
         u->ao = u->viden ? u->al : (uint8_t)((u->port_fe & 7) << 3);
-    bool ink = (u->sr >> 7 & 1) ^ ((u->ao >> 7) & (u->frames >> 4) & 1);
-    uint8_t colour = (uint8_t)((u->ao >> 3 & 8) | (ink ? u->ao & 7 : u->ao >> 3 & 7));
+    unsigned bit = u->sr >> 7 & 1, inkc = u->ao & 7, paperc = u->ao >> 3 & 7;
+    bool ink = bit ^ ((u->ao >> 7) & (u->frames >> 4) & 1);
+    uint8_t colour = (uint8_t)((u->ao >> 3 & 8) | (ink ? inkc : paperc));
     if ((c & 7) == 4 && u->viden)               /* shows from the next pixel */
         u->sr = u->dl;
     else
@@ -52,7 +53,7 @@ void ula_video(ula_t *u, const uint8_t *mem)
     unsigned p = v * ULA_C + c + (ULA_PAPER_X - 13);
     unsigned x = p % ULA_C, y = (p / ULA_C + ULA_PAPER_Y) % ULA_V;
     if (x < ULA_FB_W && y < ULA_FB_H)
-        u->fb[y][x] = colour;
+        u->fb[y][x] = (uint8_t)(bit << 7 | (ink ? paperc : inkc) << 4 | colour);
 }
 
 bool ula_new_line(ula_t *u)

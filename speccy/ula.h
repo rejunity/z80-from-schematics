@@ -70,7 +70,11 @@ typedef struct {
     uint8_t  dl, al, sr, ao;    /* bitmap and attribute latches, shift
                                    register, attribute / border output latch */
     bool     viden;
-    uint8_t  fb[ULA_FB_H][ULA_FB_W];   /* colour indices: bright << 3 | G R B */
+    /* the picture: bits 0-3 the colour shown (bright << 3 | G R B), 4-6
+       the attribute's other colour (G R B: paper where the pixel shows
+       ink, ink where it shows paper; 0 in the border), 7 the bitmap's
+       bit (before FLASH) -- for braille, whose dots are the ink */
+    uint8_t  fb[ULA_FB_H][ULA_FB_W];
 } ula_t;
 
 void ula_init(ula_t *u);
