@@ -32,6 +32,12 @@ jobs:
           make --version | head -1
           cc --version | head -1
           "$PYTHON" --version
+      - name: speccy, its ULA test, and the ROM's boot screen headless
+        # dispatched by hand on this branch (gh workflow run macos.yml --ref speccy)
+        run: |
+          make speccy speccy_test speccy_rom
+          build/bin/speccy --frames 150 | tee build/speccy-boot.txt
+          grep -q 'Sinclair Research Ltd' build/speccy-boot.txt
       - name: C unit tests (make ctest)
         run: make ctest
       - name: FUSE / Cringle 1356 cases through the C model
