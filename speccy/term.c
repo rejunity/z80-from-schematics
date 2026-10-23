@@ -81,6 +81,10 @@ static const struct { uint8_t p; uint32_t cp; } older[26] = {
     { 0x14, 0x1FBE6 }, { 0x28, 0x1FBE7 }, { 0x01, 0x1CEA8 }, { 0x02, 0x1CEAB }, { 0x40, 0x1CEA3 },
     { 0x80, 0x1CEA0 } };
 static uint32_t octant[256], braille[256];
+/* quadrants: bit 0 upper left, 1 upper right, 2 lower left, 3 lower right */
+static const uint32_t quadrant[16] = {
+    0x20, 0x2598, 0x259D, 0x2580, 0x2596, 0x258C, 0x259E, 0x259B,
+    0x2597, 0x259A, 0x2590, 0x259C, 0x2584, 0x2599, 0x259F, 0x2588 };
 
 static void glyph_tables(void)
 {
@@ -109,6 +113,7 @@ typedef struct { uint32_t ch, fg, bg; } cell_t;   /* ch 0: a wide glyph's right 
 
 static term_opts_t opt;
 static int cols = 80, rows = 24, mode;
+static bool glyphs_auto;                         /* glyphs picked by TERM_PROGRAM */
 static int grid_w, grid_h, ox, oy;               /* the picture's cells, top-left */
 static cell_t *cur, *prev;
 static bool redraw = true;
@@ -171,7 +176,8 @@ bool term_open(const term_opts_t *o)
         const char *ct = getenv("COLORTERM");
         opt.colors = ct && (!strcmp(ct, "truecolor") || !strcmp(ct, "24bit")) ? 24 : 256;
     }
-    if (opt.glyphs == GLYPHS_AUTO) {
+    glyphs_auto = opt.glyphs == GLYPHS_AUTO;
+    if (glyphs_auto) {
         /* the fonts of Terminal.app and VS Code's terminal have no octants
            (Unicode 16), and neither terminal draws them itself */
         const char *tp = getenv("TERM_PROGRAM");
@@ -209,8 +215,14 @@ void term_resize(void)
 {
     query_size();
     mode = opt.mode;
-    if (!mode)
-        mode = cols >= 128 && rows >= 48 ? 128 : cols >= 120 && rows >= 48 ? 120 : 80;
+    if (!mode) {
+        if (opt.glyphs == GLYPHS_QUADRANTS)
+            mode = cols >= 128 ? 128 : 120;
+        else if (glyphs_auto && opt.glyphs == GLYPHS_BRAILLE && cols >= 256 && rows >= 96)
+            mode = 256;           /* no octants here, but room for half blocks */
+        else
+            mode = cols >= 128 && rows >= 48 ? 128 : cols >= 120 && rows >= 48 ? 120 : 80;
+    }
     free(cur);
     free(prev);
     cur = calloc((size_t)cols * (size_t)rows, sizeof *cur);
@@ -219,7 +231,12 @@ void term_resize(void)
 }
 
 int term_mode(void) { return mode; }
-bool term_braille(void) { return opt.glyphs == GLYPHS_BRAILLE; }
+static bool quads(void) { return opt.glyphs == GLYPHS_QUADRANTS && (mode == 128 || mode == 120); }
+const char *term_glyphs(void)
+{
+    return mode == 256 ? "half blocks" : quads() ? "quadrants"
+         : opt.glyphs == GLYPHS_BRAILLE ? "braille" : "octants";
+}
 void term_size(int *c, int *r) { *c = cols; *r = rows; }
 
 void term_title(const char *s)
@@ -253,42 +270,43 @@ static int dist2(uint32_t a, uint32_t b)
     return d;
 }
 
-/* octants: p's blocks in fg, the rest in bg */
-static cell_t block_cell(unsigned p, uint32_t fg, uint32_t bg)
+/* octants (n 8) or quadrants (n 4): p's blocks in fg, the rest in bg */
+static cell_t block_cell(unsigned p, uint32_t fg, uint32_t bg, int n)
 {
     cell_t c;
+    unsigned all = (1u << n) - 1;
     if (fg == bg)
         p = 0;
     if (p == 0) { c.ch = ' '; c.fg = NO_FG; c.bg = bg; return c; }
-    if (p == 0xFF) { c.ch = ' '; c.fg = NO_FG; c.bg = fg; return c; }
-    c.ch = octant[p];
+    if (p == all) { c.ch = ' '; c.fg = NO_FG; c.bg = fg; return c; }
+    c.ch = n == 4 ? quadrant[p] : octant[p];
     c.fg = fg;
     c.bg = bg;
     return c;
 }
 
-/* eight colour indices (2x4, bit order) -> a cell: two colours exact, more
-   than two the two most common, the rest to the nearer of them */
-static cell_t index_cell(const int v[8])
+/* n colour indices (2x4 or 2x2, bit order) -> a cell: two colours exact,
+   more than two the two most common, the rest to the nearer of them */
+static cell_t index_cell(const int *v, int n)
 {
     int count[16] = { 0 }, a = -1, b = -1;
-    for (int i = 0; i < 8; i++)
+    for (int i = 0; i < n; i++)
         count[v[i]]++;
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < n; i++) {
         int c = v[i];
         if (a < 0 || count[c] > count[a])     /* the first of the most common */
             a = c;
     }
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < n; i++) {
         int c = v[i];
         if (c != a && (b < 0 || count[c] > count[b]))
             b = c;
     }
     if (b < 0)
-        return block_cell(0, rgb_of(a), rgb_of(a));
+        return block_cell(0, rgb_of(a), rgb_of(a), n);
     uint32_t ra = rgb_of(a), rb = rgb_of(b);
     unsigned p = 0;
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < n; i++) {
         int c = v[i];
         bool to_b = c == b;
         if (c != a && c != b)
@@ -296,7 +314,18 @@ static cell_t index_cell(const int v[8])
         if (to_b)
             p |= 1u << i;
     }
-    return block_cell(p, rb, ra);
+    return block_cell(p, rb, ra, n);
+}
+
+/* mode 256: the upper pixel in the upper half block, the lower one below */
+static cell_t half_block_cell(int top, int bottom)
+{
+    cell_t c;
+    c.bg = rgb_of(bottom);
+    if (rgb_of(top) == c.bg) { c.ch = ' '; c.fg = NO_FG; return c; }
+    c.ch = 0x2580;
+    c.fg = rgb_of(top);
+    return c;
 }
 
 /* mode 80: 4x8 pixels as 2x4 blocks of 2x2 */
@@ -329,7 +358,7 @@ static cell_t half_cell(int x0, int y0)
             }
         }
     if (opt.crisp || opt.colors == 16)
-        return index_cell(v);
+        return index_cell(v, 8);
     /* blended: the two shades that fit the eight blocks best (2-means in
        linear light, from the two blocks furthest apart) */
     int ia = 0, ib = 0;
@@ -370,7 +399,7 @@ static cell_t half_cell(int x0, int y0)
     }
     uint32_t fa = srgb(ca[0]) << 16 | srgb(ca[1]) << 8 | srgb(ca[2]);
     uint32_t fb2 = srgb(cb[0]) << 16 | srgb(cb[1]) << 8 | srgb(cb[2]);
-    return block_cell(p, fb2, fa);
+    return block_cell(p, fb2, fa, 8);
 }
 
 /* Braille shows only its dots, so which colour is the dots is decided per
@@ -529,8 +558,8 @@ static bool text_cells(int x0, int y0, const uint8_t *font, cell_t *c0, cell_t *
 }
 
 /* the picture's pixel columns (x) for each cell column, two (four in mode
-   80) a cell; mode 120 draws the paper's character columns 3, 7, ... without
-   their pixel columns 0 and 7 */
+   80, one in mode 256) a cell; mode 120 draws the paper's character columns
+   3, 7, ... without their pixel columns 0 and 7 */
 static int colx[1024][4], rowy[512][8];
 
 void term_frame(const uint8_t *fb, int w, int h, int px, int py, const uint8_t *font)
@@ -538,8 +567,10 @@ void term_frame(const uint8_t *fb, int w, int h, int px, int py, const uint8_t *
     g_fb = fb;
     g_w = w;
     g_h = h;
-    int pw = mode == 80 ? 4 : 2, ph = mode == 80 ? 8 : 4;          /* pixels a cell */
-    int paper_w = mode == 128 ? 128 : mode == 120 ? 120 : 64, paper_h = mode == 80 ? 24 : 48;
+    bool q = quads();
+    int pw = mode == 80 ? 4 : mode == 256 ? 1 : 2;                     /* pixels a cell */
+    int ph = mode == 80 ? 8 : mode == 256 || q ? 2 : 4;
+    int paper_w = mode == 256 ? 256 : mode == 128 ? 128 : mode == 120 ? 120 : 64, paper_h = 192 / ph;
     int bx = (cols - paper_w) / 2, by = (rows - paper_h) / 2;
     if (bx > px / pw) bx = px / pw;
     if (bx > (w - px - 256) / pw) bx = (w - px - 256) / pw;
@@ -567,7 +598,7 @@ void term_frame(const uint8_t *fb, int w, int h, int px, int py, const uint8_t *
         for (int i = 0; i < ph; i++)
             rowy[r][i] = py - by * ph + r * ph + i;
 
-    bool dots = opt.glyphs == GLYPHS_BRAILLE;
+    bool dots = opt.glyphs == GLYPHS_BRAILLE && mode != 256;
     if (dots)
         braille_chars(w, h, px, py);
     /* the cells */
@@ -576,7 +607,9 @@ void term_frame(const uint8_t *fb, int w, int h, int px, int py, const uint8_t *
             if (r + oy >= rows || c + ox >= cols)
                 continue;
             cell_t *cell = &cur[(size_t)(r + oy) * (size_t)cols + (size_t)(c + ox)];
-            if (mode == 80) {
+            if (mode == 256) {
+                *cell = half_block_cell(pix(colx[c][0], rowy[r][0]), pix(colx[c][0], rowy[r][1]));
+            } else if (mode == 80) {
                 /* in the paper: text first */
                 int pc = c - bx, pr = r - by;
                 if (font && pc >= 0 && pc < 64 && pr >= 0 && pr < 24 && !(pc & 1)) {
@@ -594,10 +627,10 @@ void term_frame(const uint8_t *fb, int w, int h, int px, int py, const uint8_t *
                 *cell = braille_cell(colx[c], rowy[r], 1, 1);
             } else {
                 int v[8];
-                for (int rr = 0; rr < 4; rr++)
+                for (int rr = 0; rr < ph; rr++)
                     for (int cc = 0; cc < 2; cc++)
                         v[2 * rr + cc] = pix(colx[c][cc], rowy[r][rr]);
-                *cell = index_cell(v);
+                *cell = index_cell(v, 2 * ph);
             }
         }
     }

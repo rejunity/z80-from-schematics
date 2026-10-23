@@ -147,11 +147,17 @@ and paper). So a cell that stays inside one character loses nothing.
 | 128 | 128×48 | Octants (Unicode 16's 2×4 block characters): one block per pixel. Exact. |
 | 120 | 120×48 | The same, but the 4th of every 4 character columns is 6 pixels wide, without its pixel columns 0 and 7. |
 | 80 | 64×24 | Two cells per character. A character whose 8×8 bitmap matches a glyph of the ROM font, or its inverse, is printed as that character. The rest is octants at half resolution (`--crisp`: no blended shades). |
+| 256 | 256×96 | Half blocks (▀, in every font): a cell is two pixels, one above the other, each in its own colour. Exact, with square pixels, but it needs a small font. |
+
+`--quadrants` draws modes 128 and 120 with 2×2 quadrant blocks (▘▝▀▖▌▞▛▗▚▐▜▄▙▟█,
+in every font) instead of octants: 128×96 cells, every pixel exact, but
+twice as tall as wide, since a terminal cell is about 1:2.
 
 - **Mode 120 and text:** columns 0 and 7 are blank in the ROM font's
   letters and digits, except the top-left pixel of T and Y.
-- **Choosing a mode:** without `--mode`, speccy picks the widest that
-  fits the terminal.
+- **Choosing a mode:** without `--mode`, speccy picks the widest of 128,
+  120 and 80 that fits the terminal. Where the terminal has no octants
+  (below), it picks 256 instead when the window has 256×96 cells.
 - **The border:** shown as far as there is room.
 - **Changed attributes or border:** where the picture has more than two
   colours in one cell, the cell keeps the two most common.

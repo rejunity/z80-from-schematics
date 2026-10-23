@@ -152,11 +152,13 @@ static void usage(void)
     puts("usage: speccy [options] [game.tap]\n"
          "  --rom FILE        the 48K ROM (default: $SPECCY_ROM, 48.rom beside the program,\n"
          "                    /usr/share/spectrum-roms, FUSE's share/fuse)\n"
-         "  --mode M          128, 120 or 80 columns (default: the widest that fits)\n"
+         "  --mode M          256 (half blocks), 128, 120 or 80 columns (default: the widest\n"
+         "                    that fits; 256 only where octants are missing)\n"
          "  --colors N        24, 256 or 16 (default: 24 if COLORTERM says so, else 256)\n"
          "  --braille         braille dots instead of octants (the default in Terminal.app\n"
          "                    and VS Code, whose fonts have no octants)\n"
          "  --octants         octants even there (a font that has Unicode 16's octants)\n"
+         "  --quadrants       2x2 quadrants in modes 128 and 120: 96 rows, tall pixels\n"
          "  --crisp           mode 80: no blended shades\n"
          "  --fullwidth       mode 80: double-width characters\n"
          "  --keys K          auto, kitty, evdev, console, macos, windows or legacy\n"
@@ -184,6 +186,7 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--colors") && v) { topt.colors = atoi(v); i++; }
         else if (!strcmp(a, "--braille")) topt.glyphs = GLYPHS_BRAILLE;
         else if (!strcmp(a, "--octants")) topt.glyphs = GLYPHS_OCTANTS;
+        else if (!strcmp(a, "--quadrants")) topt.glyphs = GLYPHS_QUADRANTS;
         else if (!strcmp(a, "--crisp")) topt.crisp = true;
         else if (!strcmp(a, "--fullwidth")) topt.fullwidth = true;
         else if (!strcmp(a, "--keys") && v) {
@@ -200,8 +203,12 @@ int main(int argc, char **argv)
         else if (a[0] != '-' && !tap) tap = a;
         else { usage(); return 2; }
     }
-    if (topt.mode && topt.mode != 128 && topt.mode != 120 && topt.mode != 80) {
-        fprintf(stderr, "speccy: --mode is 128, 120 or 80\n");
+    if (topt.mode && topt.mode != 256 && topt.mode != 128 && topt.mode != 120 && topt.mode != 80) {
+        fprintf(stderr, "speccy: --mode is 256, 128, 120 or 80\n");
+        return 2;
+    }
+    if (topt.glyphs == GLYPHS_QUADRANTS && (topt.mode == 80 || topt.mode == 256)) {
+        fprintf(stderr, "speccy: --quadrants draws modes 128 and 120\n");
         return 2;
     }
 
@@ -297,8 +304,8 @@ int main(int argc, char **argv)
             static double shown_speed;
             if (speed > 0)
                 shown_speed = speed;
-            int n = snprintf(title, sizeof title, "speccy | mode %d%s | keys: %s", term_mode(),
-                             term_braille() ? " braille" : "", keys_mode_name(kmode));
+            int n = snprintf(title, sizeof title, "speccy | mode %d %s | keys: %s", term_mode(),
+                             term_glyphs(), keys_mode_name(kmode));
             if (tap)
                 n += snprintf(title + n, sizeof title - (size_t)n, " | tape %d%% %s", tape_percent(&z.tape),
                               z.tape.playing ? "playing" : tape_done(&z.tape) ? "done" : "stopped");

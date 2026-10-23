@@ -14,9 +14,15 @@
  *   80   two cells a character, 64x24: a character whose 8x8 bitmap is a
  *        glyph of the font (or its inverse) prints as that character, the
  *        rest as octants at half resolution, blended or crisp.
+ *   256  half blocks (U+2580, in every font): a cell is two pixels, one
+ *        above the other, in their own colours, 256x96. Exact, square.
+ * Quadrants (U+2596.., in every font) draw modes 128 and 120 with 2x2
+ * blocks instead, 128x96 or 120x96: exact, but the pixels are twice as
+ * tall as wide.
  * The 2x4 blocks print as octants, or as braille dots (U+2800..) where the
  * terminal's font has no octants: speccy picks braille itself under
- * Terminal.app and VS Code (TERM_PROGRAM). Braille shows only its dots,
+ * Terminal.app and VS Code (TERM_PROGRAM), or half blocks where the
+ * window has room for mode 256. Braille shows only its dots,
  * so the dots are the ink pixels (the bitmap's 1s) on the paper's colour,
  * as the Spectrum draws them, however much of a cell the ink covers --
  * but the paper pixels in a character that is mostly ink of the colour of
@@ -31,9 +37,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-enum { GLYPHS_AUTO, GLYPHS_OCTANTS, GLYPHS_BRAILLE };
+enum { GLYPHS_AUTO, GLYPHS_OCTANTS, GLYPHS_BRAILLE, GLYPHS_QUADRANTS };
 typedef struct {
-    int  mode;        /* 128, 120, 80, or 0: the widest that fits             */
+    int  mode;        /* 256, 128, 120, 80, or 0: the widest that fits        */
     int  colors;      /* 24 (bit), 256 or 16; 0: 24 if COLORTERM says so      */
     int  glyphs;      /* GLYPHS_*; AUTO: braille in Terminal.app and VS Code  */
     bool crisp;       /* mode 80: no blended shades                          */
@@ -51,8 +57,9 @@ void term_resize(void);
 void term_frame(const uint8_t *fb, int w, int h, int px, int py, const uint8_t *font);
 /* The window title. */
 void term_title(const char *s);
-/* The mode in use, whether it draws braille, and the terminal's size. */
+/* The mode in use, the glyphs it draws ("octants", "braille", "quadrants"
+   or "half blocks") and the terminal's size. */
 int  term_mode(void);
-bool term_braille(void);
+const char *term_glyphs(void);
 void term_size(int *cols, int *rows);
 #endif
