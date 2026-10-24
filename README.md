@@ -67,6 +67,7 @@ interactive controls (Enter, Backspace, Ctrl-C / Ctrl-Space = BREAK, Ctrl-\\ = e
     make cmodel          # build the C model static lib + CLI binaries
     make ctest           # C unit / instruction tests
     make rtl             # elaborate the Verilog RTL (iverilog -t null)
+    make bus_controls    # bus-contract testbenches: decoder skew, WAIT edge, WR through Tw, INTA
     make iverilog        # build the Icarus Verilog simulation
     make verilator       # build the Verilator simulation
     make compare         # diff C, iverilog, Verilator traces phase-by-phase
@@ -77,6 +78,7 @@ interactive controls (Enter, Backspace, Ctrl-C / Ctrl-Space = BREAK, Ctrl-\\ = e
     make prelim          # prelim.com CP/M instruction test
     make zexdoc          # full ZEXDOC                                 (~25 min)
     make zexall          # full ZEXALL                                 (~25 min)
+    make phase_identity  # every pin of every phase against PHASE_REF=<rev> (a model change)
     make cfast_identity  # cfast phase by phase against the C model    (~2 min)
     make cfast_bench     # cfast against four other C emulators on ZEXDOC (cfast/BENCHMARK.md)
     make silicon_cycles  # per-opcode T-state check vs real KC85 silicon (sigrok)
@@ -94,6 +96,7 @@ interactive controls (Enter, Backspace, Ctrl-C / Ctrl-Space = BREAK, Ctrl-\\ = e
     make basic_rtl_tests     # same canned-script regression via Verilator RTL   (~1 s)
     make basic_netlist_tests # same canned-script regression on synthesised gates (~9 min)
     make z80test             # Patrik Rak z80test: z80doc, z80flags, z80memptr, z80full
+    make z80test_rtl         # the same four through the Verilator RTL       (6-15 min a variant)
     make zexall_subset_c     # curated 14-test ZEXALL slice via C model         (~2.5 min)
     make zexall_subset_rtl   # same 14-test slice via Verilator                 (~25-55 min)
     make zexall_rtl          # full ZEXALL via Verilator (hours; not in CI, the 14-test subset is)
