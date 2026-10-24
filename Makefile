@@ -151,10 +151,11 @@ $(BIN)/z80test_runner: $(SCRIPTS)/z80test_runner.c $(CMODEL_LIB) $(CMODEL_HDRS)
 # Patrik Rak's z80test variants through the C model, one after another;
 # any failed test fails the target. z80doc: documented flags; z80flags: all
 # flags, X and Y included; z80memptr: MEMPTR (WZ) through BIT n,(HL);
-# z80full: all of it. Each variant prints 160 results (the NEC and ST
-# SCF/CCF tests report "Skipped" on a Zilog part).
+# z80full: all of it; z80ccf: SCF and CCF after every instruction (Q).
+# Each variant prints 160 results (the NEC and ST SCF/CCF tests report
+# "Skipped" on a Zilog part).
 # Z80TEST_VARIANTS="z80full" runs a subset (CI's z80test-rtl matrix does).
-Z80TEST_VARIANTS ?= z80doc z80flags z80memptr z80full
+Z80TEST_VARIANTS ?= z80doc z80flags z80memptr z80full z80ccf
 z80test: z80test_runner
 	@set -e; for v in $(Z80TEST_VARIANTS); do \
 	  stdbuf -oL $(BIN)/z80test_runner $(TESTS)/z80test/$$v.tap 8000000000; \

@@ -103,9 +103,9 @@ jobs:
         run: make basic_rtl_tests
 
   z80test:
-    name: Patrik Rak z80test (doc / flags / memptr / full)
+    name: Patrik Rak z80test (doc / flags / memptr / full / ccf)
     runs-on: ubuntu-latest
-    # 4 variants × ~20-40 s each + cold start = ~3 min
+    # 5 variants × ~20-60 s each + cold start = ~4 min
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
@@ -114,7 +114,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential python3
-      - name: Run Rak's z80doc + z80flags + z80memptr + z80full; any failed test fails
+      - name: Run Rak's z80doc + z80flags + z80memptr + z80full + z80ccf; any failed test fails
         run: make z80test
 
   z80test-rtl:
@@ -126,7 +126,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [z80doc, z80flags, z80memptr, z80full]
+        variant: [z80doc, z80flags, z80memptr, z80full, z80ccf]
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v5
