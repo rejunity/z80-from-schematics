@@ -253,6 +253,14 @@ runners (`scripts/{chips,superzazu,suzukiplan,redcode}_z80test_runner.c`)
 and `scripts/redcode_fuse_runner.c` are there for investigation; see
 [docs/oracles.md](../docs/oracles.md).
 
+`make redcode_tests` (by hand, not in CI) runs redcode/Z80 through every
+suite here -- FUSE, the X / Y corpus, the five z80test variants, prelim,
+ZEXDOC, ZEXALL, both BASIC ROMs, the KC85 T-states -- and, instruction by
+instruction, through the trace programs, the pin scenarios, the HALT-to-INT
+placements and every case of the pin sweep against perfectz80's recorded
+traces (`scripts/redcode_sweep.py`, `scripts/event_sweep_redcode.c`):
+[docs/redcode.md](../docs/redcode.md) has the results.
+
 
 ### 11. Identity checks
 

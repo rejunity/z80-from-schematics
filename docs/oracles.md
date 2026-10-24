@@ -101,6 +101,10 @@ parity, not "0xBF when low byte is 0xFE"). Fix landed in commit
   corpus on perfectz80). redcode runs as `Z80_MODEL_ZILOG_NMOS` through
   `scripts/redcode_fuse_runner.c` with the same expectations.
 
+  redcode/Z80 through every test we have, the pin sweep's 78,894 cases
+  against perfectz80's recorded traces included (`make redcode_tests`):
+  [redcode.md](redcode.md).
+
 ## 4. Distinctive strengths
 
   - **floooh/chips** — first FOSS core to publish per-tick bus modeling.
