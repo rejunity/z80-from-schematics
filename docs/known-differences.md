@@ -124,7 +124,7 @@ Notes for each row:
      post-2014 silicon-faithful divergences. Mirrored to RTL
      (`rtl/z80_core.v` `EXEC_HALT` + interrupt-accept paths). The
      specific divergence redcode/Z80's end-to-end FUSE run also hit
-     (`/scripts/redcode_fuse_runner.c` reports the same `76 PC=0001`).
+     (`scripts/redcode_fuse_runner.c` reports the same `76 PC=0001`).
 
  10. `IN A,(n)` / `IN r,(C)` port-input value — FUSE expects port reads to
      return the high byte of the I/O address bus (`A` for `IN A,(n)`, `B` for

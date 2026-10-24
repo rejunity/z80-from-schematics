@@ -242,7 +242,7 @@ because Zilog never specified it. ZEXALL + die analysis are the practical arbite
   M1, MREQ, RD all deassert at end of T2 / start of T3 during an opcode
   fetch). WRn is observed only at offset 1 (writes assert WR at T2.N).
 - *"Emulator" column*: cross-references our two-phase `PHI_P / PHI_N`
-  model in `cmodel/z80.c` and `cmodel/z80_timing.c`. PHI_N is the
+  model in `cmodel/z80_core.c` and `cmodel/z80_timing.c`. PHI_N is the
   T-state's second half (Z80 clock falling-edge region), where MREQ/RD
   assert during an MRD cycle and M1 deasserts at the T2.N edge — exactly
   the offsets the LWLA observed.

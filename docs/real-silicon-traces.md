@@ -125,7 +125,7 @@ independently re-validates the per-opcode T-state count.
   writes; there's no symmetric deassert in the captured window
   because the capture caught very few WRs).
 - **"Emulator" column.** Cross-references our two-phase `PHI_P` /
-  `PHI_N` model (`cmodel/z80.c`, `cmodel/z80_timing.c`). PHI_N is the
+  `PHI_N` model (`cmodel/z80_core.c`, `cmodel/z80_timing.c`). PHI_N is the
   T-state's second half — the Z80 clock falling-edge region — where
   MREQ/RD assert during an MRD cycle and M1 deasserts at the T2.N
   edge. Those are exactly the offsets the LWLA observed on real silicon.
