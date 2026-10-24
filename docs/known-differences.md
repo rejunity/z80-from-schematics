@@ -48,8 +48,9 @@ Status legend:
 | 30 | A prefix and Q                                | undocumented / flag       | resolved |
 | 31 | Q after a RESET                               | timing / reset / flag     | resolved |
 | 32 | WZ under a RESET cut                          | MEMPTR / reset            | resolved |
+| 33 | LD (IX+d),n's write data under a RESET        | timing / reset / bus      | resolved |
 
-32 rows: 31 resolved, row 3 accepted.
+33 rows: 32 resolved, row 3 accepted.
 
 Notes for each row:
 
@@ -454,6 +455,19 @@ Notes for each row:
      the bytes read at once unless the cut ends on that read, and keep the
      others waiting for their M-cycle (C `wz_later`, RTL `wzp_v`): they land
      at its end, or at a cut that ends on a later T-state.
+ 33. **LD (IX+d),n's write data under a RESET -- resolved 2026-10-24**
+     (found the same day, once the sweep compared the data wherever both
+     sides drive it, not only under WR). LD (IX+d),n / LD (IY+d),n write n
+     from the data latch (`dlatch`, nodes 123 ...), where its read left it:
+     no write loads it from the internal bus. A RESET seen on the rising
+     edge that starts the write's T1 changes that: in the T1.N the latch
+     takes the d bus (`d_dl`, node 133), as any other write does, and the d
+     bus carries the u bus there, (W ^ 7F) | 18 with W the address's high
+     byte (all 256 checked on perfectz80); the pads show it from T1.N until
+     the cut ends the write, before WR. The models drove n
+     (`cls_dd36_reset_T16_p04` / `_p12`, `opr_dd36_T16`, `opr_fd36_T16`:
+     FD on the die, 99 in the models). They drive that byte now (C's
+     EXEC_LD_M_N, the RTL's `wd_ub`).
 
 Add rows as new differences are discovered. Each "open" or "watching" row
 should gain a test that pins the chosen behaviour or escalates it.

@@ -200,6 +200,14 @@ phase takes the bus of the half-cycle before it, so `is_latch_phase` names
 the phase after the one read from: T3.P for an opcode, T3.N for read data
 (cmodel/z80_core.c).
 
+The same latch drives the pads in a write: the die loads it from the
+internal data bus in the write's T1.N (`d_dl`, perfectz80 node 133), and
+LD (IX+d),n, whose n is in the latch from its read, doesn't. A RESET seen
+on the rising edge that starts that write's T1 makes it load the latch
+anyway, with the u bus's (W ^ 7F) | 18 (W the address's high byte), and
+the pads show that byte until the cut ends the write before WR
+(docs/known-differences.md row 33).
+
 ## HALT
 
 `HALT` is the only Z80 instruction whose M1 cycle is allowed to be

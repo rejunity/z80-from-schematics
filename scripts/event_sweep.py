@@ -14,7 +14,7 @@
 # A case matches when the control pins (mreq iorq rd wr m1 rfsh halt busack)
 # and the address agree in every half-cycle -- transfers, refreshes, and the
 # internal and idle T-states, where the bus keeps its last address -- the
-# data agrees wherever both drive WR, the same pads are driven, and F, WZ
+# data agrees on every pad both drive, the same pads are driven, and F, WZ
 # and Q agree in T4.P of every M1 (state_samples). Any case that differs
 # fails the run: there is no list of tolerated differences.
 #
@@ -934,7 +934,7 @@ def first_difference(a, b, die=False):
         what = [n for n, i in CONTROL if ra[i] != rb[i]]
         if addressed(ra) and addressed(rb) and ra[ADDR] != rb[ADDR]:
             what.append("addr")
-        if not ra[WR] and not rb[WR] and ra[DATA] != rb[DATA]:
+        if (ra[DATA] ^ rb[DATA]) & ra[DEN] & rb[DEN]:     # the pads both drive
             what.append("data")
         what += [n for n, i in ENABLES if ra[i] != rb[i]]
         if die:
