@@ -218,8 +218,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential python3 iverilog
       - name: Sweep RESET / INT / NMI / BUSREQ / WAIT across T-states and clock halves
-        # Fails on any difference from perfectz80 (the baseline,
-        # tests/event_sweep/baseline.txt, is empty) and on any half-cycle
+        # Fails on any difference from perfectz80 and on any half-cycle
         # where the C model differs from the RTL (docs/event-sweep.md).
         run: make event_sweep EVENT_SWEEP_ARGS="--shard ${{ matrix.shard }}/4 ${{ matrix.shard == 0 && '--verify-recorded 50' || '' }}"
       - name: RESET at every half-cycle of every opcode (the nightly run)

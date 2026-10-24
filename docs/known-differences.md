@@ -243,8 +243,8 @@ Notes for each row:
      diffed per half-cycle against perfectz80, the address, BUSACK and the
      pads driven included. The default run, **37,846 cases, all match**,
      the C model identical to the RTL in every half-cycle, and so does
-     `opcodes_reset` (27,768); `tests/event_sweep/baseline.txt` is empty
-     and CI fails on any difference. RESET is the die's sampled RESET with
+     `opcodes_reset` (27,768); CI fails on any difference (the sweep's
+     baseline of tolerated differences is gone). RESET is the die's sampled RESET with
      the special reset and registers kept (row 1); BUSREQ the die's grant
      (row 16).
 
