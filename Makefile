@@ -403,10 +403,8 @@ pin_scenarios_netlist: iverilog_netlist $(BIN)/perfectz80_runner
 # pulses at every 1/16 T), BUSREQ / WAIT walks, every opcode, the timing
 # classes, the data latch, combinations and random fuzz; the die's traces
 # are recorded in tests/event_sweep/pz80/. Fails on any difference from the
-# die not listed in tests/event_sweep/baseline.txt (empty: none is
-# tolerated), and on any half-cycle where the C model differs from the RTL;
-# see docs/event-sweep.md. EVENT_SWEEP_ARGS=--update-baseline rewrites the
-# baseline from a run.
+# die, and on any half-cycle where the C model differs from the RTL; see
+# docs/event-sweep.md.
 event_sweep: $(BUILD)/tb_event_sweep.vvp $(BIN)/event_sweep_pz80 $(BIN)/event_sweep_c
 	@$(PYTHON) $(SCRIPTS)/event_sweep.py --c-model $(EVENT_SWEEP_ARGS)
 

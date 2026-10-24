@@ -23,7 +23,7 @@ job. What each harness accepts, and why:
 |------|-----------------|----------------|
 | z80test (`make z80test`, `z80test_rtl`) | nothing: any failed test fails (the old allowed-failure argument is gone) | 0 |
 | FUSE (`make fuse`, `fuse_rtl`, `fuse_pz80`) | nothing; six cases are checked against the die's values (`tests/fuse/silicon.expected`) instead of FUSE's, and all six are checked on the die | 0 skipped |
-| Pin sweep (`make event_sweep`) | differences listed in `tests/event_sweep/baseline.txt`, which is empty | 0 |
+| Pin sweep (`make event_sweep`) | nothing: any difference from the die fails (the baseline file of known differences is gone) | 0 |
 | perfectz80 compares (`make perfectz80`, `pin_scenarios`, `_rtl`, `_netlist`) | nothing: control pins, address and the data under WR every half-cycle, and trace lengths | 0 |
 | ZEX (`make prelim`, `zexdoc`, `zexall`, the subset) | nothing: a run passes only with the completion banner and no `ERROR` | 0 |
 | Lockstep (`make lockstep`) | F's X and Y (bits 5, 3) of the three emulators that predate Banks 2018 (superzazu, floooh/chips, suzukiplan): on ZEXDOC3 they differ only after 20 LDIR repeats. Against redcode/Z80 F is compared whole | X / Y of 3 oracles |

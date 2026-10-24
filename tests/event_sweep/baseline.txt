@@ -1,2 +1,0 @@
-# scripts/event_sweep.py --update-baseline: cases where the RTL differs from
-# perfectz80. <case> <first differing half-cycle> <what> <RTL trace hash>

@@ -7,11 +7,11 @@ CI job. [tests/README.md](../tests/README.md) has the per-suite detail;
 the die found so far, open and resolved.
 
 No check tolerates a failure: every suite below passes in full, and a
-single difference fails its target and its CI job. The two lists that
-could hold exceptions are empty or replaced by checked values: the pin
-sweep's `tests/event_sweep/baseline.txt` is empty, and FUSE's six cases
-where FUSE's expected values are not the die's are checked against the
-die's values (`tests/fuse/silicon.expected`), not skipped.
+single difference fails its target and its CI job. No list of exceptions
+is left: the pin sweep's baseline of known differences is gone (it was
+empty once the last of them was fixed), and FUSE's six cases where FUSE's
+expected values are not the die's are checked against the die's values
+(`tests/fuse/silicon.expected`), not skipped.
 
 ## References
 

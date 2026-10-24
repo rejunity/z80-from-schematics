@@ -18,7 +18,6 @@ Files:
 - `scripts/pz80_pads.c`: which of perfectz80's pads the die drives
 - `tests/event_sweep/pz80/`: perfectz80's recorded traces, one file per group
 - `scripts/event_sweep_c.c`: C model side (`--c-model`)
-- `tests/event_sweep/baseline.txt`: cases where the RTL differs today
 
 ## How a case works
 
@@ -202,11 +201,13 @@ The default run, 37,846 cases, matches perfectz80 in every one -- the pads
 driven and, after a RESET, every register the reset keeps included -- and
 the C model matches the RTL in every half-cycle of all of them; so does
 `opcodes_reset`, RESET at every T-state of every opcode program (27,768
-cases). The baseline is empty. Until known difference 19 was resolved the
-26 cases of RESET stopping ADD HL,BC or INC BC in the T-states where the
-die still writes their result were in it, and `classes_reset` (170 of
-2,210 differing, 84 of them between the C model and the RTL too),
-`reset_nmi` (72) and `fuzz_reset` (65) ran by name.
+cases). Nothing is tolerated. While the differences were being fixed, a
+baseline file listed each differing case so that CI failed only on new
+ones; the last were known difference 19's 26 cases of RESET stopping ADD
+HL,BC or INC BC in the T-states where the die still writes their result
+(and `classes_reset`, 170 of 2,210 differing, `reset_nmi`, 72, and
+`fuzz_reset`, 65, ran by name). With the baseline empty the file and
+`--update-baseline` were removed: any difference fails the run.
 
 When the sweep was written (main `ec3c5d2`, 2287 cases) 809 differed.
 Since then:
@@ -261,31 +262,15 @@ Since then:
 `build/event_sweep/report.md` has the per-instruction grids.
 `build/event_sweep/diff/` has a side-by-side trace for every differing case.
 
-## The baseline
+## Failing
 
-`tests/event_sweep/baseline.txt` has one line per case that differs today:
-
-```
-<case> <first differing half-cycle> <what differs> <hash of the RTL's compared pins>
-```
-
-`make event_sweep` fails in two situations:
-
-- **New difference:** a case differs that isn't listed.
-- **Changed difference:** a listed case now differs in another way. Any
-  change in the RTL's pins for that case changes the hash.
-
-A listed case that now matches is reported as a warning.
-
-After an intended RTL change:
-
-```
-make event_sweep EVENT_SWEEP_ARGS=--update-baseline
-git diff tests/event_sweep/baseline.txt
-```
-
-Review the baseline diff with `build/event_sweep/diff/<case>.txt` before
-committing it.
+`make event_sweep` fails on any case that differs from perfectz80 and,
+with `--c-model` (as the make target and CI run it), on any half-cycle
+where the C model differs from the RTL. There is no list of tolerated
+differences: a change that makes a case differ from the die is a bug to
+fix, never an entry to skip.
+`build/event_sweep/diff/<case>.txt` shows the first differing half-cycles
+side by side.
 
 ## The fuzz
 

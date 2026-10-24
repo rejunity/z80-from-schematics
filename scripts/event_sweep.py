@@ -14,19 +14,12 @@
 # A case matches when the control pins (mreq iorq rd wr m1 rfsh halt busack)
 # and the address agree in every half-cycle -- transfers, refreshes, and the
 # internal and idle T-states, where the bus keeps its last address -- and the
-# data agrees wherever both drive WR. Differences are checked
-# against tests/event_sweep/baseline.txt: a difference that is not in the
-# baseline, or that changed, fails the run. Cases in the baseline that now
-# match are reported as a warning so the baseline can be trimmed.
-#
-# Differences are expected (see docs/event-sweep.md); the baseline lists
-# each differing case with a hash of the RTL's compared pins, so any change
-# to the RTL's behaviour in one of those cases also fails until the baseline
-# is regenerated with --update-baseline and the diff reviewed.
+# data agrees wherever both drive WR. Any case that differs fails the run:
+# there is no list of tolerated differences.
 #
 # --c-model also runs every case through the C model (scripts/event_sweep_c.c)
 # and fails on any half-cycle where it differs from the RTL: the two are
-# phase-identical, so the baseline covers both.
+# phase-identical.
 #
 # The `latch` group drives the data bus itself: in one read -- an opcode
 # fetch, a memory or I/O read, an INTA -- the right byte is on the bus in
@@ -36,7 +29,7 @@
 #
 # Usage:
 #   scripts/event_sweep.py [--groups int,nmi,...] [--match STR] [--phases N]
-#                          [--jobs N] [--c-model] [--update-baseline]
+#                          [--jobs N] [--c-model]
 #                          [--record] [--verify-recorded N]
 # Output: build/event_sweep/report.md, one side-by-side trace per differing
 # case in build/event_sweep/diff/.
@@ -48,7 +41,6 @@ TB_VVP = os.path.join(ROOT, "build", "tb_event_sweep.vvp")
 PZ80 = os.path.join(ROOT, "build", "bin", "event_sweep_pz80")
 CMODEL = os.path.join(ROOT, "build", "bin", "event_sweep_c")
 OUT = os.path.join(ROOT, "build", "event_sweep")
-BASELINE = os.path.join(ROOT, "tests", "event_sweep", "baseline.txt")
 # perfectz80's traces, recorded (--record): tests/event_sweep/pz80/<group>.txt.xz
 CACHE = os.path.join(ROOT, "tests", "event_sweep", "pz80")
 
@@ -807,24 +799,12 @@ def bus_cycles(rows, halves=False):
     return (out, at) if halves else out
 
 
-def signature(rows):
-    """Hash of everything the comparison looks at, so a baseline entry
-    changes whenever the RTL's compared pins change."""
-    h = hashlib.sha1()
-    for r in rows:
-        h.update(bytes([r[i] for _, i in CONTROL]))
-        if addressed(r): h.update(r[ADDR].to_bytes(2, "little"))
-        if not r[WR]: h.update(bytes([r[DATA]]))
-        h.update(bytes([r[AEN] & 0xff, r[AEN] >> 8, r[DEN], r[CEN]]))
-    return h.hexdigest()[:12]
-
-
 def summarize(c, rtl, pz):
     d = first_difference(rtl, pz)
     if d is None:
         return None
     half, what = d
-    return {"key": f"{half} {','.join(what)} {signature(rtl)}", "first_half": half, "differs": what,
+    return {"first_half": half, "differs": what,
             "rz80": " ".join(bus_cycles(rtl)[:40]), "pz80": " ".join(bus_cycles(pz)[:40])}
 
 
@@ -966,24 +946,21 @@ def latch_section(latch):
     return out
 
 
-def report(results, baseline, new, changed, fixed, path, latch=None):
+def report(results, path, latch=None):
     by_group = collections.defaultdict(list)
     for c, s, fr, fp in results:
         by_group[c["group"]].append((c, s))
     out = ["# RESET / INT / NMI sweep: RTL vs perfectz80\n",
            "One line per group; a case matches when every half-cycle of pins agrees "
            "(see scripts/event_sweep.py).\n",
-           "| group | cases | match | known difference | new | changed |", "|---|---|---|---|---|---|"]
+           "| group | cases | match | differ |", "|---|---|---|---|"]
     for g in GROUPS:
         rows = by_group.get(g)
         if not rows: continue
         m = sum(1 for _, s in rows if s is None)
-        out.append(f"| {g} | {len(rows)} | {m} | "
-                   f"{sum(1 for c, s in rows if s and c['name'] in baseline and c['name'] not in changed)} | "
-                   f"{sum(1 for c, _ in rows if c['name'] in new)} | "
-                   f"{sum(1 for c, _ in rows if c['name'] in changed)} |")
-    for title, names in (("New differences", new), ("Changed differences", changed),
-                         ("Known differences that now match", fixed)):
+        out.append(f"| {g} | {len(rows)} | {m} | {len(rows) - m} |")
+    differ = {c["name"] for c, s, *_ in results if s}
+    for title, names in (("Differences", differ),):
         if not names: continue
         out.append(f"\n## {title} ({len(names)})\n")
         res = dict((c["name"], s) for c, s, *_ in results)
@@ -1112,7 +1089,6 @@ def main():
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 2)
     ap.add_argument("--c-model", action="store_true",
                     help="also run the C model and require it to match the RTL in every half-cycle")
-    ap.add_argument("--update-baseline", action="store_true")
     ap.add_argument("--record", action="store_true",
                     help="write perfectz80's traces of the groups run to tests/event_sweep/pz80/")
     ap.add_argument("--no-cache", action="store_true", help="run perfectz80 for every case")
@@ -1140,8 +1116,6 @@ def main():
     k, n = (int(x) for x in a.shard.split("/")) if a.shard else (0, 1)
     todo = [c for i, c in enumerate(cases(a.groups.split(","), a.phases, (a.fuzz_n, a.fuzz_seed)))
             if a.match in c["name"] and i % n == k]
-    if a.shard and a.update_baseline:
-        sys.exit("--update-baseline needs every case: run it without --shard")
     work = os.path.join(OUT, "work")
     diff_dir = os.path.join(OUT, "diff")
     for d in (work, diff_dir):
@@ -1211,22 +1185,9 @@ def main():
             save_cache(g, t)
         print(f"recorded perfectz80's traces of {', '.join(sorted(texts))} in {os.path.relpath(CACHE, ROOT)}/")
 
-    # baseline.txt: `<case> <first differing half> <what differs> <RTL trace hash>`
-    baseline = {}
-    if os.path.exists(BASELINE):
-        with open(BASELINE) as f:
-            for line in f:
-                if line.strip() and not line.startswith("#"):
-                    name, key = line.split(None, 1)
-                    baseline[name] = key.strip()
-    ran = {c["name"] for c in todo}
-    new = {c["name"] for c, s, *_ in results if s and c["name"] not in baseline}
-    changed = {c["name"] for c, s, *_ in results if s and c["name"] in baseline and baseline[c["name"]] != s["key"]}
-    fixed = {c["name"] for c, s, *_ in results if not s and c["name"] in baseline}
-    report(results, baseline, new, changed, fixed, os.path.join(OUT, "report.md"), latch)
-    differing = sum(1 for _, s, *_ in results if s)
-    print(f"{len(results) - differing} match, {differing} differ "
-          f"({len(new)} new, {len(changed)} changed, {len(fixed)} known now match); "
+    report(results, os.path.join(OUT, "report.md"), latch)
+    differ = sorted(c["name"] for c, s, *_ in results if s)
+    print(f"{len(results) - len(differ)} match, {len(differ)} differ; "
           f"report: {os.path.relpath(os.path.join(OUT, 'report.md'), ROOT)}")
     if a.c_model:
         print(f"C model: {len(results) - len(c_differs)} cases identical to the RTL, {len(c_differs)} differ")
@@ -1241,23 +1202,9 @@ def main():
                   f"a harness change that needs HARNESS_VERSION bumped and the groups recorded again "
                   f"(scripts/event_sweep_pz80.c)")
 
-    if a.update_baseline:
-        kept = {n: k for n, k in baseline.items() if n not in ran}
-        kept.update({c["name"]: s["key"] for c, s, *_ in results if s})
-        os.makedirs(os.path.dirname(BASELINE), exist_ok=True)
-        with open(BASELINE, "w") as f:
-            f.write("# scripts/event_sweep.py --update-baseline: cases where the RTL differs from\n"
-                    "# perfectz80. <case> <first differing half-cycle> <what> <RTL trace hash>\n")
-            for n, k in sorted(kept.items()):
-                f.write(f"{n} {k}\n")
-        print(f"wrote {os.path.relpath(BASELINE, ROOT)} ({len(kept)} differing cases)")
-        return 0
-    for n in sorted(fixed):
-        print(f"::warning::{n} matches perfectz80 now; trim it from the baseline (--update-baseline)")
-    for n in sorted(new | changed)[:50]:
-        print(f"::error::{n}: {'new' if n in new else 'changed'} difference from perfectz80 "
-              f"(build/event_sweep/diff/{n}.txt)")
-    return 1 if new or changed or c_differs or (verify and v_bad) else 0
+    for n in differ[:50]:
+        print(f"::error::{n}: differs from perfectz80 (build/event_sweep/diff/{n}.txt)")
+    return 1 if differ or c_differs or (verify and v_bad) else 0
 
 
 if __name__ == "__main__":
