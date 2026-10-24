@@ -291,3 +291,21 @@ z80_control_t z80_pla_decode(z80_prefix_t prefix, uint8_t opcode)
 {
     return z80_pla(prefix, opcode);
 }
+
+/* ---------------------------------------------------------------------------
+ * The decode ROM: z80_pla() over all (prefix, opcode), built once by
+ * z80_pla_rom_init() (z80_reset calls it), so the M1 latch decodes with one
+ * table read. z80_pla() stays the source; a second build writes the same
+ * words.
+ * ------------------------------------------------------------------------- */
+z80_control_t z80_pla_rom[Z80_PLA_ROM_PREFIXES][256];
+static bool pla_rom_built;
+
+void z80_pla_rom_init(void)
+{
+    if (pla_rom_built) return;
+    for (int p = 0; p < Z80_PLA_ROM_PREFIXES; p++)
+        for (int op = 0; op < 256; op++)
+            z80_pla_rom[p][op] = z80_pla((z80_prefix_t)p, (uint8_t)op);
+    pla_rom_built = true;
+}

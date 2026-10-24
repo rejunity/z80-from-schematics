@@ -14,13 +14,12 @@
  *              here — also stubbed with RET so the caller of printinit gets
  *              control back.
  *
- *   z80test_runner <variant.tap> [max_instr] [max_allowed_failures]
+ *   z80test_runner <variant.tap> [max_instr]
  *
- * Exit code: 0 if observed failures <= max_allowed_failures (default 0 =
- * strict full-pass required), 1 otherwise. The Rak suite surfaces real
- * silicon-faithfulness gaps in our model that we currently document as
- * audit followups; the max_allowed_failures arg lets CI catch *new*
- * regressions without flipping red on every existing one.
+ * Exit code: 0 when the suite prints "all tests passed", 1 when it reports
+ * failures, 2 when it ends without a verdict (the instruction limit, or a
+ * crash before the result line). No failure is tolerated: every variant
+ * passes on the C model and the RTL.
  * ==========================================================================*/
 #define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
@@ -81,12 +80,11 @@ static int load_tap(const char *path, uint8_t mem[65536],
 
 int main(int argc, char **argv)
 {
-    if (argc < 2) {
-        fprintf(stderr,"usage: %s <variant.tap> [max_instr] [max_allowed_failures]\n",argv[0]);
+    if (argc < 2 || argc > 3) {
+        fprintf(stderr,"usage: %s <variant.tap> [max_instr]\n",argv[0]);
         return 2;
     }
     long long max_instr     = (argc > 2) ? atoll(argv[2]) : 5000000000LL;
-    int       max_allowed   = (argc > 3) ? atoi(argv[3])  : 0;
 
     z80_system_t *s = malloc(sizeof(*s));
     if (!s) return 2;
@@ -140,7 +138,7 @@ int main(int argc, char **argv)
         if (pc == 0x0000) break;
         if (pc == 0x0010) {
             /* RST 0x10 print: emit register A. */
-            unsigned char ch = (unsigned char)(s->cpu.rf[RFP_AF] >> 8);
+            unsigned char ch = (unsigned char)(z80_arch(&s->cpu)->rf[RFP_AF] >> 8);
             putchar((int)ch);
             if (cap_used < cap_sz - 1) captured[cap_used++] = (char)ch;
             fflush(stdout);
@@ -159,28 +157,18 @@ int main(int argc, char **argv)
     printf("instructions executed: %lld%s\n", count, hit_limit ? " (LIMIT REACHED)" : "");
     printf("elapsed: %.2f s  (%.2f Minstr/s)\n", secs, (double)count / secs / 1e6);
 
-    int rc = 2;
-    int observed_failures = -1;
-    if (strstr(captured, "all tests passed")) {
-        observed_failures = 0;
-        printf("verdict: PASS (all 160 tests passed)\n");
+    /* The suite's last line: "Result: all tests passed." or
+       "Result: N of M tests failed." */
+    int rc = 2, failed = 0, total = 0;
+    const char *res = strstr(captured, "Result: ");
+    if (res && strstr(res, "all tests passed")) {
+        printf("verdict: PASS (all tests passed)\n");
         rc = 0;
+    } else if (res && sscanf(res, "Result: %d of %d", &failed, &total) == 2) {
+        printf("verdict: FAIL (%d of %d tests failed)\n", failed, total);
+        rc = 1;
     } else {
-        /* Parse "Result: NNN of MMM tests failed." — the trailing line. */
-        const char *p = strstr(captured, "Result: ");
-        if (p && sscanf(p, "Result: %d of", &observed_failures) == 1) {
-            if (observed_failures <= max_allowed) {
-                printf("verdict: PASS (%d failure(s); within tolerance %d)\n",
-                       observed_failures, max_allowed);
-                rc = 0;
-            } else {
-                printf("verdict: FAIL (%d failure(s); tolerance was %d — REGRESSION)\n",
-                       observed_failures, max_allowed);
-                rc = 1;
-            }
-        } else {
-            printf("verdict: INCONCLUSIVE — no pass/fail string found\n");
-        }
+        printf("verdict: FAIL (no result line%s)\n", hit_limit ? "; instruction limit reached" : "");
     }
     free(captured); free(s);
     return rc;

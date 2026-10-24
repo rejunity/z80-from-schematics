@@ -29,10 +29,10 @@ static void test_functional(void)
     z80_sys_load(&s, 0x0000, prog, sizeof(prog));
     z80_sys_run_instrs(&s, 11);
 
-    CHECK_EQ_U(s.cpu.rf[RFP_AF] >> 8, 0x01, "RLC A result");
-    CHECK_EQ_U(z80_get_r8(&s.cpu, REG_B), 0x02, "RLC B result");
+    CHECK_EQ_U(z80_arch(&s.cpu)->rf[RFP_AF] >> 8, 0x01, "RLC A result");
+    CHECK_EQ_U(z80_get_r8(z80_arch(&s.cpu), REG_B), 0x02, "RLC B result");
     CHECK_EQ_U(s.mem[0x9000], 0x81, "RLC then SET 7 on (HL)");
-    CHECK_EQ_U(s.cpu.rf[RFP_AF] & Z80_ZF, 0, "BIT 0,(HL) of 0x81 -> Z clear");
+    CHECK_EQ_U(z80_arch(&s.cpu)->rf[RFP_AF] & Z80_ZF, 0, "BIT 0,(HL) of 0x81 -> Z clear");
     CHECK(s.cpu.halted, "halted");
 }
 
@@ -43,7 +43,7 @@ static void test_bit_flags(void)
     z80_system_t s; z80_sys_init(&s);
     z80_sys_load(&s, 0x0000, prog, sizeof(prog));
     z80_sys_run_instrs(&s, 2); /* LD A,0x80 ; BIT 7,A */
-    uint8_t f = s.cpu.rf[RFP_AF] & 0xFF;
+    uint8_t f = z80_arch(&s.cpu)->rf[RFP_AF] & 0xFF;
     CHECK_EQ_U(f & Z80_ZF, 0, "BIT 7 of 0x80: Z clear");
     CHECK_EQ_U(f & Z80_SF, Z80_SF, "BIT 7 of 0x80: S set");
     CHECK_EQ_U(f & Z80_HF, Z80_HF, "BIT: H set");

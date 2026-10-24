@@ -18,11 +18,15 @@ than being a high-level instruction interpreter.
 
 The C model is the fast executable reference; the Verilog RTL implements the *same
 conceptual architecture* and is checked against the C model phase-by-phase.
+For emulators, `cfast/` generates the model into a phase engine with the same pins
+every half clock; [its speed against other C Z80 emulators](cfast/BENCHMARK.md).
 
 
 ## Layout
 
     cmodel/    C99 hardware-like model
+    cfast/     the model generated into a fast phase engine for emulators
+               (its speed against other C Z80 emulators: cfast/BENCHMARK.md)
     rtl/       Verilog-2001 synthesizable RTL
     tests/     unit + instruction + timing-trace tests, ZEX suites, sim TBs
     scripts/   Python and C test generators, oracle runners, trace comparators
@@ -67,18 +71,24 @@ board's USB-UART.
     make cmodel          # build the C model static lib + CLI binaries
     make ctest           # C unit / instruction tests
     make rtl             # elaborate the Verilog RTL (iverilog -t null)
+    make bus_controls    # bus-contract testbenches: decoder skew, WAIT edge, WR through Tw, INTA
     make iverilog        # build the Icarus Verilog simulation
     make verilator       # build the Verilator simulation
-    make traces          # emit shared-format bus-cycle traces
     make compare         # diff C, iverilog, Verilator traces phase-by-phase
-    make fuse            # FUSE 1356-case suite on C model (1348 PASS + 8 known-FUSE-wrong)
-    make fuse_rtl        # FUSE 1356-case suite through RTL via iverilog (matches C)
+    make test            # the quick subset: ctest, rtl, bus_controls, compare
+    make fuse            # FUSE's 1356 cases on the C model (6 against the die's values)
+    make fuse_rtl        # the same through the RTL via iverilog
+    make fuse_pz80       # the same on perfectz80, the die                   (~2 min)
     make prelim          # prelim.com CP/M instruction test
-    make zexdoc          # full ZEXDOC                                 (~1  min)
-    make zexall          # full ZEXALL                                 (~16 min)
+    make zexdoc          # full ZEXDOC                                 (~25 min)
+    make zexall          # full ZEXALL                                 (~25 min)
+    make phase_identity  # every pin of every phase against PHASE_REF=<rev> (a model change)
+    make cfast_identity  # cfast phase by phase against the C model    (~2 min)
+    make cfast_bench     # cfast against four other C emulators on ZEXDOC (cfast/BENCHMARK.md)
     make silicon_cycles  # per-opcode T-state check vs real KC85 silicon (sigrok)
     make silicon_async   # real CPU clock + sub-T-state pin offsets from 20 MHz capture
-    make halt2int        # HALT-to-INT acceptance T-state timing probe (Brewer 2014 / Woodmass HALT2INT)
+    make halt2int        # INT-to-INTA delay at ten points of a HALT, against the die's
+    make lockstep        # our model and four other emulators, instruction by instruction (ZEXDOC3)
     make perfectz80          # gate-level signal-trace diff vs perfectz80 Visual-Z80 netlist (C model)
     make perfectz80_rtl      # same, but trace source is the iverilog RTL testbench
     make synth               # LibreLane (yosys) synthesis → build/synth/z80_top.nl.v
@@ -89,15 +99,16 @@ board's USB-UART.
     make basic_c_tests       # canned-script BASIC ROM regression via C model    (~0.5 s)
     make basic_rtl_tests     # same canned-script regression via Verilator RTL   (~1 s)
     make basic_netlist_tests # same canned-script regression on synthesised gates (~9 min)
-    make z80test             # Patrik Rak z80test (doc / memptr / full) baseline
-    make zexall_subset_c     # curated 14-test ZEXALL slice via C model         (~90 s)
+    make z80test             # Patrik Rak z80test: z80doc, z80flags, z80memptr, z80full
+    make z80test_rtl         # the same four through the Verilator RTL       (6-15 min a variant)
+    make zexall_subset_c     # curated 14-test ZEXALL slice via C model         (~2.5 min)
     make zexall_subset_rtl   # same 14-test slice via Verilator                 (~25-55 min)
-    make zexall_rtl          # full ZEXALL via Verilator (local-only; not in CI — known fails)
+    make zexall_rtl          # full ZEXALL via Verilator (hours; not in CI, the 14-test subset is)
     make pin_scenarios          # INT/NMI/WAIT/BUSREQ/RESET scenarios — C tracegen path
     make pin_scenarios_rtl      # same scenarios — iverilog RTL path
     make pin_scenarios_netlist  # same scenarios — LibreLane gate-level netlist path
-    make event_sweep            # RESET / INT / NMI / BUSREQ / WAIT at every T-state of 31 instructions, IM0/1/2, vs perfectz80
-    make all-tests           # every gate above in sequence
+    make event_sweep            # RESET / INT / NMI / BUSREQ / WAIT at every T-state of 31 instructions and every opcode, IM0/1/2, vs perfectz80
+    make all-tests           # every gate that needs only a C compiler, iverilog and Verilator (~1.5 h)
     make clean
 
 Requires: a C99 compiler, `iverilog`, `verilator`, `python3`, `make`. The Verilator
@@ -121,26 +132,30 @@ fossi-foundation substituter configured (see [docs/librelane-flow.md](docs/libre
 
 |     | Gate                                                            | Result                              |
 |:---:|-----------------------------------------------------------------|-------------------------------------|
-| ✅  | C unit tests (267 checks across 11 binaries; incl. per-T-state pin sequence) | PASS                   |
+| ✅  | C unit tests (1,069 checks across 13 binaries; incl. per-T-state pin sequence) | PASS                 |
 | ✅  | ZEXDOC                                                          | 67 / 67                             |
 | ✅  | ZEXALL                                                          | 67 / 67                             |
 | ✅  | ZEXALL 14-test subset via Verilator RTL (main + nightly)        | 14 / 14 (~25-55 min)                |
-| ✅  | FUSE corpus, C model                                            | **1348 / 1356 + 8 known-FUSE-wrong** (100 %) |
-| ✅  | FUSE corpus, through RTL (iverilog)                             | **1348 / 1356 + 8 known-FUSE-wrong** (100 %) |
-| ✅  | Patrik Rak z80test (doc / memptr / full)                        | **160 / 160 / 160** (100 %)         |
+| ✅  | Cringle's prelim                                                | PASS                                |
+| ✅  | FUSE corpus, C model                                            | **1356 / 1356**, none skipped (6 against the die's values, `tests/fuse/silicon.expected`) |
+| ✅  | FUSE corpus, through RTL (iverilog)                             | **1356 / 1356**                     |
+| ✅  | FUSE corpus on the die (perfectz80, `make fuse_pz80`)           | **1356 / 1356** (1350 as FUSE expects, the 6 above as the die runs them) |
+| ✅  | Patrik Rak z80test (z80doc / z80flags / z80memptr / z80full)    | **160 / 160** each, C model and RTL |
+| 🟡  | Patrik Rak z80ccf; Q (SCF / CCF's X / Y) vs perfectz80          | z80ccf 159 / 160 (test 129, `EX AF,AF'`); Q differs from the die after `EX AF,AF'`, a DD / FD prefix and a RESET cut ([known differences 29-31](docs/known-differences.md); fix in progress on branch `nmos-q`) |
 | ✅  | BASIC ROM via C model (NASCOM + Tiny BASIC, canned scripts)     | 4 / 4 subtests                      |
 | ✅  | BASIC ROM via Verilator RTL (NASCOM + Tiny BASIC)               | 4 / 4 subtests                      |
 | ✅  | BASIC ROM on yosys-synthesised sky130 gate-level netlist        | 4 / 4 subtests (~9 min)             |
-| ✅  | C ↔ iverilog ↔ Verilator, phase-by-phase                        | identical, 8 hand + 4 random programs |
-| ✅  | 5-way oracle lockstep (mine + superzazu + chips + suzukiplan + redcode) | identical, 7,022,691 instr.    |
+| ✅  | C ↔ iverilog ↔ Verilator, phase-by-phase                        | identical, 10 hand + 4 random programs |
+| ✅  | cfast ↔ C model, every pin of every phase (`make cfast_identity`) | identical, 3.84 billion phases (both frames and the one-header build) |
+| ✅  | 5-way oracle lockstep (mine + superzazu + floooh/chips + suzukiplan + redcode) | identical registers, 7,022,691 instr. (F whole against redcode; X / Y masked for the three that predate the 2018 block-repeat flags) |
 | ✅  | Real KC85 silicon — sync   capture (`make silicon_cycles`)      | 50 / 50 OK,  0 emu mismatches       |
 | ✅  | Real KC85 silicon — 20 MHz capture (`make silicon_async`)       | CPU ≈ 1.767 MHz, pins ✓             |
-| ✅  | HALT-to-INT T-state timing (`make halt2int`)                    | 10/10 sweep samples in silicon range (Brewer 2014 / Woodmass HALT2INT 2021) |
-| ✅  | Gate-level vs perfectz80 — **C model** path                     | 13/13 PASS: control pins and the address in every half-cycle (transfers, refresh, internal T-states); `data_o` 100 % |
-| ✅  | Gate-level vs perfectz80 — **iverilog RTL** path                | 12/12 PASS, same 12 programs        |
-| ✅  | Gate-level vs perfectz80 — **LibreLane sky130 netlist** path    | 12/12 PASS, same 12 programs ("ultimate test") |
-| ✅  | Pin-scenario programs vs perfectz80 (14 INT/NMI/WAIT/BUSREQ/RESET scenarios) | 14/14 in the C model and the RTL, the address included in every phase |
-| ✅  | RESET / INT / NMI / BUSREQ / WAIT timing sweep vs perfectz80 (`make event_sweep`, [docs/event-sweep.md](docs/event-sweep.md)) | 8181 / 8207 cases pin-identical in every half-cycle (address and BUSACK included), the C model identical to the RTL in all; the 26 others are RESET in ADD HL,BC / INC BC's write-back (known difference 19) |
+| ✅  | HALT-to-INT T-state timing (`make halt2int`)                    | 10/10 delays equal the die's (perfectz80; Brewer 2014 / Woodmass HALT2INT 2021) |
+| ✅  | Gate-level vs perfectz80 — **C model** path                     | 14/14 PASS: control pins and the address in every half-cycle (transfers, refresh, internal T-states), the data under WR |
+| ✅  | Gate-level vs perfectz80 — **iverilog RTL** path                | 14/14 PASS, the same 14 programs    |
+| ✅  | Gate-level vs perfectz80 — **LibreLane sky130 netlist** path    | 14/14 PASS, the same 14 programs ("ultimate test") |
+| ✅  | Pin-scenario programs vs perfectz80 (15 INT/NMI/WAIT/BUSREQ/RESET scenarios) | 15/15 in the C model, the RTL and the LibreLane netlist, the address included in every phase |
+| ✅  | RESET / INT / NMI / BUSREQ / WAIT timing sweep vs perfectz80 (`make event_sweep`, [docs/event-sweep.md](docs/event-sweep.md)) | 37,846 / 37,846 cases pin-identical in every half-cycle (address, BUSACK and the pad drivers included; after a RESET, every register it keeps), the C model identical to the RTL in all; so is `opcodes_reset`, RESET at every T-state of every opcode (27,768 cases) |
 
 Legend: ✅ pass / 100 % &nbsp; 🟡 ≥ 95 % (close, known artifacts) &nbsp; 🚧 < 95 % (work in progress).
 
@@ -169,10 +184,14 @@ Verification and reverse-engineering background:
 
   - [docs/verification.md](docs/verification.md) — current verification state, layers,
     acceptance gates, results.
-  - [docs/known-differences.md](docs/known-differences.md) — every deliberate or
-    watching divergence from reference behavior, plus the multi-oracle status table.
+  - [docs/known-differences.md](docs/known-differences.md) — every difference
+    from the die found so far, resolved, accepted or open, plus the multi-oracle
+    status table.
+  - [docs/event-sweep.md](docs/event-sweep.md) — the RESET / INT / NMI / BUSREQ /
+    WAIT sweep against perfectz80: how a case works, the groups, the recorded
+    perfectz80 traces.
   - [docs/oracles.md](docs/oracles.md) — the four Z80 emulators
-    (chips, superzazu, suzukiplan, redcode) used as oracles, their
+    (floooh/chips, superzazu, suzukiplan, redcode) used as oracles, their
     authorship, lineage, strengths, and how we triangulate against
     them. Includes the pass/fail matrix on Patrik Rak's z80test and
     the FUSE corpus.
@@ -181,6 +200,10 @@ Verification and reverse-engineering background:
   - [docs/real-silicon-traces.md](docs/real-silicon-traces.md) — how the sigrok KC85
     logic-analyzer captures are decoded and turned into a real-silicon T-state /
     sub-T-state-timing oracle.
+  - [asic/timing/README.md](asic/timing/README.md) — the chips' pins against the
+    NMOS Z80's datasheet (Zilog PS0178), at every process corner;
+    [asic/spice/README.md](asic/spice/README.md) — the pads, the NMI pulse catcher
+    and the whole GF180 chip at transistor level.
 
 Tests and ROMs:
 
@@ -190,8 +213,8 @@ Tests and ROMs:
     `tests/fuse/`, `tests/zex/`, `tests/z80test/`, `tests/basic/`,
     `tests/traces/`, `tests/sigrok/`).
   - [docs/simplifications.md](docs/simplifications.md) — silicon-faithfulness
-    audit (A1, A3, A4, B, C1, D, E1, F) — the source of truth for the
-    deliberate vs unintended divergences from gate-level Z80.
+    audit (A–F): where the model's structure is simpler than the die's, and
+    what became of each item.
   - [docs/librelane-flow.md](docs/librelane-flow.md) — the LibreLane (Yosys
     + sky130) gate-level synthesis flow: how `make synth` produces the
     netlist, the sky130 cell-library + Verilator version gotcha, the CI

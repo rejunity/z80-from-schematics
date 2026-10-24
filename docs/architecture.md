@@ -216,21 +216,28 @@ giant behavioural function per opcode.
 | PLA decode (pure combinational)                                                                                               | `cmodel/z80_pla.c`      | `rtl/z80_pla.v`     |
 | ALU + flag assembly (pure combinational)                                                                                      | `cmodel/z80_alu.c`      | `rtl/z80_alu.v`     |
 | External pin timing (pure combinational)                                                                                      | `cmodel/z80_timing.c`   | `rtl/z80_timing.v`  |
-| 8-bit register accessors                                                                                                      | `cmodel/z80_regfile.c`  | inlined in core     |
-| Trace capture / emit                                                                                                          | `cmodel/z80_trace.c`    | core `$display` hooks |
+| 8-bit register accessors                                                                                                      | `cmodel/z80_regfile.c`  | `rtl/z80_regfile.v` (byte ports) |
+| Trace capture / emit                                                                                                          | `cmodel/z80_trace.c`    | the testbenches (`tests/iverilog/tb_z80.v`) |
 | System wrapper (CPU + 64 K RAM/IO for runners)                                                                                | `cmodel/z80_sim.c/h`    | (test-bench only)   |
 
-Both sides have **one .c per .v module** (plus `rtl/z80_top.v`, which has no
-C counterpart: it only re-times pins to the two clock edges). The three combinational submodules
+The combinational blocks have **one .c per .v module**; the C core
+(`cmodel/z80_core.c`) covers what the RTL splits into `z80_core.v`,
+`z80_execute.v`, `z80_regfile.v` and `z80_addr.v`, and `rtl/z80_top.v` has no C
+counterpart: it only re-times pins to the two clock edges. The three combinational submodules
 (`z80_pla`, `z80_alu`, `z80_timing`) are pure functions in C with one parameter per
 Verilog port — by-value inputs first, by-pointer outputs after — so a C call site
 reads like a Verilog instantiation. The stateful `z80_core` holds the registered
 state (the `z80_t` struct = the Verilog module's internal regs) and is the only
 file that mutates it; its public functions (`z80_init`, `z80_reset`,
-`z80_phase_step`, `z80_set_pc`) are the only external entry points.
+`z80_phase_step`, `z80_tick` -- the same step with the pins in a 64-bit word --
+`z80_set_pc` and `z80_arch`, the registers as a program sees them) are the only
+external entry points.
 
-The C model is the fast reference; the RTL implements the identical machine and is
-verified against it phase-by-phase (`make compare`; see `docs/verification.md`).
+The C model is the executable reference; the RTL implements the identical machine
+and is verified against it phase-by-phase (`make compare`, and the C model beside
+the RTL in every event-sweep case; see `docs/verification.md`). For emulators,
+`cfast/` generates the model into a faster phase engine with the same pins every
+half clock (`make cfast_identity`; `cfast/BENCHMARK.md`).
 Inside the core the RTL follows the die more literally than the C model does
 (exchange flip-flops instead of copies, one IDU with its jobs spread over the
 M-cycle, WZ as the operand latch): register contents can differ *between*
@@ -238,7 +245,7 @@ T-states of an instruction, never at the pins or at instruction boundaries.
 
 ### Building
 `make cmodel` builds the static library and relinks the dependent CLI binaries
-(`build/bin/zexrunner`, `build/bin/tracegen`); editing C sources requires only that one
+(`build/bin/zexrunner`, `build/bin/tracegen`, `build/bin/fuse_runner`); editing C sources requires only that one
 target. `make ctest` rebuilds and runs unit tests; `make compare` rebuilds the iverilog
 sim and diffs C↔RTL traces; `make zexdoc` / `make zexall` run the full exercisers.
 

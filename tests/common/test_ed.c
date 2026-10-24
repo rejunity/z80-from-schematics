@@ -22,9 +22,9 @@ static void test_adc_sbc16(void)
     z80_system_t s; z80_sys_init(&s);
     z80_sys_load(&s, 0, prog, sizeof(prog));
     z80_sys_run_instrs(&s, 4);                  /* through SBC */
-    CHECK_EQ_U(s.cpu.rf[RFP_HL], 0x0123, "SBC HL,DE");
+    CHECK_EQ_U(z80_arch(&s.cpu)->rf[RFP_HL], 0x0123, "SBC HL,DE");
     z80_sys_run_instrs(&s, 1);                  /* ADC */
-    CHECK_EQ_U(s.cpu.rf[RFP_HL], 0x1234, "ADC HL,DE");
+    CHECK_EQ_U(z80_arch(&s.cpu)->rf[RFP_HL], 0x1234, "ADC HL,DE");
 }
 
 static void test_neg(void)
@@ -33,9 +33,9 @@ static void test_neg(void)
     z80_system_t s; z80_sys_init(&s);
     z80_sys_load(&s, 0, prog, sizeof(prog));
     z80_sys_run_instrs(&s, 2);
-    CHECK_EQ_U(s.cpu.rf[RFP_AF] >> 8, 0xFF, "NEG 1 -> FF");
+    CHECK_EQ_U(z80_arch(&s.cpu)->rf[RFP_AF] >> 8, 0xFF, "NEG 1 -> FF");
     /* result 0xFF also sets undocumented X/Y (bits 5,3) */
-    CHECK_EQ_U(s.cpu.rf[RFP_AF] & 0xFF,
+    CHECK_EQ_U(z80_arch(&s.cpu)->rf[RFP_AF] & 0xFF,
                (Z80_SF | Z80_YF | Z80_HF | Z80_XF | Z80_NF | Z80_CF), "NEG 1 flags");
 }
 
@@ -61,10 +61,10 @@ static void test_misc(void)
     z80_sys_run_instrs(&s, 14);
     CHECK_EQ_U(s.cpu.im, 2, "IM 2");
     CHECK_EQ_U(s.cpu.reg_i, 0x55, "LD I,A");
-    CHECK_EQ_U(s.cpu.rf[RFP_DE], 0xBEEF, "LD DE,(nn) <- LD (nn),BC");
+    CHECK_EQ_U(z80_arch(&s.cpu)->rf[RFP_DE], 0xBEEF, "LD DE,(nn) <- LD (nn),BC");
     CHECK_EQ_U(s.mem[0x9000], 0xEF, "LD (nn),BC low");
     CHECK_EQ_U(s.mem[0x9001], 0xBE, "LD (nn),BC high");
-    CHECK_EQ_U(s.cpu.rf[RFP_AF] >> 8, 0x32, "RRD A");
+    CHECK_EQ_U(z80_arch(&s.cpu)->rf[RFP_AF] >> 8, 0x32, "RRD A");
     CHECK_EQ_U(s.mem[0x9010], 0x41, "RRD (HL)");
 }
 
@@ -81,7 +81,7 @@ static void test_inout_c(void)
     z80_sys_load(&s, 0, prog, sizeof(prog));
     z80_sys_run_instrs(&s, 4);
     CHECK_EQ_U(s.io[0x0034], 0xAB, "OUT (C),A");
-    CHECK_EQ_U(z80_get_r8(&s.cpu, REG_B), 0xAB, "IN B,(C)");
+    CHECK_EQ_U(z80_get_r8(z80_arch(&s.cpu), REG_B), 0xAB, "IN B,(C)");
 }
 
 static void test_timing(void)

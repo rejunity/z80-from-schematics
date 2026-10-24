@@ -125,7 +125,7 @@ independently re-validates the per-opcode T-state count.
   writes; there's no symmetric deassert in the captured window
   because the capture caught very few WRs).
 - **"Emulator" column.** Cross-references our two-phase `PHI_P` /
-  `PHI_N` model (`cmodel/z80.c`, `cmodel/z80_timing.c`). PHI_N is the
+  `PHI_N` model (`cmodel/z80_core.c`, `cmodel/z80_timing.c`). PHI_N is the
   T-state's second half — the Z80 clock falling-edge region — where
   MREQ/RD assert during an MRD cycle and M1 deasserts at the T2.N
   edge. Those are exactly the offsets the LWLA observed on real silicon.
@@ -160,8 +160,9 @@ same KC85, two independent extractors (`sigrok_opcode_cycles.py`,
 
 ## What's noted for follow-up
 
-These sources require hardware to capture custom programs; we have the
-parser+replay scaffolding ready when those captures land.
+These sources require hardware to capture custom programs. The replay side
+(`scripts/sigrok_replay.py`) is there; each would need a parser for its
+format.
 
 ### Ho-Ro/Z80_dongle and Goran Devic's Arduino dongle
 
@@ -197,6 +198,6 @@ RC-2014 system.
   - sigrok-kc85: parser and reconstructor land; **pattern-level**
     validation against real silicon is in place; exact replay is blocked
     by unknown initial state in the capture.
-  - Ho-Ro / Devic Arduino dongle: parser scaffolding pending hardware
-    captures of known programs; framework already proven by sigrok work.
+  - Ho-Ro / Devic Arduino dongle: not integrated; needs captures of known
+    programs and a parser for the dongle's serial log.
   - LAIR: hardware-only; no integration path without an HP analyzer.

@@ -18,11 +18,15 @@
  *     in IM 0/1, longer in IM 2)
  *
  * The exact INT-to-INTA delay therefore depends on where in a NOP
- * M-cycle INT first goes low (range 1..5 T-states for the case here).
+ * M-cycle INT first goes low. The probe checks each delay against the
+ * die's: the same program and INT placements on perfectz80 (the Zilog
+ * die's transistor netlist) give 6 5 4 7 6 5 4 7 6 5 T-states. The pin
+ * sweep (make event_sweep, INT at every half-cycle around HALT) checks
+ * the whole bus of the same path against the die.
  *
  *   halt2int_probe
  *
- * Exits 0 if every measured timing matches silicon-expected ranges.
+ * Exits 0 if every delay equals the die's.
  */
 #define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
@@ -86,27 +90,11 @@ static int run_scenario(int int_delay_phases, int *out_delta_t) {
 
 int main(void) {
     printf("=== HALT2INT-style probe: INT-to-INTA T-state timing ===\n");
-    /* Sweep INT-assert timing across an 8-phase (4-T-state) HALT NOP
-     * M-cycle window. Two periods (10 samples) lets us watch the
-     * pattern repeat with M-cycle period.
-     *
-     * Silicon-faithful expectation per Z80 datasheet:
-     *   - INT is sampled at the rising edge of the LAST T-state of the
-     *     current M-cycle
-     *   - When sampled active, the NEXT M-cycle is INTA (no further
-     *     delay)
-     *
-     * So the INT-to-INTA delay depends on where INT goes low within
-     * the M-cycle:
-     *   - asserted EARLY (T1-T2):  sampled at end of THIS M-cycle
-     *                              -> delta ~3-5 T-states
-     *   - asserted LATE (T3-T4):   misses the sample window,
-     *                              waits for the NEXT M-cycle's sample
-     *                              -> delta ~6-8 T-states
-     *
-     * Acceptable range across the sweep: 3..8 T-states. Pattern must
-     * repeat every 4 T-states (= 8 phases) as the sample point of
-     * each successive M-cycle slides past. */
+    /* INT asserted 2, 4, ... 20 phases after HALT goes low: two periods
+     * of the halted 4-T NOP cycle. INT is sampled at the rising edge of
+     * each M-cycle's last T-state, so the delay repeats every 8 phases.
+     * die[]: the delays perfectz80 shows for the same placements. */
+    static const int die[10] = { 6, 5, 4, 7, 6, 5, 4, 7, 6, 5 };
     int worst = 0, best = 1000;
     int all_pass = 1;
     for (int dp = 2; dp <= 20; dp += 2) {
@@ -116,15 +104,15 @@ int main(void) {
             all_pass = 0;
             continue;
         }
-        int ok = (delta_t >= 3 && delta_t <= 8);
+        int ok = (delta_t == die[dp / 2 - 1]);
         printf("  INT @halt+%2d phases (~T%d): delta = %d T-states %s\n",
-               dp, dp / 2, delta_t, ok ? "OK" : "OUT OF RANGE");
+               dp, dp / 2, delta_t, ok ? "OK" : "DIFFERS FROM THE DIE");
         if (!ok) all_pass = 0;
         if (delta_t > worst) worst = delta_t;
         if (delta_t < best)  best  = delta_t;
     }
-    printf("\nrange observed: %d..%d T-states (silicon range: 3..8)\n", best, worst);
+    printf("\nrange observed: %d..%d T-states\n", best, worst);
     printf("verdict: %s\n",
-           all_pass ? "PASS (silicon-faithful)" : "FAIL");
+           all_pass ? "PASS (every delay as on the die)" : "FAIL");
     return all_pass ? 0 : 1;
 }

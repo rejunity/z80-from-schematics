@@ -6,12 +6,24 @@
 #   make rtl        syntax-check / elaborate the Verilog-2001 RTL
 #   make iverilog   build the Icarus Verilog simulation
 #   make verilator  build the Verilator simulation
-#   make traces     run reference programs, emit shared-format traces
-#   make compare    diff C vs Verilog traces phase-by-phase
-#   make test       run the full C + RTL + compare suite
-#   make zexdoc     run ZEXDOC through the C model
-#   make zexall     run ZEXALL through the C model
+#   make compare    C model vs iverilog (and Verilator, if built), every phase
+#   make test       ctest + rtl + bus_controls + compare (quick)
+#   make all-tests  every gate that needs only a C compiler, iverilog and
+#                   Verilator, as CI runs them (~1.5 h)
+#
+#   instruction suites, C model: prelim zexdoc zexall z80test fuse
+#     (z80test_rtl, fuse_rtl, zexall_subset_rtl: the same through the RTL)
+#   against the die (perfectz80): perfectz80 pin_scenarios event_sweep fuse_pz80
+#     (perfectz80_rtl, pin_scenarios_rtl: the RTL as the trace source)
+#   make lockstep   our model and four other emulators, instruction by
+#                   instruction over ZEXDOC3
+#   make phase_identity  every pin of every phase vs PHASE_REF=<rev>
+#   make cfast      the phase engine generated from the timing tables
+#   make cfast_identity  cfast phase by phase vs PHASE_REF=<rev>
+#   make cfast_bench  cfast against the other C emulators (cfast/BENCHMARK.md)
 #   make clean      remove build artifacts
+#
+# No target tolerates a failure: every suite passes in full.
 # =============================================================================
 
 # ---- toolchain ----
@@ -21,6 +33,36 @@ IVERILOG  ?= iverilog
 VVP       ?= vvp
 VERILATOR ?= verilator
 PYTHON    ?= python3
+
+# Link-time optimisation (default on): the per-phase engine, the timing
+# generator and the runners' bus loops (z80_sys_phase) inline across
+# translation units -- ZEXDOC 2.8 -> 4.2 Minstr/s. Fat objects keep
+# build/libz80.a usable by links without -flto, where the compiler makes
+# them; the probe asks with -flto and -Werror, since Apple clang takes
+# -ffat-lto-objects alone but refuses it next to -flto, and older clang
+# ignores it with a warning. LTO=0 for a plain build (make clean when
+# switching).
+LTO ?= 1
+ifeq ($(LTO),1)
+FAT_LTO := $(shell $(CC) -flto -ffat-lto-objects -Werror -x c -c /dev/null -o /dev/null 2>/dev/null && echo -ffat-lto-objects)
+CFLAGS += -flto $(FAT_LTO)
+endif
+
+# Jumps padded off 32-byte boundaries (x86): the microcode for Intel's JCC
+# erratum (Skylake-derived cores: 6th to 10th generation Core, Xeon
+# Scalable up to Cascade Lake) keeps a 32-byte block with a jump that
+# crosses or ends on its boundary out of the decoded-uop cache, and
+# cfast's steps are mostly jumps (ZEXDOC on an i7-7700: z80f_run 121 ->
+# 111 cycles an instruction). The probe takes clang's option, else GNU
+# as's, else none (arm64); JCC_PAD= for none. The benchmark builds every
+# emulator with it.
+ifeq ($(origin JCC_PAD),undefined)
+JCC_PAD := $(shell $(CC) -mbranches-within-32B-boundaries -Werror -x c -c /dev/null -o /dev/null 2>/dev/null \
+  && echo -mbranches-within-32B-boundaries \
+  || ($(CC) -Wa,-mbranches-within-32B-boundaries -Werror -x c -c /dev/null -o /dev/null 2>/dev/null \
+  && echo -Wa,-mbranches-within-32B-boundaries))
+endif
+CFLAGS += $(JCC_PAD)
 
 # ---- layout ----
 BUILD     := build
@@ -44,7 +86,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
-.PHONY: timing_sdc timing_sdc_check equiv all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist event_sweep basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test verilator_z80test z80test_rtl halt2int halt2int_probe
+.PHONY: cfast cfast_bench cfast_identity cfast_single cfast_single_identity pinhash phase_identity zexrunner_tick timing_sdc timing_sdc_check equiv all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl fuse_pz80 all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist event_sweep basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test verilator_z80test z80test_rtl halt2int halt2int_probe lockstep
 
 all: cmodel ctest
 
@@ -87,11 +129,16 @@ $(BIN)/tracegen: $(SCRIPTS)/tracegen.c $(CMODEL_LIB) $(CMODEL_HDRS)
 	@mkdir -p $(BIN)
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(CMODEL_LIB) -o $@
 
-# ZEX CP/M harness runner
+# ZEX CP/M harness runner; zexrunner_tick runs its bus through z80_tick
 zexrunner: cmodel $(BIN)/zexrunner
 $(BIN)/zexrunner: $(SCRIPTS)/zexrunner.c $(CMODEL_LIB) $(CMODEL_HDRS)
 	@mkdir -p $(BIN)
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(CMODEL_LIB) -o $@
+
+zexrunner_tick: cmodel $(BIN)/zexrunner_tick
+$(BIN)/zexrunner_tick: $(SCRIPTS)/zexrunner.c $(CMODEL_LIB) $(CMODEL_HDRS)
+	@mkdir -p $(BIN)
+	$(CC) $(CFLAGS) -DZEX_TICK $(INCLUDES) $< $(CMODEL_LIB) -o $@
 
 # Patrik Rak z80test (raxoft) harness — ZX Spectrum .tap loader + ROM stubs
 # at 0x10 (RST 10 print) and 0x1601 (CHAN-OPEN no-op). Tests/z80test/*.tap
@@ -101,32 +148,43 @@ $(BIN)/z80test_runner: $(SCRIPTS)/z80test_runner.c $(CMODEL_LIB) $(CMODEL_HDRS)
 	@mkdir -p $(BIN)
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(CMODEL_LIB) -o $@
 
-# Run the full / documented / memptr z80test variants in sequence with the
-# per-variant baseline allowed-failure counts. Failures THAT EXCEED the
-# baseline = a regression and the make target exits non-zero. New variants
-# go in this list:
-#   z80doc      2  — INI/IND block-I/O sub-cycle (see docs/simplifications.md
-#                    §F "Block-op M-cycle break")
-#   z80memptr   2  — INIR->NOP'/INDR->NOP' (same root cause as above)
-#   z80full    10  — additional SCF/CCF ST-variant differences (we model
-#                    Zilog NMOS Q, not Toshiba) + LDIR/LDDR->NOP'
+# Patrik Rak's z80test variants through the C model, one after another;
+# any failed test fails the target. z80doc: documented flags; z80flags: all
+# flags, X and Y included; z80memptr: MEMPTR (WZ) through BIT n,(HL);
+# z80full: all of it. Each variant prints 160 results (the NEC and ST
+# SCF/CCF tests report "Skipped" on a Zilog part).
+# Z80TEST_VARIANTS="z80full" runs a subset (CI's z80test-rtl matrix does).
+Z80TEST_VARIANTS ?= z80doc z80flags z80memptr z80full
 z80test: z80test_runner
-	@set -e; \
-	stdbuf -oL $(BIN)/z80test_runner $(TESTS)/z80test/z80doc.tap     5000000000  0; \
-	stdbuf -oL $(BIN)/z80test_runner $(TESTS)/z80test/z80memptr.tap  5000000000  0; \
-	stdbuf -oL $(BIN)/z80test_runner $(TESTS)/z80test/z80full.tap    8000000000  0
+	@set -e; for v in $(Z80TEST_VARIANTS); do \
+	  stdbuf -oL $(BIN)/z80test_runner $(TESTS)/z80test/$$v.tap 8000000000; \
+	done
 
-# FUSE z80-test harness (Frank D. Cringle test corpus, 1356 cases)
+# FUSE's Z80 tests (Philip Kendall's corpus from the FUSE emulator, 1356
+# cases): every case's final state through the C model
 fuse_runner: cmodel $(BIN)/fuse_runner
 $(BIN)/fuse_runner: $(SCRIPTS)/fuse_runner.c $(CMODEL_LIB) $(CMODEL_HDRS)
 	@mkdir -p $(BIN)
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(CMODEL_LIB) -o $@
 
 fuse: fuse_runner
-	@$(BIN)/fuse_runner tests/fuse/tests.in tests/fuse/tests.expected
+	@$(BIN)/fuse_runner tests/fuse/tests.in tests/fuse/tests.expected tests/fuse/silicon.expected
+
+# The same corpus on the die: every case of tests.in runs on perfectz80
+# behind a preamble that loads its registers, and the die's registers, WZ,
+# PC, R, T-states and memory must match tests.expected, or
+# tests/fuse/silicon.expected where the die differs from FUSE's values (six
+# cases). IFF1, IFF2 and IM are not read back. ~1.5 min.
+fuse_pz80: $(BIN)/fuse_pz80
+	@$(BIN)/fuse_pz80 tests/fuse/tests.in tests/fuse/tests.expected tests/fuse/silicon.expected
+
+$(BIN)/fuse_pz80: $(SCRIPTS)/fuse_pz80.c $(SCRIPTS)/refs/perfectz80/perfectz80.c $(SCRIPTS)/refs/perfectz80/netlist_sim.c
+	@mkdir -p $(BIN)
+	$(CC) -std=c99 -O2 -I$(SCRIPTS) $^ -o $@
 
 # FUSE through the RTL (iverilog). Generates tb_fuse.v from tests.in, builds
-# with iverilog, runs vvp, diffs results against tests.expected.
+# with iverilog, runs vvp, diffs results against tests.expected and
+# tests/fuse/silicon.expected.
 # Depends on `dirs` so the build/ output directory exists on a fresh checkout
 # (the compare_fuse_rtl.py driver writes build/tb_fuse.vvp).
 fuse_rtl: dirs
@@ -147,11 +205,11 @@ silicon_async: tracegen
 	@$(PYTHON) $(SCRIPTS)/sigrok_async_timing.py tests/sigrok/kc85-20mhz.sr --silicon-check
 
 # HALT-to-INT acceptance T-state timing probe inspired by Mark Woodmass's
-# HALT2INT v3 (2021). Sweeps INT-pulse timing across the HALT NOP M-cycle
-# and verifies the INT-to-INTA delay stays in the silicon-faithful 3-8 T
-# range (per Brewer 2014 + Z80 datasheet). HALT2INT v3 itself depends on
-# Spectrum ULA contention timing we don't model; this probe extracts the
-# CPU-only silicon property HALT2INT verifies.
+# HALT2INT v3 (2021): INT asserted at ten points of the halted NOP cycle,
+# and each INT-to-INTA delay must equal the die's (perfectz80 gives 6 5 4 7
+# 6 5 4 7 6 5 T-states for the same program). HALT2INT v3 itself needs a
+# Spectrum (ROM and ULA contention); the pin sweep (make event_sweep)
+# checks INT around HALT at every half-cycle against the die.
 halt2int_probe: cmodel $(BIN)/halt2int_probe
 $(BIN)/halt2int_probe: $(SCRIPTS)/halt2int_probe.c $(CMODEL_LIB) $(CMODEL_HDRS)
 	@mkdir -p $(BIN)
@@ -160,21 +218,18 @@ $(BIN)/halt2int_probe: $(SCRIPTS)/halt2int_probe.c $(CMODEL_LIB) $(CMODEL_HDRS)
 halt2int: halt2int_probe
 	@$(BIN)/halt2int_probe
 
-# Gate-level signal-timing diff vs perfectz80 (Brian Silverman et al's
-# transistor-level netlist port of the Visual Z80 die scan). Compares
-# per-half-cycle control pins (mreq/iorq/rd/wr/m1/rfsh/halt) between our
-# C model and the gate-level simulator across the trace programs (8 hand-
-# crafted + 4 seeded-random from scripts/gen_random_trace_progs.py).
+# Signal-timing diff vs perfectz80 (Brian Silverman et al's transistor-
+# level netlist of the Visual Z80 die scan). Compares, every half-cycle, the
+# control pins (mreq/iorq/rd/wr/m1/rfsh/halt), the address and the data
+# under WR between our C model and the die across the trace programs (10
+# hand-written + 4 seeded-random from scripts/gen_random_trace_progs.py).
+# Any difference fails.
 perfectz80: tracegen $(BIN)/perfectz80_runner
 	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py 200
 
 # Same gate but driving the iverilog RTL testbench (build/tb_z80.vvp) as
-# the trace source instead of the C model. This is the silicon-faithful
-# leg of the perfectz80 comparison — every cycle simulated at RTL
-# fidelity, diffed against the gate-level netlist per-half-cycle. The
-# iverilog testbench only understands the legacy `+nmi=<phase>`
-# shorthand, not the full `.events` sidecar, so programs that need
-# INT / WAIT / BUSREQ / RESET events still go through the C-only path.
+# the trace source instead of the C model. The pin-scenario programs with
+# their .events go through the RTL too (pin_scenarios_rtl).
 perfectz80_rtl: iverilog $(BIN)/perfectz80_runner
 	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --rtl=iverilog 200
 
@@ -252,11 +307,9 @@ $(BUILD)/tb_z80_netlist.vvp: $(TESTS)/iverilog/tb_z80_netlist.v $(BUILD)/synth/z
 	    $$SKY130_V_DIR/sky130_fd_sc_hd.v && \
 	  echo "Built $@"
 
-# Gate-level netlist vs perfectz80. Default program set: 8 hand + 4
-# random = 12 programs (the script's default when called without
-# explicit paths). Pin-scenarios still go through the C-only path
-# until .events lands in the iverilog testbenches (see
-# docs/librelane-flow.md "What we don't do").
+# Gate-level netlist vs perfectz80. Default program set: 10 hand + 4
+# random = 14 programs (the script's default when called without
+# explicit paths); pin_scenarios_netlist runs the pin scenarios.
 perfectz80_netlist: iverilog_netlist $(BIN)/perfectz80_runner
 	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --rtl=netlist 200
 
@@ -267,7 +320,7 @@ perfectz80_netlist: iverilog_netlist $(BIN)/perfectz80_runner
 # "Real software" running across millions of cycles of synthesised gates —
 # any ROM-boot regression that the rtl/ -> synth/ transformation
 # introduces (latches, glitches, async-reset folding) shows up here long
-# before it would on prog1..prog8 traces.
+# before it would on the trace programs.
 #
 # Wall clock: gate-level Verilator is 10-50× slower than source-RTL
 # Verilator. With the --exit-on sentinel terminating each subtest soon
@@ -309,10 +362,10 @@ basic_netlist_tests: verilator_basic_netlist
 # =============================================================================
 
 
-# Pin-scenario programs (prog9..prog22). Each drives a specific external-
+# Pin-scenario programs (prog9..prog23). Each drives a specific external-
 # pin event sequence via the .events sidecar (INT, NMI, WAIT, BUSREQ,
-# RESET, ...) and must match perfectz80 in every phase: the control pins
-# and the address. A difference fails the target.
+# RESET, ...) and must match perfectz80 in every phase: the control pins,
+# the address and the data under WR. A difference fails the target.
 PIN_SCENARIOS = \
 	  $(TESTS)/traces/pin_scenarios/prog9_inta_im1.hex \
 	  $(TESTS)/traces/pin_scenarios/prog10_halt_nmi.hex \
@@ -327,7 +380,8 @@ PIN_SCENARIOS = \
 	  $(TESTS)/traces/pin_scenarios/prog19_nmi_in_int.hex \
 	  $(TESTS)/traces/pin_scenarios/prog20_block_int.hex \
 	  $(TESTS)/traces/pin_scenarios/prog21_wait_ldir.hex \
-	  $(TESTS)/traces/pin_scenarios/prog22_wait_cpir.hex
+	  $(TESTS)/traces/pin_scenarios/prog22_wait_cpir.hex \
+	  $(TESTS)/traces/pin_scenarios/prog23_wb_irq.hex
 
 pin_scenarios: tracegen $(BIN)/perfectz80_runner
 	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py 200 $(PIN_SCENARIOS)
@@ -343,12 +397,16 @@ pin_scenarios_rtl: iverilog $(BIN)/perfectz80_runner
 pin_scenarios_netlist: iverilog_netlist $(BIN)/perfectz80_runner
 	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --rtl=netlist 200 $(PIN_SCENARIOS)
 
-# RESET / INT / NMI timing sweep: the iverilog RTL against perfectz80, with
-# pulses placed at every T-state of a set of instructions (one position per
-# clock half; sub-T pulses at every 1/16 T). Fails on any difference not in
-# tests/event_sweep/baseline.txt, and on any half-cycle where the C model
-# differs from the RTL; see docs/event-sweep.md.
-# EVENT_SWEEP_ARGS=--update-baseline regenerates the baseline.
+# The pin sweep: the iverilog RTL and the C model against perfectz80, half-
+# cycle by half-cycle, pins and pad drivers: RESET / INT / NMI pulses at
+# every T-state of a set of instructions (one position per clock half; sub-T
+# pulses at every 1/16 T), BUSREQ / WAIT walks, every opcode, the timing
+# classes, the data latch, combinations and random fuzz; the die's traces
+# are recorded in tests/event_sweep/pz80/. Fails on any difference from the
+# die not listed in tests/event_sweep/baseline.txt (empty: none is
+# tolerated), and on any half-cycle where the C model differs from the RTL;
+# see docs/event-sweep.md. EVENT_SWEEP_ARGS=--update-baseline rewrites the
+# baseline from a run.
 event_sweep: $(BUILD)/tb_event_sweep.vvp $(BIN)/event_sweep_pz80 $(BIN)/event_sweep_c
 	@$(PYTHON) $(SCRIPTS)/event_sweep.py --c-model $(EVENT_SWEEP_ARGS)
 
@@ -450,13 +508,9 @@ verilator: dirs
 	echo "Built $(BUILD)/obj_dir/sim_z80"
 
 # -Wno-UNUSEDSIGNAL above silences a recurring "wide compute, only carry
-# bit consumed" pattern (rtl/z80_alu.v lo_add/lo_sub[3:0]; rtl/z80_core.v
-# add12/r13/bk/bhc; rtl/z80_timing.v m_len) — those wires are declared
-# at their full width to make the silicon-faithful structural narrative
-# visible (the chip's wide adder produces both sum and carry; we route
-# only the carry into HF). The carry-only consumption is correct, not a
-# bug — but Verilator flags it. Will be revisited when the bus-segment
-# refactor (E1) introduces explicit named taps.
+# bit consumed" pattern (e.g. rtl/z80_alu.v lo_add/lo_sub, whose low four
+# bits go unused) -- those wires are declared at their full width as the
+# die's adders produce both sum and carry; only the carry feeds HF.
 
 # ZEX runner driven through the Verilated RTL — apples-to-apples with the C
 # zexrunner but every cycle simulated at gate-level-equivalent fidelity. Same
@@ -482,17 +536,16 @@ verilator_zex: dirs
 # Run ZEXALL through the Verilated RTL. sim_zex prints the same Cringle
 # OK/ERROR per-subtest lines as the C zexrunner (via BDOS console out).
 # Verilator is ~20x slower than the C model; ZEXALL takes several hours
-# of wall clock — gate to CI's main / nightly / dispatch only.
+# of wall clock, so CI runs the 14-test subset below instead.
 zexall_rtl: verilator_zex
 	@$(BUILD)/obj_dir_zex/sim_zex tests/zex/zexall.com 12000000000
 
 # Curated 14-test subset of ZEXALL chosen to keep the Verilator wall clock
-# under an hour while exercising the instructions our
-# silicon-faithfulness audit has flagged as most error-prone (LDIR/
-# LDDR + variants, CPIR/CPDR, DDCB BIT/SET/RES/INC/DEC/SHF, RRD/RLD,
-# NEG, DAA/SCF/CCF Q-leak, 16-bit ADC/SBC HL,rp). C model runs the
-# subset in ~86 s / ~550 M instructions on the dev box; Verilator on
-# ubuntu-latest takes 25-55 min wall clock, depending on the runner.
+# under an hour while exercising the instructions most prone to error
+# (LDIR/LDDR + variants, CPIR/CPDR, DDCB BIT/SET/RES/INC/DEC/SHF, RRD/RLD,
+# NEG, DAA/CPL/SCF/CCF with their X / Y flags, 16-bit ADC/SBC HL,rp).
+# The C model runs the subset in ~2 min / ~550 M instructions; Verilator
+# on ubuntu-latest takes 25-55 min wall clock, depending on the runner.
 #
 # The .com is generated from tests/zex/zexall.com by patching the
 # 67-entry test-pointer table at file offset 0x3A; everything else
@@ -509,10 +562,10 @@ zexall_subset_rtl: verilator_zex tests/zex/zexall_subset.com
 	@$(BUILD)/obj_dir_zex/sim_zex tests/zex/zexall_subset.com 1000000000
 
 # Patrik Rak z80test through the Verilated RTL. Mirrors verilator_zex /
-# zexall_subset_rtl shape: a single sim_z80test binary loads any of the
-# z80doc / z80memptr / z80full .tap variants and reports pass/fail.
-# Verilator is ~20x slower than the C model -- locally each variant
-# runs in 6-15 min. Gate to CI's silicon-faithfulness job (`z80test_rtl`).
+# zexall_subset_rtl shape: a single sim_z80test binary loads any z80test
+# .tap variant and reports pass/fail. Verilator is ~20x slower than the C
+# model -- locally each variant runs in 6-15 min; CI runs one variant per
+# job (z80test-rtl).
 verilator_z80test: dirs
 	@if [ ! -f $(TESTS)/verilator/sim_z80test.cpp ]; then echo "sim_z80test.cpp not present."; exit 0; fi; \
 	printf '#include <cstdio>\nint main(){return 0;}\n' > $(BUILD)/.cxxcheck.cpp; \
@@ -527,13 +580,12 @@ verilator_z80test: dirs
 	  -I$(RTL) $(RTL_SRCS) $(abspath $(TESTS)/verilator/sim_z80test.cpp) -o sim_z80test && \
 	echo "Built $(BUILD)/obj_dir_z80test/sim_z80test"
 
-# Run all 3 Rak variants through the RTL. Tolerances mirror `z80test`
-# (the C-model target): 0 / 0 / 0 -- the model is silicon-faithful.
+# The same z80test variants through the RTL (Verilator); any failed test
+# fails the target, as in `z80test`.
 z80test_rtl: verilator_z80test
-	@set -e; \
-	stdbuf -oL $(BUILD)/obj_dir_z80test/sim_z80test $(TESTS)/z80test/z80doc.tap    5000000000 0; \
-	stdbuf -oL $(BUILD)/obj_dir_z80test/sim_z80test $(TESTS)/z80test/z80memptr.tap 5000000000 0; \
-	stdbuf -oL $(BUILD)/obj_dir_z80test/sim_z80test $(TESTS)/z80test/z80full.tap   8000000000 0
+	@set -e; for v in $(Z80TEST_VARIANTS); do \
+	  stdbuf -oL $(BUILD)/obj_dir_z80test/sim_z80test $(TESTS)/z80test/$$v.tap 8000000000; \
+	done
 
 # BASIC ROM driver through the Verilated RTL (sim_basic). Builds the
 # Verilator harness analogously to verilator_zex. Same C++17 self-check
@@ -553,19 +605,18 @@ verilator_basic: dirs
 	echo "Built $(BUILD)/obj_dir_basic/sim_basic"
 
 # ----------------------------------------------------------------------------
-# traces / comparison
+# C model vs the RTL, phase by phase (tests/traces programs; Verilator joins
+# when build/obj_dir/sim_z80 exists)
 # ----------------------------------------------------------------------------
-traces: cmodel
-	@if [ -f $(SCRIPTS)/gen_traces.py ]; then $(PYTHON) $(SCRIPTS)/gen_traces.py; else echo "trace generator not present yet."; fi
-
 compare: tracegen iverilog
 	@$(PYTHON) $(SCRIPTS)/compare_traces.py
 
 # ----------------------------------------------------------------------------
 # compatibility suites
 # ----------------------------------------------------------------------------
-# ZEX_MAX caps instructions so an unfinished feature can't loop forever.
-ZEX_MAX ?= 4000000000
+# ZEX_MAX caps instructions so a broken build can't loop forever (ZEXDOC and
+# ZEXALL run 5.76 G instructions; the C model takes ~20 min for each).
+ZEX_MAX ?= 8000000000
 
 prelim: zexrunner
 	@$(PYTHON) $(SCRIPTS)/run_zex.py prelim $(ZEX_MAX)
@@ -577,25 +628,161 @@ zexall: zexrunner
 	@$(PYTHON) $(SCRIPTS)/run_zex.py zexall $(ZEX_MAX)
 
 # ----------------------------------------------------------------------------
+# phase identity: the work tree's model against a reference revision
+# ----------------------------------------------------------------------------
+# Every pin of every phase (the 14 trace columns + data_drive, as a rolling
+# hash) and the register file every 1M phases, through ZEXDOC, prelim,
+# z80test, all trace programs and pin scenarios, random memory soups and a
+# random data bus under random INT/NMI/WAIT/BUSREQ/RESET activity
+# (scripts/phase_identity.py, scripts/pinhash.c). PHASE_REF=<rev> picks the
+# reference (default HEAD: proves uncommitted work changes no pin);
+# PHASE_ARGS=--long runs ZEXDOC and z80test to the end.
+PHASE_REF  ?= HEAD
+PHASE_ARGS ?=
+# pinhash also hashes the die's pad drivers when the model has them
+# (z80_pins_t addr_drive / ctl_drive), and reads the registers as the
+# program sees them when it has z80_arch; phase_identity.py decides both
+# the same way for the reference
+PINHASH_DEFS := $(if $(shell grep -l addr_drive $(CMODEL)/z80.h 2>/dev/null),-DPINHASH_DRIVES) \
+                $(if $(shell grep -l z80_arch $(CMODEL)/z80.h 2>/dev/null),-DPINHASH_ARCH)
+pinhash: cmodel $(BIN)/pinhash
+$(BIN)/pinhash: $(SCRIPTS)/pinhash.c $(CMODEL_LIB) $(CMODEL_HDRS)
+	@mkdir -p $(BIN)
+	$(CC) $(CFLAGS) $(PINHASH_DEFS) $(INCLUDES) $< $(CMODEL_LIB) -o $@
+
+phase_identity: pinhash
+	@$(PYTHON) $(SCRIPTS)/phase_identity.py --ref $(PHASE_REF) --new-exe $(BIN)/pinhash $(PHASE_ARGS)
+
+# ----------------------------------------------------------------------------
+# cfast: the phase engine generated from the model's timing tables
+# ----------------------------------------------------------------------------
+# cfast/dump_tables.c prints cmodel/'s timing ROM and timing points;
+# cfast/gen_fast.py turns them into straight-line phase steps that
+# cfast/z80_fast.c runs around the model's own sequencer, with
+# z80_phase_step for what the steps don't cover: z80f_tick, one phase per
+# call (zexrunner_fast), and z80f_run, the steps back to back with the
+# bus inlined (cfast/z80_fast_run.h, zexfast). make cfast_identity checks
+# both phase by phase against PHASE_REF.
+CFAST     := cfast
+CFAST_GEN := $(BUILD)/cfast
+CFAST_INC := -I$(CMODEL) -I$(CFAST) -I$(CFAST_GEN)
+CFAST_DEP := $(CFAST)/z80_fast.c $(CFAST)/z80_fast.h $(CFAST_GEN)/z80_fast_steps.h \
+             $(CMODEL_SRCS) $(CMODEL_HDRS)
+
+cfast: $(BIN)/zexrunner_fast $(BIN)/pinhash_fast $(BIN)/zexfast $(BIN)/pinhash_run
+
+$(CFAST_GEN)/dump_tables: $(CFAST)/dump_tables.c $(CMODEL_SRCS) $(CMODEL_HDRS)
+	@mkdir -p $(CFAST_GEN)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -o $@
+
+$(CFAST_GEN)/tables.json: $(CFAST_GEN)/dump_tables
+	$< > $@
+
+$(CFAST_GEN)/z80_fast_steps.h: $(CFAST)/gen_fast.py $(CFAST_GEN)/tables.json
+	$(PYTHON) $(CFAST)/gen_fast.py $(CFAST_GEN)/tables.json $(CFAST_GEN)
+
+$(BIN)/zexrunner_fast: $(SCRIPTS)/zexrunner.c $(CFAST_DEP)
+	@mkdir -p $(BIN)
+	$(CC) $(CFLAGS) -DZ80_FAST $(CFAST_INC) $< $(CFAST)/z80_fast.c $(CMODEL)/z80_sim.c -o $@
+
+$(BIN)/pinhash_fast: $(SCRIPTS)/pinhash.c $(CFAST_DEP)
+	@mkdir -p $(BIN)
+	$(CC) $(CFLAGS) $(PINHASH_DEFS) -DZ80_FAST $(CFAST_INC) $< $(CFAST)/z80_fast.c $(CMODEL)/z80_sim.c -o $@
+
+# the run frame: cfast/zexfast.c, and pinhash compiled around z80f_run
+$(BIN)/zexfast: $(CFAST)/zexfast.c $(CFAST)/z80_fast_run.h $(CFAST_DEP)
+	@mkdir -p $(BIN)
+	$(CC) $(CFLAGS) $(CFAST_INC) $< -o $@
+
+$(BIN)/pinhash_run: $(SCRIPTS)/pinhash.c $(CFAST)/z80_fast_run.h $(CFAST_DEP)
+	@mkdir -p $(BIN)
+	$(CC) $(CFLAGS) $(PINHASH_DEFS) -DZ80_FAST_RUN $(CFAST_INC) $< $(CMODEL)/z80_sim.c -o $@
+
+cfast_identity: cfast pinhash
+	@$(PYTHON) $(SCRIPTS)/phase_identity.py --ref $(PHASE_REF) --new-exe $(BIN)/pinhash \
+	  --fast-exe $(BIN)/pinhash_fast --run-exe $(BIN)/pinhash_run $(PHASE_ARGS)
+
+# cfast as one header (stb style, cfast/amalgamate.py): the model, the
+# generated steps, z80f_tick and z80f_run. cfast_single_identity checks the
+# header's two frames like cfast_identity.
+CFAST_SINGLE := $(CFAST_GEN)/z80_cfast.h
+cfast_single: $(CFAST_SINGLE) $(BIN)/zexfast_single $(BIN)/pinhash_single
+
+$(CFAST_SINGLE): $(CFAST)/amalgamate.py $(CFAST)/z80_fast_run.h $(CFAST_DEP)
+	$(PYTHON) $(CFAST)/amalgamate.py $(CFAST_GEN) $@
+
+$(BIN)/zexfast_single: $(CFAST)/zexfast.c $(CFAST_SINGLE)
+	@mkdir -p $(BIN)
+	$(CC) $(CFLAGS) -DZEX_SINGLE -I$(CFAST_GEN) $< -o $@
+
+$(BIN)/pinhash_single: $(SCRIPTS)/pinhash.c $(CFAST_SINGLE)
+	@mkdir -p $(BIN)
+	$(CC) $(CFLAGS) $(PINHASH_DEFS) -DZ80_FAST_RUN -DZ80_SINGLE -I$(CMODEL) -I$(CFAST_GEN) $< $(CMODEL)/z80_sim.c -o $@
+
+cfast_single_identity: cfast_single pinhash
+	@$(PYTHON) $(SCRIPTS)/phase_identity.py --ref $(PHASE_REF) --new-exe $(BIN)/pinhash \
+	  --fast-exe $(BIN)/pinhash_single --run-exe $(BIN)/pinhash_single $(PHASE_ARGS)
+
+# cfast_bench: cfast's two frames, the reference model and the four other C
+# emulators in scripts/refs/ on the same ZEXDOC instructions, each in the
+# harness of cfast/bench/ (the oracles at -O2, redcode with the features the
+# lockstep CI job builds it with); scripts/cfast_bench.py writes
+# build/bench/bench.{md,json,svg}. CI runs it on every push (job cfast-bench).
+# e.g. make cfast_bench CFAST_BENCH_ARGS="--cpu 3 --rounds 5"
+CFAST_BENCH_ARGS ?=
+BENCH_REFS := $(SCRIPTS)/refs
+BENCH_BINS := $(BIN)/bench_chips $(BIN)/bench_superzazu $(BIN)/bench_redcode $(BIN)/bench_suzukiplan
+REDCODE_FLAGS := -I$(BENCH_REFS)/redcode_z80 -I$(BENCH_REFS)/redcode_z80/Zeta \
+  -DZ80_STATIC -DZ80_WITH_LOCAL_HEADER -DZ80_WITH_EXECUTE -DZ80_WITH_Q \
+  -DZ80_WITH_PARITY_COMPUTATION -DZ80_WITH_SPECIAL_RESET -DZ80_WITH_FULL_IM0 \
+  -DZ80_WITH_UNOFFICIAL_RETI
+
+cfast_bench: cfast $(BIN)/zexrunner $(BENCH_BINS)
+	@$(PYTHON) $(SCRIPTS)/cfast_bench.py --bin $(BIN) --out $(BUILD)/bench \
+	  $(if $(JCC_PAD),--jcc-pad) $(CFAST_BENCH_ARGS)
+
+$(BIN)/bench_chips: $(CFAST)/bench/bench_chips.c $(CFAST)/bench/bench_common.h
+	@mkdir -p $(BIN)
+	$(CC) -std=gnu11 -O2 $(JCC_PAD) -w -I$(BENCH_REFS) $< -o $@
+
+$(BIN)/bench_superzazu: $(CFAST)/bench/bench_superzazu.c $(CFAST)/bench/bench_common.h
+	@mkdir -p $(BIN)
+	$(CC) -std=gnu11 -O2 $(JCC_PAD) -w -I$(BENCH_REFS) $< -o $@
+
+$(BIN)/bench_redcode: $(CFAST)/bench/bench_redcode.c $(CFAST)/bench/bench_common.h
+	@mkdir -p $(BIN)
+	$(CC) -std=gnu11 -O2 $(JCC_PAD) -w $(REDCODE_FLAGS) $< $(BENCH_REFS)/redcode_z80/Z80.c -o $@
+
+$(BIN)/bench_suzukiplan: $(CFAST)/bench/bench_suzukiplan.cpp $(CFAST)/bench/bench_common.h
+	@mkdir -p $(BIN)
+	$(CXX) -std=gnu++17 -O2 $(JCC_PAD) -w -I$(BENCH_REFS) $< -o $@
+
+# ----------------------------------------------------------------------------
 # full suite
 # ----------------------------------------------------------------------------
 test: ctest rtl bus_controls compare
-	@echo "== full test suite complete =="
+	@echo "== quick test suite complete =="
 
-# Run every verification gate. Heavy: ZEXDOC + ZEXALL take ~30 min combined.
-all-tests: ctest rtl bus_controls compare fuse fuse_rtl perfectz80
-	@echo "== running ZEXDOC (~1 min) =="
-	@$(BIN)/zexrunner tests/zex/zexdoc.com 6000000000 2>&1 | tr -d '\r' | grep -E 'OK$$|ERROR|complete|elapsed' | tail -10
-	@echo "== running ZEXALL (~16 min) =="
-	@$(BIN)/zexrunner tests/zex/zexall.com 12000000000 2>&1 | tr -d '\r' | grep -E 'OK$$|ERROR|complete|elapsed' | tail -10
-	@echo "== running 4-way lockstep on zexdoc3 (~2 s) =="
-	@c++ -std=gnu++17 -O2 -w -Iscripts -Icmodel scripts/lockstep_quad.c $(CMODEL_LIB) -o $(BIN)/lockstep_quad
-	@$(BIN)/lockstep_quad tests/zex/zexdoc3.com 20000000
-	@echo "== real-silicon T-state oracle (sigrok kc85 cpuclk capture) =="
-	@$(PYTHON) $(SCRIPTS)/sigrok_opcode_cycles.py tests/sigrok/kc85-cpuclk.sr | tail -3
-	@echo "== real-silicon clock + sub-T-state (sigrok kc85 20 MHz async) =="
-	@$(PYTHON) $(SCRIPTS)/sigrok_async_timing.py tests/sigrok/kc85-20mhz.sr --silicon-check 2>&1 | tail -6
+# Every gate that needs only a C compiler, iverilog and Verilator, as CI
+# runs them (CI adds the LibreLane netlist jobs and cfast_bench). ZEXDOC and
+# ZEXALL take ~20 min each, the pin sweep ~15 min on 8 cores, the Verilator
+# z80test variants 6-15 min each: about an hour and a half in all.
+all-tests: ctest fuse fuse_rtl fuse_pz80 prelim z80test z80test_rtl halt2int lockstep \
+           silicon_cycles silicon_async rtl bus_controls verilator compare perfectz80 perfectz80_rtl \
+           pin_scenarios pin_scenarios_rtl basic_c_tests basic_rtl_tests event_sweep \
+           cfast_identity cfast_single_identity zexdoc zexall zexall_subset_rtl
 	@echo "== all-tests complete =="
+
+# Our C model and four other emulators (superzazu, floooh/chips, suzukiplan,
+# redcode/Z80) instruction by instruction over ZEXDOC3, 7.0 M instructions:
+# PC, AF, BC, DE, HL, IX, IY and SP after each must agree
+# (scripts/lockstep_quint.c; see there for the one masked difference).
+lockstep: cmodel
+	@mkdir -p $(BIN)
+	$(CC) -std=gnu11 -O2 -w $(REDCODE_FLAGS) -c $(BENCH_REFS)/redcode_z80/Z80.c -o $(BUILD)/redcode_Z80.o
+	$(CXX) -std=gnu++17 -O2 -w -I$(SCRIPTS) -I$(CMODEL) $(REDCODE_FLAGS) \
+	  $(SCRIPTS)/lockstep_quint.c $(BUILD)/redcode_Z80.o $(CMODEL_LIB) -o $(BIN)/lockstep_quint
+	@$(BIN)/lockstep_quint tests/zex/zexdoc3.com 20000000
 
 # === FPGA LUT budget ========================================================
 # `make luts` synthesizes z80_top alone for iCE40 (synth_ice40 -abc9 -dsp),
@@ -603,7 +790,7 @@ all-tests: ctest rtl bus_controls compare fuse fuse_rtl perfectz80
 # and prints LUT / carry / mux / FF counts (scripts/fpga_luts.sh,
 # scripts/fpga_luts_table.py). `make luts_netlist` then runs each mapped
 # netlist (yosys' own cell models flattened in) through the gate-level
-# testbench against perfectz80 (same 12 programs as perfectz80_netlist), so
+# testbench against perfectz80 (the 14 trace programs, as perfectz80_netlist), so
 # an area change is checked at the gates it produced.
 #
 # Toolchain: yowasp-yosys (WebAssembly yosys, pip) in .venv-fpga/, created

@@ -13,7 +13,7 @@
 localparam [2:0] AL_ABUS = 3'd0,   // the address-side bus
                  AL_IDU  = 3'd1,   // abus +1 / -1 / -2
                  AL_EA   = 3'd2,   // effective-address adder
-                 AL_A16  = 3'd3;   // 16-bit ALU sum (ADD HL,rp internal cycle)
+                 AL_WZ   = 3'd3;   // WZ (internal M-cycles: JR, DJNZ, (IX+d), CPI, RLD, ...)
 // address-side bus source
 localparam [2:0] AB_REG  = 3'd0,   // register pair, see RI_*
                  AB_NN   = 3'd1,   // {rbyte, Z}: the operand word nn as W arrives
@@ -44,7 +44,8 @@ localparam [1:0] PW_IDU = 2'd0, PW_A16 = 2'd1, PW_WZ = 2'd2;
 localparam [3:0] BW_RI = 4'd0, BW_R8 = 4'd1, BW_A = 4'd2, BW_B = 4'd3,
                  BW_DDCB = 4'd4, BW_HLPL = 4'd5, BW_HLPH = 4'd6,
                  BW_RPL = 4'd7, BW_RPH = 4'd8;
-localparam [2:0] BS_RI = 3'd0, BS_ALU = 3'd1, BS_RB = 3'd2, BS_CB = 3'd3, BS_BD = 3'd4;
+localparam [2:0] BS_RI = 3'd0, BS_ALU = 3'd1, BS_RB = 3'd2, BS_CB = 3'd3, BS_BD = 3'd4,
+                 BS_A16 = 3'd5, BS_PH = 3'd6;   // the 16-bit sum's low byte; its high byte, held
 // flag port source
 localparam [2:0] FS_ALU = 3'd0, FS_A16 = 3'd1, FS_BLD = 3'd2, FS_BCP = 3'd3, FS_BIO = 3'd4;
 // interrupt enables

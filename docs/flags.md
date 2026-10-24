@@ -108,9 +108,12 @@ unchanged. Pinned by DAA vectors + ZEXALL `<daa>`.
 ```
 SCF: CF=1  HF=0  NF=0
 CCF: HF=old CF  CF=~old CF  NF=0
-both: YF = A.5  XF = A.3      # NMOS "A"-based variant (see known-differences)
+both: YF/XF = (A | (F XOR Q)).5 / .3     # Zilog NMOS
 SF,ZF,PF unchanged
 ```
+Q is the F the previous instruction wrote, or 0 if it wrote none: right after
+a flag-writing instruction X / Y come from A alone, otherwise from A | F
+(docs/undocumented.md; docs/known-differences.md rows 2 and 29-31).
 
 ### `FLAG_CPL`
 ```
@@ -137,9 +140,17 @@ YF = n.1   XF = n.3
 
 ### `FLAG_BLOCK_IO` — INI/IND/OUTI/OUTD/…
 Per documented block-IO flag rules (involve a temp sum with C±1 / B); pinned by
-ZEXALL. Implemented in `z80_alu.c` and detailed there.
+z80test (INI, IND, INIR, INDR, OUTI, OUTD, OTIR, OTDR) and FUSE -- ZEXALL has no
+I/O tests. Implemented in `z80_alu.c` and detailed there.
+
+### Block repeats
+When LDIR / LDDR / CPIR / CPDR / INIR / INDR / OTIR / OTDR repeat, the extra
+5-T internal M-cycle rewrites YF / XF from PC bits 13 / 11, and INxR / OTxR
+also HF and PF (David Banks 2018; docs/undocumented.md). The C model's
+`blk_rep_f`, the RTL alike.
 
 ## Parity helper
 `parity(x)` = 1 when the number of set bits in `x` is even (PF=1 means even parity).
 
-All rules are exercised by `tests/common/test_flags.c` and cross-checked by ZEXALL.
+All rules are exercised by `tests/common/test_flags.c` and cross-checked by ZEXALL,
+z80test and FUSE.

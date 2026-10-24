@@ -21,7 +21,7 @@ static void test_nmi(void)
     s.cpu.pins.nmi_n = 0; z80_sys_phase(&s); s.cpu.pins.nmi_n = 1;  /* NMI edge */
     run_to_halt(&s);
     CHECK(s.cpu.halted, "NMI reached handler (HALT at 0x0066)");
-    CHECK_EQ_U(s.cpu.rf[RFP_SP], 0xFFEE, "NMI pushed return PC (SP -= 2)");
+    CHECK_EQ_U(z80_arch(&s.cpu)->rf[RFP_SP], 0xFFEE, "NMI pushed return PC (SP -= 2)");
     uint16_t ret = (uint16_t)(s.mem[0xFFEE] | (s.mem[0xFFEF] << 8));
     CHECK(ret >= 0x0003 && ret <= 0x0008, "NMI return address is in the NOP run");
     CHECK_EQ_U(s.cpu.iff1, 0, "NMI cleared IFF1");
@@ -39,13 +39,13 @@ static void test_int_im1(void)
     step_instr(&s);                         /* EI (sets ei_delay) */
     s.cpu.pins.int_n = 0;                   /* assert INT (level) */
     /* EI delay: the instruction right after EI must still execute (no INT yet) */
-    uint16_t pc_before = s.cpu.rf[RFP_PC];
+    uint16_t pc_before = z80_arch(&s.cpu)->rf[RFP_PC];
     step_instr(&s);                         /* the NOP after EI executes */
-    CHECK(s.cpu.rf[RFP_PC] != 0x0039 && pc_before <= 0x0008, "EI delays INT by one instruction");
+    CHECK(z80_arch(&s.cpu)->rf[RFP_PC] != 0x0039 && pc_before <= 0x0008, "EI delays INT by one instruction");
     run_to_halt(&s);
     CHECK(s.cpu.halted, "INT IM1 reached handler (HALT at 0x0038)");
     CHECK_EQ_U(s.cpu.iff1, 0, "INT cleared IFF1");
-    CHECK_EQ_U(s.cpu.rf[RFP_SP], 0xFFEE, "INT pushed return PC");
+    CHECK_EQ_U(z80_arch(&s.cpu)->rf[RFP_SP], 0xFFEE, "INT pushed return PC");
 }
 
 static void test_int_im2(void)
@@ -134,7 +134,7 @@ static void test_ld_a_ir_race(void)
     uint8_t prog[] = { 0xFB, 0x00, 0xED, 0x57, 0x00 };  /* EI; NOP; LD A,I; NOP */
     z80_system_t s; z80_sys_init(&s); z80_sys_load(&s, 0, prog, sizeof prog);
     for (int i = 0; i < 3; i++) step_instr(&s);
-    CHECK((s.cpu.rf[RFP_AF] & Z80_PF) != 0, "LD A,I without an interrupt: P/V = IFF2 = 1");
+    CHECK((z80_arch(&s.cpu)->rf[RFP_AF] & Z80_PF) != 0, "LD A,I without an interrupt: P/V = IFF2 = 1");
 }
 
 int main(void)
