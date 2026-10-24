@@ -1723,11 +1723,15 @@ static void advance(z80_t *c)
     }
     /* the pending writes land on the edge that ends the next M1's (INTA's)
        T1 or T2, not a Tw after it, and not in a bus grant (wb_fire) */
-    /* this T-state is an M1's (INTA's) from T2 to the T3 whose low half
-       writes the flags the instruction before left: the die's pending ones
-       (Q, below) */
+    /* this T-state is an M1's from T2 to the T3 whose low half writes the
+       flags the instruction before left, or an INTA's from T2 to its second
+       automatic Tw (a cut on its T3 or after leaves none pending): the die's
+       pending ones (Q, below; perfectz80). Or the T1 of one with nothing
+       waiting to be written: its T1.N takes no new flags, so those an earlier
+       cut left pending stay (the M1 a restart begins, cut again on T1). */
     bool keep_q = !c->bus_granted && (c->bus_op == BUSOP_M1 || c->bus_op == BUSOP_INTA) &&
-                  c->t_state >= 2 && c->t_state <= (c->bus_op == BUSOP_INTA ? c->m_len - 1 : 3);
+                  ((c->t_state >= 2 && c->t_state <= (c->bus_op == BUSOP_INTA ? 4 : 3)) ||
+                   (c->t_state == 1 && !c->wbp));
     /* the T-state ending here, for the WZ bytes a cut inside an M-cycle keeps */
     uint8_t t_end = c->t_state;
     bool granted = c->bus_granted, mend = false;

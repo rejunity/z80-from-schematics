@@ -82,7 +82,7 @@ parity, not "0xBF when low byte is 0xFE"). Fix landed in commit
   | **Rak z80flags**   | **0**    | 20        | 10           | n/a *      | **0**    |
   | **Rak z80memptr**  | **0**    | 16        | **0**        | n/a *      | **0**    |
   | **Rak z80full**    | **0**    | 20        | 10           | n/a *      | **0**    |
-  | **Rak z80ccf**     | 1 †      | 75        | 67           | n/a *      | **0**    |
+  | **Rak z80ccf**     | **0** †  | 75        | 67           | n/a *      | **0**    |
   | FUSE corpus ‡      | **1356** | n/a       | n/a          | n/a        | **1356** |
   | ZEXDOC             | PASS     | (oracle)  | (oracle)     | (oracle)   | (oracle) |
   | ZEXALL             | PASS     | (oracle)  | (oracle)     | (oracle)   | (oracle) |
@@ -91,10 +91,9 @@ parity, not "0xBF when low byte is 0xFE"). Fix landed in commit
   ED opcodes during the Rak test sequence; we run it only through the
   5-way lockstep (`make lockstep`).
 
-  † z80ccf test 129 (`EX AF,AF'`): our models leave Q = the swapped-in F
-  after `EX AF,AF'`, the die (and redcode) clear it. One of the three Q
-  differences in [known-differences.md](known-differences.md); fixed on
-  branch `nmos-q`.
+  † z80ccf test 129 (`EX AF,AF'`) failed until the models cleared Q after
+  `EX AF,AF'` as the die (and redcode) do: one of the three Q differences
+  in [known-differences.md](known-differences.md) (rows 29-31, resolved).
 
   ‡ FUSE corpus: 1356 cases, each started with Q = 0, checked against
   `tests/fuse/tests.expected` except six cases checked against the die's

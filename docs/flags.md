@@ -176,9 +176,12 @@ So Q = F means "this M1 wrote the flags left pending", and every M1 uses
 the pending flags up: DD 37 and FD 3F take X and Y from `A | F` whatever
 came before, and so does an SCF after EX AF,AF', EXX, POP AF or an
 interrupt response, none of which writes the flags. The flags stay pending
-through a RESET that cuts the M1 they wait for: the M1 that restarts at
-0000 writes them (F is then the cut's f_cut, docs/timing.md "Register
-write-back"), and a CCF there takes X and Y from A.
+through a RESET whose cut ends after the T1 of the M1 they wait for and
+before its T3.N writes them -- an INTA's, by its second automatic Tw -- and
+through another cut on the T1 of the M1 that restarts (its T1.N takes no
+new ones): that M1, at 0000, writes them (F is then the cut's f_cut,
+docs/timing.md "Register write-back"), and a CCF there takes X and Y from
+A. A cut anywhere else leaves none pending.
 
 `make event_sweep` compares Q with the die in every case: perfectz80's trace
 has 3273 (as P) next to F and WZ, and the die's Q in an M1 is F where P is

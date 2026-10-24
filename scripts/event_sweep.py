@@ -13,13 +13,14 @@
 #
 # A case matches when the control pins (mreq iorq rd wr m1 rfsh halt busack)
 # and the address agree in every half-cycle -- transfers, refreshes, and the
-# internal and idle T-states, where the bus keeps its last address -- and the
-# data agrees wherever both drive WR. Any case that differs fails the run:
-# there is no list of tolerated differences.
+# internal and idle T-states, where the bus keeps its last address -- the
+# data agrees wherever both drive WR, the same pads are driven, and F, WZ
+# and Q agree in T4.P of every M1 (state_samples). Any case that differs
+# fails the run: there is no list of tolerated differences.
 #
 # --c-model also runs every case through the C model (scripts/event_sweep_c.c)
-# and fails on any half-cycle where it differs from the RTL: the two are
-# phase-identical.
+# and fails on any half-cycle where it differs from the RTL, F, WZ and Q
+# included: the two are phase-identical.
 #
 # The `latch` group drives the data bus itself: in one read -- an opcode
 # fetch, a memory or I/O read, an INTA -- the right byte is on the bus in

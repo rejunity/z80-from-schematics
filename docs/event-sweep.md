@@ -107,11 +107,13 @@ and the die's Q is F there, else 0. The C model dumps `rf[RFP_AF]`'s F,
 `rf[RFP_WZ]` and `q`; the RTL `r_af`'s F, `r_wz` and `reg_q`.
 
 The models don't make their writes on the die's edges: the die writes F in
-T3.N of the next M1, the models on the edge that ends its T2; WZ the die
-writes a byte at a time where it adds or reads it, the C model whole. So
-the state is compared where it has settled on every side: in T4.P of every
-M1-type cycle (an opcode fetch, an INTA, the fetch an NMI discards, the
-first half-cycle of whose refresh is T3.P). By then the die has made the
+T3.N of the next M1, the models on the edge that ends its T2; the die
+writes WZ a byte at a time on its own edges, the models a byte read at
+once and the rest at the end of the M-cycle (a RESET cut leaves the bytes
+the die had written: docs/timing.md "Register write-back"). So the state
+is compared where it has settled on every side: in T4.P of every M1-type
+cycle (an opcode fetch, an INTA, the fetch an NMI discards, the first
+half-cycle of whose refresh is T3.P). By then the die has made the
 writes the instruction before left for that M1 (T1.N, T2.N, T3.N), the
 models theirs (the edges that end T1 and T2), and none has started the new
 instruction's: this is the state the instruction before left, as the next
@@ -120,8 +122,8 @@ has, at the one point every side agrees what it means. A RESET that cuts
 an M1 before its T3 leaves no sample in it; the M1 that restarts at 0000
 has one.
 
-Between the two models the comparison is stricter: F and Q in every
-half-cycle, like the pins, and WZ in the samples.
+Between the two models the comparison is stricter: F, WZ and Q in every
+half-cycle, like the pins.
 
 The groups aimed at the state:
 
@@ -133,8 +135,8 @@ The groups aimed at the state:
   EXX, EX DE,HL, POP AF, loads, DI / EI, IM 1, LD I,A / R,A, ED 00 / 77 /
   7F, DD, FD, DD DD, FD DD, DD FD, DD ED 00, JR, JP, CALL, IN / OUT, LD
   SP,HL, EX (SP),HL; and OR A, which does), then SCF or CCF;
-- `q_events`: six short sequences (CP n; SCF / CP n; EX AF,AF'; CCF / CP n;
-  DD SCF / INC B; NOP; CCF / ADD HL,BC; SCF / CP n; HALT) with INT in IM0,
+- `q_events`: six short sequences (CP n, SCF; CP n, EX AF,AF', CCF; CP n,
+  DD SCF; INC B, NOP, CCF; ADD HL,BC, SCF; CP n, HALT) with INT in IM0,
   IM1 and IM2, a 1 T NMI, a 4 T RESET, 1 T and 4 T BUSREQ and 1 T and 3 T
   WAIT from every T-state;
 - `q_reset`: 4 T RESET at every T-state of eleven flag writers (CP n, INC B,
@@ -260,11 +262,18 @@ minimum widths, which depend on analog timing.
 | reset_busreq | 312 | 312 | 0 |
 | reset_nmi | 120 | 120 | 0 |
 | latch | 268 | 268 | 0 |
+| q_ops | 3682 | 3682 | 0 |
+| q_seq | 462 | 462 | 0 |
+| q_events | 2448 | 2448 | 0 |
+| q_reset | 512 | 512 | 0 |
+| wz_int | 3712 | 3712 | 0 |
+| blk_events | 2464 | 2464 | 0 |
 | opcodes_reset (run by name) | 27768 | 27768 | 0 |
 
-The default run, 37,846 cases, matches perfectz80 in every one -- the pads
-driven and, after a RESET, every register the reset keeps included -- and
-the C model matches the RTL in every half-cycle of all of them; so does
+The default run, 51,126 cases, matches perfectz80 in every one -- the pads
+driven, F, WZ and Q in every state sample and, after a RESET, every
+register the reset keeps included -- and the C model matches the RTL in
+every half-cycle of all of them, F, WZ and Q included; so does
 `opcodes_reset`, RESET at every T-state of every opcode program (27,768
 cases). Nothing is tolerated. While the differences were being fixed, a
 baseline file listed each differing case so that CI failed only on new
@@ -273,6 +282,12 @@ HL,BC or INC BC in the T-states where the die still writes their result
 (and `classes_reset`, 170 of 2,210 differing, `reset_nmi`, 72, and
 `fuzz_reset`, 65, ran by name). With the baseline empty the file and
 `--update-baseline` were removed: any difference fails the run.
+
+The state samples came with HARNESS_VERSION 2 (24 October 2026). On
+main's models then, 38,557 of the 69,689 cases of every group and
+`opcodes_reset` differed from the die, all in the state: Q after any
+RESET (the restart's), after a prefix and after EX AF,AF', and WZ under a
+RESET cut (known differences 29-32).
 
 When the sweep was written (main `ec3c5d2`, 2287 cases) 809 differed.
 Since then:
@@ -382,6 +397,10 @@ catches a forgotten bump: CI's shard 0 checks 50 random ones on every push
 came in this way: 50 recorded cases from all 23 groups printed their
 recordings byte for byte with the new harness, and the recordings were
 re-keyed, not run again.
+
+HARNESS_VERSION 2 (F, WZ and P next to the pins) recorded every group
+again: 69,689 cases with `opcodes_reset`, 68,028 perfectz80 runs, 2 h 30
+min on 5 jobs.
 
 `--no-cache` runs perfectz80 for every case.
 
