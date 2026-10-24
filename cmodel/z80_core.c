@@ -47,8 +47,18 @@ static inline uint16_t z80_pc_inc(z80_t *c){
     return a;
 }
 
+/* always inlined: the sequencer's step, into end_mcycle() and cfast's
+   zf_end_mcycle_in(), which the phase engine and cfast's steps run at every
+   M-cycle's end, and the small helpers that step calls there -- inside
+   cfast's z80f_run, a function of tens of KB, GCC would call them */
+#if defined(__GNUC__)
+#define Z80_STEP_INLINE inline __attribute__((always_inline))
+#else
+#define Z80_STEP_INLINE inline
+#endif
+
 /* condition-code evaluation cc[y]: NZ Z NC C PO PE P M */
-static inline bool z80_cc_true(uint8_t f, uint8_t cc){
+static Z80_STEP_INLINE bool z80_cc_true(uint8_t f, uint8_t cc){
     switch (cc & 7) {
         case 0: return !(f & Z80_ZF);
         case 1: return  (f & Z80_ZF) != 0;
@@ -60,14 +70,6 @@ static inline bool z80_cc_true(uint8_t f, uint8_t cc){
         default:return  (f & Z80_SF) != 0;
     }
 }
-
-/* the sequencer's step: inlined into its one caller, end_mcycle(), which
-   the phase engine and cfast's steps call at every M-cycle's end */
-#if defined(__GNUC__)
-#define Z80_STEP_INLINE inline __attribute__((always_inline))
-#else
-#define Z80_STEP_INLINE inline
-#endif
 
 /* forward decls — sequencer / bus helpers are referenced by the phase
    engine below; bus helpers are referenced by the sequencer.            */
@@ -263,7 +265,7 @@ static uint8_t f_cut(const z80_t *c, uint8_t fo, uint8_t fn, uint8_t a, uint8_t 
 static const uint8_t wb_mid_m[EXEC_ILLEGAL + 1] = {
     [EXEC_EX_SP_HL] = 4, [EXEC_DJNZ] = 3, [EXEC_BLOCK] = 3,
 };
-static inline bool wb_mid(const z80_t *c)
+static Z80_STEP_INLINE bool wb_mid(const z80_t *c)
 {
     return c->m_cycle == wb_mid_m[c->ctl.exec] &&
            (c->ctl.exec != EXEC_BLOCK || ((c->ctl.aux >> 1) & 3) != 1);

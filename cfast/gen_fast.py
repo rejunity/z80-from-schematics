@@ -57,8 +57,10 @@
 #   ZF_PHASE_CHK(next)   the same after an M1 opcode latch, which leaves
 #                        fast mode for a HALT
 #   ZF_SLOW_AT(step)     hand this phase to the reference engine
-#   ZF_GOTO_T1P(k)       continue with the T1.P of template k = bus_op << 4 | m_len,
-#                        | 0x80 for the variant (end_mcycle() returns it)
+#   ZF_END_MCYCLE()      an M-cycle end: run the sequencer (zf_end_mcycle(),
+#                        cfast/z80_fast.c) and continue with the T1.P of the
+#                        template it returns: bus_op << 4 | m_len, | 0x80 for
+#                        the variant, 256 + ZK_* for a kind's copy of an M1
 #
 # Fast mode never sees WAIT, BUSREQ, RESET or NMI asserted, a halt, an
 # interrupt acknowledge, the instruction an interrupting device hands over
@@ -202,7 +204,7 @@ def main():
                 f"ZF_MEND({n});"]
         if ph[(op, n, 1)]["refresh_end"]:
             body.append(R_STEP)
-        body.append("ZF_GOTO_T1P(zf_end_mcycle(c));")
+        body.append("ZF_END_MCYCLE();")
         code.append(f"ZF_LABEL({ids[-1]}): /* {name} m_len {n}{' (wb_mid)' if hook else ''}: "
                     "M-cycle end */\n    " + "\n    ".join(body))
 

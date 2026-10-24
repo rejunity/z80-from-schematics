@@ -86,9 +86,13 @@ static uint64_t z80f_run(z80f_t *f, uint64_t pins)
         if (__builtin_expect(zf_exit != 0, 0)) { ZF_LEAVE(next); return pins; } \
         if (__builtin_expect((pins & ZF_SLOW_IN) != 0 || !f->fast, 0)) { ZF_LEAVE(next); goto zf_slow; } } while (0)
 #define ZF_SLOW_AT(s)      do { ZF_SYNC((s) - 1); goto zf_slow; } while (0)
-#define ZF_GOTO_T1P(k)     goto *t1p_label[k]
+#define ZF_END_MCYCLE()    goto zf_mend
 #define ZF_JUMP(s)         goto s
 #include "z80_fast_steps.h"
+zf_mend:    /* every step's M-cycle end: the sequencer, inlined here once,
+               then the T1.P of the template it set up (an instruction's
+               end: its kind's copy of the next M1's first steps) */
+    goto *t1p_label[zf_end_mcycle_in(c)];
 #undef ZF_LABEL
 #undef ZF_CLOCK
 #undef ZF_MEND
@@ -97,7 +101,7 @@ static uint64_t z80f_run(z80f_t *f, uint64_t pins)
 #undef ZF_PHASE_BOUNDARY
 #undef ZF_PHASE_CHK
 #undef ZF_SLOW_AT
-#undef ZF_GOTO_T1P
+#undef ZF_END_MCYCLE
 #undef ZF_JUMP
 #undef ZF_LEAVE
 #undef ZF_SYNC_STATE
