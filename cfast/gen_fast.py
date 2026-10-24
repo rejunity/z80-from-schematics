@@ -93,7 +93,7 @@ KINDS = [
     ("CB_R",     "c->wbp = WBP_ALU;",               None, "zf_fire_cb_r(c);"),
     ("EXDH",     "c->q = 0;",                       None, "zf_fire_exdh(c);"),
     ("EXX",      "c->q = 0;",                       None, "zf_fire_exx(c);"),
-    ("EXAF",     "c->q = (uint8_t)c->rf[RFP_AF2];", "zf_fire_exaf(c);", None),
+    ("EXAF",     "c->q = 0;",                       "zf_fire_exaf(c);", None),
     ("F16",      None,                              None, "zf_fire_f16(c);"),
 ]
 M1K_SEQ = [(1, 0), (1, 1), (2, 0), (2, 1), (3, 0)]     # a copy's phases, T1.P - T3.P

@@ -1091,10 +1091,12 @@ module z80_core (
         pex_af_n = pex_af; pex_x_n = pex_x; pex_dh_n = pex_dh;
         // the deferred writes land (a RESET cut ending here blocks them, but
         // F after a cut on T2): the decode held for them goes, and Q is the
-        // F they wrote, or 0
-        if (fire)  begin pend_n = 1'b0;  prefix_n = `PFX_NONE; if (!cut) reg_q_n = fire_fw ? f_data : 8'h00; end
-        if (fire1) begin pend1_n = 1'b0; prefix_n = `PFX_NONE; if (!cut) reg_q_n = f_data; end
-        if (fire16) begin pf16_n = 1'b0; if (!cut) reg_q_n = pf_val; end
+        // F written, or 0 -- after a cut too: flags the die has taken for
+        // this M1 stay pending through the RESET, and the M1 that restarts
+        // writes them; a cut ending on T1 loses them (perfectz80)
+        if (fire)  begin pend_n = 1'b0;  prefix_n = `PFX_NONE; reg_q_n = fire_fw ? (cut ? f_cut : f_data) : 8'h00; end
+        if (fire1) begin pend1_n = 1'b0; prefix_n = `PFX_NONE; reg_q_n = cut ? 8'h00 : f_data; end
+        if (fire16) begin pf16_n = 1'b0; reg_q_n = cut ? pf_cut : pf_val; end
         if (e1) pex_af_n = 1'b0;
         if (e2) begin pex_x_n = 1'b0; pex_dh_n = 1'b0; end
         // ADD / ADC / SBC HL: the sum at the first internal M-cycle's end --
@@ -1214,7 +1216,9 @@ module z80_core (
         end
         // last T-state of the M-cycle: the execute step
         else begin
-            if (ctl_prefix) prefix_n = pfx_next;
+            // a prefix's M1 takes the last instruction's flags and writes
+            // none: Q is 0 for the opcode after it
+            if (ctl_prefix) begin prefix_n = pfx_next; reg_q_n = 8'h00; end
             if (ctl_tmph) tmph_n = rbyte;
             case (ctl_iff)
                 IFF_DI:   begin iff1_n = 1'b0; iff2_n = 1'b0; end
@@ -1253,9 +1257,8 @@ module z80_core (
                 // Q: F if the instruction wrote F, else 0 (Sean Young 4.1; z80full
                 // 007 SCF+CCF, 102/103 INIR/INDR->NOP') -- the instructions that
                 // write F commit it with their F write (fire, fire1, fire16);
-                // EX AF,AF' the F it swaps in; the rest write none
-                reg_q_n = (defer_now || defer1_now || a16_now) ? reg_q :
-                          (fin_ok && ctl_ex_af) ? r_af2[7:0] : 8'h00;
+                // the rest, EX AF,AF' among them, write none
+                reg_q_n = (defer_now || defer1_now || a16_now) ? reg_q : 8'h00;
                 if (defer_now)  begin pend_n = 1'b1; pend_pv_n = iff2 & ~ldair_int; pend_rep_n = blk_rep_fin; end
                 if (defer1_now) begin pend1_n = 1'b1; pend_rep_n = blk_rep_fin; end
                 if (a16_now) pf16_n = 1'b1;
@@ -1336,6 +1339,11 @@ module z80_core (
             nmi_pending_n = 1'b0; bus_granted_n = 1'b0; srst_m1_n = 1'b0;
             in_tw_n = 1'b0;
             pend_n = 1'b0; pend1_n = 1'b0; pf16_n = 1'b0; pex_af_n = 1'b0; pex_x_n = 1'b0; pex_dh_n = 1'b0;
+            // Q: the flags stay pending through the RESET only when the cut
+            // ends on the T2 (or a Tw after it) of the M1 they wait for,
+            // which took them in its T1.N; else none are pending at the
+            // restart (perfectz80)
+            if (!rst_idle && !(m1_any && (t_state == 4'd2) && !bus_granted)) reg_q_n = 8'h00;
         end
     end
 

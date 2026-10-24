@@ -391,6 +391,10 @@ static void do_adc16(z80_t *c, bool sub)
 
 static void set_prefix_from_ir(z80_t *c)
 {
+    /* Q: a prefix's M1 is the next M1 the last instruction's flags wait
+       for, and it writes none of its own, so the opcode after it finds
+       Q = 0 (DD / FD 37 / 3F take X / Y from A | F: perfectz80) */
+    c->q = 0;
     switch (c->ir) {
         case 0xDD: c->prefix = PFX_DD; break;
         case 0xFD: c->prefix = PFX_FD; break;
@@ -1144,7 +1148,7 @@ static uint8_t blk_rep_f(const z80_t *c, uint8_t f)
    (back from wb_exec / wb_idx / wb_disp after an interrupt response's,
    WBP_DEC), the ALU again from the operands as it left them -- the
    registers and F, the byte read in tmp8. A cut ending on this edge blocks
-   them, but F at T2: f_cut. Q is the F written, or 0. As z80_core.v's
+   them, but F at T2: f_cut. Q is the F that stands, or 0. As z80_core.v's
    fire / fire1. */
 static void wb_fire_op(z80_t *c, bool f1, bool cut)
 {
@@ -1206,7 +1210,11 @@ static void wb_fire_op(z80_t *c, bool f1, bool cut)
         }
         z80_setF(c, f);
     }
-    if (!cut) c->q = fw ? fn : 0;
+    /* Q: the F written, or 0 -- after a cut too: flags the die has taken
+       for this M1 (its T1.N) stay pending through the RESET, and the M1
+       that restarts it writes them; on a cut ending on T1 it never takes
+       them (perfectz80) */
+    c->q = (fw && (!cut || !f1)) ? z80_F(c) : 0;
     if (dec) { ctl->exec = ex; ctl->idx = ix; ctl->use_disp = dp; }
 }
 
@@ -1227,7 +1235,7 @@ static void wb_fire(z80_t *c, uint8_t t, bool cut)
     if (p & WBP_ALU) wb_fire_op(c, false, cut);
     if (p & WBP_F16) {
         z80_setF(c, cut ? c->pf_cut : c->pf_val);
-        if (!cut) c->q = c->pf_val;
+        c->q = z80_F(c);
     }
     if (!cut && (p & WBP_EXX))
         for (uint8_t i = RFP_BC; i <= RFP_HL; i++) {
@@ -1505,11 +1513,13 @@ static const uint8_t wb_cls[EXEC_ILLEGAL + 1] = {
 
 /* An instruction ends: the writes the die makes in the next M1 wait (wbp),
    with the decode they need and Q, which they commit (wb_fire_op). Any
-   other instruction commits Q here: SCF / CCF in the next one derive X / Y
-   from (A | Q), and Q is F if this instruction wrote F, else 0 -- Sean
-   Young's "Undocumented Z80 Documented" §4.1 (ZEXALL's <daa,cpl,scf,ccf>
-   CRC; run 27650481834). EX AF,AF' writes the F it swaps in; ADD / ADC /
-   SBC HL commit theirs with it (WBP_F16); the rest write none. */
+   other instruction commits Q here: SCF / CCF in the next one take X / Y
+   from ((Q ^ F) | A), and Q is F if this instruction wrote F, else 0 --
+   Sean Young's "Undocumented Z80 Documented" §4.1 (ZEXALL's
+   <daa,cpl,scf,ccf> CRC; run 27650481834). ADD / ADC / SBC HL commit
+   theirs with their F (WBP_F16); the rest, EX AF,AF' among them, write
+   none: on the die the next M1 then reads F instead of writing it (docs/
+   flags.md "Q"). */
 static inline void wb_defer(z80_t *c)
 {
     uint8_t k = wb_cls[c->ctl.exec];
@@ -1525,7 +1535,7 @@ static inline void wb_defer(z80_t *c)
         if (c->ctl.exec == EXEC_LD_A_IR)
             c->wb_pv = (c->iff2 && !(c->int_sampled && c->iff1 && !c->nmi_sampled)) ? 1u : 0u;
     } else if (!(c->wbp & WBP_F16))
-        c->q = (c->wbp & WBP_EXAF) ? (uint8_t)c->rf[RFP_AF2] : 0;
+        c->q = 0;
 }
 
 /* The end of an M-cycle: the sequencer sets up the next one or finishes the
@@ -1624,6 +1634,10 @@ static void advance(z80_t *c)
     }
     /* the pending writes land on the edge that ends the next M1's (INTA's)
        T1 or T2, not a Tw after it, and not in a bus grant (wb_fire) */
+    /* this T-state is an M1's (INTA's) T2, or a Tw after it: the flags the
+       instruction before left are the die's pending ones (Q, below) */
+    bool keep_q = !c->bus_granted && (c->bus_op == BUSOP_M1 || c->bus_op == BUSOP_INTA) &&
+                  c->t_state == 2;
     if (c->wbp && !c->bus_granted && (c->bus_op == BUSOP_M1 || c->bus_op == BUSOP_INTA) &&
         (c->t_state == 1 || (c->t_state == 2 && !c->in_tw)))
         wb_fire(c, c->t_state, res2);
@@ -1654,6 +1668,11 @@ static void advance(z80_t *c)
     /* the T-state this edge starts is a Tw: WAIT held the last one */
     c->in_tw = !c->bus_granted && c->stalled;
     if (res2) {                              /* this T-state was the last */
+        /* Q: the die keeps the flags pending through the RESET only when
+           the cut ends on the T2 (or a Tw after it) of the M1 they wait
+           for, which took them in its T1.N; else none are pending at the
+           restart (perfectz80) */
+        if (!keep_q) c->q = 0;
         enter_reset_idle(c);
         c->rd_hold = cut_t1;
     }

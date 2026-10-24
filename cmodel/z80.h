@@ -343,7 +343,9 @@ typedef struct {
 
     /* Q register: holds F if the previous instruction wrote F, else 0. Used
        by SCF/CCF X/Y derivation on NMOS silicon. Committed with the
-       instruction's F write (wb_fire), else at its end (wb_defer). */
+       instruction's F write (wb_fire), else at its end (wb_defer); a
+       prefix clears it. The die has no such register: it is whether the
+       flags were pending at the last M1 (docs/flags.md "Q"). */
     uint8_t      q;
 
     /* RESET, as the die does it (perfectz80; docs/timing.md "RESET"):
