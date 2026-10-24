@@ -248,6 +248,10 @@ Not tested here: the macOS key paths, the Linux console and Windows.
 
 `--frames N` runs headless for N frames, then prints the screen's text by
 matching the ROM font. `--save-scr` also writes the screen as a `.scr`.
+For programs that want keys: `--type F:TEXT` types from frame F (`\n` is
+ENTER), `--type-on S:TEXT` types whenever the screen shows S (and prints
+that screen), `--exit-on S` stops when it shows S, and `--shot F:NAME`
+writes `NAME.scr` and `NAME.txt` after frame F.
 Patrik Rak's z80test tapes load through the ROM and run:
 
 ```
@@ -256,6 +260,25 @@ Z80 doc test        2012 RAXOFT
 000 SELF TEST                 OK
 001 SCF                       OK
 ...
+```
+
+`make speccy_woodmass` runs Mark Woodmass's Z80 Test Suite (2008,
+`tests/woodmass/`), whose results are a real NEC D780C-1's: it picks the
+Flags test from the suite's menu, then the MEMPTR test, answers every
+`scroll?`, and fails unless all 47 and all 58 tests pass. They do, in 14
+minutes of the Spectrum's time (nearly all of it the Flags test), about a
+minute of the host's:
+
+```
+./build/bin/speccy tests/woodmass/z80-test-suite-2008.tap --frames 60000 \
+    --type 3100:1 --type-on 'scroll?:y' --exit-on 'press a key'
+== frame 10250: scroll?
+      Testing Z80 flags...
+SCF                : 0EBF passed
+CCF                : 3CED passed
+...
+CB (00-FF) 5+3 RAM : 1B66 passed
+All tests finished - press a key
 ```
 
 On macOS (Apple clang, the system's make 3.81 and Python 3.9), the

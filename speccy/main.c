@@ -106,10 +106,11 @@ static bool find_rom(const char *opt, const char *argv0, uint8_t rom[16384], cha
 }
 
 /* the screen's text: each 8x8 cell that is a glyph of the font (or its
-   inverse) as that character, other non-blank cells as '#' */
-static void dump_text(const zx_t *z, FILE *fp)
+   inverse) as that character, other non-blank cells as '#'; 24 lines */
+static void screen_text(const zx_t *z, char text[24 * 33 + 1])
 {
     const uint8_t *font = zx_font(z);
+    char *out = text;
     for (int row = 0; row < 24; row++) {
         char line[33];
         for (int col = 0; col < 32; col++) {
@@ -136,9 +137,29 @@ static void dump_text(const zx_t *z, FILE *fp)
         int end = 32;
         while (end > 0 && line[end - 1] == ' ')
             end--;
-        line[end] = 0;
-        fprintf(fp, "%s\n", line);
+        memcpy(out, line, (size_t)end);
+        out += end;
+        *out++ = '\n';
     }
+    *out = 0;
+}
+
+static void dump_text(const zx_t *z, FILE *fp)
+{
+    char text[24 * 33 + 1];
+    screen_text(z, text);
+    fputs(text, fp);
+}
+
+/* the --type text: \n is ENTER */
+static void type_text(keys_t *k, const char *s)
+{
+    char text[256];
+    size_t n = 0;
+    for (; *s && n + 1 < sizeof text; s++)
+        text[n++] = s[0] == '\\' && s[1] == 'n' ? (s++, '\n') : *s;
+    text[n] = 0;
+    keys_type(k, text);
 }
 
 static volatile sig_atomic_t got_signal, got_winch;
@@ -172,6 +193,12 @@ static void usage(void)
          "  --late            late ULA timing (INT a T-state earlier against the screen)\n"
          "  --frames N        headless: run N frames, then print the screen's text\n"
          "  --save-scr FILE   with --frames: also write the screen as a .scr\n"
+         "  --type F:TEXT     with --frames: type TEXT from frame F (\\n is ENTER); repeatable\n"
+         "  --shot F:NAME     with --frames: after frame F write NAME.scr and NAME.txt (the\n"
+         "                    screen's text); repeatable\n"
+         "  --type-on S:TEXT  with --frames: type TEXT whenever the screen shows S (and print\n"
+         "                    the screen, the frame first); repeatable\n"
+         "  --exit-on S       with --frames: stop when the screen shows S\n"
          "keys: F10 or Ctrl-C quit, F5 reset, F12 full speed; Esc is BREAK, Tab\n"
          "EXTENDED MODE, shift CAPS SHIFT, ctrl or alt SYMBOL SHIFT.");
 }
@@ -183,6 +210,11 @@ int main(int argc, char **argv)
     int keys_want = KEYS_AUTO;
     long frames_headless = -1;
     bool autoload = true, turbo = false, late = false;
+    static struct { long frame; const char *arg; } types[1024], shots[1024];
+    int ntypes = 0, nshots = 0;
+    struct { char on[64]; const char *text; } ons[16];
+    int nons = 0;
+    const char *exit_on = NULL;
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
         const char *v = i + 1 < argc ? argv[i + 1] : NULL;
@@ -212,6 +244,20 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--late")) late = true;
         else if (!strcmp(a, "--frames") && v) { frames_headless = atol(v); i++; }
         else if (!strcmp(a, "--save-scr") && v) { save_scr = v; i++; }
+        else if ((!strcmp(a, "--type") || !strcmp(a, "--shot")) && v && strchr(v, ':')) {
+            bool type = a[2] == 't';
+            if ((type ? ntypes : nshots) == 1024) { fprintf(stderr, "speccy: at most 1024 %s\n", a); return 2; }
+            if (type) { types[ntypes].frame = atol(v); types[ntypes++].arg = strchr(v, ':') + 1; }
+            else { shots[nshots].frame = atol(v); shots[nshots++].arg = strchr(v, ':') + 1; }
+            i++;
+        }
+        else if (!strcmp(a, "--type-on") && v && strrchr(v, ':') && nons < 16) {
+            size_t n = (size_t)(strrchr(v, ':') - v);
+            snprintf(ons[nons].on, sizeof ons[nons].on, "%.*s", (int)n, v);
+            ons[nons++].text = strrchr(v, ':') + 1;
+            i++;
+        }
+        else if (!strcmp(a, "--exit-on") && v) { exit_on = v; i++; }
         else if (!strcmp(a, "-h") || !strcmp(a, "--help")) { usage(); return 0; }
         else if (a[0] != '-' && !tap) tap = a;
         else { usage(); return 2; }
@@ -247,13 +293,47 @@ int main(int argc, char **argv)
         for (long f = 0; f < frames_headless; f++) {
             if (tap && autoload && z.frames == AUTOLOAD_FRAME)
                 keys_type(&k, "j\"\"\n");      /* LOAD "" */
+            for (int i = 0; i < ntypes; i++)
+                if (types[i].frame == f)
+                    type_text(&k, types[i].arg);
             keys_frame(&k);
             z.keys = keys_down(&k);
             z.ula.draw = false;
             zx_frame(&z);
             zx_tape_motor(&z);
+            if ((nons || exit_on) && z.frames % 10 == 0 && !keys_busy(&k)) {
+                char text[24 * 33 + 1];
+                screen_text(&z, text);
+                if (exit_on && strstr(text, exit_on)) {
+                    fflush(stdout);
+                    fprintf(stderr, "speccy: \"%s\" at frame %llu\n", exit_on, (unsigned long long)z.frames);
+                    break;
+                }
+                for (int i = 0; i < nons; i++)
+                    if (strstr(text, ons[i].on)) {
+                        printf("== frame %llu: %s\n%s", (unsigned long long)z.frames, ons[i].on, text);
+                        type_text(&k, ons[i].text);
+                        break;
+                    }
+            }
+            for (int i = 0; i < nshots; i++)
+                if (shots[i].frame == f + 1) {
+                    char path[1024];
+                    snprintf(path, sizeof path, "%s.scr", shots[i].arg);
+                    FILE *fp = fopen(path, "wb");
+                    if (fp) {
+                        fwrite(&z.mem[0x4000], 1, 6912, fp);
+                        fclose(fp);
+                    }
+                    snprintf(path, sizeof path, "%s.txt", shots[i].arg);
+                    if ((fp = fopen(path, "w"))) {
+                        dump_text(&z, fp);
+                        fclose(fp);
+                    }
+                }
         }
         dump_text(&z, stdout);
+        fflush(stdout);
         if (tap)
             fprintf(stderr, "speccy: tape: block %u of %u, %d%%, %s; %u reads of port 0xFE last frame\n",
                     z.tape.blocks_done, z.tape.blocks, tape_percent(&z.tape),

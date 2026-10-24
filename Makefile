@@ -78,7 +78,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
-.PHONY: speccy speccy_rom speccy_test cfast cfast_bench cfast_identity cfast_single cfast_single_identity pinhash phase_identity zexrunner_tick timing_sdc timing_sdc_check equiv all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist event_sweep basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test verilator_z80test z80test_rtl halt2int halt2int_probe
+.PHONY: speccy speccy_rom speccy_test speccy_woodmass cfast cfast_bench cfast_identity cfast_single cfast_single_identity pinhash phase_identity zexrunner_tick timing_sdc timing_sdc_check equiv all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist traces compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist event_sweep basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test verilator_z80test z80test_rtl halt2int halt2int_probe
 
 all: cmodel ctest
 
@@ -718,6 +718,24 @@ $(BIN)/speccy_test: $(SPECCY)/test_ula.c $(SPECCY)/zx.c $(SPECCY)/ula.c $(SPECCY
 speccy_rom: $(BIN)/48.rom
 $(BIN)/48.rom:
 	$(PYTHON) $(SPECCY)/get_rom.py $@
+# Mark Woodmass's Z80 Test Suite (2008) on the machine, through the ROM: the
+# Flags test and the MEMPTR test, picked from its menu, every scroll?
+# answered; it fails unless all 47 and all 58 tests pass
+WOODMASS_TAP := $(TESTS)/woodmass/z80-test-suite-2008.tap
+speccy_woodmass: $(BIN)/speccy $(BIN)/48.rom
+	@set -e; for part in "1 Flags 47" "2 MEMPTR 58"; do \
+	  set -- $$part; log=$(BUILD)/woodmass_$$2.txt; \
+	  $(BIN)/speccy --frames 60000 --type 3100:$$1 --type-on 'scroll?:y' \
+	    --exit-on 'press a key' $(WOODMASS_TAP) > $$log 2>&1; \
+	  passed=$$(grep -E ': [0-9A-F]{4} passed$$' $$log | sort -u | wc -l | tr -d ' '); \
+	  failed=$$(grep -c failed $$log || true); \
+	  if grep -q 'All tests finished' $$log && [ "$$passed" = "$$3" ] && [ "$$failed" = 0 ]; then \
+	    echo "Woodmass $$2 test: all $$3 passed ($$log)"; \
+	  else \
+	    grep -E 'failed' $$log | sort -u; \
+	    echo "Woodmass $$2 test: $$passed of $$3 passed ($$log)"; exit 1; \
+	  fi; \
+	done
 
 cfast_single_identity: cfast_single pinhash
 	@$(PYTHON) $(SCRIPTS)/phase_identity.py --ref $(PHASE_REF) --new-exe $(BIN)/pinhash \
