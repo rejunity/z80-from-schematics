@@ -14,10 +14,11 @@ See `docs/flags.md`. Summary of the non-result-bit cases:
   silicon takes the leak from `A` only (no Q involvement). We model
   Zilog NMOS. Implementations that just `A | Q` (without `F XOR Q`)
   produce NEC-like output for chained SCF — a bug we hit and fixed
-  on the `perfect` branch. On the die (perfectz80) Q is also 0 after
-  `EX AF,AF'` and after a DD or FD prefix, and a RESET cut that writes F
-  (row 19's `f_cut`) sets Q to that F; the models don't do these three
-  yet (docs/known-differences.md rows 29-31, branch `nmos-q`).
+  on the `perfect` branch. On the die (perfectz80) Q is 0 after
+  `EX AF,AF'` and for the opcode after any prefix, and the flags a RESET
+  cut leaves pending -- F as row 19's `f_cut` left it -- are Q after the
+  restart (docs/flags.md "Q"; docs/known-differences.md rows 29-31). The
+  die has no Q register: Q is whether the M1 wrote flags left pending.
 - 16-bit `ADD/ADC/SBC`: X/Y from result high byte.
 - block `LD`/`CP`: X/Y from a derived temp, not the result.
 - **Block-instruction repeat** (Banks 2018): during the extra 5-T

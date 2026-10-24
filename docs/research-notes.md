@@ -328,9 +328,9 @@ The questions this file started with, and what settled them:
 
 1. **SCF/CCF XF/YF exact formula** and its NMOS vs CMOS variance — Zilog NMOS:
    `A | (F XOR Q)` (docs/undocumented.md), pinned by z80test, ZEXALL `<daa,cpl,scf,ccf>`
-   and FUSE. **Open:** three corners of Q differ from perfectz80 (`EX AF,AF'`, a DD / FD
-   prefix, a RESET cut; docs/known-differences.md rows 29-31), being fixed on branch
-   `nmos-q`.
+   and FUSE. Three corners of Q that differed from perfectz80 (`EX AF,AF'`, a prefix, a
+   RESET cut; docs/known-differences.md rows 29-31) are fixed; the die has no Q register
+   (docs/flags.md "Q"), and the event sweep now checks Q against it in every case.
 2. **WZ update on every instruction class** — the MEMPTR rules in docs/undocumented.md,
    pinned by z80memptr (160 / 160), ZEXALL's BIT tests and FUSE (which records WZ).
 3. **Exact interrupt-acceptance timing** — INT at the rising edge that starts the last

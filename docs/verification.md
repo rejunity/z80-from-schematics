@@ -40,7 +40,7 @@ reference.
 | 7 | C model ↔ iverilog ↔ Verilator, every phase of 14 trace programs | `make compare` | `parity-tests` | identical |
 | 8 | Trace programs against the die: control pins, address and data under WR every half-cycle | `make perfectz80`, `make perfectz80_rtl` | `parity-tests` | 14 / 14, C model and RTL |
 | 9 | Pin scenarios against the die (15 programs driving INT / NMI / WAIT / BUSREQ / RESET) | `make pin_scenarios`, `make pin_scenarios_rtl` | `parity-tests` | 15 / 15, C model and RTL |
-| 10 | The pin sweep against the die: pins and pad drivers every half-cycle, 37,846 cases (RESET / INT / NMI / BUSREQ / WAIT at every T-state, every opcode, 86 timing classes, the data latch, combinations, fuzz); C model = RTL every half-cycle | `make event_sweep` | `event-sweep` (4 shards; nightly also RESET at every half-cycle of every opcode, 27,768 cases, and fresh fuzz) | 37,846 / 37,846 |
+| 10 | The pin sweep against the die: pins and pad drivers every half-cycle, F, WZ and Q in T4.P of every M1, 51,126 cases (RESET / INT / NMI / BUSREQ / WAIT at every T-state, every opcode, 86 timing classes, the data latch, the Q / WZ groups, combinations, fuzz); C model = RTL every half-cycle | `make event_sweep` | `event-sweep` (4 shards; nightly also RESET at every half-cycle of every opcode, 27,768 cases, and fresh fuzz) | 51,126 / 51,126 |
 | 11 | Synthesised netlist (LibreLane, sky130) against the die: trace programs and pin scenarios | `make perfectz80_netlist`, `make pin_scenarios_netlist` | `librelane-netlist` | 14 / 14, 15 / 15 |
 | 12 | BASIC ROMs (NASCOM 4.7c, 1K Tiny BASIC) on the C model, the RTL and the netlist | `make basic_c_tests`, `basic_rtl_tests`, `basic_netlist_tests` | `basic-c-tests`, `basic-rtl-tests`, `librelane-basic-netlist` | 4 / 4 subtests each |
 | 13 | HALT-to-INT delays, ten INT positions, equal to the die's | `make halt2int` | `c-tests` | 10 / 10 |
@@ -76,11 +76,13 @@ bus_controls, compare).
   - **Equivalence of implementations** (layers 7, 10, 16, 17): C model =
     RTL = synthesised netlist = cfast, phase by phase.
 
-What no layer reads directly: the die's internal state beyond what the
-pins show and what FUSE's final state includes (registers, WZ, I, R);
-three Q differences found in October 2026 by probing the die showed
-that gap (see known-differences.md). Their fix, and Q, F and WZ recorded
-from perfectz80 next to the pins, are on branch `nmos-q`.
+What the event sweep reads besides the pins: F, WZ and Q, recorded from
+perfectz80 next to the pins and compared in T4.P of every M1 (docs/event-sweep.md
+"State"). Before, no layer read the die's internal state beyond what the
+pins show and what FUSE's final state includes; the state samples found
+three Q differences and WZ under a RESET cut (known-differences.md rows
+29-32, all resolved). The rest of the die's registers are still compared
+only through what the programs store.
 
 ## Notes from the record
 
