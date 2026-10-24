@@ -348,6 +348,13 @@ typedef struct {
        flags were pending at the last M1 (docs/flags.md "Q"). */
     uint8_t      q;
 
+    /* WZ as the die writes it, a byte at a time (wz_later): the value and
+       the T-states of the M-cycle under way in whose low half the die
+       writes Z and W (0: not this M-cycle). They land at the M-cycle's
+       end, or at a RESET cut that ends on a later T-state. */
+    uint16_t     wzp_v;
+    uint8_t      wzp_kz, wzp_kw;
+
     /* RESET, as the die does it (perfectz80; docs/timing.md "RESET"):
        the pin is sampled on every rising edge (res_s); the full reset res2
        takes that sample on the falling edge in the middle of each T-state,
