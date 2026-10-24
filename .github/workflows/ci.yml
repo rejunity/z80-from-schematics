@@ -224,7 +224,7 @@ jobs:
         run: make event_sweep EVENT_SWEEP_ARGS="--shard ${{ matrix.shard }}/4 ${{ matrix.shard == 0 && '--verify-recorded 50' || '' }}"
       - name: RESET at every half-cycle of every opcode (the nightly run)
         # Group opcodes_reset: 27,768 cases, recorded like the others, about
-        # 6 more minutes a shard; too long for every push.
+        # 10 more minutes a shard; too long for every push.
         if: github.event_name == 'schedule'
         run: make event_sweep EVENT_SWEEP_ARGS="--groups opcodes_reset --shard ${{ matrix.shard }}/4 --out build/event_sweep_opcodes_reset"
       - name: Fuzz with fresh seeds (the nightly run)

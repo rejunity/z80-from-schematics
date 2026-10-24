@@ -1,9 +1,11 @@
 # Bus-cycle trace programs
 
 Tiny Z80 hex programs used by the **C ↔ RTL** trace-comparison harness
-(`make compare`). Each program is loaded at address `0x0000`, run for **400
-phases** (or the count in an optional `<prog>.phases` file next to it) (= 200 T-states = 100 modern-clock cycles), and the per-phase bus-cycle
-trace produced by
+(`make compare`) and by the comparisons with the die (`make perfectz80`,
+`perfectz80_rtl`, `perfectz80_netlist`). Each program is loaded at address
+`0x0000`, run for **400 phases** (half T-states: 200 T-states), or the
+count in an optional `<prog>.phases` file next to it, and the per-phase
+bus-cycle trace produced by
 
   - the C model       (`scripts/tracegen.c`),
   - the iverilog sim  (`tests/iverilog/tb_z80.v`), and
@@ -29,12 +31,13 @@ The trace columns (one line per modern-clock phase) are:
 | `prog6_block.hex`     |  33  | ED block ops — `LDI` / `LDIR`, `CPI` / `CPIR` with both BC-exhausted and Z-hit terminations    |
 | `prog7_ddcb.hex`      |  25  | `DDCB` / `FDCB` — bit ops on `(IX+d)` including the undocumented copy-into-r[z] for `z ≠ 6`, plus `HALT` |
 | `prog10_exchange.hex` |  62  | exchange renaming — `EX DE,HL` in both banks across `EXX`, writes after renaming, both `EX AF,AF'` directions, `DD EB`, `EX (SP),HL` with DE/HL swapped; every pair pushed so the bus shows it. Runs 800 phases (`prog10_exchange.phases`) |
+| `prog9_q_banks.hex`   |  53  | F after every flag-writing operation, pushed so the bus shows it: an SCF / CCF chain across a non-flag instruction (Q), and LDIR / CPIR / INIR repeats (the Banks 2018 repeat flags). Runs 1200 phases (`prog9_q_banks.phases`); see [`prog9_q_banks.README.md`](prog9_q_banks.README.md) |
 | `prog8_nmi.hex`       |  16  | NMI handling — an NMI is pulsed at phase 30 by both the iverilog tb and the C tracegen; the acknowledge M1 (5 T-states, suppressed decode) plus the implicit `CALL 0x0066` are visible in the trace |
 
 The numbers in the "Size" column are byte counts; all programs fit in a single
 ROM-image hex file with no `@addr` directives (they all start at `0x0000`).
 
-Together the 8 programs cover every instruction-class category that contributes
+Together the 10 programs cover every instruction-class category that contributes
 to the bus-cycle protocol: M1 fetch, MRD operand, MWR write, IORQ R / W, refresh,
 prefix chaining, displacement reads, RMW, block-op interleave, NMI ACK and HALT.
 
@@ -60,8 +63,8 @@ seeds 1..4. To add more:
     scripts/gen_random_trace_progs.py 5 48 tests/traces/prog_rnd_05.hex
 
 Then re-run `make compare`, `make perfectz80`, and `make perfectz80_rtl`
-— the new program is auto-discovered (the compare script globs
-`prog_rnd_*.hex`).
+— the new program is auto-discovered (both compare scripts glob
+`tests/traces/*.hex`).
 
 The random programs surfaced one real loader-parity bug in
 `scripts/perfectz80_runner.c` (it didn't skip `#` / `//` comment lines —
@@ -110,16 +113,14 @@ the pin, `<pin>` is one of `nmi`, `int`, `wait`, `busreq`, `reset`, and
 | `prog22_wait_cpir.hex`        | WAIT on the T2 sample of `CPIR`'s read M-cycle (two Tw), the RTL's BC-1 edge; stops on a match, pushes BC / HL / AF. |
 | `prog23_wb_irq.hex`           | Register write-back across an interrupt response — prefixed instructions whose writes the die makes in the next M1 (`INC IXL`, `NEG`, `RLC B`, `LD IYL,A`, `LD A,I`, `RLC (IX+5)`, `LD A,(IX+5)`, `LD IXH,n`), each followed by an INTA (INT held low, `EI` before each) and the last (`DEC IXL`) by an NMI response; the handlers load through IX, IY, BC, DE, HL and AF so the registers show on the address bus. Runs 3600 phases. |
 
-`scripts/compare_signal_timing.py` now also compares `addr` (where
-`mreq`||`iorq` is low on both sides) and `data_o` (where `wr` is low on
-both sides) — reported as **informational** findings per-program. Only
-the 7 control pins gate `make perfectz80`'s exit code; the bus diff is
-visible but doesn't gate. Set `BUS_STRICT=1` in the environment to
-promote bus mismatches to gating too.
+`scripts/compare_signal_timing.py` compares, in every phase, the 7
+control pins and the address -- transfers, refreshes (I:R), and the
+internal and idle T-states, where the bus keeps its last address -- and
+`data_o` wherever `wr` is low on both sides; any difference fails, and so
+does a trace of the wrong length.
 
 `make pin_scenarios` (and `pin_scenarios_rtl` / `pin_scenarios_netlist`)
-fails on any control-pin or address difference from perfectz80, like
-`make perfectz80`. The INT scenarios hold INT low across an instruction's
+applies the same comparison to the pin scenarios. The INT scenarios hold INT low across an instruction's
 last T-state, where the CPU samples it, and release it after the INTA
 cycle; a pulse that ends before a sampling edge is never taken. Every
 harness puts 00 on the bus during INTA, so prog12's IM2 table read is at
