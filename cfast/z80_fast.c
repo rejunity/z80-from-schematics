@@ -58,9 +58,11 @@
 #if defined(__GNUC__)
 #define ZF_INLINE inline __attribute__((always_inline))
 #define ZF_NOINLINE __attribute__((noinline))
+#define ZF_FLATTEN __attribute__((flatten))     /* every call in it inlined */
 #else
 #define ZF_INLINE inline
 #define ZF_NOINLINE
+#define ZF_FLATTEN
 #endif
 
 /* register r as getr / setr (r) and getri / setri (ri) reach it, inlined
@@ -81,8 +83,11 @@ static ZF_INLINE void zf_set(z80_t *c, uint8_t r, bool ix, uint8_t v)
 }
 
 /* the ALU on the instruction's operation and flag mode (md): A and b, F and
-   Q as they stand, xy the bit ops' X / Y source; the result, F in *f */
-static inline uint8_t zf_alu(z80_t *c, uint8_t md, uint8_t b, uint8_t xy, uint8_t *f)
+   Q as they stand, xy the bit ops' X / Y source; the result, F in *f. Out
+   of line, with the model's ALU flattened into it: one call deep, where
+   GCC called zf_alu and it z80_alu (0.22 of each a Z80 instruction on
+   ZEXDOC), and one copy of z80_alu's 2 KB */
+static ZF_NOINLINE ZF_FLATTEN uint8_t zf_alu(z80_t *c, uint8_t md, uint8_t b, uint8_t xy, uint8_t *f)
 {
     const z80_control_t *ctl = &c->ctl;
     uint8_t r;
@@ -235,8 +240,12 @@ static ZF_INLINE void zf_begin_next(z80_t *c)
    leaves for the next M1 picks that M1's steps, 256 + ZK_* (z80_fast_enum.h);
    only ZK_MODEL records it the model's way (wb_defer). In fast mode the
    boundary starts an M1 of 4 T-states: an interrupt to accept goes to the
-   reference engine before (the M-cycle end steps), as do an NMI and a halt. */
-static unsigned zf_end_mcycle(z80_t *c)
+   reference engine before (the M-cycle end steps), as do an NMI and a halt.
+   z80f_run inlines it, z80_exec_step and all (9.6 KB), at the one M-cycle
+   end its steps share (zf_mend), so it is in the code once either way; out
+   of line it was a call at every M-cycle end, 2.5 a Z80 instruction on
+   ZEXDOC. z80f_tick calls zf_end_mcycle(). */
+static ZF_INLINE unsigned zf_end_mcycle_in(z80_t *c)
 {
     z80_exec_step(c);
     if (!c->instr_done)
@@ -249,6 +258,7 @@ static unsigned zf_end_mcycle(z80_t *c)
     zf_begin_next(c);
     return 256u + k;
 }
+static ZF_NOINLINE unsigned zf_end_mcycle(z80_t *c) { return zf_end_mcycle_in(c); }
 
 /* inputs only the reference engine handles */
 #define ZF_SLOW_IN (Z80_RES | Z80_BUSREQ | Z80_WAIT | Z80_NMI)
@@ -357,7 +367,7 @@ uint64_t z80f_tick(z80f_t *f, uint64_t pins)
 #define ZF_PHASE_BOUNDARY(next) ZF_PHASE(next)
 #define ZF_PHASE_CHK(next) ZF_PHASE(next)
 #define ZF_SLOW_AT(s)      return slow_tick(f, pins)
-#define ZF_GOTO_T1P(k)     ZF_GOTO_STEP(zf_template[k])
+#define ZF_END_MCYCLE()    ZF_GOTO_STEP(zf_template[zf_end_mcycle(c)])
 #define ZF_JUMP(s)         ((void)0)     /* after ZF_PHASE's return */
 #include "z80_fast_steps.h"
 #undef ZF_LABEL
@@ -368,7 +378,7 @@ uint64_t z80f_tick(z80f_t *f, uint64_t pins)
 #undef ZF_PHASE_BOUNDARY
 #undef ZF_PHASE_CHK
 #undef ZF_SLOW_AT
-#undef ZF_GOTO_T1P
+#undef ZF_END_MCYCLE
 #undef ZF_JUMP
 
 #if !ZF_GNU

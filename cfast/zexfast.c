@@ -35,12 +35,30 @@ static void bdos(const z80_t *c)
     fflush(stdout);
 }
 
-/* the next instruction is about to be fetched: count, trap, maybe stop */
-static int boundary(const z80_t *c)
+/* (ZF_INLINE is not defined yet in a ZEX_SINGLE build) */
+#if defined(__GNUC__)
+#define ZEX_INLINE inline __attribute__((always_inline))
+#define ZEX_NOINLINE __attribute__((noinline))
+#else
+#define ZEX_INLINE inline
+#define ZEX_NOINLINE
+#endif
+
+/* a BDOS call, with the writes of the next M1 made */
+static ZEX_NOINLINE void bdos_trap(const z80_t *c)
+{
+    bdos(z80_arch(c));
+}
+
+/* the next instruction is about to be fetched: count, trap, maybe stop.
+   Inline in the steps, as the other emulators' frames test inline (out of
+   line it took ZEXDOC 3.8 host instructions and 1.7 branches more a Z80
+   instruction) */
+static ZEX_INLINE int boundary(const z80_t *c)
 {
     if (++count >= max_instr) { hit_limit = 1; return 1; }
     if (c->rf[RFP_PC] == 0x0000) return 1;
-    if (c->rf[RFP_PC] == 0x0005) bdos(z80_arch(c));   /* the writes of the next M1 made */
+    if (c->rf[RFP_PC] == 0x0005) bdos_trap(c);
     return 0;
 }
 
