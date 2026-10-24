@@ -782,7 +782,7 @@ lockstep: cmodel
 # and prints LUT / carry / mux / FF counts (scripts/fpga_luts.sh,
 # scripts/fpga_luts_table.py). `make luts_netlist` then runs each mapped
 # netlist (yosys' own cell models flattened in) through the gate-level
-# testbench against perfectz80 (same 12 programs as perfectz80_netlist), so
+# testbench against perfectz80 (the 14 trace programs, as perfectz80_netlist), so
 # an area change is checked at the gates it produced.
 #
 # Toolchain: yowasp-yosys (WebAssembly yosys, pip) in .venv-fpga/, created
