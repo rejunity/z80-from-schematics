@@ -18,6 +18,9 @@
 #     (perfectz80_rtl, pin_scenarios_rtl: the RTL as the trace source)
 #   make lockstep   our model and four other emulators, instruction by
 #                   instruction over ZEXDOC3
+#   make redcode_tests  the reference emulator redcode/Z80 through every
+#                   suite and, instruction by instruction, the pin sweep's
+#                   recorded die traces (docs/redcode.md; by hand)
 #   make phase_identity  every pin of every phase vs PHASE_REF=<rev>
 #   make cfast      the phase engine generated from the timing tables
 #   make cfast_identity  cfast phase by phase vs PHASE_REF=<rev>
@@ -756,10 +759,13 @@ cfast_single_identity: cfast_single pinhash
 CFAST_BENCH_ARGS ?=
 BENCH_REFS := $(SCRIPTS)/refs
 BENCH_BINS := $(BIN)/bench_chips $(BIN)/bench_superzazu $(BIN)/bench_redcode $(BIN)/bench_suzukiplan
+# (Z80_WITH_ZILOG_NMOS_LD_A_IR_BUG: the NMOS LD A,I / LD A,R race, P/V
+# cleared when an INT is taken at their end; Z80_MODEL_ZILOG_NMOS asks for
+# it, but redcode compiles it in only with this)
 REDCODE_FLAGS := -I$(BENCH_REFS)/redcode_z80 -I$(BENCH_REFS)/redcode_z80/Zeta \
   -DZ80_STATIC -DZ80_WITH_LOCAL_HEADER -DZ80_WITH_EXECUTE -DZ80_WITH_Q \
   -DZ80_WITH_PARITY_COMPUTATION -DZ80_WITH_SPECIAL_RESET -DZ80_WITH_FULL_IM0 \
-  -DZ80_WITH_UNOFFICIAL_RETI
+  -DZ80_WITH_UNOFFICIAL_RETI -DZ80_WITH_ZILOG_NMOS_LD_A_IR_BUG
 
 cfast_bench: cfast $(BIN)/zexrunner $(BENCH_BINS)
 	@$(PYTHON) $(SCRIPTS)/cfast_bench.py --bin $(BIN) --out $(BUILD)/bench \
@@ -807,6 +813,58 @@ lockstep: cmodel
 	$(CXX) -std=gnu++17 -O2 -w -I$(SCRIPTS) -I$(CMODEL) $(REDCODE_FLAGS) \
 	  $(SCRIPTS)/lockstep_quint.c $(BUILD)/redcode_Z80.o $(CMODEL_LIB) -o $(BIN)/lockstep_quint
 	@$(BIN)/lockstep_quint tests/zex/zexdoc3.com 20000000
+
+# === redcode/Z80 through every test we have ================================
+# The reference emulator redcode/Z80 (scripts/refs/redcode_z80, built as
+# Zilog NMOS with REDCODE_FLAGS) through the instruction suites -- FUSE and
+# the six cases the die corrects, the X / Y corpus, z80test's five variants,
+# prelim, ZEXDOC, ZEXALL, both BASIC ROMs -- and, instruction by
+# instruction, through every event-sweep case against perfectz80's recorded
+# traces (make redcode_sweep: scripts/redcode_sweep.py around
+# scripts/event_sweep_redcode.c; docs/redcode.md has the results). By hand,
+# not in CI: redcode is a reference, not the replica.
+RC_DIR := $(BUILD)/redcode
+RC_OBJ := $(RC_DIR)/Z80.o
+RC_CC   = $(CC) -std=gnu11 -O2 -w $(REDCODE_FLAGS)
+RC_ZEX_MAX ?= 8000000000
+.PHONY: redcode_tests redcode_fuse redcode_xyflags redcode_z80test redcode_zex redcode_basic redcode_sweep redcode_sigrok
+$(RC_OBJ): $(BENCH_REFS)/redcode_z80/Z80.c $(BENCH_REFS)/redcode_z80/Z80.h
+	@mkdir -p $(RC_DIR)
+	$(RC_CC) -c $< -o $@
+$(BIN)/redcode_%: $(SCRIPTS)/redcode_%.c $(RC_OBJ)
+	@mkdir -p $(BIN)
+	$(RC_CC) -D_POSIX_C_SOURCE=200809L $< $(RC_OBJ) -o $@
+$(BIN)/event_sweep_redcode: $(SCRIPTS)/event_sweep_redcode.c $(RC_OBJ)
+	@mkdir -p $(BIN)
+	$(RC_CC) -D_POSIX_C_SOURCE=200809L $< $(RC_OBJ) -o $@
+
+redcode_fuse: $(BIN)/redcode_fuse_runner
+	@$(BIN)/redcode_fuse_runner tests/fuse/tests.in tests/fuse/tests.expected tests/fuse/silicon.expected
+
+redcode_xyflags: $(BIN)/redcode_fuse_runner $(XYFLAGS)/tests.in $(XYFLAGS)/tests.expected
+	@$(BIN)/redcode_fuse_runner $(XYFLAGS)/tests.in $(XYFLAGS)/tests.expected /dev/null
+
+redcode_z80test: $(BIN)/redcode_z80test_runner
+	@set -e; for v in $(Z80TEST_VARIANTS); do \
+	  $(BIN)/redcode_z80test_runner $(TESTS)/z80test/$$v.tap > $(RC_DIR)/$$v.log; \
+	  grep -q 'all tests passed' $(RC_DIR)/$$v.log || { tail -c 600 $(RC_DIR)/$$v.log; echo "redcode $$v: FAILED"; exit 1; }; \
+	  echo "redcode $$v: all tests passed"; done
+
+redcode_zex: $(BIN)/redcode_zex_runner
+	@set -e; for p in prelim zexdoc zexall; do \
+	  $(PYTHON) $(SCRIPTS)/run_zex.py --runner $(BIN)/redcode_zex_runner $$p $(RC_ZEX_MAX); done
+
+redcode_basic: $(BIN)/redcode_basicrunner
+	@$(TESTS)/basic/run_basic_tests.sh redcode
+
+REDCODE_SWEEP_ARGS ?=
+redcode_sweep: $(BIN)/event_sweep_redcode
+	@$(PYTHON) $(SCRIPTS)/redcode_sweep.py $(REDCODE_SWEEP_ARGS)
+
+redcode_sigrok: $(BIN)/event_sweep_redcode
+	@$(PYTHON) $(SCRIPTS)/sigrok_opcode_cycles.py --emulator redcode tests/sigrok/kc85-cpuclk.sr | tail -3
+
+redcode_tests: redcode_fuse redcode_xyflags redcode_z80test redcode_zex redcode_basic redcode_sigrok lockstep redcode_sweep
 
 # === FPGA LUT budget ========================================================
 # `make luts` synthesizes z80_top alone for iCE40 (synth_ice40 -abc9 -dsp),

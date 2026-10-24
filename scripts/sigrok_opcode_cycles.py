@@ -33,6 +33,10 @@ from collections import defaultdict, Counter
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DECODE = os.path.join(ROOT, "scripts/sigrok_z80_decode.py")
 TRACEGEN = os.path.join(ROOT, "build/bin/tracegen")
+# --emulator redcode: the reference emulator redcode/Z80 instead of the C
+# model, through scripts/event_sweep_redcode.c (make redcode_sigrok)
+REDCODE = os.path.join(ROOT, "build/bin/event_sweep_redcode")
+EMULATOR = "c"
 
 # Z80 documented T-state counts per opcode (unprefixed). For conditional
 # opcodes we list both (taken, not-taken). None = prefix or unhandled.
@@ -165,6 +169,10 @@ def emit_emulator_opcode_cycles(opcode):
         f.write(f"{opcode:02x}\n")
         for _ in range(8): f.write("00\n")
     try:
+        if EMULATOR == "redcode":    # its M1 T-states from the opcode on: the next one ends it
+            out = subprocess.check_output([REDCODE, "-m", "0100", "-r", "30", path]).decode()
+            m1s = [int(v[0]) for v in (l.split() for l in out.splitlines()) if len(v) == 4 and v[1] == "F"]
+            return m1s[1] - m1s[0] if len(m1s) > 1 else None
         out = subprocess.check_output([TRACEGEN, path, "60"], stderr=subprocess.DEVNULL).decode()
     finally:
         os.unlink(path)
@@ -194,7 +202,10 @@ def emit_emulator_opcode_cycles(opcode):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("sr")
+    ap.add_argument("--emulator", choices=("c", "redcode"), default="c")
     args = ap.parse_args()
+    global EMULATOR
+    EMULATOR = args.emulator
     cycles = decode(args.sr)
     starts = find_m1_starts(cycles)
     # for each consecutive pair, the duration is the T-state count of the

@@ -6,10 +6,12 @@
 #   netlist  — the Verilated LibreLane-synthesised sky130 gate-level
 #              netlist (sim_basic_netlist) — slow but the silicon-
 #              faithful gate of record for BASIC.
+#   redcode  — the reference emulator redcode/Z80 (redcode_basicrunner,
+#              make redcode_basic)
 # Verify expected substrings appear in stdout. Exit 0 if all subtests
 # pass; non-zero (and a printed list of failures) otherwise.
 #
-# Usage:  tests/basic/run_basic_tests.sh [c|rtl|netlist]   (default: c)
+# Usage:  tests/basic/run_basic_tests.sh [c|rtl|netlist|redcode]   (default: c)
 #
 # Each subtest:
 #   tests/basic/scripts/<name>.in     - lines fed to BASIC stdin
@@ -52,8 +54,16 @@ case "$MODE" in
       exit 2
     fi
     ;;
+  redcode)
+    BIN="$ROOT/build/bin/redcode_basicrunner"
+    SUITE_NAME="redcode/Z80"
+    if [ ! -x "$BIN" ]; then
+      echo "FAIL: redcode_basicrunner not built at $BIN — run \`make redcode_basic\`" >&2
+      exit 2
+    fi
+    ;;
   *)
-    echo "usage: $0 [c|rtl|netlist]" >&2
+    echo "usage: $0 [c|rtl|netlist|redcode]" >&2
     exit 2
     ;;
 esac
@@ -104,7 +114,7 @@ run_one() {
   local tmplog="/tmp/basic_test_${name}_$$.log"
   rm -f "$tmplog"
   case "$MODE" in
-    c)
+    c|redcode)
       prep_input "$in_file" \
         | stdbuf -oL "$BIN" $rom_args --max-instr $MAX_INSTR \
             ${sentinel:+--exit-on "$sentinel"} "$rom" 2>&1 \

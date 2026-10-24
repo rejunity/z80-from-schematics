@@ -15,17 +15,22 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUNNER = os.path.join(ROOT, "build", "bin", "zexrunner")
 
 def main():
-    which = sys.argv[1] if len(sys.argv) > 1 else "prelim"
-    max_instr = sys.argv[2] if len(sys.argv) > 2 else "4000000000"
+    # --runner EXE: another CP/M runner with the same output (make redcode_zex)
+    args = sys.argv[1:]
+    runner = RUNNER
+    if args[:1] == ["--runner"]:
+        runner, args = args[1], args[2:]
+    which = args[0] if len(args) > 0 else "prelim"
+    max_instr = args[1] if len(args) > 1 else "4000000000"
     com = os.path.join(ROOT, "tests", "zex", which + ".com")
 
-    if not os.path.exists(RUNNER):
-        raise SystemExit(f"missing {RUNNER} (run: make zexrunner)")
+    if not os.path.exists(runner):
+        raise SystemExit(f"missing {runner} (run: make zexrunner)")
     if not os.path.exists(com):
         raise SystemExit(f"missing {com}")
 
-    print(f"== running {which}.com through the C model ==")
-    proc = subprocess.Popen([RUNNER, com, max_instr], stdout=subprocess.PIPE,
+    print(f"== running {which}.com through {'the C model' if runner == RUNNER else os.path.basename(runner)} ==")
+    proc = subprocess.Popen([runner, com, max_instr], stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True, bufsize=1,
                             errors="replace")
     out_lines = []
