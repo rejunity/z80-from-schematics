@@ -1386,10 +1386,16 @@ module z80_core (
             wzp_kz_n = 3'd0; wzp_kw_n = 3'd0;
             // Q: the flags stay pending through the RESET only when the cut
             // ends after the T1 of the M1 they wait for, which took them in
-            // its T1.N, and before its T3.N writes them; else none are
-            // pending at the restart (perfectz80)
-            if (!rst_idle && !(m1_any && !bus_granted && (t_state >= 4'd2) &&
-                               (t_state <= ((bus_op == `BUSOP_INTA) ? m_len - 4'd1 : 4'd3))))
+            // its T1.N, and before its T3.N writes them -- for an INTA, by
+            // its second automatic Tw; or on the T1 of one with nothing
+            // waiting to be written, whose T1.N takes no new flags (the M1
+            // a restart begins, cut again); else none are pending at the
+            // restart (perfectz80)
+            if (!rst_idle && !(m1_any && !bus_granted &&
+                               (((t_state >= 4'd2) &&
+                                 (t_state <= ((bus_op == `BUSOP_INTA) ? 4'd4 : 4'd3))) ||
+                                ((t_state == 4'd1) &&
+                                 !(pend | pend1 | pf16 | pex_af | pex_x | pex_dh)))))
                 reg_q_n = 8'h00;
         end
     end
