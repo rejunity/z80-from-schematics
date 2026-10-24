@@ -119,12 +119,11 @@ Notes for each row:
      interrupt exit. The PC was correct at instruction boundaries but
      the intermediate trace diverged from perfectz80 by 145 / 200 phases
      on `prog13_halt_int`. The silicon-faithful convention now mirrors
-     perfectz80 exactly (bus addr 110 / 200 match, up from 107). FUSE
-     test `76` enters the known-FUSE-wrong list alongside the other
-     post-2014 silicon-faithful divergences. Mirrored to RTL
-     (`rtl/z80_core.v` `EXEC_HALT` + interrupt-accept paths). The
-     specific divergence redcode/Z80's end-to-end FUSE run also hit
-     (`scripts/redcode_fuse_runner.c` reports the same `76 PC=0001`).
+     perfectz80 exactly. FUSE test `76` expects FUSE's own PC; the die's
+     (`make fuse_pz80`) is in `tests/fuse/silicon.expected`, which the
+     runners check instead. Mirrored to RTL
+     (`rtl/z80_core.v` `EXEC_HALT` + interrupt-accept paths); redcode/Z80
+     does the same (`scripts/redcode_fuse_runner.c` gives `76 PC=0001`).
 
  10. `IN A,(n)` / `IN r,(C)` port-input value — FUSE expects port reads to
      return the high byte of the I/O address bus (`A` for `IN A,(n)`, `B` for
@@ -150,10 +149,10 @@ Notes for each row:
        (commit `9f1acb2`). C and RTL synced.
      - **WZ = PC + 1** during repeat (commit `b654110`) per
        boo-boo et al. 2006 MEMPTR / Rak's z80memptr 1.2a.
-     `make z80test` now passes 160 / 160 / 160. Some FUSE cases
-     (`edba_1`, `edb2_1`, `edbb_1`, `edb3_1`, `edb9_2`) had their
-     expected pre-Banks values; listed in
-     [tests/fuse/known-fuse-wrong.txt](../tests/fuse/known-fuse-wrong.txt).
+     `make z80test` passes every variant. FUSE's `edba_1`, `edb2_1`,
+     `edbb_1`, `edb3_1` and `edb9_2` expect pre-Banks values; the die's
+     (`make fuse_pz80`) are in
+     [tests/fuse/silicon.expected](../tests/fuse/silicon.expected).
 
  13. `LDIR` / `LDDR` / `INIR` / `INDR` Q-leak into next instruction —
      **resolved 2026-06-18** as part of #12 (the Banks fold-in is
@@ -192,9 +191,9 @@ Notes for each row:
      control-pin or address difference.
 
      `scripts/compare_signal_timing.py` (`make perfectz80` / `_rtl` /
-     `_netlist`, the 13 trace programs) gates on the same: every control
-     pin and the address in every half-cycle (row 18). It also compares
-     `data_o` wherever both sides drive WR: 100 % on every program.
+     `_netlist`, the 14 trace programs) gates on the same: every control
+     pin and the address in every half-cycle (row 18), and the data the
+     CPU drives wherever WR is low on both sides.
 
  15. **RTL clocking (`cmos-clock`) — RTL vs C-model reset / BUSREQ
      settle**. The RTL now runs on the Z80 clock with every core register
@@ -438,15 +437,16 @@ should gain a test that pins the chosen behaviour or escalates it.
 
 | Oracle                                                     | Workload                                            | Result                                                    |
 |------------------------------------------------------------|-----------------------------------------------------|-----------------------------------------------------------|
-| perfectz80, the die's transistor netlist (`make perfectz80` / `_rtl` / `_netlist`) | 13 trace programs, 200 phases each | every control pin and the address in every half-cycle: identical in the C model, the iverilog RTL and the LibreLane sky130 netlist |
+| perfectz80, the die's transistor netlist (`make perfectz80` / `_rtl` / `_netlist`) | 14 trace programs, 200 phases each | every control pin, the address and the data under WR in every half-cycle: identical in the C model, the iverilog RTL and the LibreLane sky130 netlist |
 | perfectz80, pin scenarios (`make pin_scenarios` / `_rtl` / `_netlist`) | 15 INT / NMI / WAIT / BUSREQ / RESET programs | identical, the same three paths |
 | perfectz80, the event sweep (`make event_sweep`)           | 37,846 cases (+ `opcodes_reset`, 27,768)            | identical in every half-cycle, the pads driven and the registers after a RESET included; the C model identical to the RTL |
 | Our RTL via iverilog + Verilator (`make compare`)          | 14 trace programs, 400 phases (more where a `.phases` file asks) | identical phase-by-phase across C, iverilog and Verilator |
-| cfast (`make cfast_identity`, `cfast_single_identity`)     | 3.44 G phases: ZEXDOC, z80test, the trace programs and pin scenarios, random soups and buses | every pin of every phase identical to the C model |
-| 5-way lockstep (`scripts/lockstep_quint.c`): superzazu, floooh/chips, suzukiplan, redcode | 7,022,691 instr. (ZEXDOC3)   | identical registers (F's X / Y masked: three of the four predate the 2018 block-repeat flags) |
-| FUSE corpus (Kendall 2006) (`make fuse`)                   | 1356 cases                                          | **1348 PASS + 8 known-FUSE-wrong (silicon-faithful)**     |
-| FUSE through RTL via iverilog (`make fuse_rtl`)            | 1356 cases                                          | **1348 PASS + 8 known-FUSE-wrong (matches C)**            |
-| Patrik Rak z80test (`make z80test`, C model; `make z80test_rtl`, Verilator) | doc / memptr / full, 160 tests each | **all pass** (the 4 SCF / CCF tests for NEC and ST parts are skipped as not this CPU) |
+| cfast (`make cfast_identity`, `cfast_single_identity`)     | 3.84 G phases: ZEXDOC, z80test, the trace programs and pin scenarios, random soups and buses | every pin of every phase identical to the C model |
+| 5-way lockstep (`make lockstep`): superzazu, floooh/chips, suzukiplan, redcode | 7,022,691 instr. (ZEXDOC3)   | identical registers (F whole against redcode; X / Y masked for the three that predate the 2018 block-repeat flags) |
+| FUSE corpus (Kendall 2006) (`make fuse`)                   | 1356 cases                                          | **1356 PASS**, none skipped (6 against the die's values, `tests/fuse/silicon.expected`) |
+| FUSE through RTL via iverilog (`make fuse_rtl`)            | 1356 cases                                          | **1356 PASS**                                             |
+| FUSE on perfectz80 (`make fuse_pz80`)                      | 1356 cases                                          | **1356 PASS**: the die agrees with FUSE's values in 1350, with `silicon.expected` in the other 6 |
+| Patrik Rak z80test (`make z80test`, C model; `make z80test_rtl`, Verilator) | z80doc / z80flags / z80memptr / z80full, 160 tests each | **all pass** (the 4 SCF / CCF tests for NEC and ST parts are skipped as not this CPU); z80ccf: 159 / 160, row 29 |
 | ZEXDOC / ZEXALL, C model (`make zexdoc`, `make zexall`)    | 5.76 G instr. each                                  | **67 / 67**, **67 / 67**                                  |
 | ZEXALL 14-test subset via Verilator RTL (`make zexall_subset_rtl`) | 550 M instr through Verilator                 | **14 / 14** PASS; ~25-55 min on CI                         |
 | Real KC85 silicon — sync   (`make silicon_cycles`)         | 50 classified opcodes (kc85-cpuclk.sr)              | **50 OK** (4 with /WAIT attribution); 0 emu mismatches    |

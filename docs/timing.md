@@ -228,10 +228,10 @@ the phase after the one read from: T3.P for an opcode, T3.N for read data
 
 `make halt2int` runs a focused CPU-only probe that sweeps INT-assert
 timing across the HALT NOP M-cycle and verifies the INT-to-INTA delay
-stays in the silicon-faithful 3..8 T-state range. FUSE's test `76`
-(`PC=halt_addr` after HALT) reflects the pre-Brewer convention and
-lives in `tests/fuse/known-fuse-wrong.txt`; our model and redcode/Z80
-both side with silicon.
+equals the die's at each of ten INT positions. FUSE's test `76`
+(`PC=halt_addr` after HALT) reflects the pre-Brewer convention; the
+die's PC (`make fuse_pz80`) is in `tests/fuse/silicon.expected`, which
+the runners check, and our model and redcode/Z80 both match it.
 
 ## BUSREQ / BUSACK
 

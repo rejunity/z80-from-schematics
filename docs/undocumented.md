@@ -49,9 +49,9 @@ WZ is an internal 16-bit temp, observable only via `BIT n,(HL)` X/Y. Update poin
   by Richard Chandler), the extra 5-T internal M-cycle of the repeat
   overwrites **WZ = PC + 1** (where PC is the post-rewind address =
   the original opcode address). FUSE's pre-2006 expected (`WZ = BC ±
-  1`) for the BC=1→0 corner is the outlier; the four affected cases
-  (`edba_1`, `edb2_1`, `edbb_1`, `edb3_1`) are in
-  `tests/fuse/known-fuse-wrong.txt`. We side with silicon.
+  1`) for the BC=1→0 corner is the outlier; for the four affected cases
+  (`edba_1`, `edb2_1`, `edbb_1`, `edb3_1`) the runners check the die's
+  values (`tests/fuse/silicon.expected`, from `make fuse_pz80`).
 - 16-bit `ADD/ADC/SBC HL,rp`: WZ = HL+1 (before the add).
 
 ## Undocumented opcodes

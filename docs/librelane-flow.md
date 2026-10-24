@@ -183,15 +183,16 @@ so the cells tie off their power pins.
 build/tb_z80_netlist.vvp +prog=<prog> +phases=<N>` and diffs the trace
 against perfectz80 like the C and RTL paths:
 
-- `make perfectz80_netlist`: the 13 trace programs (`prog1` .. `prog8_nmi`,
-  `prog10_exchange` and the four seeded-random `prog_rnd_*`), 200 phases
-  each;
+- `make perfectz80_netlist`: every trace program in `tests/traces/` -- 14:
+  `prog1` .. `prog10_exchange` and the four seeded-random `prog_rnd_*` --
+  200 phases each;
 - `make pin_scenarios_netlist`: the 15 pin scenarios with their `.events`;
 - `make basic_netlist_tests`: the BASIC ROMs' canned scripts on the same
   netlist built with Verilator (`sim_basic.cpp`; Verilator 5.030-5.048, see
   README.md).
 
-Each fails on any control-pin or address difference in any half-cycle.
+Each fails on any control-pin, address or (under WR) data difference in
+any half-cycle.
 
 ### CI
 

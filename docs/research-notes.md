@@ -140,8 +140,9 @@ because Zilog never specified it. ZEXALL + die analysis are the practical arbite
 - **Trust:** Very high — corroborated by Richard Chandler on NEC + Visual Z80
   Remix in Rak's v1.2a (z80test PR #3).
 - **Use here:** `cmodel/z80_core.c` + `rtl/z80_core.v` INIR/INDR/OTIR/OTDR
-  repeat branches; the four affected FUSE cases (`edba_1`, `edb2_1`,
-  `edbb_1`, `edb3_1`) live in `tests/fuse/known-fuse-wrong.txt`.
+  repeat branches; for the four affected FUSE cases (`edba_1`, `edb2_1`,
+  `edbb_1`, `edb3_1`) the runners check the die's values in
+  `tests/fuse/silicon.expected` (`make fuse_pz80`).
 
 ### Banks 2018 — block-instruction repeat-M-cycle flag fold-in
 - **URLs:**
@@ -156,8 +157,8 @@ because Zilog never specified it. ZEXALL + die analysis are the practical arbite
 - **Trust:** Very high (silicon-traced).
 - **Use here:** Block-repeat branches in `cmodel/z80_core.c` and
   `rtl/z80_core.v`; mirrors redcode's `INXR_OTXR_COMMON` (`scripts/refs/
-  redcode_z80/Z80.c`). FUSE's `edb9_2` CPDR-repeat case is one of the
-  known-FUSE-wrong entries.
+  redcode_z80/Z80.c`). For FUSE's `edb9_2` CPDR-repeat case the runners
+  check the die's value in `tests/fuse/silicon.expected`.
 
 ### Brewer 2014 — Z80 HALT-PC convention + Woodmass 2021 HALT2INT verification
 - **URLs:**
@@ -170,12 +171,11 @@ because Zilog never specified it. ZEXALL + die analysis are the practical arbite
   HALT2INT v3 is the real-hardware verification on a 48K Spectrum.
 - **Trust:** Very high.
 - **Use here:** `cmodel/z80_core.c` EXEC_HALT + NMI/INT begin_next paths;
-  `rtl/z80_core.v` likewise. `make halt2int` runs a focused CPU-only
-  HALT-to-INT T-state-timing probe (silicon range 3..8 T-states across
-  the M-cycle window). The Spectrum ULA contention and ROM dependencies
-  that prevent the full HALT2INT v3 from running headless on a CPU-only
-  model are tracked in `tests/woodmass/README.md`. FUSE's `76` is in
-  `tests/fuse/known-fuse-wrong.txt`.
+  `rtl/z80_core.v` likewise. `make halt2int` checks the INT-to-INTA
+  delay at ten INT positions in a HALT against the die's (perfectz80:
+  6 5 4 7 6 5 4 7 6 5 T-states). HALT2INT v3 itself needs a Spectrum
+  (its ULA contention and ROM); it isn't vendored. For FUSE's `76` the
+  runners check the die's PC in `tests/fuse/silicon.expected`.
 
 ### SCF/CCF flag behavior (the "flags" investigations, Q)
 - **Contributes:** SCF/CCF set XF/YF from A and the previous F: on Zilog NMOS parts
@@ -291,9 +291,9 @@ corrected; the kc85 capture earned its place as the gold standard.
   they encode *cycle-accurate bus events*, matching our trace philosophy.
 - **Type:** Emulator cores + test vectors.
 - **Use here:** superzazu/z80 in the lockstep; the FUSE corpus in `tests/fuse/`
-  (`make fuse`, `make fuse_rtl`: registers, memory and T-states, not the bus events;
-  the cases where FUSE's expected values differ from silicon are listed in
-  `tests/fuse/known-fuse-wrong.txt`).
+  (`make fuse`, `make fuse_rtl`, and `make fuse_pz80` on the die: registers, memory
+  and T-states, not the bus events; for the six cases where the die differs from
+  FUSE's expected values the runners check the die's, `tests/fuse/silicon.expected`).
 
 ### redcode/Z80 by Manuel Sainz de Baranda
 - **URL:** https://github.com/redcode/Z80
