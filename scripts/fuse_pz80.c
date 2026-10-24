@@ -93,7 +93,9 @@ static test_t *load_all(const char *path, int expected, int *n) {
     FILE *f = fopen(path, "r");
     if (!f) { perror(path); exit(2); }
     int cap = 2048; test_t *v = malloc(cap * sizeof *v); *n = 0;
-    while (*n < cap && read_case(f, &v[*n], expected)) (*n)++;
+    while (read_case(f, &v[*n], expected)) {
+        if (++*n == cap) { cap *= 2; v = realloc(v, cap * sizeof *v); }
+    }
     fclose(f);
     return v;
 }
@@ -120,8 +122,9 @@ static int build(const test_t *t, uint8_t *mem, const char **why) {
             mem[(t->mem[k].addr + j) & 0xFFFF] = t->mem[k].bytes[j];
             used[(t->mem[k].addr + j) & 0xFFFF] = 1;
         }
-    /* keep away from the case's PC, SP and WZ too */
-    for (int k = -8; k < 24; k++) used[(t->pc + k) & 0xFFFF] |= 2;
+    /* keep away from the case's PC, SP and WZ too, and from the preamble
+       itself, which ends at PC: a data area under it would be overwritten */
+    for (int k = -72; k < 24; k++) used[(t->pc + k) & 0xFFFF] |= 2;
     for (int k = -8; k < 8; k++) used[(t->sp + k) & 0xFFFF] |= 2;
     for (int k = -2; k < 2; k++) used[(t->memptr + k) & 0xFFFF] |= 2;
     static const unsigned bases[] = { 0x8000, 0xA000, 0xC000, 0x6000, 0x3000, 0xE000, 0x1000, 0x5000 };
