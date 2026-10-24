@@ -1,9 +1,10 @@
 # PLA decode & control word
 
 The decoder is a compact, ROM-like table that maps `(prefix_state, opcode)` to a
-**control word** of named lines. The exact bit layout lives in `cmodel/z80.h`
-(`z80_control_t`) and is mirrored by `localparam` bit positions in `rtl/z80_pla.v`;
-this document explains the structure and the conventions.
+**control word** of named lines. The exact fields live in `cmodel/z80.h`
+(`z80_control_t`); `rtl/z80_pla.v` outputs the same fields as ports, with the
+encodings in `rtl/z80_defs.vh`. This document explains the structure and the
+conventions.
 
 ## Opcode decomposition (Dinu fields)
 
@@ -52,9 +53,10 @@ decode. Using them keeps the table small and faithful instead of 256+ ad-hoc row
 
 ## Decoded control word
 
-The PLA produces a `z80_control_t` (see `cmodel/z80.h` for the exact struct; the RTL
-inlines an equivalent bundle of named signals into `rtl/z80_core.v`). Conceptual
-field groups:
+The PLA produces a `z80_control_t` (see `cmodel/z80.h` for the exact struct; the
+RTL's `z80_pla` module outputs the same fields, and `rtl/z80_execute.v` turns the
+class, the M-cycle and the T-state into the per-edge control word `ctl_*`,
+docs/architecture.md section 4). Conceptual field groups:
 
 | Group           | Field(s) (C names)                  | Purpose                                                          |
 |-----------------|-------------------------------------|------------------------------------------------------------------|
@@ -62,11 +64,11 @@ field groups:
 | Sequencer       | `seq` (`SEQ_*`)                     | M-cycle template selector (see below)                            |
 | Reg select      | `rf_src`, `rf_dst`                  | source / destination reg or pair (`y`, `z`, `rp_sel`, …)         |
 | ALU             | `alu_op` (`ALU_*`)                  | ALU operation; carry-in is selected per `flag_mode`              |
-| Flags           | `flag_mode` (`FM_*`)                | which flag-update rule fires (`docs/flags.md`)                   |
+| Flags           | `flag_mode` (`FLAG_*`)              | which flag-update rule fires (`docs/flags.md`)                   |
 | Addressing      | `addr_src`, `wz_op`                 | 16-bit source for the bus + MEMPTR / WZ update rule              |
 | Prefix / idx    | `idx`, `use_disp`                   | DD / FD index map (IX / IY) + need-displacement flag             |
 | Condition       | `cc` (`CC_*`)                       | condition-code selector for JR cc / JP cc / RET cc / CALL cc     |
-| Special         | `special` (`SPC_*`)                 | undocumented / edge-case hooks (DDCB copy, OUT (C),0, NEG, …)    |
+| Special         | `special` (`SPC_*`, C only)         | edge-case hooks: HALT, EI / DI, prefix bytes, CP's X / Y, the DDCB copy |
 
 ### Sequence templates (`seq`)
 
