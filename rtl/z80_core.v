@@ -112,6 +112,11 @@ module z80_core (
     // =======================================================================
     reg [7:0]  reg_i, reg_r, ir;
     reg [7:0]  reg_q;          // Q: F left by the previous F-modifying instruction, else 0
+    // WZ bytes the die writes inside the M-cycle under way (z80_execute's
+    // wz_later; cmodel's wzp_v / wzp_kz / wzp_kw): the value and the
+    // T-states in whose low half Z and W land (0: none)
+    reg [15:0] wzp_v;
+    reg [2:0]  wzp_kz, wzp_kw;
     reg [3:0]  t_state;
     reg [2:0]  m_cycle;
     reg [2:0]  bus_op;
@@ -165,6 +170,8 @@ module z80_core (
     reg        halted_n;
     reg [7:0]  tmp8_n, tmph_n;
     reg [7:0]  reg_q_n;
+    reg [15:0] wzp_v_n;
+    reg [2:0]  wzp_kz_n, wzp_kw_n;
     reg        nmi_pending_n, prev_nmi_n_n, ei_delay_n, suppress_decode_n, bus_granted_n;
     reg        nmi_sampled_n, int_sampled_n;
     reg        nmi_pending_mid;   // nmi_pending after the clock-high-half edge detect
@@ -684,6 +691,9 @@ module z80_core (
     wire [1:0]  ctl_bi;
     wire        ctl_bhi;
     wire [2:0]  ctl_pc, ctl_wz;
+    wire [1:0]  ctl_wzm;
+    wire        ctl_wzc;
+    wire [2:0]  ctl_wzp, ctl_wzkz, ctl_wzkw;
     wire [1:0]  ctl_sp, ctl_vec;
     wire        ctl_pw;
     wire [2:0]  ctl_pwi;
@@ -719,6 +729,7 @@ module z80_core (
         .ctl_ea_pc(ctl_ea_pc), .ctl_ea_d(ctl_ea_d),
         .ctl_db(ctl_db), .ctl_bi(ctl_bi), .ctl_bhi(ctl_bhi),
         .ctl_pc(ctl_pc), .ctl_wz(ctl_wz), .ctl_sp(ctl_sp), .ctl_vec(ctl_vec),
+        .ctl_wzm(ctl_wzm), .ctl_wzc(ctl_wzc), .ctl_wzp(ctl_wzp), .ctl_wzkz(ctl_wzkz), .ctl_wzkw(ctl_wzkw),
         .ctl_pw(ctl_pw), .ctl_pwi(ctl_pwi), .ctl_pws(ctl_pws),
         .ctl_bw(ctl_bw), .ctl_bwd(ctl_bwd), .ctl_bws(ctl_bws),
         .ctl_fw(ctl_fw), .ctl_fs(ctl_fs),
@@ -739,7 +750,7 @@ module z80_core (
     // =======================================================================
     wire [15:0] abus, idu, ea, al_in, a16;
     z80_addr u_addr (
-        .pc(r_pc), .sp(r_sp), .wz(r_wz), .hl(r_hl), .de(r_de), .bc(r_bc),
+        .pc(r_pc), .sp(r_sp), .wz(r_wz), .wzp(wzp_v), .hl(r_hl), .de(r_de), .bc(r_bc),
         .hlp(rf_hlp), .rp(rf_rp), .rbyte(rbyte), .a(A_cur), .i_reg(reg_i),
         .tmp8(tmp8), .b_dec(b_dec),
         .ctl_ab(ctl_ab), .ctl_ri(ctl_ri), .ctl_inc(ctl_inc),
@@ -1058,6 +1069,32 @@ module z80_core (
     // every port but the deferred writes moves on an advancing edge (and on a
     // cut that ends inside a WAIT: the T2 micro-ops' writes stand)
     wire we_norm = wr_edge || stall_cut;
+    // the WZ bytes waiting for this M-cycle land at its end, or at a RESET
+    // cut ending on a later T-state (in a Tw after T2: a T2 byte too); the
+    // ones the execute step writes from a read are blocked by a cut ending
+    // on that read's T3 (ctl_wzc)
+    wire wz_cut_tw = in_tw && (t_state == 4'd2);
+    wire wzl_z = (wzp_kz != 3'd0) && ((ex_edge && !cut) ||
+                 (cut && ((wzp_kz < t_state) || (wz_cut_tw && wzp_kz == 3'd2))));
+    wire wzl_w = (wzp_kw != 3'd0) && ((ex_edge && !cut) ||
+                 (cut && ((wzp_kw < t_state) || (wz_cut_tw && wzp_kw == 3'd2))));
+    wire wzi    = wz_we && we_norm && !(ctl_wzc && cut);
+    wire wzi_z  = wzi && ctl_wzm[0];
+    wire wzi_w  = wzi && ctl_wzm[1];
+    wire [15:0] wz_wd = {wzi_w ? wz_d[15:8] : wzl_w ? wzp_v[15:8] : r_wz[15:8],
+                         wzi_z ? wz_d[7:0]  : wzl_z ? wzp_v[7:0]  : r_wz[7:0]};
+    // the value a wz_later loads
+    reg [15:0] wzp_src;
+    always @* begin
+        case (ctl_wzp)
+            WZP_IDU:  wzp_src = idu;
+            WZP_EA:   wzp_src = ea;
+            WZP_A:    wzp_src = {A_cur, 8'h00};
+            WZP_QFA:  wzp_src = {(reg_q ^ F_cur) | A_cur, 8'h00};
+            WZP_IV:   wzp_src = {reg_i, tmp8};
+            default:  wzp_src = wzp_v;            // WZP_KEEP
+        endcase
+    end
     z80_regfile u_regs (
         .clk(clk), .por_n(por_n), .pc_clr(pc_clr), .we(we_norm || fire || fire1 || fire16), .ex_en(1'b1),
         .ex_dehl(pex_dh && e2 && !cut), .ex_af(pex_af && e1 && !cut), .exx(pex_x && e2 && !cut),
@@ -1069,7 +1106,7 @@ module z80_core (
         .f_we(fire ? fire_fw : fire1 ? !cut : fire16 ? 1'b1 : (ctl_fw && we_norm && !defer_now)),
         .f_d(fire16 ? (cut ? pf_cut : pf_val) : (fire && cut) ? f_cut : f_data),
         .pc_we(pc_we && we_norm), .pc_d(pc_d), .sp_we(sp_we && we_norm), .sp_d(sp_d),
-        .wz_we(wz_we && we_norm), .wz_d(wz_d),
+        .wz_we(wzi_z || wzi_w || wzl_z || wzl_w), .wz_d(wz_wd),
         .bc(r_bc), .de(r_de), .hl(r_hl), .af(r_af),
         .bc2(r_bc2), .de2(r_de2), .hl2(r_hl2), .af2(r_af2),
         .ix(r_ix), .iy(r_iy), .sp(r_sp), .pc(r_pc), .wz(r_wz),
@@ -1086,15 +1123,24 @@ module z80_core (
         prefix_n = prefix; iff1_n = iff1; iff2_n = iff2; im_n = im; halted_n = halted;
         tmp8_n = tmp8; tmph_n = tmph;
         reg_q_n = reg_q;
+        wzp_v_n = wzp_v; wzp_kz_n = wzp_kz; wzp_kw_n = wzp_kw;
+        // an M-cycle's end lands its WZ bytes (above) and the execute step
+        // may leave the next M-cycle's
+        if (ex_edge) begin
+            wzp_kz_n = 3'd0; wzp_kw_n = 3'd0;
+            if (ctl_wzp != WZP_NONE) begin wzp_v_n = wzp_src; wzp_kz_n = ctl_wzkz; wzp_kw_n = ctl_wzkw; end
+        end
         pend_n = pend; pend1_n = pend1; pend_rep_n = pend_rep; pend_pv_n = pend_pv;
         pf16_n = pf16; pf_val_n = pf_val; pf_cut_n = pf_cut; ph_val_n = ph_val;
         pex_af_n = pex_af; pex_x_n = pex_x; pex_dh_n = pex_dh;
         // the deferred writes land (a RESET cut ending here blocks them, but
         // F after a cut on T2): the decode held for them goes, and Q is the
-        // F they wrote, or 0
-        if (fire)  begin pend_n = 1'b0;  prefix_n = `PFX_NONE; if (!cut) reg_q_n = fire_fw ? f_data : 8'h00; end
-        if (fire1) begin pend1_n = 1'b0; prefix_n = `PFX_NONE; if (!cut) reg_q_n = f_data; end
-        if (fire16) begin pf16_n = 1'b0; if (!cut) reg_q_n = pf_val; end
+        // F written, or 0 -- after a cut too: flags the die has taken for
+        // this M1 stay pending through the RESET, and the M1 that restarts
+        // writes them; a cut ending on T1 loses them (perfectz80)
+        if (fire)  begin pend_n = 1'b0;  prefix_n = `PFX_NONE; reg_q_n = fire_fw ? (cut ? f_cut : f_data) : 8'h00; end
+        if (fire1) begin pend1_n = 1'b0; prefix_n = `PFX_NONE; reg_q_n = cut ? 8'h00 : f_data; end
+        if (fire16) begin pf16_n = 1'b0; reg_q_n = cut ? pf_cut : pf_val; end
         if (e1) pex_af_n = 1'b0;
         if (e2) begin pex_x_n = 1'b0; pex_dh_n = 1'b0; end
         // ADD / ADC / SBC HL: the sum at the first internal M-cycle's end --
@@ -1214,7 +1260,9 @@ module z80_core (
         end
         // last T-state of the M-cycle: the execute step
         else begin
-            if (ctl_prefix) prefix_n = pfx_next;
+            // a prefix's M1 takes the last instruction's flags and writes
+            // none: Q is 0 for the opcode after it
+            if (ctl_prefix) begin prefix_n = pfx_next; reg_q_n = 8'h00; end
             if (ctl_tmph) tmph_n = rbyte;
             case (ctl_iff)
                 IFF_DI:   begin iff1_n = 1'b0; iff2_n = 1'b0; end
@@ -1253,9 +1301,8 @@ module z80_core (
                 // Q: F if the instruction wrote F, else 0 (Sean Young 4.1; z80full
                 // 007 SCF+CCF, 102/103 INIR/INDR->NOP') -- the instructions that
                 // write F commit it with their F write (fire, fire1, fire16);
-                // EX AF,AF' the F it swaps in; the rest write none
-                reg_q_n = (defer_now || defer1_now || a16_now) ? reg_q :
-                          (fin_ok && ctl_ex_af) ? r_af2[7:0] : 8'h00;
+                // the rest, EX AF,AF' among them, write none
+                reg_q_n = (defer_now || defer1_now || a16_now) ? reg_q : 8'h00;
                 if (defer_now)  begin pend_n = 1'b1; pend_pv_n = iff2 & ~ldair_int; pend_rep_n = blk_rep_fin; end
                 if (defer1_now) begin pend1_n = 1'b1; pend_rep_n = blk_rep_fin; end
                 if (a16_now) pf16_n = 1'b1;
@@ -1336,6 +1383,14 @@ module z80_core (
             nmi_pending_n = 1'b0; bus_granted_n = 1'b0; srst_m1_n = 1'b0;
             in_tw_n = 1'b0;
             pend_n = 1'b0; pend1_n = 1'b0; pf16_n = 1'b0; pex_af_n = 1'b0; pex_x_n = 1'b0; pex_dh_n = 1'b0;
+            wzp_kz_n = 3'd0; wzp_kw_n = 3'd0;
+            // Q: the flags stay pending through the RESET only when the cut
+            // ends after the T1 of the M1 they wait for, which took them in
+            // its T1.N, and before its T3.N writes them; else none are
+            // pending at the restart (perfectz80)
+            if (!rst_idle && !(m1_any && !bus_granted && (t_state >= 4'd2) &&
+                               (t_state <= ((bus_op == `BUSOP_INTA) ? m_len - 4'd1 : 4'd3))))
+                reg_q_n = 8'h00;
         end
     end
 
@@ -1358,6 +1413,7 @@ module z80_core (
             nmi_sampled <= 1'b0; int_sampled <= 1'b0;
             suppress_decode <= 1'b0; bus_granted <= 1'b0; irq_seq <= 2'd0; im0_ins <= 1'b0;
             reg_q <= 8'h00;
+            wzp_v <= 16'h0000; wzp_kz <= 3'd0; wzp_kw <= 3'd0;
             pend <= 1'b0; pend1 <= 1'b0; pend_rep <= 1'b0; pend_pv <= 1'b0; pf16 <= 1'b0;
             pf_val <= 8'h00; pf_cut <= 8'h00; ph_val <= 8'h00;
             pex_af <= 1'b0; pex_x <= 1'b0; pex_dh <= 1'b0;
@@ -1379,6 +1435,7 @@ module z80_core (
             suppress_decode <= suppress_decode_n; bus_granted <= bus_granted_n; irq_seq <= irq_seq_n;
             im0_ins <= im0_ins_n;
             reg_q <= reg_q_n;
+            wzp_v <= wzp_v_n; wzp_kz <= wzp_kz_n; wzp_kw <= wzp_kw_n;
             pend <= pend_n; pend1 <= pend1_n; pend_rep <= pend_rep_n; pend_pv <= pend_pv_n; pf16 <= pf16_n;
             pf_val <= pf_val_n; pf_cut <= pf_cut_n; ph_val <= ph_val_n;
             pex_af <= pex_af_n; pex_x <= pex_x_n; pex_dh <= pex_dh_n;

@@ -17,7 +17,8 @@
    holds NMI low for the model until the next rising edge has seen it.
    The interrupting device (-v, -o) is the one in event_sweep_pz80.c; an IN
    reads what an OUT wrote to its address, FF before. -D is its data
-   window: data_in is dd in half-cycles r0 .. r1, vv in half-cycle w. */
+   window: data_in is dd in half-cycles r0 .. r1, vv in half-cycle w.
+   After the pins, each line has the model's F, WZ and Q. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -164,9 +165,11 @@ int main(int argc, char **argv) {
             }
             apply_events(p, rel);
             if (wait_low && !p->reset_n) { wait_low = false; p->wait_n = true; }
-            printf("%d %d %04x %02x %d %d %d %d %d %d %d %d %04x %02x %02x\n", rel, clk, p->addr, p->data_out,
+            printf("%d %d %04x %02x %d %d %d %d %d %d %d %d %04x %02x %02x %02x %04x %02x\n", rel, clk,
+                   p->addr, p->data_out,
                    p->mreq_n, p->iorq_n, p->rd_n, p->wr_n, p->m1_n, p->rfsh_n, p->halt_n, p->busack_n,
-                   p->addr_drive ? 0xffff : 0, p->data_drive ? 0xff : 0, p->ctl_drive ? 0xff : 0xf0);
+                   p->addr_drive ? 0xffff : 0, p->data_drive ? 0xff : 0, p->ctl_drive ? 0xff : 0xf0,
+                   s.cpu.rf[RFP_AF] & 0xff, s.cpu.rf[RFP_WZ], s.cpu.q);
             if (rel >= 2 * run - 1) break;
         }
         z80_sys_phase(&s);

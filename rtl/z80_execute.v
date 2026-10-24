@@ -67,6 +67,11 @@ module z80_execute (
     output reg         ctl_bhi,   //   ... high byte
     output reg  [2:0]  ctl_pc,   // PC / WZ loads
     output reg  [2:0]  ctl_wz,   // PC / WZ loads
+    output reg  [1:0]  ctl_wzm,  //   the bytes it writes: [0] Z, [1] W
+    output reg         ctl_wzc,  //   a byte read in its T3.N: a RESET cut ending here blocks it
+    output reg  [2:0]  ctl_wzp,  // WZ bytes the die writes inside the next M-cycle (wzp)
+    output reg  [2:0]  ctl_wzkz, //   the T-state in whose low half Z lands (0: none)
+    output reg  [2:0]  ctl_wzkw, //   ... W
     output reg  [1:0]  ctl_sp,   // SP load
     output reg  [1:0]  ctl_vec,   // vector for PC_VEC / WZ_VEC
     output reg         ctl_pw,   // pair write port
@@ -132,6 +137,7 @@ module z80_execute (
     task at_mem; input [2:0] bop; input [3:0] extra;
         begin
             if (mem_ea) begin ctl_ea_pc = 1'b0; ctl_ea_d = EA_RB; mstart(bop, AL_EA, extra); end
+            else if (mem_ri == RI_WZ) mstart(bop, AL_WZP, extra);   // IX+d: as it lands
             else at_pair(bop, mem_ri, extra);
         end
     endtask
@@ -162,6 +168,17 @@ module z80_execute (
     task wr_flags; input [2:0] src;
         begin ctl_fw = 1'b1; ctl_fs = src; end
     endtask
+    // WZ as the die writes it (cmodel wz_later / wz_land): bytes from the
+    // incrementer or the adder land in T2.N (T1.N, T5.N) of the next
+    // M-cycle -- held in z80_core's wzp until its end, or a RESET cut that
+    // ends after them; bytes read land in that read's T3.N (wz_rd: blocked
+    // by a cut ending on that T3)
+    task wz_later; input [2:0] src; input [2:0] kz; input [2:0] kw;
+        begin ctl_wzp = src; ctl_wzkz = kz; ctl_wzkw = kw; end
+    endtask
+    task wz_rd; input [2:0] src; input [1:0] bytes;
+        begin ctl_wz = src; ctl_wzm = bytes; ctl_wzc = 1'b1; end
+    endtask
     // A <- ALU result unless the op is CP, F <- ALU flags
     task alu_to_a;
         begin if (alu_op_w != `ALU_CP) wr_byte(BW_A, BS_ALU); wr_flags(FS_ALU); end
@@ -179,7 +196,7 @@ module z80_execute (
     task blk_repeat; input [2:0] fsrc;
         begin
             ctl_ab = AB_REG; ctl_ri = RI_PC; ctl_inc = INC_M2; ctl_pc = PC_IDU;
-            ctl_ea_pc = 1'b1; ctl_ea_d = EA_M1; ctl_wz = WZ_EA;
+            ctl_ea_pc = 1'b1; ctl_ea_d = EA_M1; wz_later(WZP_EA, 3'd2, 3'd2);   // WZ = PC+1 in its T2.N
             mstart(`BUSOP_INTERNAL, AL_ABUS, 4'd5);
         end
     endtask
@@ -198,6 +215,7 @@ module z80_execute (
         ctl_ea_pc = 1'b0; ctl_ea_d = EA_RB;
         ctl_db = DB_ZERO; ctl_bi = BI_PC; ctl_bhi = 1'b0;
         ctl_pc = PC_HOLD; ctl_sp = SP_HOLD; ctl_wz = WZ_HOLD; ctl_vec = VEC_RST;
+        ctl_wzm = 2'b11; ctl_wzc = 1'b0; ctl_wzp = WZP_NONE; ctl_wzkz = 3'd0; ctl_wzkw = 3'd0;
         ctl_pw = 1'b0; ctl_pwi = RI_RP; ctl_pws = PW_IDU;
         ctl_bw = 1'b0; ctl_bwd = BW_RI; ctl_bws = BS_RI;
         ctl_fw = 1'b0; ctl_fs = FS_ALU;
@@ -226,9 +244,6 @@ module z80_execute (
             end
             else if (latch_pos && bus_op == `BUSOP_M1 && !suppress_decode) begin
                 ctl_ri = RI_PC; ctl_inc = INC_P1; ctl_pc = PC_IDU;   // opcode fetch: PC+1
-            end else if (eff_exec == `EXEC_BLOCK && aux_w[2:1] == 2'd1 && m_cycle == 3'd3 &&
-                         t_state == 4'd1) begin                         // CPx: WZ, M3 T1
-                ctl_ri = RI_WZ; ctl_inc = aux_w[0] ? INC_M1 : INC_P1; ctl_wz = WZ_IDU;
             end
             // the block pointer steps in the T2.N of a bus cycle (the die's
             // edges: docs/timing.md "Register write-back") -- LDx HL in the
@@ -265,14 +280,14 @@ module z80_execute (
             op_fetch(4'd0);
         end else if (irq_seq == 2'd0 && idx_w != 2'd0 && use_disp_w && m_cycle == 3'd2
                      && eff_exec != `EXEC_LD_M_N) begin
-            ctl_ea_pc = 1'b0; ctl_ea_d = EA_RB; ctl_wz = WZ_EA;
+            ctl_ea_pc = 1'b0; ctl_ea_d = EA_RB; wz_later(WZP_EA, 3'd2, 3'd5);   // Z in T2.N, W in T5.N
             int_wz(4'd5);
         end else begin
             // LD (IX+d),n: WZ = IX+d while n is read (no internal cycle; the
             // n read is 2 T longer), then the operation runs one M-cycle in
             if (irq_seq == 2'd0 && idx_w != 2'd0 && use_disp_w &&
                 eff_exec == `EXEC_LD_M_N && m_cycle == 3'd2) begin
-                ctl_ea_pc = 1'b0; ctl_ea_d = EA_RB; ctl_wz = WZ_EA;
+                ctl_ea_pc = 1'b0; ctl_ea_d = EA_RB; wz_later(WZP_EA, 3'd2, 3'd5);   // in the n read
             end
             if (irq_seq == 2'd0 && idx_w != 2'd0 && use_disp_w) begin
                 mem_ri = RI_WZ;
@@ -294,14 +309,15 @@ module z80_execute (
             end
             `EXEC_DDCB: begin
                 ctl_cbx = 1'b1;
-                if (m_cycle == 3'd2) begin                // d -> Z; read op
-                    ctl_wz = WZ_Z; op_fetch(4'd0);
-                end else if (m_cycle == 3'd3) begin       // op -> tmph; WZ = IX+d
+                if (m_cycle == 3'd2) begin                // IX+d: Z in the op read's T2.N; read op
+                    ctl_ea_pc = 1'b0; ctl_ea_d = EA_RB; wz_later(WZP_EA, 3'd2, 3'd0);
+                    op_fetch(4'd0);
+                end else if (m_cycle == 3'd3) begin       // op -> tmph; W in the next T2.N
                     ctl_tmph = 1'b1;
-                    ctl_ea_pc = 1'b0; ctl_ea_d = EA_Z; ctl_wz = WZ_EA;
-                    mstart(`BUSOP_INTERNAL, AL_EA, 4'd2);
+                    wz_later(WZP_KEEP, 3'd0, 3'd2);
+                    mstart(`BUSOP_INTERNAL, AL_WZP, 4'd2);
                 end else if (m_cycle == 3'd4)
-                    at_pair(`BUSOP_MRD, RI_WZ, 4'd1);     // read (IX+d), 4 T
+                    mstart(`BUSOP_MRD, AL_WZP, 4'd1);     // read (IX+d), 4 T
                 else if (m_cycle == 3'd5) begin
                     if (ddcb_kind == `CB_BIT) ctl_fin = 1'b1;     // F in the next M1
                     else begin                            // F and the copy to r[z] too
@@ -354,13 +370,14 @@ module z80_execute (
             end
             `EXEC_ADD_HL_RP: begin
                 if (m_cycle == 3'd1) begin
-                    ctl_ab = AB_REG; ctl_ri = RI_HLP; ctl_inc = INC_P1; ctl_wz = WZ_IDU;  // WZ = HL+1
+                    ctl_ab = AB_REG; ctl_ri = RI_HLP; ctl_inc = INC_P1;
+                    wz_later(WZP_IDU, 3'd2, 3'd2);                   // WZ = HL+1 in its T2.N
                     at_pair(`BUSOP_INTERNAL, RI_HLP, 4'd4);         // the latch holds HL
                 end
                 // the die's M2 and M3: internal M-cycles of 4 and 3 T (BUSREQ
                 // can take the bus between them; perfectz80). L in M2's T3.N,
                 // H in M3's (the core holds it), F in the next M1 (the core)
-                else if (m_cycle == 3'd2) begin wr_byte(BW_HLPL, BS_A16); int_wz(4'd3); end
+                else if (m_cycle == 3'd2) begin wr_byte(BW_HLPL, BS_A16); mstart(`BUSOP_INTERNAL, AL_WZP, 4'd3); end
                 else begin wr_byte(BW_HLPH, BS_PH); ctl_fin = 1'b1; end
             end
 
@@ -404,9 +421,9 @@ module z80_execute (
             end
             `EXEC_JP, `EXEC_JP_CC: begin
                 if (m_cycle == 3'd1) op_fetch(4'd0);
-                else if (m_cycle == 3'd2) begin ctl_wz = WZ_Z; op_fetch(4'd0); end
+                else if (m_cycle == 3'd2) begin wz_rd(WZ_Z, 2'b01); op_fetch(4'd0); end
                 else begin
-                    ctl_wz = WZ_W;                        // MEMPTR = nn, taken or not
+                    wz_rd(WZ_W, 2'b10);                   // MEMPTR = nn, taken or not
                     if (exec_w == `EXEC_JP || cc_taken) ctl_pc = PC_NN;
                     ctl_fin = 1'b1;
                 end
@@ -414,8 +431,8 @@ module z80_execute (
             `EXEC_JR, `EXEC_JR_CC: begin
                 if (m_cycle == 3'd1) op_fetch(4'd0);
                 else if (m_cycle == 3'd2) begin
-                    if (eff_exec == `EXEC_JR || cc_taken) begin
-                        ctl_ea_pc = 1'b1; ctl_ea_d = EA_RB; ctl_pc = PC_EA; ctl_wz = WZ_EA;
+                    if (eff_exec == `EXEC_JR || cc_taken) begin   // WZ = PC+e: Z in T2.N, W in T5.N
+                        ctl_ea_pc = 1'b1; ctl_ea_d = EA_RB; ctl_pc = PC_EA; wz_later(WZP_EA, 3'd2, 3'd5);
                         int_wz(4'd5);
                     end else ctl_fin = 1'b1;
                 end else ctl_fin = 1'b1;
@@ -425,7 +442,7 @@ module z80_execute (
                 else if (m_cycle == 3'd2) op_fetch(4'd0);
                 else if (m_cycle == 3'd3) begin       // B-1 came in this read's T2
                     if (b_nz) begin
-                        ctl_ea_pc = 1'b1; ctl_ea_d = EA_RB; ctl_pc = PC_EA; ctl_wz = WZ_EA;
+                        ctl_ea_pc = 1'b1; ctl_ea_d = EA_RB; ctl_pc = PC_EA; wz_later(WZP_EA, 3'd2, 3'd5);
                         int_wz(4'd5);
                     end else ctl_fin = 1'b1;
                 end else ctl_fin = 1'b1;
@@ -433,9 +450,9 @@ module z80_execute (
 
             `EXEC_CALL, `EXEC_CALL_CC: begin
                 if (m_cycle == 3'd1) op_fetch(4'd0);
-                else if (m_cycle == 3'd2) begin ctl_wz = WZ_Z; op_fetch(4'd0); end
+                else if (m_cycle == 3'd2) begin wz_rd(WZ_Z, 2'b01); op_fetch(4'd0); end
                 else if (m_cycle == 3'd3) begin
-                    ctl_wz = WZ_W;                        // WZ = nn (MEMPTR, taken or not)
+                    wz_rd(WZ_W, 2'b10);                   // WZ = nn (MEMPTR, taken or not)
                     if (exec_w == `EXEC_CALL || cc_taken) at_pair(`BUSOP_INTERNAL, RI_PC, 4'd1);
                     else ctl_fin = 1'b1;
                 end
@@ -445,9 +462,9 @@ module z80_execute (
             end
             `EXEC_RET, `EXEC_RETN: begin
                 if (m_cycle == 3'd1) at_pair(`BUSOP_MRD, RI_SP, 4'd0);
-                else if (m_cycle == 3'd2) begin ctl_wz = WZ_Z; pop_next; end
+                else if (m_cycle == 3'd2) begin wz_rd(WZ_Z, 2'b01); pop_next; end
                 else begin
-                    pop_done; ctl_pc = PC_NN; ctl_wz = WZ_W;
+                    pop_done; ctl_pc = PC_NN; wz_rd(WZ_W, 2'b10);
                     if (eff_exec == `EXEC_RETN) ctl_iff = IFF_RETN;
                     ctl_fin = 1'b1;
                 end
@@ -458,14 +475,16 @@ module z80_execute (
                     if (cc_taken) at_pair(`BUSOP_MRD, RI_SP, 4'd0);
                     else ctl_fin = 1'b1;
                 end
-                else if (m_cycle == 3'd3) begin ctl_wz = WZ_Z; pop_next; end
-                else begin pop_done; ctl_pc = PC_NN; ctl_wz = WZ_W; ctl_fin = 1'b1; end
+                else if (m_cycle == 3'd3) begin wz_rd(WZ_Z, 2'b01); pop_next; end
+                else begin pop_done; ctl_pc = PC_NN; wz_rd(WZ_W, 2'b10); ctl_fin = 1'b1; end
             end
             `EXEC_RST: begin
                 if (m_cycle == 3'd1) at_pair(`BUSOP_INTERNAL, RI_PC, 4'd1);
                 else if (m_cycle == 3'd2) push_byte(BI_PC, 1'b1);
-                else if (m_cycle == 3'd3) push_byte(BI_PC, 1'b0);
-                else begin ctl_vec = VEC_RST; ctl_pc = PC_VEC; ctl_wz = WZ_VEC; ctl_fin = 1'b1; end
+                else if (m_cycle == 3'd3) begin           // Z = p in the first push's T3.N
+                    push_byte(BI_PC, 1'b0); ctl_vec = VEC_RST; wz_rd(WZ_VEC, 2'b01);
+                end
+                else begin ctl_vec = VEC_RST; ctl_pc = PC_VEC; wz_rd(WZ_VEC, 2'b10); ctl_fin = 1'b1; end
             end
             `EXEC_PUSH: begin
                 if (m_cycle == 3'd1) at_pair(`BUSOP_INTERNAL, RI_PC, 4'd1);
@@ -483,43 +502,49 @@ module z80_execute (
 
             `EXEC_LD_A_RP: begin
                 if (m_cycle == 3'd1) begin
-                    ctl_inc = INC_P1; ctl_wz = WZ_IDU;          // WZ = rp+1
+                    ctl_inc = INC_P1; wz_later(WZP_IDU, 3'd2, 3'd2);   // WZ = rp+1 in the read's T2.N
                     at_pair(`BUSOP_MRD, RI_RP, 4'd0);
                 end else begin wr_byte(BW_A, BS_RB); ctl_fin = 1'b1; end
             end
             `EXEC_LD_RP_A: begin
-                if (m_cycle == 3'd1) begin
-                    ctl_inc = INC_P1; ctl_wz = WZ_ALO;          // WZ = {A, rp.lo+1}
+                if (m_cycle == 3'd1) begin               // WZ = rp+1 in the write's T2.N
+                    ctl_inc = INC_P1; wz_later(WZP_IDU, 3'd2, 3'd2);
                     ctl_db = DB_REG; ctl_bi = BI_A; ctl_bhi = 1'b1;
                     at_pair(`BUSOP_MWR, RI_RP, 4'd0);
-                end else ctl_fin = 1'b1;
+                end else begin wz_rd(WZ_ALO, 2'b10); ctl_fin = 1'b1; end   // W = A in its T3.N
             end
+            // W = (Q ^ F) | A in the operand read's T1.N (the M1's AF access
+            // on the bus with A), Z and W the operand bytes, WZ = nn+1 in the
+            // transfer's T2.N (and W = A in the write's T3.N)
             `EXEC_LD_A_NN: begin
-                if (m_cycle == 3'd1) op_fetch(4'd0);
-                else if (m_cycle == 3'd2) begin ctl_wz = WZ_Z; op_fetch(4'd0); end
+                if (m_cycle == 3'd1) begin wz_later(WZP_QFA, 3'd0, 3'd1); op_fetch(4'd0); end
+                else if (m_cycle == 3'd2) begin wz_rd(WZ_Z, 2'b01); op_fetch(4'd0); end
                 else if (m_cycle == 3'd3) begin
-                    ctl_ab = AB_NN; ctl_inc = INC_P1; ctl_wz = WZ_IDU;   // WZ = nn+1
+                    wz_rd(WZ_W, 2'b10);
+                    ctl_ab = AB_NN; ctl_inc = INC_P1; wz_later(WZP_IDU, 3'd2, 3'd2);   // WZ = nn+1
                     mstart(`BUSOP_MRD, AL_ABUS, 4'd0);
                 end else begin wr_byte(BW_A, BS_RB); ctl_fin = 1'b1; end
             end
             `EXEC_LD_NN_A: begin
-                if (m_cycle == 3'd1) op_fetch(4'd0);
-                else if (m_cycle == 3'd2) begin ctl_wz = WZ_Z; op_fetch(4'd0); end
+                if (m_cycle == 3'd1) begin wz_later(WZP_QFA, 3'd0, 3'd1); op_fetch(4'd0); end
+                else if (m_cycle == 3'd2) begin wz_rd(WZ_Z, 2'b01); op_fetch(4'd0); end
                 else if (m_cycle == 3'd3) begin
-                    ctl_ab = AB_NN; ctl_inc = INC_P1; ctl_wz = WZ_ALO;   // WZ = {A, n.lo+1}
+                    wz_rd(WZ_W, 2'b10);
+                    ctl_ab = AB_NN; ctl_inc = INC_P1; wz_later(WZP_IDU, 3'd2, 3'd2);   // WZ = nn+1
                     ctl_db = DB_REG; ctl_bi = BI_A; ctl_bhi = 1'b1;
                     mstart(`BUSOP_MWR, AL_ABUS, 4'd0);
-                end else ctl_fin = 1'b1;
+                end else begin wz_rd(WZ_ALO, 2'b10); ctl_fin = 1'b1; end   // W = A
             end
             `EXEC_LD_HL_NN, `EXEC_LD_RP_NNA: begin
                 if (m_cycle == 3'd1) op_fetch(4'd0);
-                else if (m_cycle == 3'd2) begin ctl_wz = WZ_Z; op_fetch(4'd0); end
+                else if (m_cycle == 3'd2) begin wz_rd(WZ_Z, 2'b01); op_fetch(4'd0); end
                 else if (m_cycle == 3'd3) begin
-                    ctl_ab = AB_NN; ctl_inc = INC_P1; ctl_wz = WZ_IDU;   // WZ = nn+1
+                    wz_rd(WZ_W, 2'b10);
+                    ctl_ab = AB_NN; ctl_inc = INC_P1; wz_later(WZP_IDU, 3'd2, 3'd2);   // WZ = nn+1
                     mstart(`BUSOP_MRD, AL_ABUS, 4'd0);
                 end else if (m_cycle == 3'd4) begin                       // read (nn+1) at WZ
                     wr_byte((eff_exec == `EXEC_LD_HL_NN) ? BW_HLPL : BW_RPL, BS_RB);
-                    at_pair(`BUSOP_MRD, RI_WZ, 4'd0);
+                    mstart(`BUSOP_MRD, AL_WZP, 4'd0);
                 end else begin
                     wr_byte((eff_exec == `EXEC_LD_HL_NN) ? BW_HLPH : BW_RPH, BS_RB);
                     ctl_fin = 1'b1;
@@ -527,42 +552,47 @@ module z80_execute (
             end
             `EXEC_LD_NN_HL, `EXEC_LD_NNA_RP: begin
                 if (m_cycle == 3'd1) op_fetch(4'd0);
-                else if (m_cycle == 3'd2) begin ctl_wz = WZ_Z; op_fetch(4'd0); end
+                else if (m_cycle == 3'd2) begin wz_rd(WZ_Z, 2'b01); op_fetch(4'd0); end
                 else if (m_cycle == 3'd3) begin
-                    ctl_ab = AB_NN; ctl_inc = INC_P1; ctl_wz = WZ_IDU;   // WZ = nn+1
+                    wz_rd(WZ_W, 2'b10);
+                    ctl_ab = AB_NN; ctl_inc = INC_P1; wz_later(WZP_IDU, 3'd2, 3'd2);   // WZ = nn+1
                     ctl_db = DB_REG; ctl_bhi = 1'b0;
                     ctl_bi = (eff_exec == `EXEC_LD_NN_HL) ? BI_HLP : BI_RP;
                     mstart(`BUSOP_MWR, AL_ABUS, 4'd0);
                 end else if (m_cycle == 3'd4) begin                       // write (nn+1) at WZ
                     ctl_db = DB_REG; ctl_bhi = 1'b1;
                     ctl_bi = (eff_exec == `EXEC_LD_NN_HL) ? BI_HLP : BI_RP;
-                    at_pair(`BUSOP_MWR, RI_WZ, 4'd0);
+                    mstart(`BUSOP_MWR, AL_WZP, 4'd0);
                 end else ctl_fin = 1'b1;
             end
 
+            // W = A in the operand read's T1.N, Z = n in its T3.N, WZ = {A,n}+1
+            // in the I/O cycle's T2.N (and OUT's W = A in its last T-state's)
             `EXEC_IN_A_N: begin
-                if (m_cycle == 3'd1) op_fetch(4'd0);
+                if (m_cycle == 3'd1) begin wz_later(WZP_A, 3'd0, 3'd1); op_fetch(4'd0); end
                 else if (m_cycle == 3'd2) begin
-                    ctl_ab = AB_AN; ctl_inc = INC_P1; ctl_wz = WZ_IDU;   // WZ = {A,n}+1
+                    wz_rd(WZ_Z, 2'b01);
+                    ctl_ab = AB_AN; ctl_inc = INC_P1; wz_later(WZP_IDU, 3'd2, 3'd2);   // WZ = {A,n}+1
                     mstart(`BUSOP_IORD, AL_ABUS, 4'd0);
                 end else begin wr_byte(BW_A, BS_RB); ctl_fin = 1'b1; end
             end
             `EXEC_OUT_N_A: begin
-                if (m_cycle == 3'd1) op_fetch(4'd0);
+                if (m_cycle == 3'd1) begin wz_later(WZP_A, 3'd0, 3'd1); op_fetch(4'd0); end
                 else if (m_cycle == 3'd2) begin
-                    ctl_ab = AB_AN; ctl_inc = INC_P1; ctl_wz = WZ_ALO;   // WZ = {A, n+1}
+                    wz_rd(WZ_Z, 2'b01);
+                    ctl_ab = AB_AN; ctl_inc = INC_P1; wz_later(WZP_IDU, 3'd2, 3'd2);   // WZ = {A,n}+1
                     ctl_db = DB_REG; ctl_bi = BI_A; ctl_bhi = 1'b1;
                     mstart(`BUSOP_IOWR, AL_ABUS, 4'd0);
-                end else ctl_fin = 1'b1;
+                end else begin wz_rd(WZ_ALO, 2'b10); ctl_fin = 1'b1; end   // W = A
             end
-            `EXEC_EX_SP_HL: begin
-                if (m_cycle == 3'd1) at_pair(`BUSOP_MRD, RI_SP, 4'd0);
+            `EXEC_EX_SP_HL: begin                       // WZ = SP+1 in the first read's T2.N
+                if (m_cycle == 3'd1) begin wz_later(WZP_IDU, 3'd2, 3'd2); at_pair(`BUSOP_MRD, RI_SP, 4'd0); end
                 else if (m_cycle == 3'd2) begin
-                    ctl_wz = WZ_Z;                                        // (SP) -> Z
+                    wz_rd(WZ_Z, 2'b01);                                   // (SP) -> Z
                     ctl_ab = AB_REG; ctl_ri = RI_SP; ctl_inc = INC_P1;
                     mstart(`BUSOP_MRD, AL_IDU, 4'd1);
                 end else if (m_cycle == 3'd3) begin
-                    ctl_wz = WZ_W;                                        // (SP+1) -> W
+                    ctl_wz = WZ_W; ctl_wzm = 2'b10;                       // (SP+1) -> W, its T3.N (of 4)
                     ctl_ab = AB_REG; ctl_ri = RI_SP; ctl_inc = INC_P1;
                     ctl_db = DB_REG; ctl_bi = BI_HLP; ctl_bhi = 1'b1;
                     mstart(`BUSOP_MWR, AL_IDU, 4'd0);
@@ -593,10 +623,12 @@ module z80_execute (
 
             // ---------- ED page (non-block) ----------
             `EXEC_ADC16, `EXEC_SBC16: begin                   // internal 4 + 3 T, as ADD; the
-                if (m_cycle == 3'd1) at_pair(`BUSOP_INTERNAL, RI_HL, 4'd4);   // sum at the first
-                else if (m_cycle == 3'd2) begin                               // one's end, where
-                    ctl_inc = INC_P1; ctl_wz = WZ_IDU;                        // the die has L
-                    wr_byte(BW_HLPL, BS_A16);                                 // WZ = HL+1, the
+                if (m_cycle == 3'd1) begin                                    // sum at the first
+                    wz_later(WZP_IDU, 3'd2, 3'd2);                            // one's end, where
+                    at_pair(`BUSOP_INTERNAL, RI_HL, 4'd4);                    // WZ = HL+1 in T2.N
+                end else if (m_cycle == 3'd2) begin                           // the die has L
+                    ctl_inc = INC_P1;
+                    wr_byte(BW_HLPL, BS_A16);                                 // HL+1, the
                     ctl_ab = AB_REG; ctl_ri = RI_HL; mstart(`BUSOP_INTERNAL, AL_IDU, 4'd3);  // latch's
                 end else begin wr_byte(BW_HLPH, BS_PH); ctl_fin = 1'b1; end   // H; F in the next M1
             end
@@ -615,7 +647,7 @@ module z80_execute (
             end
             `EXEC_IN_C: begin
                 if (m_cycle == 3'd1) begin
-                    ctl_inc = INC_P1; ctl_wz = WZ_IDU;          // WZ = BC+1
+                    ctl_inc = INC_P1; wz_later(WZP_IDU, 3'd2, 3'd2);   // WZ = BC+1 in the I/O T2.N
                     at_pair(`BUSOP_IORD, RI_BC, 4'd0);
                 end else begin
                     wr_byte(BW_R8, BS_RB);                     // r[y]; y=6 writes nothing
@@ -624,7 +656,7 @@ module z80_execute (
             end
             `EXEC_OUT_C: begin
                 if (m_cycle == 3'd1) begin
-                    ctl_inc = INC_P1; ctl_wz = WZ_IDU;          // WZ = BC+1
+                    ctl_inc = INC_P1; wz_later(WZP_IDU, 3'd2, 3'd2);   // WZ = BC+1 in the I/O T2.N
                     ctl_db = DB_R8;                            // r[y]; y=6 sends 0 (NMOS)
                     at_pair(`BUSOP_IOWR, RI_BC, 4'd0);
                 end else ctl_fin = 1'b1;
@@ -632,13 +664,13 @@ module z80_execute (
             `EXEC_RRD, `EXEC_RLD: begin
                 if (m_cycle == 3'd1) at_pair(`BUSOP_MRD, RI_HL, 4'd0);
                 else if (m_cycle == 3'd2) begin
-                    ctl_ab = AB_REG; ctl_ri = RI_HL; ctl_inc = INC_P1; ctl_wz = WZ_IDU;  // WZ = HL+1
                     int_wz(4'd4);
                 end else if (m_cycle == 3'd3) begin
                     // the (HL) byte is still in tmp8 and A is untouched: the
                     // ALU forms A and the flags (FLAG_RRD / FLAG_RLD), the new
                     // (HL) byte is nibble routing
                     ctl_db = DB_RRD; at_pair(`BUSOP_MWR, RI_HL, 4'd0);   // A and F in the next M1
+                    wz_later(WZP_IDU, 3'd2, 3'd2);                       // WZ = HL+1 in the write's T2.N
                 end else ctl_fin = 1'b1;
             end
 
@@ -660,7 +692,9 @@ module z80_execute (
                 2'd1: begin                                   // CPI CPD CPIR CPDR
                     if (m_cycle == 3'd1) at_pair(`BUSOP_MRD, RI_HL, 4'd0);
                     else if (m_cycle == 3'd2) begin
-                        // HL stepped at M2 T2, WZ at M3 T1, BC at M3 T4
+                        // HL stepped at M2 T2, WZ in M3's T2.N, BC at M3 T4
+                        ctl_ab = AB_REG; ctl_ri = RI_WZ; ctl_inc = aux_w[0] ? INC_M1 : INC_P1;
+                        wz_later(WZP_IDU, 3'd2, 3'd2);
                         int_wz(4'd5);
                     end else if (m_cycle == 3'd3) begin       // F in the next M1
                         if (aux_w[3] && bc_nz && !zf) blk_repeat(FS_BLD);
@@ -670,7 +704,8 @@ module z80_execute (
                 2'd2: begin                                   // INI IND INIR INDR
                     if (m_cycle == 3'd1) at_pair(`BUSOP_INTERNAL, RI_PC, 4'd1);
                     else if (m_cycle == 3'd2) begin
-                        ctl_inc = aux_w[0] ? INC_M1 : INC_P1; ctl_wz = WZ_IDU;  // WZ = BC +/- 1
+                        ctl_inc = aux_w[0] ? INC_M1 : INC_P1;      // WZ = BC +/- 1 in its T2.N
+                        wz_later(WZP_IDU, 3'd2, 3'd2);
                         at_pair(`BUSOP_IORD, RI_BC, 4'd0);
                     end else if (m_cycle == 3'd3) begin
                         ctl_db = DB_RB;                       // data stays in tmp8 for the flags
@@ -685,7 +720,8 @@ module z80_execute (
                     if (m_cycle == 3'd1) at_pair(`BUSOP_INTERNAL, RI_PC, 4'd1);
                     else if (m_cycle == 3'd2) at_pair(`BUSOP_MRD, RI_HL, 4'd0);
                     else if (m_cycle == 3'd3) begin       // B-1 came at M3 T2: out to BC
-                        ctl_ab = AB_REG; ctl_ri = RI_BC; ctl_inc = aux_w[0] ? INC_M1 : INC_P1; ctl_wz = WZ_IDU;
+                        ctl_ab = AB_REG; ctl_ri = RI_BC; ctl_inc = aux_w[0] ? INC_M1 : INC_P1;
+                        wz_later(WZP_IDU, 3'd2, 3'd2);         // WZ = BC +/- 1 in its T2.N
                         ctl_db = DB_RB;
                         mstart(`BUSOP_IOWR, AL_ABUS, 4'd0);
                     end else if (m_cycle == 3'd4) begin
@@ -700,26 +736,36 @@ module z80_execute (
             // ---------- interrupt acceptance sequences ----------
             `EXEC_NMI: begin
                 if (m_cycle == 3'd1) push_byte(BI_PC, 1'b1);
-                else if (m_cycle == 3'd2) push_byte(BI_PC, 1'b0);
-                else begin ctl_vec = VEC_NMI; ctl_pc = PC_VEC; ctl_wz = WZ_VEC; ctl_fin = 1'b1; end
+                else if (m_cycle == 3'd2) begin            // Z = 66 in the first push's T3.N
+                    push_byte(BI_PC, 1'b0); ctl_vec = VEC_NMI; wz_rd(WZ_VEC, 2'b01);
+                end
+                else begin ctl_vec = VEC_NMI; ctl_pc = PC_VEC; wz_rd(WZ_VEC, 2'b10); ctl_fin = 1'b1; end
             end
             `EXEC_INT: begin
+                // WZ: IM 1 / IM 0 RST p, Z = p in the first push's T3.N, W = 00
+                // in the second's; IM 2, {I, vector} in the second push's T2.N
+                // (Z) and T3.N (W), I:vector+1 in the table read's T2.N, then
+                // the table's bytes in their reads' T3.N
                 if (m_cycle == 3'd1) push_byte(BI_PC, 1'b1);
-                else if (m_cycle == 3'd2) push_byte(BI_PC, 1'b0);
+                else if (m_cycle == 3'd2) begin
+                    push_byte(BI_PC, 1'b0);
+                    if (im == 2'd2) wz_later(WZP_IV, 3'd2, 3'd3);
+                    else begin ctl_vec = VEC_IM; wz_rd(WZ_VEC, 2'b01); end
+                end
                 else if (m_cycle == 3'd3) begin
                     if (im == 2'd2) begin
-                        ctl_wz = WZ_IV; ctl_ab = AB_IV;           // WZ = {I, vector}
+                        ctl_ab = AB_IV; ctl_inc = INC_P1; wz_later(WZP_IDU, 3'd2, 3'd2);
                         mstart(`BUSOP_MRD, AL_ABUS, 4'd0);
                     end else begin
-                        ctl_vec = VEC_IM; ctl_pc = PC_VEC; ctl_wz = WZ_VEC; ctl_fin = 1'b1;
+                        ctl_vec = VEC_IM; ctl_pc = PC_VEC; wz_rd(WZ_VEC, 2'b10); ctl_fin = 1'b1;
                     end
                 end
                 else if (m_cycle == 3'd4) begin
-                    ctl_wz = WZ_Z;                                         // low byte -> Z
+                    wz_rd(WZ_Z, 2'b01);                                    // low byte -> Z
                     ctl_ab = AB_REG; ctl_ri = RI_WZ; ctl_inc = INC_P1;
                     mstart(`BUSOP_MRD, AL_IDU, 4'd0);
                 end
-                else begin ctl_pc = PC_NN; ctl_wz = WZ_W; ctl_fin = 1'b1; end
+                else begin ctl_pc = PC_NN; wz_rd(WZ_W, 2'b10); ctl_fin = 1'b1; end
             end
 
             default: ctl_fin = 1'b1;
