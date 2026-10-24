@@ -14,7 +14,10 @@ See `docs/flags.md`. Summary of the non-result-bit cases:
   silicon takes the leak from `A` only (no Q involvement). We model
   Zilog NMOS. Implementations that just `A | Q` (without `F XOR Q`)
   produce NEC-like output for chained SCF — a bug we hit and fixed
-  on the `perfect` branch.
+  on the `perfect` branch. On the die (perfectz80) Q is also 0 after
+  `EX AF,AF'` and after a DD or FD prefix, and a RESET cut that writes F
+  (row 19's `f_cut`) sets Q to that F; the models don't do these three
+  yet (docs/known-differences.md rows 29-31, branch `nmos-q`).
 - 16-bit `ADD/ADC/SBC`: X/Y from result high byte.
 - block `LD`/`CP`: X/Y from a derived temp, not the result.
 - **Block-instruction repeat** (Banks 2018): during the extra 5-T
@@ -38,15 +41,17 @@ WZ is an internal 16-bit temp, observable only via `BIT n,(HL)` X/Y. Update poin
 - `IN/OUT (C)`: WZ = BC+1.
 - block `LDI / LDD / CPI / CPD / INI / IND / OUTI / OUTD`: per-
   instruction WZ adjustments (table in `z80_core.c`).
+- interrupt responses: WZ = the address they jump to (0038 in IM1, 0066
+  for NMI, the handler address read from the table in IM2).
 - block **repeat** `LDIR / LDDR / CPIR / CPDR / INIR / INDR / OTIR /
   OTDR`: per the boo-boo et al. 2006 MEMPTR paper + Patrik Rak's
   z80memptr 1.2a (validated on real Spectrum + NEC + Visual Z80 Remix
   by Richard Chandler), the extra 5-T internal M-cycle of the repeat
   overwrites **WZ = PC + 1** (where PC is the post-rewind address =
   the original opcode address). FUSE's pre-2006 expected (`WZ = BC ±
-  1`) for the BC=1→0 corner is the outlier; the four affected cases
-  (`edba_1`, `edb2_1`, `edbb_1`, `edb3_1`) are in
-  `tests/fuse/known-fuse-wrong.txt`. We side with silicon.
+  1`) for the BC=1→0 corner is the outlier; for the four affected cases
+  (`edba_1`, `edb2_1`, `edbb_1`, `edb3_1`) the runners check the die's
+  values (`tests/fuse/silicon.expected`, from `make fuse_pz80`).
 - 16-bit `ADD/ADC/SBC HL,rp`: WZ = HL+1 (before the add).
 
 ## Undocumented opcodes
@@ -60,7 +65,11 @@ WZ is an internal 16-bit temp, observable only via `BIT n,(HL)` X/Y. Update poin
   out-of-scope in known-differences.
 
 ## Internal-register / timing quirks
-- `LD A,I` / `LD A,R`: PF = IFF2, and there is a documented race where an interrupt
-  arriving during the instruction can clear PF.
+- `LD A,I` / `LD A,R`: PF = IFF2, and on the NMOS part an INT accepted at the
+  end of the instruction clears it (the pushed F has P/V = 0; an NMI there
+  leaves P/V = IFF2). Modelled in both (docs/known-differences.md row 5).
+- `HALT`: PC moves past the HALT byte, which the halted CPU keeps fetching
+  from (with the opcode discarded) until an interrupt; the interrupt pushes
+  that PC (docs/known-differences.md row 9).
 - `R` register: only bits 6:0 increment on each M1; bit 7 is preserved from the last
   `LD R,A`.

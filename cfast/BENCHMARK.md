@@ -15,15 +15,15 @@ The table below is one run of it, on GitHub's runner:
 
 | Emulator | Sees every | ZEXDOC Minstr/s | Z80 clock | Against cfast |
 |---|---|---:|---:|---:|
-| **rz80 cfast, z80f_run** | half clock | 62.7 | 507 MHz | 1.00× |
-| rz80 cfast, z80f_tick | half clock | 18.2 | 147 MHz | 0.29× |
-| rz80 C model | half clock | 10.9 | 88 MHz | 0.17× |
-| floooh/chips | clock | 45.9 | 371 MHz | 0.73× |
-| suzukiplan | instruction | 96.4 | 779 MHz | 1.54× |
-| superzazu | instruction | 188.0 | 1520 MHz | 3.00× |
-| redcode | instruction | 185.1 | 1496 MHz | 2.95× |
+| **rz80 cfast, z80f_run** | half clock | 35.1 | 284 MHz | 1.00× |
+| rz80 cfast, z80f_tick | half clock | 8.8 | 71 MHz | 0.25× |
+| rz80 C model | half clock | 3.6 | 29 MHz | 0.10× |
+| floooh/chips | clock | 25.2 | 203 MHz | 0.72× |
+| suzukiplan | instruction | 48.6 | 393 MHz | 1.39× |
+| superzazu | instruction | 107.0 | 865 MHz | 3.05× |
+| redcode | instruction | 102.6 | 829 MHz | 2.93× |
 
-The first 50,000,000 instructions of ZEXDOC, the best of 5 rounds of each emulator's CPU time (on CPU 1); Z80 clock: the T-states it emulates a second. AMD EPYC 9V45 96-Core Processor, cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, -O2; GitHub Actions (ubuntu24), commit e64fd89, 2026-10-21 12:41 UTC.
+The first 50,000,000 instructions of ZEXDOC, the best of 5 rounds of each emulator's CPU time (on CPU 1); Z80 clock: the T-states it emulates a second. AMD EPYC 7763 64-Core Processor, cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, -O2, jumps padded off 32-byte boundaries; GitHub Actions (ubuntu24), commit 780418a, 2026-10-24 16:02 UTC.
 
 - **rz80 cfast, z80f_run**: the phase engine generated from the C model's timing tables, steps back to back with the bus inlined (`cfast/`)
 - **rz80 cfast, z80f_tick**: the same steps, one half clock per call, the pins in a word
@@ -32,6 +32,11 @@ The first 50,000,000 instructions of ZEXDOC, the best of 5 rounds of each emulat
 - **suzukiplan**: [suzukiplan/z80](https://github.com/suzukiplan/z80): `execute(1)`
 - **superzazu**: [superzazu/z80](https://github.com/superzazu/z80): `z80_step`
 - **redcode**: [redcode/Z80](https://github.com/redcode/Z80): `z80_execute(1)`
+
+GitHub's runners differ from run to run, and so do the ratios: on this
+code `z80f_run` ran 1.39× floooh/chips on the EPYC 7763 above, 1.60× on
+a Xeon Platinum 8573C, and 1.38-1.47× on the macOS job's Apple M1
+virtual machine.
 
 ## The columns
 
@@ -69,8 +74,10 @@ The first 50,000,000 instructions of ZEXDOC, the best of 5 rounds of each emulat
   generation Core) keeps a 32-byte block whose jump crosses or ends on its
   boundary out of the decoded-uop cache, which costs each emulator what its
   code layout happens to cost it. On an i7-7700, best of 3, padding made
-  `z80f_run` 7 % faster, floooh/chips 13 %, superzazu 14 %, redcode 8 %,
-  suzukiplan 6 %, the C model 11 %, and `z80f_tick` 4 % slower.
+  floooh/chips 13 % faster, superzazu 14 %, redcode 8 %, suzukiplan 6 %,
+  the C model 11 %, and `z80f_tick` 4 % slower; `z80f_run`, 7 % faster
+  when that was measured, runs about as fast either way since its M-cycle
+  end and ALU went inline (95.2 against 96.6 cycles an instruction).
 
 Run it:
 
