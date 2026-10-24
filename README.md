@@ -232,7 +232,7 @@ The brief that this project follows: [z80_core_project_BRIEF.md](z80_core_projec
 
 The project's original **C model, support software, and documentation are
 MIT-licensed**. Its original **RTL and hardware implementation sources in
-`rtl/` and `librelane/` use CERN-OHL-W-2.0**. These are licenses for separate
+`rtl/` and `asic/librelane/` use CERN-OHL-W-2.0**. These are licenses for separate
 components, not a choice of either license for every file.
 
 Commercial use is welcome under the applicable terms. Hardware manufacturers

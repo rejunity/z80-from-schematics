@@ -24,7 +24,7 @@ not offered as a repository-wide choice between MIT and CERN-OHL-W-2.0.
 2. Original hardware design sources — CERN-OHL-W-2.0
 
    The project's original RTL and hardware implementation sources in rtl/
-   and librelane/ are licensed under the CERN Open Hardware Licence
+   and asic/librelane/ are licensed under the CERN Open Hardware Licence
    Version 2 — Weakly Reciprocal, SPDX identifier CERN-OHL-W-2.0.
 
    The full, unmodified license is in LICENSES/CERN-OHL-W-2.0.txt.
