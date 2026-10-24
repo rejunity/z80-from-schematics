@@ -1,5 +1,10 @@
 # `perfect` branch — closing the last gaps
 
+> A record of the `perfect` branch (June 2026), merged into main. The
+> numbers below are the branch's; everything it deferred has been done
+> since -- see "Since then" at the end, and docs/known-differences.md for
+> the current state.
+
 Direction: nail down the tests that aren't 100 % passing today, with
 focus on the gaps we can close cleanly. Out of scope: deep silicon-
 faithfulness refactors of the block-op M-cycle (those move to a future
@@ -52,126 +57,30 @@ Plus, well outside the original plan:
 | `make fuse`                   | 1356/1356 (with pre-Banks / pre-Brewer expecteds) | **1348 + 8 known-FUSE-wrong (silicon-faithful)** |
 | `make zexall_rtl` (Verilator) | Known fails                        | **Passing the 14-test subset on CI; full ZEXALL is local-only**     |
 
-## Deferred to a future branch
+## Since then
 
-  - **Sub-T-state pin timing fidelity** on the still-informational
-    pin_scenarios. **Six-step plan** to drive pin_scenarios to 100 %
-    parity vs perfectz80, executing in order — each step verified
-    against FUSE / Rak / halt2int / compare / 5-way lockstep before
-    moving on:
+What the branch deferred, and what became of it:
 
-    | # | Step                                       | Status     | Closes                            |
-    |--:|--------------------------------------------|------------|-----------------------------------|
-    | 0 | per-phase diff harness                     | **DONE**   | analysis tool (scripts/pin_scenarios_diff.py) |
-    | 1 | C1 reset register init 0xFFFF → 0x5555     | **DONE**   | make perfectz80 4 informational diffs + prog19 SP-init |
-    | 2 | RFSH-pin late-deassert (bound to T3..T4)   | **DONE**   | prog10 5→3, prog19 3→1 ctrl-pin   |
-    | 3 | HALT-pin assertion at T4.N of HALT M1      | **DONE**   | prog10 3→1, prog19 1→**PASS**     |
-    | 4 | Reset state machine (filter + frozen hold) | **DONE**   | prog17 131→**1** + prog10 3→1     |
-    | 5 | BUSREQ — wire pz80 + 2-phase release filter| **DONE**   | prog15 154→**PASS**               |
-    | 6 | WAIT-insertion sub-T-state phasing         | pending ⚠  | prog11 (142), prog14 (147) — needs initial-settle alignment, not WAIT-sample shift |
-
-    Steps 4-6 (the ⚠ rows) each need a focused structural rework of
-    pin-driving logic: Step 4 a reset state machine, Step 5 an
-    M-cycle abort sequencer, Step 6 a WAIT-sample phasing fix. Each
-    is 1-2 days of careful work + regression testing. Given the
-    "perfect" branch's other green gates (FUSE, Rak, ZEXALL,
-    halt2int, lockstep, gate-level netlist), these residual
-    informational diffs are documented as a follow-up branch
-    rather than blocking the current branch's merge.
-
-    **Bonus discovery during Step 1**: the `test_timing` IN A,(n)
-    unit test was implicitly depending on the OLD reset register-init
-    value of 0xFFFF (it used the post-reset A=0xFF to derive
-    port = 0xFF10). After the reset flip to 0x5555, the test broke
-    in CI. Fixed in commit `1da7356` by setting A explicitly via
-    `z80_set_r8` rather than relying on the reset default — all 135
-    unit tests PASS again.
-
-    Functional behaviour is verified via Rak + FUSE + `make halt2int`;
-    this 6-step plan addresses gate-level timing fidelity vs the
-    perfectz80 Visual-Z80 netlist. Two quick fixes already landed
-    (2026-06-18 continuation):
-    - **C1 reset init flipped 0xFFFF → 0x5555** to match perfectz80's
-      gate-level boot pattern. Closed all 4 informational diffs on
-      `make perfectz80` (`prog_rnd_02/03/04` now clean) and 11 of
-      `prog19_nmi_in_int`'s bus-only diffs.
-    - **RFSH-pin late-deassert fix** in `cmodel/z80_timing.c` +
-      `rtl/z80_timing.v`. RFSH was held asserted into T5+ of extended-
-      length M1 cycles (NMI ack 5T, INTA 7T). Now bounded to T3..T4
-      exactly. Closed `prog10_halt_nmi` 5→3 and `prog19_nmi_in_int`
-      3→1 ctrl-pin diffs.
-
-    Pin_scenarios current state (post-Step-5):
-    | Program | Ctrl diffs | Root cause |
-    |---|---:|---|
-    | prog9, 12, 15, 16, 17, 18, 19, 20 | **0** | (PASS — 8 of 12) |
-    | prog10_halt_nmi       | **1** | sub-T-state HALT-pin transition |
-    | prog11_wait_mem       | 142   | 1-phase initial offset → WAIT sample alignment |
-    | prog13_halt_int       | 144   | HALT-pin during NOP-loop M-cycles |
-    | prog14_wait_io        | 147   | 1-phase initial offset → WAIT sample alignment |
-
-    Tracked under items B2 / B3 in
-    [docs/simplifications.md](simplifications.md). The four high-count
-    items (prog11/13/14/15/17) each need a careful pin-driving rework
-    that's out of scope for a single iteration without regression risk;
-    a dedicated follow-up branch could close them one at a time.
-
-    **prog17 silicon-behavior analysis (2026-06-19)** — captured
-    here so the follow-up branch starts from concrete findings rather
-    than guesses. Trace observation (`scripts/pin_scenarios_diff.py
-    tests/traces/pin_scenarios/prog17_reset.hex`):
-
-    | pz80 phase | Behavior                                                                |
-    |-----------:|-------------------------------------------------------------------------|
-    | 50         | reset_n asserted — **no immediate effect**. M1 refresh of `INC HL @ 0003` continues. |
-    | 51         | refresh phase ends, T4 done.                                            |
-    | 52         | starts **fresh M1 at PC=0006** — chip is still executing.                |
-    | 53         | T1.N of that M1: `m1=0 mreq=0 rd=0` actively fetching.                   |
-    | 54         | **`m1` deasserts mid-fetch** — reset just got recognized.                |
-    | 55–73      | full idle hold at `addr=0006` (frozen at the address where reset hit).   |
-    | 74         | reset_n released → fresh M1 at PC=0 begins.                              |
-
-    So the silicon-faithful model for reset_n falling edge is a
-    **~3-clock filter** (matching Zilog UM0080's spec: reset_n must be
-    held low for "≥ 3 clock periods" to be recognized), with the chip
-    continuing normal execution during the filter window — including
-    starting fresh M-cycles — and only freezing when the recognition
-    fires. Similarly, the rising edge takes ~4 phases of internal
-    settling before the post-reset M1 fetch starts.
-
-    The C model currently freezes immediately when reset_n=0, missing
-    both the assert-filter (closes ~5 ctrl-pin diffs at the top of the
-    reset window) AND the release-filter (closes another ~4 at the
-    bottom). The hard part is mid-window: pz80 starts a real M1 fetch
-    to `PC+0x06` (the natural next instruction-fetch address after a
-    few aborted in-flight cycles), then freezes mid-T2. Modeling that
-    requires the reset state machine to know about M-cycle abort
-    points (same machinery Step 5 BUSREQ needs).
-
-    Implementation sketch for the follow-up branch:
-
-      1. Add `reset_assert_filter` (uint8) and `reset_release_filter`
-         (uint8) and `in_reset_hold` (bool) fields to `z80_t` and
-         mirror in `rtl/z80_core.v`.
-      2. On reset_n=0: increment `reset_assert_filter`. If &lt;5
-         continue normal phase execution. If ≥5 enter hold: call
-         `reset_state()`, set `in_reset_hold`, drive pins idle.
-      3. In hold + reset_n=0: stay frozen, don't advance.
-      4. On reset_n=1 + in_reset_hold: increment
-         `reset_release_filter`. If &lt;4 stay frozen. If ≥4 exit hold
-         and start fresh M1 from PC=0.
-      5. Run `make pin_scenarios`, `make pin_scenarios_rtl`, AND
-         `make compare` after each C/RTL change to catch divergence
-         early.
-
-    Estimated work: 0.5-1 day for the filter halves (closes ~10
-    ctrl diffs); 1-2 days for the M-cycle-abort behavior shared
-    with Step 5 (closes most of the remaining ~120).
+  - **Sub-T-state pin timing on the pin scenarios** -- done. The
+    branch's six-step plan reached step 5; the WAIT phasing (step 6) and
+    the HALT pin went with the RTL's clocking rework and later fixes:
+    all 15 pin scenarios now match perfectz80 in every control pin and
+    the address in every phase, through the C model, the RTL and the
+    LibreLane netlist, and CI fails on any difference
+    (docs/known-differences.md rows 14 and 17).
+  - **RESET** -- not the ~3-clock filter the branch's prog17 analysis
+    sketched: perfectz80's nodes show RESET sampled on rising edges, the
+    T-state in hand and one more finished, registers kept, T1 at 0000 on
+    the third rising edge after release, and the special reset (rows 1,
+    17, 25-27; docs/timing.md "RESET").
+  - **BUSREQ** -- the die's grant after any M-cycle (row 16).
+  - **The event sweep** (`make event_sweep`, docs/event-sweep.md) went
+    further than the plan: RESET / INT / NMI / BUSREQ / WAIT at every
+    T-state of every opcode, 37,846 cases, all matching perfectz80.
   - **A-Z80 as second gate-level oracle** — **dropped.** With LibreLane
     providing an independent sky130-synthesised gate-level reference
     alongside perfectz80's Visual-Z80 port, the third oracle is no
     longer worth the integration cost.
-  - **Full LibreLane PnR + STA** — out of scope; needs a tape-out
-    target to justify the CI budget.
-
-The branch is ready to merge into `main`.
+  - **Full PnR + STA** -- the `asic-<pdk>` branches run RTL-to-GDS on
+    sky130, IHP SG13G2 and GF180MCU (7- and 9-track cells), and check the
+    three padded chips' pins against the NMOS datasheet (`asic/timing/`).
