@@ -267,19 +267,21 @@ static uint8_t f_cut(const z80_t *c, uint8_t fo, uint8_t fn, uint8_t a, uint8_t 
 static inline void wz_later(z80_t *c, uint16_t v, uint8_t kz, uint8_t kw)
 {
     c->wzp_v = v; c->wzp_kz = kz; c->wzp_kw = kw;
+    c->wzp_m = (uint16_t)((kz ? 0x00FFu : 0u) | (kw ? 0xFF00u : 0u));
 }
-/* the waiting bytes land: at the M-cycle's end (t = 0), or at a cut ending
-   on T-state t -- those written before t, and in t's low half when t is a
-   Tw after it (tw) */
-static inline void wz_land(z80_t *c, uint8_t t, bool tw)
+/* the waiting bytes land at the M-cycle's end */
+static inline void wz_land(z80_t *c)
 {
-    uint16_t wz = c->rf[RFP_WZ];
-    if (c->wzp_kz && (!t || c->wzp_kz < t || (tw && c->wzp_kz == t)))
-        wz = (uint16_t)((wz & 0xFF00) | (c->wzp_v & 0x00FF));
-    if (c->wzp_kw && (!t || c->wzp_kw < t || (tw && c->wzp_kw == t)))
-        wz = (uint16_t)((wz & 0x00FF) | (c->wzp_v & 0xFF00));
-    c->rf[RFP_WZ] = wz;
-    c->wzp_kz = c->wzp_kw = 0;
+    c->rf[RFP_WZ] = (uint16_t)((c->rf[RFP_WZ] & ~c->wzp_m) | (c->wzp_v & c->wzp_m));
+    c->wzp_m = 0;
+}
+/* or at a cut ending on T-state t: those written before t, and in t's low
+   half when t is a Tw after it (tw) */
+static void wz_land_cut(z80_t *c, uint8_t t, bool tw)
+{
+    if (c->wzp_kz >= t && !(tw && c->wzp_kz == t)) c->wzp_m &= 0xFF00;
+    if (c->wzp_kw >= t && !(tw && c->wzp_kw == t)) c->wzp_m &= 0x00FF;
+    wz_land(c);
 }
 static inline void wz_setz(z80_t *c, uint8_t z) { c->rf[RFP_WZ] = (uint16_t)((c->rf[RFP_WZ] & 0xFF00) | z); }
 static inline void wz_setw(z80_t *c, uint8_t w) { c->rf[RFP_WZ] = (uint16_t)((c->rf[RFP_WZ] & 0x00FF) | (uint16_t)w << 8); }
@@ -547,8 +549,10 @@ static Z80_STEP_INLINE void z80_exec_step(z80_t *c)
     z80_control_t *ctl = &c->ctl;
     uint8_t m = c->m_cycle;
     uint8_t hlp = hl_pair(c);          /* HL / IX / IY for 16-bit "HL" ops */
-    if (c->wzp_kz | c->wzp_kw)         /* the WZ bytes of the M-cycle ending here */
-        wz_land(c, c->cut_now ? (uint8_t)(c->t_state - 1) : 0, false);
+    if (c->wzp_m) {                    /* the WZ bytes of the M-cycle ending here */
+        if (!c->cut_now) wz_land(c);
+        else wz_land_cut(c, (uint8_t)(c->t_state - 1), false);
+    }
 
     /* (IX+d)/(IY+d) displacement preamble: fetch d (M2), then a 5T address calc
        cycle (M3) for most ops; LD (IX+d),n folds the 2T IX+d compute into its
@@ -1661,7 +1665,7 @@ static void enter_reset_idle(z80_t *c)
 {
     c->rst_idle = true;
     c->wbp = 0;
-    c->wzp_kz = c->wzp_kw = 0;
+    c->wzp_m = 0;
     c->in_tw = false;
     c->rf[RFP_PC] = 0x0000;
     c->reg_i = 0; c->reg_r = 0;
@@ -1766,7 +1770,7 @@ static void advance(z80_t *c)
         /* the WZ bytes written before the cut's last T-state (in its low
            half, a Tw's after T2) stand; at an M-cycle's end the exec step
            landed them, and the next M-cycle's never come */
-        if (!mend && !granted && (c->wzp_kz | c->wzp_kw)) wz_land(c, t_end, tw);
+        if (!mend && !granted && c->wzp_m) wz_land_cut(c, t_end, tw);
         enter_reset_idle(c);
         c->rd_hold = cut_t1;
     }
@@ -1797,7 +1801,7 @@ static void reset_state(z80_t *c)
     c->decoded = false; c->instr_done = false; c->ucode = 0;
     c->phase_primed = false; c->stalled = false; c->wait_sampled = false;
     c->q = 0; c->wbp = 0;
-    c->wzp_kz = c->wzp_kw = 0;
+    c->wzp_m = 0;
     c->res_s = c->res2 = c->sres = c->rst_idle = c->srst_m1 = c->rd_hold = false;
     c->in_tw = false;
     c->busreq_s = false;
