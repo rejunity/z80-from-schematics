@@ -725,7 +725,18 @@ static Z80_STEP_INLINE void z80_exec_step(z80_t *c)
             uint8_t extra = (ctl->idx && ctl->use_disp) ? 2u : 0u;
             z80_start_mcycle(c, BUSOP_MRD, z80_pc_inc(c), 0, extra);
         }
-        else if (mm == 2) z80_start_mcycle(c, BUSOP_MWR, memaddr, RB, 0);
+        else if (mm == 2) {
+            /* LD (IX+d),n writes n from the data latch, where its read left
+               it. A RESET seen on the rising edge that starts the write's T1
+               makes the die load the latch in that T1.N from the u bus, as
+               for any other write (d_dl): it carries (W ^ 7F) | 18, W the
+               address's high byte, and the pads show that until the cut ends
+               the write before WR (perfectz80) */
+            uint8_t wd = RB;
+            if (c->res_s && ctl->idx && ctl->use_disp)
+                wd = (uint8_t)(((memaddr >> 8) ^ 0x7Fu) | 0x18u);
+            z80_start_mcycle(c, BUSOP_MWR, memaddr, wd, 0);
+        }
         else finish(c);
         break;
 

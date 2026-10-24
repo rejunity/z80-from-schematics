@@ -225,6 +225,15 @@ module z80_core (
     // the same pure function the C model calls; phi selects the half.
     wire [15:0] tp_addr, tn_addr;
     wire [7:0]  tp_dout, tn_dout;
+    // LD (IX+d),n writes n from the data latch, where its read left it. A
+    // RESET seen on the rising edge that starts the write's T1 makes the die
+    // load the latch in that T1.N from the u bus, as for any other write
+    // (d_dl): it carries (W ^ 7F) | 18, W the address's high byte, and the
+    // pads show that until the cut ends the write before WR (perfectz80).
+    wire        wd_ub = res_s && !rst_idle && !bus_granted && (bus_op == `BUSOP_MWR) &&
+                        (t_state == 4'd1) && (irq_seq == 2'd0) && (eff_exec == `EXEC_LD_M_N) &&
+                        (idx_w != 2'd0) && use_disp_w;
+    wire [7:0]  wd_ub_val = (m_addr[15:8] ^ 8'h7F) | 8'h18;
     wire        tp_drive, tp_m1, tp_mreq, tp_iorq, tp_rd, tp_wr, tp_rfsh;
     wire        tn_drive, tn_m1, tn_mreq, tn_iorq, tn_rd, tn_wr, tn_rfsh;
     z80_timing u_timing_pos (
@@ -236,7 +245,7 @@ module z80_core (
     );
     z80_timing u_timing_neg (
         .bus_op(bus_op), .t_state(t_state[2:0]), .phi(1'b1), .m_len(m_len),
-        .m_addr(m_addr), .m_wdata(m_wdata), .reg_i(reg_i), .reg_r(reg_r),
+        .m_addr(m_addr), .m_wdata(wd_ub ? wd_ub_val : m_wdata), .reg_i(reg_i), .reg_r(reg_r),
         .addr(tn_addr), .data_out(tn_dout), .data_drive(tn_drive),
         .m1_n(tn_m1), .mreq_n(tn_mreq), .iorq_n(tn_iorq),
         .rd_n(tn_rd), .wr_n(tn_wr), .rfsh_n(tn_rfsh)
@@ -1119,7 +1128,8 @@ module z80_core (
     always @* begin
         reg_i_n = reg_i; reg_r_n = reg_r; ir_n = ir;
         t_n = t_state; m_cycle_n = m_cycle;
-        bus_op_n = bus_op; m_len_n = m_len; m_addr_n = m_addr; m_wdata_n = m_wdata;
+        bus_op_n = bus_op; m_len_n = m_len; m_addr_n = m_addr;
+        m_wdata_n = wd_ub ? wd_ub_val : m_wdata;     // the u bus's byte stays latched
         prefix_n = prefix; iff1_n = iff1; iff2_n = iff2; im_n = im; halted_n = halted;
         tmp8_n = tmp8; tmph_n = tmph;
         reg_q_n = reg_q;

@@ -91,7 +91,8 @@ A case matches when:
 - the address agrees in every half-cycle: transfers, refreshes (I:R), and
   the internal and idle T-states, where the bus keeps its last address;
 - BUSACK is one of the control pins;
-- the data agrees wherever both sides drive WR;
+- the data agrees on every pad both sides drive (the writes, and LD
+  (IX+d),n's under a RESET before WR: known difference 33);
 - the same pads are driven in every half-cycle;
 - F, WZ and Q agree in every state sample (below).
 
