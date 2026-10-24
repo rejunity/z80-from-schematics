@@ -28,7 +28,15 @@
 
    Each line also has the pads the die drives (scripts/pz80_pads.c): the
    address pads, the data pads, and MREQ IORQ RD WR M1 RFSH HALT BUSAK
-   (bit 0 first), in hex.
+   (bit 0 first), in hex; then F (of the live AF bank, node ex_af), WZ
+   and P: 1 while node 3273 is low. The flags an instruction writes wait
+   for the next M1 (an INTA, a prefix's, the one that restarts after a
+   RESET): the latch 541 / 1587 holds them pending from its T1.N, and
+   its T3.N writes them into F (rl_wr with the AF word line) where an M1
+   with nothing pending reads AF; 3273 goes low with the latch and stays
+   low until the next M1's T1.N. So SCF and CCF, which take X and Y from
+   A and that access, see Q = F where P is set in their M1 and Q = 0
+   where not (docs/flags.md "Q").
 
    The interrupting device: -v is the byte it puts on the bus in INTA (hex,
    FF if not given), -o more bytes (hex, first byte first, e.g. -o 3412)
@@ -53,7 +61,7 @@
    every group again); an option only new cases use leaves it alone.
    scripts/event_sweep.py --verify-recorded runs a sample of recorded
    cases live and fails on any difference (CI). */
-#define HARNESS_VERSION 1
+#define HARNESS_VERSION 2
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -63,6 +71,8 @@
 
 extern uint8_t cpu_memory[0x10000];
 extern uint8_t cpu_io[0x10000];
+
+#define FLAGS_WRITTEN_N 3273     /* low: this M1 wrote the flags left pending (P) */
 
 typedef struct { int pin, lo, hi; } pulse_t;
 static pulse_t pulses[8];
@@ -209,11 +219,13 @@ int main(int argc, char **argv) {
             }
             apply_events(st, rel);
             if (wait_low && !cpu_readRESET(st)) { wait_low = false; cpu_writeWAIT(st, true); }
-            printf("%d %d %04x %02x %d %d %d %d %d %d %d %d %04x %02x %02x\n", rel, cpu_readCLK(st) ? 1 : 0,
-                   cpu_readAddressBus(st), cpu_readDataBus(st),
+            printf("%d %d %04x %02x %d %d %d %d %d %d %d %d %04x %02x %02x %02x %04x %02x\n", rel,
+                   cpu_readCLK(st) ? 1 : 0, cpu_readAddressBus(st), cpu_readDataBus(st),
                    cpu_readMREQ(st), cpu_readIORQ(st), cpu_readRD(st), cpu_readWR(st),
                    cpu_readM1(st), cpu_readRFSH(st), cpu_readHALT(st), cpu_readBUSAK(st),
-                   pz80_addr_driven(st), pz80_data_driven(st), pz80_ctl_driven(st));
+                   pz80_addr_driven(st), pz80_data_driven(st), pz80_ctl_driven(st),
+                   cpu_readF(st), (unsigned)(cpu_readW(st) << 8 | cpu_readZ(st)),
+                   cpu_read_node(st, FLAGS_WRITTEN_N) ? 0 : 1);
             if (rel >= 2 * run - 1) break;
             /* -D: a rising edge next inside the window, the read's address
                on the bus: the byte perfectz80's bus puts on after it is the
