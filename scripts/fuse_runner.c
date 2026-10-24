@@ -1,7 +1,13 @@
-/* fuse_runner.c - run the Frank-D-Cringle / FUSE Z80 test suite against the C
-   model. Reads tests/fuse/tests.in (~1356 cases) and tests/fuse/tests.expected,
-   compares final state (regs+IFFs+IM+HALTED+T-states+memory) per case.
-   Per-cycle bus-event verification (the MC/MR/MW lines) is deferred. */
+/* fuse_runner.c - run the FUSE Z80 test suite (Philip Kendall's corpus,
+   1356 cases) against the C model. Reads tests/fuse/tests.in and
+   tests/fuse/tests.expected and compares the final state of every case
+   (registers, WZ, IFFs, IM, HALTED, T-states, memory). For the six cases in
+   tests/fuse/silicon.expected it compares against those values instead: the
+   die's, where it differs from FUSE's (make fuse_pz80 runs the whole corpus
+   on perfectz80). The per-cycle bus events (the MC/MR/MW lines) are not
+   compared; the pin sweeps against perfectz80 cover the bus.
+
+     fuse_runner [tests.in] [tests.expected] [silicon.expected] */
 /* Expose clock_gettime / CLOCK_MONOTONIC / struct timespec from <time.h>:
    Linux glibc hides POSIX.1-2008 extensions at -std=c99 unless asked;
    macOS libc exposes them unconditionally. */
@@ -43,9 +49,10 @@ static int parse_mem_line(const char* line, memblk_t* mb) {
     return 1;
 }
 
+/* the next line that is not blank or a '#' comment */
 static int skip_blank_lines(FILE* f, char* line, size_t sz) {
     while (fgets(line, (int)sz, f)) {
-        if (line[0] != '\n' && line[0] != '\r' && line[0] != 0) return 1;
+        if (line[0] != '\n' && line[0] != '\r' && line[0] != 0 && line[0] != '#') return 1;
     }
     return 0;
 }
@@ -111,53 +118,49 @@ static int read_test_exp(FILE* f, test_t* t) {
     return 1;
 }
 
-/* Known-FUSE-wrong: FUSE's tests.expected values for these cases are
- * incorrect vs real Z80 silicon (see tests/fuse/known-fuse-wrong.txt
- * + docs/simplifications.md F1). We deliberately differ from FUSE on
- * them; the runner tallies them as "known-FUSE-wrong" rather than
- * "FAIL" so make fuse exits 0 and the headline number reflects
- * silicon-faithful behavior. */
-#define MAX_KNOWN 64
-static char known_names[MAX_KNOWN][64];
-static int  n_known = 0;
+/* tests/fuse/silicon.expected: the die's values for the cases where they
+   differ from tests.expected */
+#define MAX_FIX 32
+static test_t fixes[MAX_FIX];
+static int    n_fix = 0;
 
-static int load_known_fuse_wrong(const char *path) {
+static void load_fixes(const char *path) {
     FILE *f = fopen(path, "r");
-    if (!f) return 0;     /* no list -- treat all fails as real fails */
-    char line[256];
-    while (fgets(line, sizeof line, f)) {
-        if (line[0] == '#' || line[0] == '\n' || line[0] == '\r') continue;
-        char name[64];
-        if (sscanf(line, "%63s", name) != 1) continue;
-        if (n_known < MAX_KNOWN) strncpy(known_names[n_known++], name, 63);
-    }
+    if (!f) { perror(path); exit(2); }
+    while (n_fix < MAX_FIX && read_test_exp(f, &fixes[n_fix])) n_fix++;
     fclose(f);
-    return n_known;
 }
-static int is_known_fuse_wrong(const char *name) {
-    for (int i = 0; i < n_known; i++)
-        if (strcmp(name, known_names[i]) == 0) return 1;
-    return 0;
+static const test_t *fix_for(const char *name) {
+    for (int i = 0; i < n_fix; i++)
+        if (strcmp(name, fixes[i].name) == 0) return &fixes[i];
+    return NULL;
 }
 
 int main(int argc, char** argv) {
     const char* in_path  = (argc>1) ? argv[1] : "tests/fuse/tests.in";
     const char* exp_path = (argc>2) ? argv[2] : "tests/fuse/tests.expected";
+    const char* fix_path = (argc>3) ? argv[3] : "tests/fuse/silicon.expected";
     FILE* fi = fopen(in_path, "r");  if (!fi){perror(in_path); return 2;}
     FILE* fe = fopen(exp_path, "r"); if (!fe){perror(exp_path); return 2;}
-
-    load_known_fuse_wrong("tests/fuse/known-fuse-wrong.txt");
+    load_fixes(fix_path);
 
     z80_system_t* s = malloc(sizeof *s);
-    test_t tin, texp;
-    int npass=0, nfail=0, nknown=0, ntotal=0;
+    test_t tin, texp_fuse;
+    int npass=0, nfail=0, nfixed=0, ntotal=0;
     char buf[65536] = ""; int shown=0;
-    int max_show = (argc>3) ? atoi(argv[3]) : 12;
+    const int max_show = 12;
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
 
-    while (read_test_in(fi, &tin) && read_test_exp(fe, &texp)) {
+    while (read_test_in(fi, &tin) && read_test_exp(fe, &texp_fuse)) {
         ntotal++;
+        if (strcmp(tin.name, texp_fuse.name) != 0) {
+            fprintf(stderr, "%s and %s out of step at %s / %s\n", in_path, exp_path, tin.name, texp_fuse.name);
+            return 2;
+        }
+        const test_t *fx = fix_for(tin.name);
+        if (fx) nfixed++;
+        const test_t texp = fx ? *fx : texp_fuse;
         z80_sys_init(s);
         /* FUSE convention: port read returns the HIGH byte of the address bus.
            Pre-fill s->io so any port read at (B<<8)|C / (A<<8)|N returns B/A. */
@@ -172,9 +175,11 @@ int main(int argc, char** argv) {
         s->cpu.reg_i=tin.i; s->cpu.reg_r=tin.r;
         s->cpu.iff1=tin.iff1; s->cpu.iff2=tin.iff2;
         s->cpu.im=tin.im; s->cpu.halted=tin.halted;
-        /* FUSE convention: Q (the F value left by the "previous" instruction
-           used by SCF/CCF X/Y) is taken to be the initial F. */
-        s->cpu.q = (uint8_t)(tin.af & 0xFF);
+        /* Q = 0: no flags written by the previous instruction, as on the die
+           after loading the registers (fuse_pz80's preamble ends with POP AF
+           and LD SP,nn). FUSE's SCF / CCF values (37_1, 3f) are the die's
+           then. */
+        s->cpu.q = 0;
         s->cpu.cycle = 0;
         for (int i=0; i<tin.nmem; i++)
             for (int j=0; j<tin.mem[i].n; j++)
@@ -223,9 +228,6 @@ int main(int argc, char** argv) {
             }
         #undef CHK
         if (ok) npass++;
-        else if (is_known_fuse_wrong(tin.name)) {
-            nknown++;
-        }
         else {
             nfail++;
             if (shown < max_show) {
@@ -240,11 +242,9 @@ int main(int argc, char** argv) {
                 + (double)(t1.tv_nsec - t0.tv_nsec) / 1e9;
 
     printf("=== FUSE z80-test (final-state mode) ===\n");
-    printf("%d tests: %d PASS, %d FAIL, %d known-FUSE-wrong  (%.2f s)\n",
-           ntotal, npass, nfail, nknown, secs);
-    if (nknown) printf("note: %d cases differ from FUSE on purpose -- see "
-                       "tests/fuse/known-fuse-wrong.txt\n", nknown);
+    printf("%d tests: %d PASS, %d FAIL  (%d against %s; %.2f s)\n",
+           ntotal, npass, nfail, nfixed, fix_path, secs);
     if (nfail) printf("\nFirst %d failures:\n%s", shown, buf);
     free(s); fclose(fi); fclose(fe);
-    return nfail ? 1 : 0;
+    return (nfail || nfixed != n_fix) ? 1 : 0;   /* every correction must meet its case */
 }
