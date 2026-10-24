@@ -139,7 +139,7 @@ jobs:
         run: make z80test_rtl Z80TEST_VARIANTS=${{ matrix.variant }}
 
   parity-tests:
-    name: Parity (C vs iverilog vs Verilator, and the die: perfectz80)
+    name: Parity (C vs iverilog vs Verilator, and vs the die in perfectz80)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
