@@ -416,7 +416,9 @@ edge.
   sum, waits in `pf_val` (`pf_cut` after a cut on T2) for T2's end. EX
   AF,AF' flips at T1's end, EXX and EX DE,HL at T2's. Q, which SCF / CCF
   read, is committed with the F write -- 0 when the instruction writes
-  none.
+  none. (The die also sets Q to the F a cut on T2 writes, and leaves it 0
+  after EX AF,AF' and after a DD / FD prefix; the models don't yet:
+  docs/known-differences.md rows 29-31.)
 - **Inside the instruction**, on the die's edge or on the next one when
   nothing reads the register in between: a write in T_k.N on the edge
   that ends T_k, which a cut ending there blocks (the RTL's block pointer
@@ -476,7 +478,8 @@ does there, which a RESET cut in its T1 shows (RESET above).
 ## WAIT summary
 
 WAIT is sampled at `.N` of T2 in memory M-cycles, at `.N` of the automatic Tw in I/O
-cycles, and at `.N` of T2 (and inserted Tw) in M1. While WAIT is low, the M-cycle
+cycles, at `.N` of T2 (and inserted Tw) in M1, and at `.N` of the second automatic Tw
+in INTA. While WAIT is low, the M-cycle
 holds its current bus state and re-samples each subsequent `.N` until WAIT releases.
 
 `make bus_controls` tests the sampling edge and continuous memory/IO write

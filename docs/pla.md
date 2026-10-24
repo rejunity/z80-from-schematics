@@ -92,9 +92,11 @@ grows), each starting after the M1 fetch of the opcode:
 | `SEQ_IDX_D`   | MRD (d) then base template on `(IX+d)`     | DD / FD memory forms                                         |
 | `SEQ_BLOCK`   | per block-instruction microflow            | `LDIR` / `CPIR` / `INIR` / `OTIR` …                          |
 
-Internal-only extra T-states (e.g. the 5 padding T-states added to `IX+d` address
-formation, or the 7-T-state `(HL)`-RMW write delay) are represented as `INTERNAL`
-bus_op cycles in the template so the trace stays cycle-accurate.
+Internal-only extra T-states are either `INTERNAL` bus_op M-cycles (the 5
+T-states of the `IX+d` address formation, ADD HL,rr's 4 + 3, the 2 after INC rr's
+M1) or a longer M-cycle (`m_len`: a read-modify-write's 4-T read, a 5-T M1),
+as the die's M-cycles are, so the trace stays cycle-accurate and BUSREQ is granted
+at the die's M-cycle ends.
 
 ## Table generation
 
