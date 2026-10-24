@@ -63,9 +63,14 @@ CLOCK_PORT: clk
 CLOCK_PERIOD: 50
 
 # Let the die follow the cell area; utilisation is reported so it can be
-# compared with TinyTapeout tile and wafer.space slot sizes.
+# compared with TinyTapeout tile and wafer.space slot sizes. 48 %, not the
+# 7-track core's 45 %: the macro has to stay inside the chip's CORE_AREA
+# at chip/config.yaml's location (~732 x 581 um at [480, 477] in a
+# 778 x 628 um core area); at 45 % the Q / WZ write-back logic grew it to
+# 756 x 597 um, past the core area's right and top edges, and the chip's
+# power grid lost the rows under it.
 FP_SIZING: relative
-FP_CORE_UTIL: 45
+FP_CORE_UTIL: 48
 # Wider than tall, the shape of the room inside the chip's pad ring
 # (chip/config.yaml: CORE_AREA 778 x 628 um): square, the 9-track core
 # (610 x 637 um) would not fit in it.
