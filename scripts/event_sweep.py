@@ -13,13 +13,14 @@
 #
 # A case matches when the control pins (mreq iorq rd wr m1 rfsh halt busack)
 # and the address agree in every half-cycle -- transfers, refreshes, and the
-# internal and idle T-states, where the bus keeps its last address -- and the
-# data agrees wherever both drive WR. Any case that differs fails the run:
-# there is no list of tolerated differences.
+# internal and idle T-states, where the bus keeps its last address -- the
+# data agrees on every pad both drive, the same pads are driven, and F, WZ
+# and Q agree in T4.P of every M1 (state_samples). Any case that differs
+# fails the run: there is no list of tolerated differences.
 #
 # --c-model also runs every case through the C model (scripts/event_sweep_c.c)
-# and fails on any half-cycle where it differs from the RTL: the two are
-# phase-identical.
+# and fails on any half-cycle where it differs from the RTL, F, WZ and Q
+# included: the two are phase-identical.
 #
 # The `latch` group drives the data bus itself: in one read -- an opcode
 # fetch, a memory or I/O read, an INTA -- the right byte is on the bus in
@@ -101,7 +102,8 @@ BASIC = ["inc_a", "ld_a_hl", "ld_hl_a", "inc_hl"]
 GROUPS = ["int", "nmi", "nmi_short", "nmi_reentry", "reset", "reset_release",
           "reset_wait", "reset_short", "combo", "busreq", "wait", "im2", "im2_combo",
           "im0", "im0_combo", "opcodes", "classes", "classes_reset", "opcodes_reset", "fuzz",
-          "fuzz_reset", "reset_m1wait", "reset_busreq", "reset_nmi", "latch"]
+          "fuzz_reset", "reset_m1wait", "reset_busreq", "reset_nmi", "latch",
+          "q_ops", "q_seq", "q_events", "q_reset", "wz_int", "blk_events"]
 # run only when named (--groups): RESET at every T-state of every opcode
 EXPLICIT = {"opcodes_reset"}
 FUZZ_N, FUZZ_SEED = 2000, 1     # the recorded fuzz cases; --fuzz-seed / --fuzz-n for others
@@ -138,6 +140,67 @@ LATCH_READS = [   # (name, kind, code, T1.P half, right byte, decoy, what)
 LATCH_HALVES = {"m1": ["T1", "T2", "T3"], "mrd": ["T1", "T2", "T3"],
                 "iord": ["T1", "T2", "Twa", "T3"], "inta": ["T1", "T2", "Twa1", "Twa2", "T3"]}
 LATCH_WAIT_AT = {"m1": 1, "mrd": 1, "iord": 2, "inta": 3}   # index of that T-state
+
+# ---- Q, F and WZ (the q_* groups, wz_int, blk_events) ----------------------
+# Every case compares F, WZ and Q with the die's where state_samples takes
+# them; these groups aim at them. A = 42 and F = A9 (S Y X C) before the
+# instruction under test, so an SCF or CCF after it shows Q: X and Y of
+# F | A when Q = 0, of A alone when Q = F.
+Q_AF = (0xc5, 0x01, 0xa9, 0x42, 0xc5, 0xf1, 0xc1)   # PUSH BC; LD BC,42A9; PUSH BC; POP AF; POP BC
+# flag writers: CP 28 (X Y from the operand), INC B (27 -> 28), BIT 3,B,
+# CPI, ADD HL,BC, SCF, LD A,I
+Q_FLAG_OPS = {"cp": [0xfe, 0x28], "incb": [0x04], "bit3b": [0xcb, 0x58], "cpi": [0xed, 0xa1],
+              "addhl": [0x09], "scf": [0x37], "ldai": [0xed, 0x57]}
+Q_FLAG_SETUP = (0x06, 0x27)                          # LD B,27 (INC B -> 28; BIT 3,B: Z clear)
+# what can stand between a flag writer and SCF / CCF: instructions that
+# write no flags (Q = 0 after them on the die), prefixes, and controls
+# that do (OR A)
+Q_BETWEEN = {"nop": [0x00], "exaf": [0x08], "exx": [0xd9], "exdehl": [0xeb], "popaf": [0xf1],
+             "pushbc": [0xc5], "ldbn": [0x06, 0x28], "ldab": [0x78], "ldhlb": [0x70],
+             "ldbhl": [0x46], "incbc": [0x03], "di": [0xf3], "ei": [0xfb], "im1": [0xed, 0x56],
+             "ldia": [0xed, 0x47], "ldra": [0xed, 0x4f], "ed00": [0xed, 0x00], "ed77": [0xed, 0x77],
+             "ed7f": [0xed, 0x7f], "dd": [0xdd], "fd": [0xfd], "dddd": [0xdd, 0xdd],
+             "fddd": [0xfd, 0xdd], "ddfd": [0xdd, 0xfd], "dded00": [0xdd, 0xed, 0x00],
+             "jr0": [0x18, 0x00], "jp": None, "call": None, "outna": [0xd3, 0x10],
+             "inan": [0xdb, 0x10], "ldsphl": None, "exsphl": [0xe3], "ora": [0xb7]}
+# short Q sequences for the pin sweeps
+Q_SEQS = {"cp_scf": [0xfe, 0x28, 0x37], "cp_exaf_ccf": [0xfe, 0x28, 0x08, 0x3f],
+          "cp_ddscf": [0xfe, 0x28, 0xdd, 0x37], "incb_nop_ccf": [0x04, 0x00, 0x3f],
+          "addhl_scf": [0x09, 0x37], "cp_halt": [0xfe, 0x28, 0x76]}
+# the M1 after a flag writer: RESET cuts it at every half-cycle
+Q_RESET_SEQS = {"cp": [0xfe, 0x28, 0x00], "incb": [0x04, 0x00], "decb": [0x05, 0x00],
+                "bit3b": [0xcb, 0x58, 0x00], "addhl": [0x09, 0x00], "adchl": [0xed, 0x4a, 0x00],
+                "cpi": [0xed, 0xa1, 0x00], "ldai": [0xed, 0x57, 0x00], "scf": [0x37, 0x00],
+                "exaf": [0x08, 0x00], "neg": [0xed, 0x44, 0x00], "rlb": [0xcb, 0x10, 0x00]}
+# the instructions that load WZ (MEMPTR); RET returns past itself
+WZ_OPS = {"ld_a_nn": [0x3a, 0x00, 0x80], "ld_nn_a": [0x32, 0x00, 0x81], "ld_a_bc": [0x0a],
+          "ld_a_de": [0x1a], "ld_bc_a": [0x02], "ld_de_a": [0x12], "jp": None, "call": [0xcd, 0x00, 0x04],
+          "ret": [0xc9], "rst38": [0xff], "jr": [0x18, 0x00], "djnz": [0x10, 0x00],
+          "ex_sp_hl": [0xe3], "ld_hl_nn": [0x2a, 0x00, 0x80], "ld_nn_hl": [0x22, 0x00, 0x81],
+          "ld_sp_nn": [0xed, 0x7b, 0x00, 0x90], "add_hl_bc": [0x09], "adc_hl_bc": [0xed, 0x4a],
+          "sbc_hl_bc": [0xed, 0x42], "in_a_n": [0xdb, 0x10], "out_n_a": [0xd3, 0x10],
+          "in_b_c": [0xed, 0x40], "out_c_b": [0xed, 0x41], "rld": [0xed, 0x6f], "rrd": [0xed, 0x67],
+          "ld_a_ixd": [0xdd, 0x7e, 0x05], "bit_ixd": [0xdd, 0xcb, 0x05, 0x46],
+          "bit_hl": [0xcb, 0x46], "add_ix_bc": [0xdd, 0x09], "ld_ix_nn": [0xdd, 0x2a, 0x00, 0x80],
+          "ldi": [0xed, 0xa0], "cpi": [0xed, 0xa1], "ini": [0xed, 0xa2], "outi": [0xed, 0xa3],
+          "ldd": [0xed, 0xa8], "cpd": [0xed, 0xa9], "ind": [0xed, 0xaa], "outd": [0xed, 0xab]}
+WZ_SETUP = {"ret": (0x21, 0x02, 0x02, 0xe5)}       # LD HL,0202; PUSH HL: RET to the NOP after it
+# the repeating block instructions, two rounds (BC = 2, or B = 2)
+BLK_OPS = {"ldir": 0xb0, "cpir": 0xb1, "inir": 0xb2, "otir": 0xb3,
+           "lddr": 0xb8, "cpdr": 0xb9, "indr": 0xba, "otdr": 0xbb}
+
+
+def q_between(name, at):
+    """The bytes of a Q_BETWEEN entry placed at address `at`"""
+    nxt = at + 3
+    return {"jp": [0xc3, nxt & 0xff, nxt >> 8], "call": [0xcd, nxt & 0xff, nxt >> 8],
+            "ldsphl": [0xf9]}.get(name) or Q_BETWEEN[name]
+
+
+def wz_op(name):
+    """The bytes of a WZ_OPS entry at 0201 (after the marker)"""
+    return [0xc3, 0x04, 0x02] if name == "jp" else WZ_OPS[name]
+
 
 # ---- every opcode (the `opcodes` group) ------------------------------------
 # Operands: d = 05 (IX+5 / IY+5), n = 99, nn = 0300 (zeros: a NOP run, safe
@@ -251,13 +314,14 @@ def all_opcodes():
     return out
 
 
-def program(target, im=1, ei=False, nmi_nops=0, setup=(), full_dump=False):
+def program(target, im=1, ei=False, nmi_nops=0, setup=(), full_dump=False, dump_pre=()):
     """The sweep program as a 64K image (same layout as the hardware harness
     in hardesk's rp2350b_driver tests/event_sweep.cpp). setup: bytes run
     after the register setup, before [EI and] the jump to the marker.
     full_dump: the code at 0000 stores every register a RESET keeps --
     A and F first (PUSH AF), IX, IY and the alternates too -- for the cases
-    with a RESET pulse."""
+    with a RESET pulse. dump_pre: bytes run before that dump (CCF: the
+    restart shows the Q the reset left in the F it pushes)."""
     ram = bytearray(0x10000)
     for i in range(0x100):
         ram[0x8000 + i] = (0x11 * (i + 1)) & 0xff
@@ -266,7 +330,7 @@ def program(target, im=1, ei=False, nmi_nops=0, setup=(), full_dump=False):
         ram[at:at + len(data)] = bytes(data)
     # 0000: register dump (what a reset left), then on to the setup
     if full_dump:
-        put(0x0000, [0xf5,                        # PUSH AF: A and F as the reset left them
+        put(0x0000, list(dump_pre) + [0xf5,       # PUSH AF: A and F as the reset left them
                      0xed, 0x73, 0x00, 0x70,      # LD (7000),SP (after the push)
                      0xed, 0x43, 0x02, 0x70,      # LD (7002),BC
                      0xed, 0x53, 0x04, 0x70,      # LD (7004),DE
@@ -334,16 +398,21 @@ def case(name, group, target, pulses, run=None, **kw):
          "code": tuple(TARGETS[target][0]) if target in TARGETS else (), "setup": (),
          "im": 1, "ei": False, "nmi_nops": 0, "inta_release": False,
          "int_at": None, "hold": None, "vec": 0xff, "ops": (), "meta": {},
-         "busreq_walk": False, "wait_walk": False, "dwin": None}
+         "busreq_walk": False, "wait_walk": False, "dwin": None, "dump_pre": ()}
     c.update(kw)
-    c["code"], c["setup"] = tuple(c["code"]), tuple(c["setup"])
+    c["code"], c["setup"], c["dump_pre"] = tuple(c["code"]), tuple(c["setup"]), tuple(c["dump_pre"])
     c["full_dump"] = any(p == RESET for p, _, _ in pulses)
     return c
 
 
 def prog_id(c):
     """What the program image depends on."""
-    return (c["code"], c["setup"], c["im"], c["ei"], c["nmi_nops"], c["full_dump"])
+    return (c["code"], c["setup"], c["im"], c["ei"], c["nmi_nops"], c["full_dump"], c["dump_pre"])
+
+
+def image(c):
+    """The case's program image (program())"""
+    return program(c["code"], c["im"], c["ei"], c["nmi_nops"], c["setup"], c["full_dump"], c["dump_pre"])
 
 
 def cases(groups, phases, fuzz=(FUZZ_N, FUZZ_SEED)):
@@ -594,6 +663,77 @@ def cases(groups, phases, fuzz=(FUZZ_N, FUZZ_SEED)):
                     out.append(case(f"latch_{name}_w{nw}_{k:02d}{hn}", "latch", name, list(pulses),
                                     run=80, code=code, dwin=(t1, r1, t1 + k, vv, dd),
                                     meta=dict(m, half=k), **kw))
+    if want("q_ops"):        # every opcode, then SCF or CCF: Q as each one leaves it
+        for name, code, setup in all_opcodes():
+            for tail, t in ((0x37, "scf"), (0x3f, "ccf")):
+                out.append(case(f"qop_{name}_{t}", "q_ops", name, [], code=list(code) + [tail],
+                                setup=setup or Q_AF, run=120, meta={"kind": t}))
+    if want("q_seq"):        # a flag writer, an instruction that writes none, then SCF or CCF
+        for fn, fcode in Q_FLAG_OPS.items():
+            for bn in Q_BETWEEN:
+                for tail, t in ((0x37, "scf"), (0x3f, "ccf")):
+                    code = fcode + q_between(bn, 0x0201 + len(fcode)) + [tail]
+                    out.append(case(f"qseq_{fn}_{bn}_{t}", "q_seq", fn, [], code=code,
+                                    setup=Q_AF + Q_FLAG_SETUP, run=100, meta={"kind": f"{bn} {t}"}))
+    if want("q_events"):     # each pin at every T-state of the Q sequences
+        for qn, code in Q_SEQS.items():
+            length = 4 * len(code) + 8
+            for n in range(length + 2):
+                for j in ph:
+                    kw = {"code": code, "setup": Q_AF + Q_FLAG_SETUP}
+                    m = {"n": n, "phase": j, "seq": qn}
+                    for name, pins, extra in (
+                            ("int1", [(INT, at(n, j), -1)], dict(ei=True, inta_release=True)),
+                            ("int2", [(INT, at(n, j), -1)], dict(im=2, ei=True, inta_release=True, vec=0x40)),
+                            ("int0", [(INT, at(n, j), -1)], dict(im=0, ei=True, inta_release=True, vec=0xff)),
+                            ("nmi", [(NMI, at(n, j), at(n, j) + 16)], {}),
+                            ("reset", [(RESET, at(n, j), at(n, j) + 64)], dict(run=300, dump_pre=(0x3f,))),
+                            ("busreq1", [(BUSREQ, at(n, j), at(n, j) + 16)], {}),
+                            ("busreq4", [(BUSREQ, at(n, j), at(n, j) + 64)], {}),
+                            ("wait1", [(WAIT, at(n, j), at(n, j) + 16)], {}),
+                            ("wait3", [(WAIT, at(n, j), at(n, j) + 48)], {})):
+                        out.append(case(f"qev_{qn}_{name}_T{n}_p{j:02d}", "q_events", qn, pins,
+                                        meta=dict(m, kind=name), **dict(dict(kw, run=100), **extra)))
+    if want("q_reset"):      # RESET at every half-cycle of the M1 after a flag writer; CCF restarts
+        for qn, code in Q_RESET_SEQS.items():
+            for n in range(1, 4 * len(code) + 12):
+                for j in ph:
+                    out.append(case(f"qrst_{qn}_T{n}_p{j:02d}", "q_reset", qn,
+                                    [(RESET, at(n, j), at(n, j) + 64)], code=code,
+                                    setup=Q_AF + Q_FLAG_SETUP, run=300, dump_pre=(0x3f,),
+                                    meta={"n": n, "phase": j}))
+    if want("wz_int"):       # INT and NMI at every T-state of each instruction that loads WZ
+        for wn in WZ_OPS:
+            code = wz_op(wn)
+            length = 26 if code[0] in (0xdd, 0xfd) else 24 if code[0] in (0xed, 0xcb, 0xcd) else 20
+            for n in range(length + 2):
+                for j in ph:
+                    kw = {"code": code, "setup": WZ_SETUP.get(wn, ()), "run": 100}
+                    out += [case(f"wzi_{wn}_int_T{n}_p{j:02d}", "wz_int", wn, [(INT, at(n, j), -1)],
+                                 ei=True, inta_release=True, meta={"n": n, "phase": j, "kind": "int"}, **kw),
+                            case(f"wzi_{wn}_nmi_T{n}_p{j:02d}", "wz_int", wn,
+                                 [(NMI, at(n, j), at(n, j) + 16)], meta={"n": n, "phase": j, "kind": "nmi"},
+                                 **kw)]
+    if want("blk_events"):   # two rounds of each repeating block instruction, a pin at every T-state
+        for bn, op in BLK_OPS.items():
+            setup = (0x06, 0x02) if op & 2 else (0x01, 0x02, 0x00)
+            if op & 8:       # down: HL / DE from the top of their blocks
+                setup += (0x21, 0x01, 0x80, 0x11, 0x01, 0x83)
+            code = [0xed, op]
+            for n in range(44):
+                kw = {"code": code, "setup": setup, "run": 120}
+                m = {"n": n, "block": bn}
+                for j in ph:
+                    out += [case(f"blk_{bn}_int_T{n}_p{j:02d}", "blk_events", bn, [(INT, at(n, j), -1)],
+                                 ei=True, inta_release=True, meta=dict(m, phase=j, kind="int"), **kw),
+                            case(f"blk_{bn}_nmi_T{n}_p{j:02d}", "blk_events", bn,
+                                 [(NMI, at(n, j), at(n, j) + 16)], meta=dict(m, phase=j, kind="nmi"), **kw)]
+                out += [case(f"blk_{bn}_reset_T{n}", "blk_events", bn, [(RESET, at(n, 4), at(n, 4) + 64)],
+                             meta=dict(m, phase=4, kind="reset"), dump_pre=(0x3f,), **dict(kw, run=300)),
+                        case(f"blk_{bn}_busreq_T{n}", "blk_events", bn, [(BUSREQ, at(n, 4), at(n, 4) + 16)],
+                             meta=dict(m, phase=4, kind="busreq"), **kw),
+                        case(f"blk_{bn}_wait_T{n}", "blk_events", bn, [(WAIT, at(n, 4), at(n, 4) + 16)],
+                             meta=dict(m, phase=4, kind="wait"), **kw)]
     if want("opcodes"):      # every opcode: plain, BUSREQ and WAIT walked through it, INT, NMI
         for name, code, setup in all_opcodes():
             kw = {"code": code, "setup": setup, "run": 120}
@@ -734,7 +874,7 @@ def parse_rows(out, what):
     rows = []
     for line in out.splitlines():
         v = line.split()
-        if len(v) == 15 and v[0].isdigit():
+        if len(v) == 18 and v[0].isdigit():
             rows.append([int(v[0]), int(v[1]), int(v[2], 16), int(v[3], 16)] +
                         [int(x) for x in v[4:12]] + [int(x, 16) for x in v[12:]])
     if not rows:
@@ -742,12 +882,33 @@ def parse_rows(out, what):
     return rows
 
 
-# row: h clk addr data mreq iorq rd wr m1 rfsh halt busack aen den cen
-H, CLK, ADDR, DATA, MREQ, IORQ, RD, WR, M1, RFSH, HALT, BUSACK, AEN, DEN, CEN = range(15)
+# row: h clk addr data mreq iorq rd wr m1 rfsh halt busack aen den cen f wz q
+# (q: the models' Q; perfectz80's P, its pending-flags bit)
+H, CLK, ADDR, DATA, MREQ, IORQ, RD, WR, M1, RFSH, HALT, BUSACK, AEN, DEN, CEN, F, WZ, Q = range(18)
 CONTROL = [("mreq", MREQ), ("iorq", IORQ), ("rd", RD), ("wr", WR), ("m1", M1),
            ("rfsh", RFSH), ("halt", HALT), ("busack", BUSACK)]
 # the pads driven: address, data, MREQ IORQ RD WR M1 RFSH HALT BUSACK
 ENABLES = [("addr_en", AEN), ("data_en", DEN), ("ctl_en", CEN)]
+STATE = [("F", 1), ("WZ", 2), ("Q", 3)]     # fields of a state sample
+
+
+def state_samples(rows, die):
+    """{half: (F, WZ, Q)}: the state an instruction leaves, as the next
+    one meets it -- in T4.P of every M1-type cycle (an opcode fetch, an
+    INTA, the fetch an NMI discards; T3.P is the first half-cycle of its
+    refresh). The die writes the pending results of the instruction before
+    in that M1's T1.N (EX AF), T2.N (registers, EXX, EX DE,HL) and T3.N
+    (F), the models on the edges that end its T1 and T2, so both have them
+    by T4.P, and none has started the new instruction's. The die has no
+    Q register (docs/flags.md "Q"): its Q is F where this M1 wrote the
+    flags left pending (P), else 0."""
+    out = {}
+    for i in range(1, len(rows) - 2):
+        r, a, b = rows[i], rows[i + 1], rows[i + 2]
+        if r[CLK] and not r[RFSH] and rows[i - 1][RFSH] and not a[RFSH] and not b[RFSH]:
+            q = (b[F] if b[Q] else 0) if die else b[Q]
+            out[b[H]] = (b[F], b[WZ], q)
+    return out
 
 
 def addressed(r):
@@ -757,11 +918,15 @@ def addressed(r):
     return True
 
 
-def first_difference(a, b):
-    """(half, [what differs]) of the first mismatching half-cycle, or None."""
+def first_difference(a, b, die=False):
+    """(half, [what differs]) of the first mismatching half-cycle, or None.
+    The pins in every half-cycle. die: b is perfectz80's, and the state
+    (F, WZ, Q) is compared where state_samples takes it. Else the two are
+    models, and F, WZ and Q must match in every half-cycle too."""
     bh = {r[H]: r for r in b}
     if not a or not b or a[0][H] != b[0][H]:
         return (a[0][H] if a else 0), ["start"]
+    sa, sb = (state_samples(a, False), state_samples(b, True)) if die else ({}, {})
     for ra in a:
         rb = bh.get(ra[H])
         if rb is None:
@@ -769,9 +934,15 @@ def first_difference(a, b):
         what = [n for n, i in CONTROL if ra[i] != rb[i]]
         if addressed(ra) and addressed(rb) and ra[ADDR] != rb[ADDR]:
             what.append("addr")
-        if not ra[WR] and not rb[WR] and ra[DATA] != rb[DATA]:
+        if (ra[DATA] ^ rb[DATA]) & ra[DEN] & rb[DEN]:     # the pads both drive
             what.append("data")
         what += [n for n, i in ENABLES if ra[i] != rb[i]]
+        if die:
+            x, y = sa.get(ra[H]), sb.get(ra[H])
+            if x != y:
+                what += [n for n, k in STATE if x and y and x[k - 1] != y[k - 1]] or ["samples"]
+        else:
+            what += [n for n, i in (("F", F), ("WZ", WZ), ("Q", Q)) if ra[i] != rb[i]]
         if what:
             return ra[H], what
     if len(a) != len(b):
@@ -799,13 +970,25 @@ def bus_cycles(rows, halves=False):
     return (out, at) if halves else out
 
 
+def state_text(samples, what):
+    """The differing fields of the state samples, as text for the report"""
+    k = [i for n, i in STATE if n in what] or [1, 2, 3]
+    fmt = {1: "F={:02x}", 2: "WZ={:04x}", 3: "Q={:02x}"}
+    return " ".join(f"{h}:" + ",".join(fmt[i].format(v[i - 1]) for i in k) for h, v in sorted(samples.items()))
+
+
 def summarize(c, rtl, pz):
-    d = first_difference(rtl, pz)
+    d = first_difference(rtl, pz, die=True)
     if d is None:
         return None
     half, what = d
-    return {"first_half": half, "differs": what,
-            "rz80": " ".join(bus_cycles(rtl)[:40]), "pz80": " ".join(bus_cycles(pz)[:40])}
+    out = {"first_half": half, "differs": what,
+           "rz80": " ".join(bus_cycles(rtl)[:40]), "pz80": " ".join(bus_cycles(pz)[:40])}
+    if any(n in what for n, _ in STATE):    # the state, from the first differing sample
+        sr, sp = state_samples(rtl, False), state_samples(pz, True)
+        out["rz80"] = state_text({h: v for h, v in sr.items() if h >= half}, what)
+        out["pz80"] = state_text({h: v for h, v in sp.items() if h >= half}, what)
+    return out
 
 
 def facts(c, rows):
@@ -886,19 +1069,32 @@ def reset_section(rows):
     return out
 
 
-def write_diff(c, rtl, pz, path):
-    names = "h clk addr data mreq iorq rd wr m1 rfsh halt busack aen den cen"
+def write_diff(c, rtl, pz, path, die=True):
+    """Side by side, one half-cycle a line: `*` where the pins differ;
+    with the die on the right, its state samples (state_samples) after the
+    lines they are taken in, `!` where they differ. The models' rows end
+    in F WZ Q, the die's in F WZ P."""
+    names = "h clk addr data mreq iorq rd wr m1 rfsh halt busack aen den cen f wz q"
+    right = ("perfectz80 (q: P)", names) if die else ("RZ80 (iverilog RTL)", names)
+    left = "RZ80 (iverilog RTL)" if die else "C model"
+    sa, sb = (state_samples(rtl, False), state_samples(pz, True)) if die else ({}, {})
     with open(path, "w") as f:
         f.write(f"# {c['name']}: pulses {c['pulses']} (pin lo hi in 1/16 T from the marker's T1)\n")
-        f.write(f"# {'RZ80 (iverilog RTL)':<56} | perfectz80\n# {names:<56} | {names}\n")
+        f.write(f"# {left:<68} | {right[0]}\n# {names:<68} | {right[1]}\n")
         for i in range(max(len(rtl), len(pz))):
             fmt = lambda r: (f"{r[H]} {r[CLK]} {r[ADDR]:04x} {r[DATA]:02x} " +
                              " ".join(str(v) for v in r[MREQ:AEN]) +
-                             f" {r[AEN]:04x} {r[DEN]:02x} {r[CEN]:02x}") if r else ""
+                             f" {r[AEN]:04x} {r[DEN]:02x} {r[CEN]:02x} {r[F]:02x} {r[WZ]:04x} {r[Q]:02x}") if r else ""
             a = rtl[i] if i < len(rtl) else None
             b = pz[i] if i < len(pz) else None
-            mark = " " if a and b and fmt(a).split()[4:] == fmt(b).split()[4:] else "*"
-            f.write(f"{mark} {fmt(a):<56} | {fmt(b)}\n")
+            n = 15 if die else 18                # the die's state is compared in the samples
+            mark = " " if a and b and fmt(a).split()[4:n] == fmt(b).split()[4:n] else "*"
+            f.write(f"{mark} {fmt(a):<68} | {fmt(b)}\n")
+            h = a[H] if a else None
+            if h in sa or h in sb:
+                x, y = sa.get(h), sb.get(h)
+                show = lambda v: f"F={v[0]:02x} WZ={v[1]:04x} Q={v[2]:02x}" if v else "-"
+                f.write(f"{'!' if x != y else ' '}   state sample {show(x):<52} | {show(y)}\n")
 
 
 def latch_section(latch):
@@ -1029,8 +1225,7 @@ def opcode_lengths():
     for c in cases(["opcodes"], 2):
         if c["meta"]["kind"] != "plain":
             continue
-        c["prog_sha"] = hashlib.sha1(program(c["code"], c["im"], c["ei"], c["nmi_nops"], c["setup"],
-                                             c["full_dump"])).hexdigest()[:16]
+        c["prog_sha"] = hashlib.sha1(image(c)).hexdigest()[:16]
         text = cache.get(cache_key(c, hid))
         if text is None:
             sys.exit(f"{c['name']}: no recorded trace (run --groups opcodes --record first)")
@@ -1053,8 +1248,7 @@ def timing_classes(cache, hid):
     for c in todo:
         pid = prog_id(c)
         if pid not in shas:
-            shas[pid] = hashlib.sha1(program(c["code"], c["im"], c["ei"], c["nmi_nops"], c["setup"],
-                                             c["full_dump"])).hexdigest()[:16]
+            shas[pid] = hashlib.sha1(image(c)).hexdigest()[:16]
         c["prog_sha"] = shas[pid]
     pins = lambda rows: tuple((r[M1], r[MREQ], r[IORQ], r[RD], r[WR], r[RFSH], r[HALT], r[BUSACK]) for r in rows)
     runs = collections.defaultdict(dict)
@@ -1126,7 +1320,7 @@ def main():
     for c in todo:             # one program file per distinct image, named by its hash
         pid = prog_id(c)
         if pid not in progs:
-            ram = program(c["code"], c["im"], c["ei"], c["nmi_nops"], c["setup"], c["full_dump"])
+            ram = image(c)
             sha = hashlib.sha1(ram).hexdigest()[:16]
             path = os.path.join(work, f"prog_{sha}.hex")
             if not os.path.exists(path):
@@ -1169,7 +1363,7 @@ def main():
                 d = first_difference(cm, rtl)
                 if d:
                     c_differs.append((c["name"], d))
-                    write_diff(c, cm, rtl, os.path.join(diff_dir, f"{c['name']}.c_vs_rtl.txt"))
+                    write_diff(c, cm, rtl, os.path.join(diff_dir, f"{c['name']}.c_vs_rtl.txt"), die=False)
             results.append((c, s, facts(c, rtl), facts(c, pz)))
             if c["group"] == "latch":
                 latch[c["name"]] = (rtl, pz, c["meta"])

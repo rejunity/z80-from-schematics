@@ -200,6 +200,14 @@ phase takes the bus of the half-cycle before it, so `is_latch_phase` names
 the phase after the one read from: T3.P for an opcode, T3.N for read data
 (cmodel/z80_core.c).
 
+The same latch drives the pads in a write: the die loads it from the
+internal data bus in the write's T1.N (`d_dl`, perfectz80 node 133), and
+LD (IX+d),n, whose n is in the latch from its read, doesn't. A RESET seen
+on the rising edge that starts that write's T1 makes it load the latch
+anyway, with the u bus's (W ^ 7F) | 18 (W the address's high byte), and
+the pads show that byte until the cut ends the write before WR
+(docs/known-differences.md row 33).
+
 ## HALT
 
 `HALT` is the only Z80 instruction whose M1 cycle is allowed to be
@@ -416,9 +424,12 @@ edge.
   sum, waits in `pf_val` (`pf_cut` after a cut on T2) for T2's end. EX
   AF,AF' flips at T1's end, EXX and EX DE,HL at T2's. Q, which SCF / CCF
   read, is committed with the F write -- 0 when the instruction writes
-  none. (The die also sets Q to the F a cut on T2 writes, and leaves it 0
-  after EX AF,AF' and after a DD / FD prefix; the models don't yet:
-  docs/known-differences.md rows 29-31.)
+  none, and 0 after EX AF,AF' and for the opcode after a prefix. A RESET
+  cut from the T2 to the flag-writing T3 of that M1 (an INTA's: to its
+  second automatic Tw), or on the T1 of the M1 a restart begins, leaves
+  the flags pending on the die, and the restart writes them: Q is the F
+  the cut left; any other cut leaves Q = 0 (docs/flags.md "Q";
+  docs/known-differences.md rows 29-31).
 - **Inside the instruction**, on the die's edge or on the next one when
   nothing reads the register in between: a write in T_k.N on the edge
   that ends T_k, which a cut ending there blocks (the RTL's block pointer
@@ -434,6 +445,22 @@ edge.
   last edge of the M-cycle before the write. A cut that ends on a T2 that
   WAIT held, or on a Tw after it, makes the T2 writes then (the C model's
   stall path in `advance()`, the RTL's `stall_cut` / `tw_cut`).
+- **WZ**, a byte at a time: a byte read into Z or W in that read's T3.N;
+  an incrementer or adder result in T2.N of the M-cycle that uses it --
+  rr+1 (LD A,(rr), IN / OUT (C), ADD / ADC / SBC HL's HL+1), nn+1 in the
+  transfer at nn, CPI's WZ+-1, INI / OUTI's BC+-1, RLD's HL+1 in its
+  write, the block repeat's PC+1, EX (SP),HL's SP+1; IX+d and PC+e (JR,
+  DJNZ) Z in T2.N and W in T5.N of their 5-T cycle, DD CB d op's Z in the
+  op read's T2.N and W in the next M-cycle's; LD A,(nn) / LD (nn),A put
+  (Q ^ F) | A in W in the operand read's T1.N (what the M1's AF access
+  left on the bus), IN A,(n) / OUT (n),A put A there; RST and the
+  interrupt responses Z = the vector in the first push's T3.N, W in the
+  second's (IM 2: {I, vector} in the second push's T2.N and T3.N, then
+  I:vector+1 in the table read's T2.N). The models make a byte read on its
+  read's last edge unless a cut ends there (C `cut_now`, RTL `ctl_wzc`);
+  the others wait for their M-cycle (C `wz_later` / `wzp_*`, RTL `wzp_v`)
+  and land at its end, or at a cut that ends on a later T-state -- what a
+  RESET leaves in WZ is the die's (known difference 32).
 
 The registers as the program sees them, with the next M1's writes made:
 `z80_arch()` in the C model (zexrunner, fuse_runner, z80test_runner,

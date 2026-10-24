@@ -10,10 +10,13 @@ import os, re, subprocess, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GEN  = os.path.join(ROOT, "scripts/gen_fuse_tb.py")
-TB_V = os.path.join(ROOT, "tests/iverilog/tb_fuse.v")
-VVP  = os.path.join(ROOT, "build/tb_fuse.vvp")
-EXP  = os.path.join(ROOT, "tests/fuse/tests.expected")
-FIX  = os.path.join(ROOT, "tests/fuse/silicon.expected")
+# FUSE_IN / FUSE_EXPECTED / FUSE_FIX / FUSE_TB / FUSE_VVP run another corpus in
+# the same format (tests/xyflags/, make xyflags_rtl); gen_fuse_tb.py reads them too
+TB_V = os.environ.get("FUSE_TB")       or os.path.join(ROOT, "tests/iverilog/tb_fuse.v")
+VVP  = os.environ.get("FUSE_VVP")      or os.path.join(ROOT, "build/tb_fuse.vvp")
+EXP  = os.environ.get("FUSE_EXPECTED") or os.path.join(ROOT, "tests/fuse/tests.expected")
+FIX  = os.environ.get("FUSE_FIX")      or os.path.join(ROOT, "tests/fuse/silicon.expected")
+LABEL = os.environ.get("FUSE_LABEL", "FUSE")
 
 
 def parse_expected(path):
@@ -85,7 +88,7 @@ def main():
     import glob
     rtl = sorted(os.path.relpath(p, ROOT) for p in glob.glob(os.path.join(ROOT, "rtl", "*.v")))
     subprocess.check_call(["iverilog", "-g2001", "-Irtl", "-o", VVP] + rtl +
-                          ["tests/iverilog/tb_fuse.v"], cwd=ROOT)
+                          [TB_V], cwd=ROOT)
     print("running iverilog vvp ...")
     proc = subprocess.run(["vvp", VVP], cwd=ROOT, capture_output=True, text=True)
     text = proc.stdout
@@ -125,9 +128,9 @@ def main():
             if len(first_fails) < 10:
                 first_fails.append(f"FAIL {name}: " + " ".join(diff))
 
-    print(f"\n=== FUSE through RTL (iverilog) ===")
+    print(f"\n=== {LABEL} through RTL (iverilog) ===")
     print(f"{len(expd)} tests: {pass_ct} PASS, {fail_ct} FAIL, {len(missing)} missing  "
-          f"({len(fixes)} against {os.path.relpath(FIX, ROOT)})")
+          + (f"({len(fixes)} against {os.path.relpath(FIX, ROOT)})" if FIX != "/dev/null" else ""))
     if missing:
         print("no result from the RTL for: " + " ".join(missing[:20]))
     if stale:

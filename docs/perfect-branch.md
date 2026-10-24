@@ -76,7 +76,8 @@ What the branch deferred, and what became of it:
   - **BUSREQ** -- the die's grant after any M-cycle (row 16).
   - **The event sweep** (`make event_sweep`, docs/event-sweep.md) went
     further than the plan: RESET / INT / NMI / BUSREQ / WAIT at every
-    T-state of every opcode, 37,846 cases, all matching perfectz80.
+    T-state of every opcode, 51,126 cases, all matching perfectz80 (F, WZ
+    and Q included since 2026-10-24).
   - **A-Z80 as second gate-level oracle** — **dropped.** With LibreLane
     providing an independent sky130-synthesised gate-level reference
     alongside perfectz80's Visual-Z80 port, the third oracle is no

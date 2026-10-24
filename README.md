@@ -136,8 +136,8 @@ fossi-foundation substituter configured (see [docs/librelane-flow.md](docs/libre
 | ✅  | FUSE corpus, C model                                            | **1356 / 1356**, none skipped (6 against the die's values, `tests/fuse/silicon.expected`) |
 | ✅  | FUSE corpus, through RTL (iverilog)                             | **1356 / 1356**                     |
 | ✅  | FUSE corpus on the die (perfectz80, `make fuse_pz80`)           | **1356 / 1356** (1350 as FUSE expects, the 6 above as the die runs them) |
-| ✅  | Patrik Rak z80test (z80doc / z80flags / z80memptr / z80full)    | **160 / 160** each, C model and RTL |
-| 🟡  | Patrik Rak z80ccf; Q (SCF / CCF's X / Y) vs perfectz80          | z80ccf 159 / 160 (test 129, `EX AF,AF'`); Q differs from the die after `EX AF,AF'`, a DD / FD prefix and a RESET cut ([known differences 29-31](docs/known-differences.md); fix in progress on branch `nmos-q`) |
+| ✅  | Patrik Rak z80test (z80doc / z80flags / z80memptr / z80full / z80ccf) | **160 / 160** each, C model and RTL |
+| ✅  | Q, F and WZ vs perfectz80 (the event sweep's state samples)   | identical in every case, C model and RTL ([known differences 29-32](docs/known-differences.md), resolved) |
 | ✅  | BASIC ROM via C model (NASCOM + Tiny BASIC, canned scripts)     | 4 / 4 subtests                      |
 | ✅  | BASIC ROM via Verilator RTL (NASCOM + Tiny BASIC)               | 4 / 4 subtests                      |
 | ✅  | BASIC ROM on yosys-synthesised sky130 gate-level netlist        | 4 / 4 subtests (~9 min)             |
@@ -151,7 +151,7 @@ fossi-foundation substituter configured (see [docs/librelane-flow.md](docs/libre
 | ✅  | Gate-level vs perfectz80 — **iverilog RTL** path                | 14/14 PASS, the same 14 programs    |
 | ✅  | Gate-level vs perfectz80 — **LibreLane sky130 netlist** path    | 14/14 PASS, the same 14 programs ("ultimate test") |
 | ✅  | Pin-scenario programs vs perfectz80 (15 INT/NMI/WAIT/BUSREQ/RESET scenarios) | 15/15 in the C model, the RTL and the LibreLane netlist, the address included in every phase |
-| ✅  | RESET / INT / NMI / BUSREQ / WAIT timing sweep vs perfectz80 (`make event_sweep`, [docs/event-sweep.md](docs/event-sweep.md)) | 37,846 / 37,846 cases pin-identical in every half-cycle (address, BUSACK and the pad drivers included; after a RESET, every register it keeps), the C model identical to the RTL in all; so is `opcodes_reset`, RESET at every T-state of every opcode (27,768 cases) |
+| ✅  | RESET / INT / NMI / BUSREQ / WAIT timing sweep vs perfectz80 (`make event_sweep`, [docs/event-sweep.md](docs/event-sweep.md)) | 51,126 / 51,126 cases pin-identical in every half-cycle (address, BUSACK and the pad drivers included; after a RESET, every register it keeps) and F, WZ and Q identical in T4.P of every M1, the C model identical to the RTL in all (F, WZ and Q every half-cycle); so is `opcodes_reset`, RESET at every T-state of every opcode (27,768 cases) |
 
 Legend: ✅ pass / 100 % &nbsp; 🟡 ≥ 95 % (close, known artifacts) &nbsp; 🚧 < 95 % (work in progress).
 

@@ -174,44 +174,51 @@ random registers; the ASIC chip ties `por_n` off.
 ## D. Q register
 
 Q is the F the previous instruction wrote, or 0 (docs/undocumented.md);
-SCF / CCF take X / Y from `A | (F XOR Q)`. Three corners differ from the
-die, found with perfectz80 on 2026-10-24; the fix for all three is in
-progress on branch `nmos-q`.
+SCF / CCF take X / Y from `A | (F XOR Q)`. The die has no Q register: Q
+is whether the M1 that starts an instruction wrote flags the one before
+left pending (docs/flags.md "Q"). The models keep Q as a register (`q`,
+`reg_q`); three corners differed from the die, found with perfectz80 on
+2026-10-24 and fixed the same day.
 
-### D1. EX AF,AF' sets Q (OPEN — known difference 29)
+### D1. EX AF,AF' sets Q (RESOLVED — known difference 29)
 
-The models end EX AF,AF' with Q = the F it swaps in (`wb_defer` in
+The models ended EX AF,AF' with Q = the F it swaps in (`wb_defer` in
 `cmodel/z80_core.c`, `reg_q_n` in `rtl/z80_core.v`, the `EXAF` step kind in
 `cfast/gen_fast.py`); the die leaves Q = 0, so a SCF / CCF after it takes
 X / Y from A | F. An earlier version of this entry called the bump
 correct because z80full's test 129 passes -- but z80full doesn't follow
-EX AF,AF' with a CCF. z80ccf does, and fails its test 129 (CRC 3E5C2221,
+EX AF,AF' with a CCF. z80ccf does, and failed its test 129 (CRC 3E5C2221,
 expected 4CFA32A0).
 
-**Fix**: Q = 0 at the end of EX AF,AF'.
+**Fix**: Q = 0 at the end of EX AF,AF'. z80ccf passes 160 / 160.
 
-**Status**: open.
+**Status**: resolved.
 
-### D2. A DD / FD prefix keeps Q (OPEN — known difference 30)
+### D2. A prefix keeps Q (RESOLVED — known difference 30)
 
-A DD or FD prefix clears Q on the die; the models carry Q through the
-prefix (`set_prefix_from_ir` in the C model, the RTL's prefix decode), so
-`DD 3F` / `FD 37` after a flag write take X / Y from A alone.
+A prefix's M1 takes the flags left pending and writes none: Q = 0 for the
+opcode after DD, FD, ED or CB. The models carried Q through the prefix, so
+`DD 3F` / `FD 37` after a flag write took X / Y from A alone.
 
-**Fix**: Q = 0 when a DD or FD prefix is decoded.
+**Fix**: Q = 0 when a prefix is decoded (`set_prefix_from_ir`, the RTL's
+prefix step).
 
-**Status**: open.
+**Status**: resolved.
 
-### D3. A RESET cut leaves Q (OPEN — known difference 31)
+### D3. A RESET cut and Q (RESOLVED — known difference 31)
 
-A RESET cut on the T2 of the M1 after a flag write writes F from the flag
-latches (`f_cut`, row 19); the die sets Q to that F as well, the models
-leave Q as it was (`if (!cut)` in `wb_fire_op` / `wb_fire` and the RTL's
-fire).
+The flags left pending survive a RESET whose cut ends from the T2 of the
+M1 they wait for to the T3 whose low half writes them (an INTA's: to its
+second automatic Tw) -- the T1.N took them -- and another cut on the T1 of
+the M1 that restarts; that M1 writes them (F as `f_cut` left it, row 19):
+Q is that F. Any other cut leaves none pending: Q = 0. The models
+left Q as it was at any cut (`if (!cut)` in `wb_fire_op` / `wb_fire` and the
+RTL's fire).
 
-**Fix**: Q = the F the cut writes.
+**Fix**: Q = the F the fire leaves (0 for a CPI / INI / OUTI cut on T1,
+which writes none), and Q = 0 at any cut outside that window.
 
-**Status**: open.
+**Status**: resolved.
 
 ## E. Internal bus / external pin protocols
 
@@ -269,9 +276,9 @@ differences 12 and 13):
 - **SCF / CCF**: X / Y = `A | (F XOR Q)`, not `A | Q` (redcode's Zilog NMOS
   model).
 
-Now z80doc, z80memptr, z80full and z80flags pass: 160 tests each, the SCF /
-CCF variants for NEC and ST parts skipped by the suite as not this CPU.
-z80ccf fails one test, 129 (D1).
+Now z80doc, z80memptr, z80full, z80flags and z80ccf pass: 160 tests each,
+the SCF / CCF variants for NEC and ST parts skipped by the suite as not
+this CPU. z80ccf failed one test, 129, until D1 was fixed.
 
 **False lead** (commit `093f95b`, reverted in `b4f5aca`): a Q that
 persisted across instructions broke ZEXALL's `<daa,cpl,scf,ccf>` CRC (run
@@ -324,11 +331,11 @@ to another maker's SCF / CCF is not planned (no current use case).
 
 ### Resolved
 A2 (ALU modes), B1 (M1 deassert), B2 (NMI sample), B3 (INT sample), B4
-(data latch), C1 (reset state), F1 (block flags, SCF / CCF).
+(data latch), C1 (reset state), D1-D3 (Q), F1 (block flags, SCF / CCF).
 
 ### Open
-D1-D3 (Q: EX AF,AF', DD / FD prefixes, RESET cuts; known differences
-29-31), on branch `nmos-q`.
+None. D1-D3 (Q: EX AF,AF', prefixes, RESET cuts; known differences
+29-31) were resolved on 2026-10-24.
 
 ### Remaining structural work, sorted by leverage × risk
 

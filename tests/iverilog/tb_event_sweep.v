@@ -39,11 +39,11 @@
 // data bus carries dd (hex), in half-cycle w vv, from just after the edge
 // that starts the half-cycle to the edge that ends it (as the events).
 // Memory writes are captured from the pins at the end of every half-cycle.
-// Output: `h clk addr data mreq iorq rd wr m1 rfsh halt busack aen den cen`
+// Output: `h clk addr data mreq iorq rd wr m1 rfsh halt busack aen den cen f wz q`
 // for halves 0 .. 2*run-1 from the marker's T1, pins sampled at the end of
 // each half; aen den cen are the pads driven (hex masks: A0-A15, D0-D7,
 // MREQ IORQ RD WR M1 RFSH HALT BUSACK bit 0 first): addr_drive, data_drive,
-// ctl_drive (M1 RFSH HALT BUSACK always).
+// ctl_drive (M1 RFSH HALT BUSACK always); then the core's F, WZ and Q.
 // ===========================================================================
 `timescale 1ns/1ns
 
@@ -214,11 +214,12 @@ module tb_event_sweep;
             if (t % 16 == 15 && !mreq_n && !wr_n) mem[addr] = data_out;
             if (t % 16 == 15 && !iorq_n && !wr_n) io[addr] = data_out;
             if (found && t % 16 == 15) begin
-                $display("%0d %0d %04x %02x %0d %0d %0d %0d %0d %0d %0d %0d %04x %02x %02x",
+                $display("%0d %0d %04x %02x %0d %0d %0d %0d %0d %0d %0d %0d %04x %02x %02x %02x %04x %02x",
                          half - mark_half, clk, addr, data_out,
                          mreq_n, iorq_n, rd_n, wr_n, m1_n, rfsh_n, halt_n, busack_n,
                          addr_drive ? 16'hffff : 16'h0000, data_drive ? 8'hff : 8'h00,
-                         {4'hf, {4{ctl_drive}}});
+                         {4'hf, {4{ctl_drive}}},
+                         dut.u_core.r_af[7:0], dut.u_core.r_wz, dut.u_core.reg_q);
                 if (half - mark_half >= 2 * run - 1) $finish(0);
             end
             if (!found && t > 32 * 4000) begin $display("marker not reached"); $finish(0); end

@@ -26,19 +26,17 @@ runs `make z80test` in the `z80test` job and one variant per job of the
 | `z80doc.tap`      | all registers, the documented flags only                                     | 160 / 160, in `make z80test` |
 | `z80flags.tap`    | all flags, X and Y included; registers ignored                              | 160 / 160, in `make z80test` |
 | `z80memptr.tap`   | all flags after a `BIT n,(HL)` that follows each tested instruction: MEMPTR (WZ) shows through X and Y | 160 / 160, in `make z80test` |
-| `z80ccf.tap`      | all flags after a `CCF` that follows each tested instruction: Q shows through CCF's X and Y | 159 / 160: test 129 `EX AF,AF'` fails |
+| `z80ccf.tap`      | all flags after a `CCF` that follows each tested instruction: Q shows through CCF's X and Y | 160 / 160, in `make z80test` |
 
 "160 / 160" counts the four tests of the NEC and ST variants of SCF / CCF
 (003-006), which the suite reports as `Skipped` on a Zilog-type CPU.
 
-`z80ccf` test 129 fails on main because the models leave Q, the "flags
-written by the last instruction" state that SCF / CCF read their X and Y
-from, equal to the swapped-in F after `EX AF,AF'`; the die clears it (CRC
-3E5C2221, expected 4CFA32A0). It is one of three Q differences found on
-perfectz80 in October 2026 (EX AF,AF', a DD / FD prefix, a RESET cut at
-the next M1), listed in
-[docs/known-differences.md](../../docs/known-differences.md). The fix is
-on branch `nmos-q`, which also adds `z80ccf` to `make z80test`.
+`z80ccf` test 129 failed until the models cleared Q, the "flags written
+by the last instruction" state SCF / CCF read their X and Y from, after
+`EX AF,AF'` as the die does (CRC 3E5C2221, expected 4CFA32A0): one of
+three Q differences found on perfectz80 in October 2026 (EX AF,AF', a
+prefix, a RESET cut), rows 29-31 of
+[docs/known-differences.md](../../docs/known-differences.md).
 
 Upstream also has `z80docflags` (documented flags only, registers
 ignored): `z80flags` checks a superset of it, so it is not vendored.
