@@ -54,8 +54,8 @@ them:
   response, where redcode rejects a second NMI.
 - **RESET**: sampled at every rising edge. Seen in the T2 of an M1 cycle
   and gone at the next edge, it is the special reset
-  (`z80_special_reset`). Otherwise the die finishes the T-state it saw
-  it in and idles, and redcode gets `z80_instant_reset`; the fetch at
+  (`z80_special_reset`). Otherwise the die runs the next T-state as a
+  cut cycle and idles, and redcode gets `z80_instant_reset`; the fetch at
   0000 comes on the third rising edge after RESET goes, and the die keeps
   no NMI edge from before the second.
 - **A pin is one wire**: two pulses that overlap end when the first does,
