@@ -23,7 +23,9 @@
  *                    calls ZF_SYNC_STATE() first.
  *   ZF_BOUNDARY(c)   an expression evaluated at every instruction boundary
  *                    (z80_t *c, the next instruction about to be fetched);
- *                    nonzero returns
+ *                    nonzero returns. It runs once a Z80 instruction: keep
+ *                    it small and inline, its rare work out of line
+ *                    (cfast/zexfast.c's boundary() and bdos_trap())
  * It defines static uint64_t z80f_run(z80f_t *f, uint64_t pins): pins as
  * for z80f_tick; returns the last phase's pins after ZF_BUS; call it again
  * to go on.
