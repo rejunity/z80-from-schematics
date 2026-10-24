@@ -614,9 +614,9 @@ static Z80_STEP_INLINE void z80_exec_step(z80_t *c)
          * gave the correct final state but the *intermediate* PC + halt
          * pin trace diverged from perfectz80 by 145 / 200 phases on
          * prog13_halt_int. The silicon-faithful convention agrees with
-         * perfectz80 exactly. FUSE's test `76` (expecting PC at HALT
-         * byte) becomes another known-FUSE-wrong case alongside the
-         * Banks fold-in / SCF Q-leak / INxR WZ cases. */
+         * perfectz80 exactly. FUSE's test `76` expects PC at the HALT
+         * byte; tests/fuse/silicon.expected has the die's value (make
+         * fuse_pz80 runs the case on perfectz80). */
         c->halted = true;
         finish(c);
         break;
