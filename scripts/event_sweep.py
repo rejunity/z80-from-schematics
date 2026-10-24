@@ -929,12 +929,11 @@ def first_difference(a, b, die=False):
     """(half, [what differs]) of the first mismatching half-cycle, or None.
     The pins in every half-cycle. die: b is perfectz80's, and the state
     (F, WZ, Q) is compared where state_samples takes it. Else the two are
-    models: F and Q in every half-cycle too, WZ in the samples (the C
-    model loads WZ whole where the RTL takes it a byte at a time)."""
+    models, and F, WZ and Q must match in every half-cycle too."""
     bh = {r[H]: r for r in b}
     if not a or not b or a[0][H] != b[0][H]:
         return (a[0][H] if a else 0), ["start"]
-    sa, sb = state_samples(a, False), state_samples(b, die)
+    sa, sb = (state_samples(a, False), state_samples(b, True)) if die else ({}, {})
     for ra in a:
         rb = bh.get(ra[H])
         if rb is None:
@@ -945,12 +944,12 @@ def first_difference(a, b, die=False):
         if not ra[WR] and not rb[WR] and ra[DATA] != rb[DATA]:
             what.append("data")
         what += [n for n, i in ENABLES if ra[i] != rb[i]]
-        x, y = sa.get(ra[H]), sb.get(ra[H])
-        if x != y:
-            what += [n for n, k in STATE if x and y and x[k - 1] != y[k - 1] and (die or n == "WZ")] \
-                    or ([] if x and y else ["samples"])
-        if not die:
-            what += [n for n, i in (("F", F), ("Q", Q)) if ra[i] != rb[i]]
+        if die:
+            x, y = sa.get(ra[H]), sb.get(ra[H])
+            if x != y:
+                what += [n for n, k in STATE if x and y and x[k - 1] != y[k - 1]] or ["samples"]
+        else:
+            what += [n for n, i in (("F", F), ("WZ", WZ), ("Q", Q)) if ra[i] != rb[i]]
         if what:
             return ra[H], what
     if len(a) != len(b):
