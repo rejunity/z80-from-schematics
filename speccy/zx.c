@@ -144,6 +144,17 @@ void zx_tape_motor(zx_t *z)
     }
     uint16_t pc = z80_arch(&z->cpu)->rf[RFP_PC];
     bool reading = z->fe_reads_last >= 400 || (pc >= 0x0556 && pc < 0x0606);
+    if (z->tape.stopped) {
+        /* a stop block: PLAY again once a loader has waited half a second */
+        z->tape_wait = reading ? z->tape_wait + 1 : 0;
+        if (z->tape_wait >= 25) {
+            z->tape.stopped = false;
+            z->tape.playing = true;
+            z->tape_idle = 0;
+            z->tape_wait = 0;
+        }
+        return;
+    }
     if (reading) {
         z->tape_idle = 0;
         z->tape.playing = true;

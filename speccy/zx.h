@@ -21,6 +21,7 @@ typedef struct {
     uint32_t fe_reads;      /* port 0xFE reads this frame                */
     uint32_t fe_reads_last; /* ... in the last frame                     */
     uint32_t tape_idle;     /* frames since the program last read the tape */
+    uint32_t tape_wait;     /* frames it has read it since a stop block  */
     int      reset_phases;  /* RESET held for this many more phases      */
     uint64_t frames;
 } zx_t;
@@ -38,7 +39,9 @@ void zx_phase(zx_t *z);
 /* The tape motor: on while a program reads the tape -- port 0xFE read
    thousands of times a frame, or the PC in the ROM's tape routines -- and
    off 3 s after (the ROM sits a second in a delay loop when it first hears
-   a tone). Call once a frame. */
+   a tone). A stop block (a TZX's "stop the tape") stops it until the
+   program has read the tape for half a second: a loader waiting for the
+   next part, as someone would press PLAY for it. Call once a frame. */
 void zx_tape_motor(zx_t *z);
 /* The font the ROM prints with (CHARS + 256), 768 bytes. */
 const uint8_t *zx_font(const zx_t *z);

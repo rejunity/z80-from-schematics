@@ -10,6 +10,7 @@ drawn as text in any terminal that has Unicode block characters.
 make speccy speccy_rom        # build/bin/speccy, and the ROM beside it
 ./build/bin/speccy            # the 48K BASIC
 ./build/bin/speccy game.tap   # types LOAD "", plays the tape at full speed
+./build/bin/speccy game.tzx   # the same for a TZX: turbo and custom loaders
 ```
 
 `make speccy_rom` downloads FUSE 1.6.0's copy of the 48K ROM and checks
@@ -110,25 +111,60 @@ the published 48K timings. Everything matches:
 | INT accepted at boundaries | 0..31 only |
 | Border changes | at the first 4-T-state cell after the OUT's T2 |
 
+It also runs the tape player (`speccy/test_tape.c`), which needs the ROM, so
+`make speccy_test` fetches it first:
+
+| Check | Result |
+|---|---|
+| The pulses of every kind of TZX block: lengths, levels, pauses, flow control, stops, Z-RLE (stored, fixed and dynamic codes), malformed files | 34 checks |
+| A `.tap` and the same blocks eight TZX ways (`speccy/tzxgen.py`): standard, turbo, pure tone + pulses + pure data, generalized, direct recording, CSW RLE and Z-RLE, and flow control with two stops, loaded through the ROM by `LOAD ""` | the same 700 bytes at 32768 and `0 OK` from each; the flow tape stops twice and starts again |
+
 ## The tape and fast-forward
 
 `tape.c` plays a `.tap` the way the ROM's SA-BYTES writes one:
 
-| Part | Length of each half-wave |
+| Part | Length of each pulse |
 |---|---|
-| Pilot | 2168 T: 8063 half-waves before a header, 3223 before data |
+| Pilot | 2168 T: 8063 pulses before a header, 3223 before data |
 | Sync | 667 T, then 735 T |
-| Bits | two half-waves of 855 T for a 0, 1710 T for a 1 |
+| Bits | two pulses of 855 T for a 0, 1710 T for a 1 |
 | After each block | one second of silence |
 
-Any loader that reads standard blocks works, the ROM's or the program's
-own.
+A `.tzx` (version 1.20) describes the signal itself, and `tape.c` plays
+every block that makes one, so turbo and custom loaders load as the
+cassette did:
+
+| Block | What it plays |
+|---|---|
+| 0x10 standard data | as a `.tap` block, with the block's own pause |
+| 0x11 turbo data | the same shape at the block's pilot, sync and bit lengths, pilot count and bits in the last byte |
+| 0x12 pure tone, 0x13 pulse sequence, 0x14 pure data | a custom loader's parts, pulse by pulse |
+| 0x15 direct recording | the samples as levels, a run of equal samples one pulse |
+| 0x18 CSW recording | RLE, or Z-RLE inflated by a small built-in inflate |
+| 0x19 generalized data | the pilot/sync and data symbol tables, each symbol's first pulse as its flags say (edge, no edge, low, high) |
+| 0x20 pause, 0x2A stop if 48K | silence; a 0 ms pause or 0x2A stops the tape (see below) |
+| 0x2B signal level | sets the level |
+| 0x21/0x22 groups, 0x23 jump, 0x24/0x25 loop, 0x26/0x27 call and return, 0x28 select | followed; a selection takes its first entry |
+| 0x30-0x35, 0x5A, and blocks it does not know | nothing; unknown ones are skipped by their length, as the format's extension rule allows. In a headless run the archive info (0x32) is printed: title, publisher, year, loader |
+
+A pulse toggles the level at its start, or leaves it, or sets it, where a
+0x19 symbol or a direct recording says so. A pause starts with the edge that
+ends the last pulse, holds that level for 1 ms, then goes low (TZX 1.20, as
+FUSE plays it).
 
 The tape motor runs while a program reads the tape. That is detected two
 ways: port 0xFE is read thousands of times a frame, or the PC is inside
 the ROM's tape routines. The motor stops 3 s after the reading stops,
 because the ROM sits in a one-second delay loop when it first hears a
 tone. Multi-load games therefore pause and resume by themselves.
+
+A stop block ("stop the tape": a 0 ms pause, or 0x2A on this 48K machine)
+stops the tape where it is. It starts again once a program has read the
+tape for half a second without a break: a loader waiting for the next
+part, which is when someone would press PLAY. A loader that polls straight
+through the stop starts it half a second later. A game that runs after
+the stop leaves it stopped until it loads its next part. The title bar,
+and a headless run's last line, say "stopped by the tape" meanwhile.
 
 While the tape plays, the machine runs flat out and the picture updates
 ten times a second, so the loading stripes show. The same applies while

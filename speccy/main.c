@@ -1,9 +1,9 @@
 /* ============================================================================
  * main.c - speccy: a 48K ZX Spectrum in a terminal.
  *
- *   speccy [options] [game.tap]
+ *   speccy [options] [game.tap | game.tzx]
  *
- * With a .tap it types LOAD "" once the ROM has started, plays the tape
+ * With a tape it types LOAD "" once the ROM has started, plays the tape
  * while the program reads it (a tape loader reads port 0xFE thousands of
  * times a frame), and runs flat out until the loading is done.
  * ==========================================================================*/
@@ -170,7 +170,7 @@ static void on_winch(int sig) { (void)sig; got_winch = 1; }
 
 static void usage(void)
 {
-    puts("usage: speccy [options] [game.tap]\n"
+    puts("usage: speccy [options] [game.tap | game.tzx]\n"
          "  --rom FILE        the 48K ROM (default: $SPECCY_ROM, 48.rom beside the program,\n"
          "                    /usr/share/spectrum-roms, FUSE's share/fuse)\n"
          "  --mode M          256 (half blocks), 128, 120 or 80 columns (default: the widest\n"
@@ -188,7 +188,7 @@ static void usage(void)
          "  --crisp           mode 80, half-height quadrants and bars: no blended shades\n"
          "  --fullwidth       mode 80: double-width characters\n"
          "  --keys K          auto, kitty, evdev, console, macos, windows or legacy\n"
-         "  --no-autoload     don't type LOAD \"\" for a .tap\n"
+         "  --no-autoload     don't type LOAD \"\" for a tape\n"
          "  --turbo           run flat out (F12 toggles)\n"
          "  --late            late ULA timing (INT a T-state earlier against the screen)\n"
          "  --frames N        headless: run N frames, then print the screen's text\n"
@@ -283,13 +283,17 @@ int main(int argc, char **argv)
     zx_init(&z, rom);
     ula_set_late(&z.ula, late);
     if (tap && !tape_load(&z.tape, tap)) {
-        fprintf(stderr, "speccy: %s: %s\n", tap, errno == EINVAL ? "not a .tap file" : strerror(errno));
+        fprintf(stderr, "speccy: %s: %s\n", tap, errno == EINVAL ? "not a .tap or .tzx file" : strerror(errno));
         return 1;
     }
+    char tape_info[256];
+    tape_describe(&z.tape, tape_info, sizeof tape_info);
     keys_t k;
 
     if (frames_headless >= 0) {                /* tests: no terminal */
         memset(&k, 0, sizeof k);
+        if (tape_info[0])
+            fprintf(stderr, "speccy: tape: %s\n", tape_info);
         for (long f = 0; f < frames_headless; f++) {
             if (tap && autoload && z.frames == AUTOLOAD_FRAME)
                 keys_type(&k, "j\"\"\n");      /* LOAD "" */
@@ -337,7 +341,8 @@ int main(int argc, char **argv)
         if (tap)
             fprintf(stderr, "speccy: tape: block %u of %u, %d%%, %s; %u reads of port 0xFE last frame\n",
                     z.tape.blocks_done, z.tape.blocks, tape_percent(&z.tape),
-                    z.tape.playing ? "playing" : tape_done(&z.tape) ? "done" : "stopped", z.fe_reads_last);
+                    z.tape.playing ? "playing" : tape_done(&z.tape) ? "done" :
+                    z.tape.stopped ? "stopped by the tape" : "stopped", z.fe_reads_last);
         if (save_scr) {
             FILE *fp = fopen(save_scr, "wb");
             if (fp) {
@@ -401,7 +406,8 @@ int main(int argc, char **argv)
                              term_glyphs(), keys_mode_name(kmode));
             if (tap)
                 n += snprintf(title + n, sizeof title - (size_t)n, " | tape %d%% %s", tape_percent(&z.tape),
-                              z.tape.playing ? "playing" : tape_done(&z.tape) ? "done" : "stopped");
+                              z.tape.playing ? "playing" : tape_done(&z.tape) ? "done" :
+                              z.tape.stopped ? "stopped by the tape" : "stopped");
             if (ff && shown_speed > 0)
                 n += snprintf(title + n, sizeof title - (size_t)n, " | fast x%.0f", shown_speed);
             snprintf(title + n, sizeof title - (size_t)n, " | F10 quit");

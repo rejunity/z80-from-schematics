@@ -703,18 +703,28 @@ $(BIN)/pinhash_single: $(SCRIPTS)/pinhash.c $(CFAST_SINGLE)
 # speccy/: a 48K ZX Spectrum on cfast, in a terminal (speccy/README.md).
 # make speccy_rom fetches the ROM (FUSE's copy) next to the binary.
 SPECCY      := speccy
-SPECCY_SRC  := $(filter-out $(SPECCY)/test_ula.c,$(wildcard $(SPECCY)/*.c))
+SPECCY_SRC  := $(filter-out $(SPECCY)/test_%.c,$(wildcard $(SPECCY)/*.c))
 SPECCY_HDR  := $(wildcard $(SPECCY)/*.h)
 speccy: $(BIN)/speccy
 $(BIN)/speccy: $(SPECCY_SRC) $(SPECCY_HDR) $(CFAST_SINGLE)
 	@mkdir -p $(BIN)
 	$(CC) -std=gnu11 -O2 -g -Wall -I$(CFAST_GEN) $(SPECCY_SRC) -o $@ -lm
-# the ULA against the published 48K timings (speccy/test_ula.c)
-speccy_test: $(BIN)/speccy_test
+# the ULA against the published 48K timings (speccy/test_ula.c); the tape
+# player's pulses for every kind of TZX block, and tapes speccy/tzxgen.py
+# writes -- a .tap and the same blocks eight TZX ways -- loaded through the
+# ROM (speccy/test_tape.c)
+SPECCY_TAPES := $(BUILD)/speccy_tapes
+speccy_test: $(BIN)/speccy_test $(BIN)/speccy_tape_test $(BIN)/48.rom $(SPECCY_TAPES)/code.bin
 	$(BIN)/speccy_test
+	$(BIN)/speccy_tape_test $(SPECCY_TAPES) $(BIN)/48.rom
 $(BIN)/speccy_test: $(SPECCY)/test_ula.c $(SPECCY)/zx.c $(SPECCY)/ula.c $(SPECCY)/tape.c $(SPECCY_HDR) $(CFAST_SINGLE)
 	@mkdir -p $(BIN)
 	$(CC) -std=gnu11 -O2 -g -Wall -I$(CFAST_GEN) $(SPECCY)/test_ula.c $(SPECCY)/zx.c $(SPECCY)/ula.c $(SPECCY)/tape.c -o $@ -lm
+$(BIN)/speccy_tape_test: $(SPECCY)/test_tape.c $(SPECCY)/zx.c $(SPECCY)/ula.c $(SPECCY)/tape.c $(SPECCY)/keys.c $(SPECCY_HDR) $(CFAST_SINGLE)
+	@mkdir -p $(BIN)
+	$(CC) -std=gnu11 -O2 -g -Wall -I$(CFAST_GEN) $(SPECCY)/test_tape.c $(SPECCY)/zx.c $(SPECCY)/ula.c $(SPECCY)/tape.c $(SPECCY)/keys.c -o $@ -lm
+$(SPECCY_TAPES)/code.bin: $(SPECCY)/tzxgen.py
+	$(PYTHON) $< $(SPECCY_TAPES)
 speccy_rom: $(BIN)/48.rom
 $(BIN)/48.rom:
 	$(PYTHON) $(SPECCY)/get_rom.py $@
