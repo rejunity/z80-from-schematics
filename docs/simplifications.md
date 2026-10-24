@@ -295,11 +295,14 @@ persisted across instructions broke ZEXALL's `<daa,cpl,scf,ccf>` CRC (run
   validation on a real 48K Spectrum, and refined by Richard Chandler
   on NEC Z80 + Visual Z80 Remix in Rak's v1.2a (z80test PR #3).
 
-**Cross-check: redcode end-to-end on FUSE** (2026-06-18, via
-`scripts/redcode_fuse_runner.c`): **1348 / 1356 PASS**, failing the same
-eight cases the model differs from FUSE on (`tests/fuse/known-fuse-wrong.txt`):
-the four INxR / OTxR WZ cases (`edb2_1`, `edb3_1`, `edba_1`, `edbb_1`),
-SCF / CCF's X / Y (`37_1`, `3f`), CPDR's X (`edb9_2`) and HALT's PC (`76`).
+**FUSE on the die** (`make fuse_pz80`): perfectz80 agrees with FUSE's
+expected values in 1350 of the 1356 cases. The other six -- the four INxR /
+OTxR WZ cases (`edb2_1`, `edb3_1`, `edba_1`, `edbb_1`), CPDR's X / Y
+(`edb9_2`) and HALT's PC (`76`) -- are in `tests/fuse/silicon.expected`,
+which the C model, the RTL and redcode/Z80 (`scripts/redcode_fuse_runner.c`)
+are checked against instead: 1356 / 1356 each, none skipped. SCF / CCF's
+`37_1` and `3f` were the runners' doing (they started with Q = F; the die
+has Q = 0 after the registers are loaded).
 
 ### F2. SCF / CCF for other CPUs (NEC, ST)
 
