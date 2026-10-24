@@ -168,7 +168,7 @@ that half sees the pulse. The sweep therefore shows whether the chip's
 input logic can catch such a pulse; it does not test the data sheet's
 minimum widths, which depend on analog timing.
 
-## Results (rejunity `nmos-writeback`, 22 October 2026)
+## Results (main, 24 October 2026)
 
 | group | cases | match | differ |
 |---|---|---|---|
