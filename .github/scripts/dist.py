@@ -1020,8 +1020,9 @@ h3 { font-size: 16px; margin: 0; }
 p { margin: 0 0 12px; }
 a { color: var(--link); }
 @media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
-/* the section bar under the title: sticks to the top once the page scrolls past it; --navh is its
-   height (set by NAV_JS), which anchored headings and the corner switch keep clear of */
+/* the section bar between the opening paragraph and the first section: sticks to the top once the page
+   scrolls past it; --navh is its height (set by NAV_JS), which anchored headings and the corner switch
+   keep clear of. The first section's title follows it at the bar's own spacing, not a section's. */
 .withnav { --navh: 42px; }
 .sitenav { position: sticky; top: 0; z-index: 3; display: flex; flex-wrap: wrap; align-items: baseline;
   gap: 2px 10px; margin: 10px 0 14px; padding: 8px 0; background: var(--bg); border-bottom: 1px solid var(--line);
@@ -1030,6 +1031,7 @@ a { color: var(--link); }
 .sitenav a:hover { text-decoration: underline; }
 .sitenav span { color: var(--muted); }
 @media (max-width: 480px) { .sitenav { font-size: 13.5px; column-gap: 6px; } }   /* one line from 375 px */
+.sitenav + h2 { margin-top: 14px; }
 h2[id] { scroll-margin-top: calc(var(--navh, 0px) + 12px); }
 .muted, .size { color: var(--muted); }
 .size { font-size: 12px; }
@@ -1246,9 +1248,9 @@ def site(src, out):
 <body class="withnav">
 <main>
 <h1>rz80 builds</h1>
-<nav class="sitenav" aria-label="Sections">{nav}</nav>
 <p class="muted">The Z80 core of <a href="{SERVER}/{REPO}">{e(REPO)}</a> on every ASIC PDK and FPGA board,
 from the latest {run} on main where all of them passed: {commit}, published {when}.</p>
+<nav class="sitenav" aria-label="Sections">{nav}</nav>
 
 <h2 id="asic">ASIC chip layouts</h2>
 <p class="muted">The core as a chip: z80_top, hardened on its own, as a hard macro in a ring of I/O pads,
