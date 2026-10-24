@@ -462,7 +462,7 @@ should gain a test that pins the chosen behaviour or escalates it.
     Verilator RTL:          0.18 Minstr/s on the ZEXALL subset (CI; ~21x slower than C)
     perfectz80 gate level:  ~10   k  phases/s — use only for short, targeted comparisons
 
-cfast, the model generated into a phase engine, runs ZEXDOC more than ten
+cfast, the model generated into a phase engine, runs ZEXDOC about ten
 times faster than the C model: [cfast/BENCHMARK.md](../cfast/BENCHMARK.md).
 
 
