@@ -61,6 +61,14 @@ The first 50,000,000 instructions of ZEXDOC, the best of 5 rounds of each emulat
   emulators interleaved within each round and pinned to one CPU.
 - rz80's code builds with the project's flags (`-O2`, LTO), the others at
   `-O2`; redcode with the features the lockstep CI job builds it with.
+- On x86 they all build with their jumps padded off 32-byte boundaries
+  (the Makefile's `JCC_PAD`, probed; `JCC_PAD=` for none). Intel's
+  microcode for the JCC erratum (Skylake-derived cores: 6th to 10th
+  generation Core) keeps a 32-byte block whose jump crosses or ends on its
+  boundary out of the decoded-uop cache, which costs each emulator what its
+  code layout happens to cost it. On an i7-7700, best of 3, padding made
+  `z80f_run` 7 % faster, floooh/chips 13 %, superzazu 14 %, redcode 8 %,
+  suzukiplan 6 %, the C model 11 %, and `z80f_tick` 4 % slower.
 
 Run it:
 

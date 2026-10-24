@@ -27,6 +27,14 @@
  * It defines static uint64_t z80f_run(z80f_t *f, uint64_t pins): pins as
  * for z80f_tick; returns the last phase's pins after ZF_BUS; call it again
  * to go on.
+ *
+ * For Intel's Skylake-derived cores (6th to 10th generation Core, Xeon
+ * Scalable up to Cascade Lake), build it with jumps padded off 32-byte
+ * boundaries -- GCC: -Wa,-mbranches-within-32B-boundaries, clang:
+ * -mbranches-within-32B-boundaries. Their microcode for the JCC erratum
+ * keeps a 32-byte block whose jump crosses or ends on its boundary out of
+ * the decoded-uop cache, and the steps are mostly jumps: ZEXDOC on an
+ * i7-7700 ran 121 cycles an instruction unpadded, 111 padded.
  * ==========================================================================*/
 #if !ZF_GNU
 #error "z80_fast_run.h needs computed goto (GCC / Clang)"
@@ -67,11 +75,11 @@ static uint64_t z80f_run(z80f_t *f, uint64_t pins)
         ZF_BUS(pins); \
         if (__builtin_expect(zf_exit != 0, 0)) { ZF_LEAVE(next); return pins; } \
         if (__builtin_expect((pins & ZF_SLOW_IN) != 0, 0)) { ZF_LEAVE(next); goto zf_slow; } } while (0)
-#define ZF_PHASE_T1P(next) do { const unsigned zf_cur = (next) - 1; (void)zf_cur; \
+#define ZF_PHASE_BOUNDARY(next) do { const unsigned zf_cur = (next) - 1; (void)zf_cur; \
         ZF_BUS(pins); \
         if (__builtin_expect(zf_exit != 0, 0)) { ZF_LEAVE(next); return pins; } \
-        if (c->instr_count != ic) { ic = c->instr_count; ZF_SYNC(zf_cur); \
-            if (ZF_BOUNDARY(c)) { ZF_LEAVE(next); return pins; } } \
+        ic = c->instr_count; ZF_SYNC(zf_cur); \
+        if (ZF_BOUNDARY(c)) { ZF_LEAVE(next); return pins; } \
         if (__builtin_expect((pins & ZF_SLOW_IN) != 0, 0)) { ZF_LEAVE(next); goto zf_slow; } } while (0)
 #define ZF_PHASE_CHK(next) do { const unsigned zf_cur = (next) - 1; (void)zf_cur; \
         ZF_BUS(pins); \
@@ -86,7 +94,7 @@ static uint64_t z80f_run(z80f_t *f, uint64_t pins)
 #undef ZF_MEND
 #undef ZF_SAVE_BUS
 #undef ZF_PHASE
-#undef ZF_PHASE_T1P
+#undef ZF_PHASE_BOUNDARY
 #undef ZF_PHASE_CHK
 #undef ZF_SLOW_AT
 #undef ZF_GOTO_T1P

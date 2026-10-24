@@ -86,6 +86,9 @@ def machine():
             "date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")}
 
 
+PAD_MD = ", jumps padded off 32-byte boundaries"
+
+
 def markdown(res, m, a):
     base = next(r for r in res if r["binary"] == BASE)
     rows = ["| Emulator | Sees every | ZEXDOC Minstr/s | Z80 clock | Against cfast |",
@@ -96,7 +99,7 @@ def markdown(res, m, a):
                     f"{r['minstr'] / base['minstr']:.2f}× |")
     rows += ["", f"The first {a.instr:,} instructions of ZEXDOC, the best of {a.rounds} rounds of each "
                  f"emulator's CPU time{'' if a.cpu is None else f' (on CPU {a.cpu})'}; Z80 clock: the T-states "
-                 f"it emulates a second. {m['cpu']}, {m['compiler']}, -O2; {m['where']}, "
+                 f"it emulates a second. {m['cpu']}, {m['compiler']}, -O2{PAD_MD if a.jcc_pad else ''}; {m['where']}, "
                  f"commit {m['commit']}, {m['date']}.", ""]
     rows += [f"- **{r['name']}**: {r['about']}" for r in res]
     return "\n".join(rows) + "\n"
@@ -115,7 +118,7 @@ def svg(res, m, a):
          f"<rect width='{W}' height='{H}' fill='white'/>",
          f"<text x='16' y='24' font-size='15' font-weight='bold' fill='#111'>C Z80 emulators on ZEXDOC: "
          f"million instructions a second</text>",
-         f"<text x='16' y='42' font-size='11.5' fill='#555'>{e(m['cpu'])}, {e(m['compiler'].split(' (')[0])} -O2; "
+         f"<text x='16' y='42' font-size='11.5' fill='#555'>{e(m['cpu'])}, {e(m['compiler'].split(' (')[0])} -O2{' (JCC-padded)' if a.jcc_pad else ''}; "
          f"best of {a.rounds} x {a.instr / 1e6:g}M instructions; Z80 clock in grey; commit {e(m['commit'])}, "
          f"{e(m['date'])}</text>"]
     for k, r in enumerate(res):
@@ -145,6 +148,8 @@ def main():
     ap.add_argument("--rounds", type=int, default=5)
     ap.add_argument("--cpu", type=int, help="pin every run to this CPU (taskset)")
     ap.add_argument("--out", default="build/bench")
+    ap.add_argument("--jcc-pad", action="store_true",
+                    help="say the emulators were built with jumps padded off 32-byte boundaries")
     a = ap.parse_args()
     times = {b: [] for _, b, _, _ in EMULATORS}
     seen = {}
@@ -168,7 +173,7 @@ def main():
     m = machine()
     os.makedirs(a.out, exist_ok=True)
     json.dump({"machine": m, "program": os.path.basename(a.prog), "instructions": a.instr, "rounds": a.rounds,
-               "cpu_pinned": a.cpu, "results": res}, open(os.path.join(a.out, "bench.json"), "w"), indent=1)
+               "cpu_pinned": a.cpu, "jcc_pad": a.jcc_pad, "results": res}, open(os.path.join(a.out, "bench.json"), "w"), indent=1)
     md = markdown(res, m, a)
     open(os.path.join(a.out, "bench.md"), "w").write(md)
     open(os.path.join(a.out, "bench.svg"), "w").write(svg(res, m, a))
