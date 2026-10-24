@@ -67,14 +67,16 @@ def scenarios(long_run):
     soup_ph = "200000000" if long_run else "20000000"
     sc = [("zexdoc", [t("zex", "zexdoc.com")] + zex_ph, False),
           ("prelim", [t("zex", "prelim.com")], False)]
-    for v in ("z80doc", "z80memptr", "z80full"):
+    for v in ("z80doc", "z80flags", "z80memptr", "z80full"):
         sc.append((v, [t("z80test", v + ".tap")] + z80t_ph, False))
-    for p in sorted(glob.glob(t("traces", "*.hex"))):
+    # a program may ask for a longer run in <prog>.phases (one number)
+    def phases(p, default):
         side = os.path.splitext(p)[0] + ".phases"
-        ph = open(side).read().split()[0] if os.path.exists(side) else "400"
-        sc.append((os.path.basename(p), [p, "-n", ph], False))
+        return str(max(default, int(open(side).read().split()[0]))) if os.path.exists(side) else str(default)
+    for p in sorted(glob.glob(t("traces", "*.hex"))):
+        sc.append((os.path.basename(p), [p, "-n", phases(p, 400)], False))
     for p in sorted(glob.glob(t("traces", "pin_scenarios", "*.hex"))):
-        sc.append((os.path.basename(p), [p, "-n", "2000"], False))
+        sc.append((os.path.basename(p), [p, "-n", phases(p, 2000)], False))
     for seed in range(1, 5):
         # random memory soup, interrupts / WAIT / BUSREQ / RESET 4x the
         # default rates

@@ -34,7 +34,7 @@ jobs:
           "$PYTHON" --version
       - name: C unit tests (make ctest)
         run: make ctest
-      - name: FUSE / Cringle 1356 cases through the C model
+      - name: FUSE's 1356 cases through the C model
         run: make fuse
       - name: cfast phase by phase against the model (make cfast_identity)
         run: make cfast_identity

@@ -262,26 +262,21 @@ int main(int argc, char** argv) {
         uint16_t rix = R.ix_iy[0].uint16_value, riy = R.ix_iy[1].uint16_value;
         uint16_t rsp = R.sp.uint16_value, rpc = R.pc.uint16_value;
 
-        /* Mask the undocumented YF (bit 5) and XF (bit 3) of F before
-         * comparing AF across the five oracles. Our model and
-         * redcode/Z80 both implement David Banks' 2018 LDIR/LDDR/CPIR/
-         * CPDR/INIR/INDR/OTIR/OTDR repeat-M-cycle Y/X fold-in
-         * (YF=PC.13, XF=PC.11). superzazu, chips/z80.h and suzukiplan's
-         * cores predate that work and still use the LDI / CPI / INI /
-         * OUT single-shot Y/X formula during the repeat. The two
-         * conventions disagree by exactly bits 5+3 in F at the boundary
-         * right after a repeat aborts. Masking 0x28 lets the lockstep
-         * keep catching real architectural drift (all the documented
-         * bits + every other register) without firing on this known
-         * Banks-vs-pre-Banks oracle gap. See docs/oracles.md §5. */
+        /* F is compared whole against redcode/Z80, which models the die's
+         * X / Y (bits 5 and 3) like ours. superzazu, floooh/chips and
+         * suzukiplan predate David Banks' 2018 finding that a repeating
+         * LDIR / LDDR / CPIR / CPDR / INIR / INDR / OTIR / OTDR takes X / Y
+         * from PC's high byte in its extra M-cycle; they keep LDI's X / Y.
+         * Their F is compared without bits 5 and 3: on ZEXDOC3 that hides
+         * X / Y after 20 LDIR repeats and nothing else (no other
+         * instruction starts an X / Y difference). See docs/oracles.md. */
         const uint16_t AF_MASK = 0xFFD7u;   /* clear YF | XF in F */
         uint16_t maf_m = maf & AF_MASK;
         uint16_t saf_m = saf & AF_MASK;
         uint16_t caf_m = C.af & AF_MASK;
         uint16_t paf_m = paf & AF_MASK;
-        uint16_t raf_m = raf & AF_MASK;
         bool diverge = (mpc2 != spc || mpc2 != cpc || mpc2 != ppc || mpc2 != rpc ||
-                        maf_m != saf_m || maf_m != caf_m || maf_m != paf_m || maf_m != raf_m ||
+                        maf_m != saf_m || maf_m != caf_m || maf_m != paf_m || maf != raf ||
                         mbc != sbc || mbc != C.bc || mbc != pbc || mbc != rbc ||
                         mde != sde || mde != C.de || mde != pde || mde != rde ||
                         mhl != shl || mhl != C.hl || mhl != phl || mhl != rhl ||

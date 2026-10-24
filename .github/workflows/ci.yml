@@ -1,8 +1,9 @@
 name: CI
 
-# Every push and every PR fires the fast tier (c-tests, rtl-tests,
-# parity-tests). PRs to main, a nightly cron, and manual dispatch
-# additionally fire the slow ZEX jobs (zexdoc + zexall in parallel).
+# Every push, PR, nightly run and manual dispatch runs every job below,
+# except zexall-subset-rtl (Verilator, ~25-55 min): main pushes, the
+# nightly run and dispatch only. No job tolerates a failure: every suite
+# must pass in full.
 on:
   push:
     branches: ['**']
@@ -20,13 +21,11 @@ concurrency:
 
 jobs:
   # =====================================================================
-  # FAST TIER — runs on every push + every PR.
-  # Three parallel jobs split by tool surface, each installing only what
-  # it needs.
+  # Jobs split by tool surface, each installing only what it needs.
   # =====================================================================
 
   c-tests:
-    name: C model (ctest + FUSE + silicon + lockstep)
+    name: C model (ctest, FUSE, prelim, HALT-to-INT, silicon, lockstep)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -35,35 +34,20 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential python3
-      - name: C unit tests (test_alu/block/cb/ddcb/ddfd/ed/exec/flags/int/pla)
+      - name: C unit tests (tests/common, 13 binaries)
         run: make ctest
-      - name: FUSE / Cringle 1356 cases through C model
+      - name: FUSE's 1356 cases through the C model
         run: make fuse
+      - name: Cringle's prelim through the C model
+        run: make prelim
+      - name: HALT-to-INT delays equal the die's
+        run: make halt2int
       - name: Real-silicon T-state oracle (sigrok KC85 capture)
         run: make silicon_cycles
       - name: Real-silicon sub-T-state timing (sigrok 20 MHz capture)
         run: make silicon_async
-      - name: 5-way lockstep on ZEXDOC3 (mine + superzazu + chips + suzukiplan + redcode)
-        run: |
-          make tracegen
-          # Vendored redcode/Z80 is built as a separate .o (C, not C++)
-          # with the features Rak triangulation needs.
-          cc -std=gnu11 -O2 -w \
-            -Iscripts/refs/redcode_z80 -Iscripts/refs/redcode_z80/Zeta \
-            -DZ80_STATIC -DZ80_WITH_LOCAL_HEADER -DZ80_WITH_EXECUTE \
-            -DZ80_WITH_Q -DZ80_WITH_PARITY_COMPUTATION \
-            -DZ80_WITH_SPECIAL_RESET -DZ80_WITH_FULL_IM0 \
-            -DZ80_WITH_UNOFFICIAL_RETI \
-            -c scripts/refs/redcode_z80/Z80.c -o build/redcode_Z80.o
-          c++ -std=gnu++17 -O2 -w -Iscripts -Icmodel \
-            -Iscripts/refs/redcode_z80 -Iscripts/refs/redcode_z80/Zeta \
-            -DZ80_STATIC -DZ80_WITH_LOCAL_HEADER -DZ80_WITH_EXECUTE \
-            -DZ80_WITH_Q -DZ80_WITH_PARITY_COMPUTATION \
-            -DZ80_WITH_SPECIAL_RESET -DZ80_WITH_FULL_IM0 \
-            -DZ80_WITH_UNOFFICIAL_RETI \
-            scripts/lockstep_quint.c build/redcode_Z80.o build/libz80.a \
-            -o build/bin/lockstep_quint
-          build/bin/lockstep_quint tests/zex/zexdoc3.com 20000000
+      - name: 5-way lockstep on ZEXDOC3 (ours + superzazu + floooh/chips + suzukiplan + redcode)
+        run: make lockstep
 
   rtl-tests:
     name: RTL (iverilog elaboration + FUSE through RTL)
@@ -79,7 +63,7 @@ jobs:
         run: make rtl
       - name: Registered bus controls and decoder skew
         run: make bus_controls
-      - name: FUSE / Cringle 1356 cases through iverilog RTL
+      - name: FUSE's 1356 cases through the iverilog RTL
         run: make fuse_rtl
       # the chip flows' pin-timing SDC is generated from the NMOS Z80
       # datasheet table (asic/timing/); the committed one must match
@@ -119,10 +103,10 @@ jobs:
         run: make basic_rtl_tests
 
   z80test:
-    name: Patrik Rak z80test (doc / memptr / full — within baseline)
+    name: Patrik Rak z80test (doc / flags / memptr / full)
     runs-on: ubuntu-latest
-    # 3 variants × ~25 s each + cold start = ~2 min
-    timeout-minutes: 10
+    # 4 variants × ~20-40 s each + cold start = ~3 min
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
       - name: Install C toolchain
@@ -130,20 +114,20 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential python3
-      - name: Run Rak's z80doc + z80memptr + z80full and check baselines
+      - name: Run Rak's z80doc + z80flags + z80memptr + z80full; any failed test fails
         run: make z80test
 
   z80test-rtl:
-    name: Patrik Rak z80test through Verilator RTL (doc / memptr / full)
+    name: Patrik Rak z80test through Verilator RTL (${{ matrix.variant }})
     runs-on: ubuntu-latest
-    # Verilator is ~20x slower than the C model on Rak's workload.
-    # Healthy ubuntu-latest run: ~18 min total wall clock (z80doc ~5,
-    # z80memptr ~3, z80full ~5, plus ~2 build/setup). Slow CI runners
-    # have been seen at ~30 min total (Verilator at 0.26 vs 0.55 Mi/s),
-    # so previous 30-min budget killed the job 10s before z80full's
-    # PASS line printed. Bumped to 60 to keep healthy + slow runs both
-    # green.
-    timeout-minutes: 60
+    # Verilator is ~20x slower than the C model on Rak's workload: one
+    # variant per job, ~6-15 min each including the Verilator build
+    # (slow runners have been seen at half the usual speed).
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [z80doc, z80flags, z80memptr, z80full]
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v5
       - name: Install C + Verilator
@@ -151,17 +135,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential python3 verilator
-      - name: Build Verilator sim_z80test
-        run: make verilator_z80test
-      - name: Run Rak z80doc through RTL
-        run: stdbuf -oL build/obj_dir_z80test/sim_z80test tests/z80test/z80doc.tap 5000000000 0
-      - name: Run Rak z80memptr through RTL
-        run: stdbuf -oL build/obj_dir_z80test/sim_z80test tests/z80test/z80memptr.tap 5000000000 0
-      - name: Run Rak z80full through RTL
-        run: stdbuf -oL build/obj_dir_z80test/sim_z80test tests/z80test/z80full.tap 8000000000 0
+      - name: Run Rak ${{ matrix.variant }} through the RTL; any failed test fails
+        run: make z80test_rtl Z80TEST_VARIANTS=${{ matrix.variant }}
 
   parity-tests:
-    name: Parity (C vs iverilog vs Verilator + perfectz80)
+    name: Parity (C vs iverilog vs Verilator, and the die: perfectz80)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -172,34 +150,39 @@ jobs:
             build-essential python3 iverilog verilator
       - name: Build Verilator sim (sim_z80) so compare actually exercises it
         run: make verilator
-      - name: C vs iverilog vs Verilator parity (8 hand + 4 random trace programs)
+      - name: C vs iverilog vs Verilator parity (10 hand + 4 random trace programs)
         run: make compare
-      - name: C model vs perfectz80 gate-level netlist (signal-timing)
+      - name: C model vs perfectz80 (signal-timing)
+        # Every half-cycle: the control pins, the address and the data
+        # under WR; any difference fails.
         run: make perfectz80
-      - name: iverilog RTL vs perfectz80 gate-level netlist (signal-timing)
-        # Same 12 trace programs, but the trace source is the iverilog RTL
-        # testbench (build/tb_z80.vvp) rather than the C model. This is the
-        # silicon-faithful leg — every cycle simulated at RTL fidelity,
-        # diffed against the gate-level netlist per-half-cycle. Random
+      - name: iverilog RTL vs perfectz80 (signal-timing)
+        # Same 14 trace programs, but the trace source is the iverilog RTL
+        # testbench (build/tb_z80.vvp) rather than the C model. Random
         # programs (prog_rnd_01..04 from scripts/gen_random_trace_progs.py)
         # give opcode-mix coverage no hand-written program would have.
         run: make perfectz80_rtl
       - name: Pin-scenario programs vs perfectz80 — C path
-        # 14 trace programs (prog9..prog22) that drive INT / NMI / WAIT /
+        # 15 trace programs (prog9..prog23) that drive INT / NMI / WAIT /
         # BUSREQ / RESET via the .events sidecar; every phase's control
-        # pins and address must match the gate-level netlist.
+        # pins, address and data under WR must match the die.
         run: make pin_scenarios
       - name: Pin-scenario programs vs perfectz80 — iverilog RTL path
-        # Same 14 scenarios through the iverilog RTL testbench. .events
+        # Same 15 scenarios through the iverilog RTL testbench. .events
         # is plumbed via per-pin +<pin>_lo / +<pin>_hi plusargs
         # (compare_signal_timing.py encodes the sidecar).
         run: make pin_scenarios_rtl
+      - name: FUSE's 1356 cases on the die (perfectz80)
+        # Every case behind a preamble that loads its registers; the die's
+        # registers, WZ, PC, R, T-states and memory must match
+        # tests.expected, or tests/fuse/silicon.expected (six cases).
+        run: make fuse_pz80
       - name: Upload per-program VCDs as artifact (open in GTKWave / Surfer)
         # compare_signal_timing.py + the pin-scenario runner emit
         # build/vcd/<prog>.<source>.vcd containing both our pins (top
         # scope) and perfectz80's pins (perfectz80.* scope) so the two
         # render side-by-side from one file. Keep them for ~14 days
-        # post-CI for offline inspection of any informational diffs.
+        # post-CI for offline inspection.
         if: always()
         uses: actions/upload-artifact@v5
         with:
@@ -211,10 +194,12 @@ jobs:
   event-sweep:
     name: Pin sweep, every opcode and timing class (RTL + C vs perfectz80) ${{ matrix.shard }}/4
     runs-on: ubuntu-latest
-    # ~33,500 cases in four shards (docs/event-sweep.md): RESET / INT / NMI
+    # 37,846 cases in four shards (docs/event-sweep.md): RESET / INT / NMI
     # / BUSREQ / WAIT at every T-state of the targets and of one opcode of
     # every timing class, every opcode with BUSREQ and WAIT walked through
-    # it, and the data latch of every kind of read. Each runs through the
+    # it, the data latch of every kind of read, combinations and 2,000
+    # fuzz cases; nightly also RESET at every half-cycle of every opcode
+    # (opcodes_reset) and 500 fresh fuzz cases. Each runs through the
     # RTL and the C model; perfectz80's side comes from its recorded traces
     # (tests/event_sweep/pz80/), and runs only for a case they don't have.
     # Shard 0 also runs 50 recorded cases through perfectz80 live and fails
@@ -232,12 +217,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential python3 iverilog
-      - name: Sweep RESET / INT / NMI across T-states and clock halves
-        # Fails on any difference from perfectz80 that is not in
-        # tests/event_sweep/baseline.txt, or that changed. After an
-        # intended RTL change: make event_sweep EVENT_SWEEP_ARGS=--update-baseline
-        # and review the baseline diff (docs/event-sweep.md).
+      - name: Sweep RESET / INT / NMI / BUSREQ / WAIT across T-states and clock halves
+        # Fails on any difference from perfectz80 (the baseline,
+        # tests/event_sweep/baseline.txt, is empty) and on any half-cycle
+        # where the C model differs from the RTL (docs/event-sweep.md).
         run: make event_sweep EVENT_SWEEP_ARGS="--shard ${{ matrix.shard }}/4 ${{ matrix.shard == 0 && '--verify-recorded 50' || '' }}"
+      - name: RESET at every half-cycle of every opcode (the nightly run)
+        # Group opcodes_reset: 27,768 cases, recorded like the others, about
+        # 6 more minutes a shard; too long for every push.
+        if: github.event_name == 'schedule'
+        run: make event_sweep EVENT_SWEEP_ARGS="--groups opcodes_reset --shard ${{ matrix.shard }}/4 --out build/event_sweep_opcodes_reset"
       - name: Fuzz with fresh seeds (the nightly run)
         # 500 cases nobody has run before -- random code, interrupt modes and
         # pin events (docs/event-sweep.md), perfectz80 live -- in the
@@ -258,6 +247,8 @@ jobs:
             build/event_sweep/diff/
             build/event_sweep_fuzz/report.md
             build/event_sweep_fuzz/diff/
+            build/event_sweep_opcodes_reset/report.md
+            build/event_sweep_opcodes_reset/diff/
           if-no-files-found: warn
           retention-days: 14
 
@@ -277,7 +268,7 @@ jobs:
   # =====================================================================
 
   librelane-netlist:
-    name: LibreLane gate-level sim vs perfectz80 (12 programs)
+    name: LibreLane gate-level sim vs perfectz80 (14 programs + 15 pin scenarios)
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -329,11 +320,11 @@ jobs:
       - name: Build gate-level iverilog testbench (sky130 cells)
         run: make iverilog_netlist
 
-      - name: Gate-level netlist vs perfectz80 (8 hand + 4 random = 12 programs)
+      - name: Gate-level netlist vs perfectz80 (10 hand + 4 random = 14 programs)
         run: make perfectz80_netlist
 
       - name: Pin-scenarios vs perfectz80 — gate-level netlist
-        # The 14 pin-scenario programs (prog9..prog22) driven through the
+        # The 15 pin-scenario programs (prog9..prog23) driven through the
         # synthesised sky130 netlist via tb_z80_netlist.v's .events
         # plusarg support; gated like the C and iverilog paths.
         run: make pin_scenarios_netlist
@@ -366,9 +357,8 @@ jobs:
   # exercise — anything that takes millions of cycles of ROM boot,
   # interrupt-driven RX, ACIA polling, etc. to manifest.
   #
-  # Heavy (~10-15 min wall clock for the canned subtests at gate-level
-  # Verilator speed). Gated to push-to-main + nightly cron + manual
-  # dispatch — same gate as zexall-subset-rtl.
+  # ~5-10 min wall clock (Verilator's gate-level build dominates); runs
+  # on every push.
   # =====================================================================
 
   librelane-basic-netlist:
@@ -522,6 +512,7 @@ jobs:
             echo "::error::ZEXDOC reported ERROR — see lines above"
             exit 1
           fi
+          grep -q 'Tests complete' zexdoc.log || { echo "::error::ZEXDOC did not finish"; exit 1; }
       - name: Upload ZEXDOC log
         if: always()
         uses: actions/upload-artifact@v6
@@ -552,6 +543,7 @@ jobs:
             echo "::error::ZEXALL reported ERROR — see lines above"
             exit 1
           fi
+          grep -q 'Tests complete' zexall.log || { echo "::error::ZEXALL did not finish"; exit 1; }
       - name: Upload ZEXALL log
         if: always()
         uses: actions/upload-artifact@v6
@@ -564,14 +556,10 @@ jobs:
   # RTL ZEXALL via Verilator — apples-to-apples with the C-side zexall,
   # but every cycle simulated at gate-level-equivalent fidelity. Verilator
   # is ~20x slower than the C model, so this is gated to push-to-main /
-  # nightly cron / manual dispatch (~25-55 min wall clock).
-  #
-  # NOTE: the FULL ZEXALL via Verilator RTL is not currently run in CI.
-  # We have a known set of silicon-faithful gaps (block-op M-cycle
-  # ordering; LDIR/LDDR + INIR/INDR Q-leak) that make the full 67-test
-  # ZEXALL fail under the RTL today — see docs/known-differences.md and
-  # docs/simplifications.md. Once those gaps land, restore a full-ZEXALL
-  # RTL job here gated the same way.
+  # nightly cron / manual dispatch (~25-55 min wall clock). The full
+  # 67-test ZEXALL would take several hours through Verilator (the C
+  # model's ZEXALL job above runs all 67); this slice keeps the families
+  # most prone to error.
   # =====================================================================
 
   zexall-subset-rtl:
@@ -608,6 +596,7 @@ jobs:
             echo "::error::ZEXALL subset through Verilator RTL reported ERROR — see lines above"
             exit 1
           fi
+          grep -q 'Tests complete' zexall_subset_rtl.log || { echo "::error::the ZEXALL subset did not finish"; exit 1; }
       - name: Upload ZEXALL-subset-RTL log
         if: always()
         uses: actions/upload-artifact@v6

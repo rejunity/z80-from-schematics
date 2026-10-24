@@ -3,15 +3,16 @@
 # emitter of choice (C tracegen, iverilog RTL, or Verilator RTL) and the
 # perfectz80 gate-level netlist simulator (build/bin/perfectz80_runner).
 #
-# Compares the 7 CPU-driven control pins (mreq/iorq/rd/wr/m1/rfsh/halt) for
-# every phase. ALSO compares addr+data on the windows where they're known
-# valid (addr during any mreq/iorq active, data_o during wr active).
+# Compares, in every phase, the 7 CPU-driven control pins (mreq/iorq/rd/wr/
+# m1/rfsh/halt) and the address -- transfers, refreshes (I:R), and the
+# internal and idle T-states, where the bus keeps its last address -- and
+# the data the CPU drives wherever WR is low on both sides. Any difference
+# fails the program.
 #
-# If a `<prog>.events` sidecar exists alongside the .hex, the C tracegen
-# loads it and applies the per-phase pin-events. (The iverilog and
-# Verilator RTL testbenches today only understand the `+nmi=<phase>`
-# shorthand, not the full sidecar; programs that need INT/WAIT/BUSREQ/
-# RESET events won't be exercised through the RTL paths yet.)
+# If a `<prog>.events` sidecar exists alongside the .hex, every harness
+# applies its per-phase pin events: the C tracegen and perfectz80_runner
+# read the file, the RTL testbenches (iverilog, Verilator, the netlist)
+# take it as per-pin +<pin>_lo=N +<pin>_hi=M plusargs.
 #
 # Usage:
 #   scripts/compare_signal_timing.py [phases] [prog...]
@@ -42,23 +43,9 @@ VERILATOR_SIM = os.path.join(ROOT, "build", "obj_dir", "sim_z80")
 # idle); align with PZ_OFFSET=1.
 PZ_OFFSET = 1
 
-# Always-on control-pin parity (CPU-driven, no don't-cares) — this is the
-# gate of record and affects exit code. The address is part of the gate in
-# every phase: transfers, refreshes (I:R), and the internal and idle
-# T-states, where the bus keeps its last address.
+# The control pins compared in every phase, with the address and the data
+# the CPU drives under WR.
 COMPARED  = ["mreq","iorq","rd","wr","m1","rfsh","halt"]
-# Bus parity: addr is valid when (mreq||iorq) is low; data_o is valid
-# when wr is low. Compared only on phases where BOTH the C model AND
-# perfectz80 agree on the relevant strobe being low. Reported as
-# informational findings (counted, summarised, but DO NOT affect exit
-# code) because there's a well-known one-phase addr-settle delta where
-# our model latches addr slightly earlier than pz80 — silicon-faithfulness
-# polish item, tracked in docs/test-expansion-plan.md "bus-window
-# comparison" and docs/audit-followups.md.
-# Enable bus comparison: COMPARE_BUS=1 (default).
-# Make bus diffs gate exit code too: BUS_STRICT=1 (default off).
-COMPARE_BUS = os.environ.get("COMPARE_BUS", "1") != "0"
-BUS_STRICT  = os.environ.get("BUS_STRICT",  "0") == "1"
 # When EMIT_VCD=1, emit build/vcd/<prog>.vcd per program containing both
 # our model's pins (top scope) and perfectz80's pins (under "perfectz80"
 # scope) so GTKWave / Surfer can render them side-by-side from one file.
@@ -249,8 +236,8 @@ def compare(prog, phases, source="c"):
     n = min(len(c), len(g))
     name = os.path.basename(prog)
     suffix = " + events" if events else ""
-    if n == 0:
-        print(f"  {name}: FAIL (no rows)"); return False
+    if n == 0 or len(c) != len(g):
+        print(f"  {name}: FAIL ({len(c)} phases from {source}, {len(g)} from perfectz80)"); return False
 
     # Emit VCD waveform — our pins at top, pz80 pins under perfectz80 scope.
     # Open with `gtkwave build/vcd/<prog>.vcd` to see both sides side-by-side.
@@ -258,88 +245,26 @@ def compare(prog, phases, source="c"):
         vcd_path = os.path.join(VCD_DIR, name.replace(".hex", "") + f".{source}.vcd")
         write_vcd(vcd_path, c, g, source)
 
-    ctrl_mism = 0           # control-pin mismatches — count against pass/fail
-    bus_addr_mism = 0       # bus-value mismatches — informational by default
-    bus_data_mism = 0
-    bus_addr_compared = 0
-    bus_data_compared = 0
-    bus_addr_dontcare = 0   # raw mismatches absorbed by the don't-care rule
-                            # (phases where no data transfer is in progress)
+    mism = 0                # phases with any difference
+    data_compared = 0       # phases where both sides drive WR low
     shown = 0
-
-    def is_data_transfer(row):
-        """True if this phase's strobe combo means an actual data transfer
-        is in progress (MREQ+RD / MREQ+WR / IORQ+RD / IORQ+WR). Refresh
-        cycles (MREQ asserted alone, RD+WR both high) are NOT data
-        transfers — they're DRAM-refresh strobes, no addr semantics for
-        the CPU. Idle phases (all strobes high) are obviously not transfers."""
-        mreq_active = row["mreq"] == "0"
-        iorq_active = row["iorq"] == "0"
-        rd_active   = row["rd"]   == "0"
-        wr_active   = row["wr"]   == "0"
-        return (mreq_active or iorq_active) and (rd_active or wr_active)
-
-    def addr_dont_care(i):
-        """`addr` is don't-care at phase i when no actual data transfer
-        is in progress on EITHER side. A data transfer requires both a
-        target strobe (MREQ or IORQ) AND a direction strobe (RD or WR).
-        Cases this catches:
-          - Refresh windows: MREQ low + RFSH low, but RD/WR both high.
-            No CPU data, but the address (I:R) is gated separately.
-          - Idle phases between M-cycles: all strobes high. addr may be
-            transitioning or stale on either side.
-          - T1.P / setup phases: addr being driven but strobes haven't
-            dropped yet — neither side has committed.
-        """
-        return (not is_data_transfer(c[i])) and (not is_data_transfer(g[i]))
-
     for i in range(n):
         diff = [(col, c[i][col], g[i][col]) for col in COMPARED if c[i][col] != g[i][col]]
         if c[i]["addr"] != g[i]["addr"]:
             diff.append(("addr", c[i]["addr"], g[i]["addr"]))
-        bus_diff = []
-        if COMPARE_BUS:
-            # Compare addr at every phase, with the settle tolerance.
-            # Tolerance fires only when (mreq, iorq, rd, wr) are all
-            # inactive on both sides at phase i AND our addr matches
-            # pz80's value at one of the next 1-2 phases — the canonical
-            # "our addr settles to the next M-cycle's value 1-2 phases
-            # ahead of pz80" pattern.
-            bus_addr_compared += 1
-            if c[i]["addr"] == g[i]["addr"]:
-                pass  # exact match
-            elif addr_dont_care(i):
-                bus_addr_dontcare += 1
-            else:
-                bus_addr_mism += 1
-                bus_diff.append(("addr", c[i]["addr"], g[i]["addr"]))
-            # data_o is valid when wr is low on BOTH sides.
-            if c[i]["wr"] == "0" and g[i]["wr"] == "0":
-                bus_data_compared += 1
-                if c[i]["data_o"] != g[i]["data_o"]:
-                    bus_data_mism += 1
-                    bus_diff.append(("data_o", c[i]["data_o"], g[i]["data_o"]))
+        if c[i]["wr"] == "0" and g[i]["wr"] == "0":
+            data_compared += 1
+            if c[i]["data_o"] != g[i]["data_o"]:
+                diff.append(("data_o", c[i]["data_o"], g[i]["data_o"]))
         if diff:
-            ctrl_mism += 1
-        if (diff or bus_diff) and shown < 5:
-            shown += 1
-            d = " ".join(f"{c1}: C={v1} pz80={v2}" for c1,v1,v2 in (diff + bus_diff))
-            print(f"  {name} phase {i} differ:  {d}")
-    # Headline status reflects control-pin parity only (the gate of record);
-    # bus diffs are summarised in a second line as informational findings.
-    is_ok = (ctrl_mism == 0) and (not BUS_STRICT or (bus_addr_mism + bus_data_mism) == 0)
-    head  = "PASS" if ctrl_mism == 0 else f"{ctrl_mism}/{n} ctrl-pin phases differ"
-    print(f"  {name}: {head}{suffix}")
-    if COMPARE_BUS:
-        addr_pct = (100.0 * (bus_addr_compared - bus_addr_mism) / bus_addr_compared) \
-                   if bus_addr_compared else 100.0
-        data_pct = (100.0 * (bus_data_compared - bus_data_mism) / bus_data_compared) \
-                   if bus_data_compared else 100.0
-        flag = "" if BUS_STRICT else "  [informational]"
-        settled_note = f" ({bus_addr_dontcare} don't-care phases)" if bus_addr_dontcare else ""
-        print(f"           bus addr   {bus_addr_compared - bus_addr_mism}/{bus_addr_compared} "
-              f"({addr_pct:.1f}%) match{settled_note};  data_o {bus_data_compared - bus_data_mism}/{bus_data_compared} "
-              f"({data_pct:.1f}%) match{flag}")
+            mism += 1
+            if shown < 5:
+                shown += 1
+                d = " ".join(f"{c1}: C={v1} pz80={v2}" for c1, v1, v2 in diff)
+                print(f"  {name} phase {i} differ:  {d}")
+    is_ok = mism == 0
+    head  = "PASS" if is_ok else f"{mism}/{n} phases differ"
+    print(f"  {name}: {head}{suffix} ({n} phases, data under WR in {data_compared})")
     return is_ok
 
 def main():
@@ -368,17 +293,10 @@ def main():
     if rest:
         progs = rest
     else:
-        hand = [os.path.join(ROOT, f"tests/traces/{n}.hex") for n in (
-                    "prog1","prog2","prog3_cb","prog4_ed",
-                    "prog5_ddfd","prog6_block","prog7_ddcb","prog8_nmi",
-                    "prog10_exchange")]
-        # Random programs from scripts/gen_random_trace_progs.py. Sorted
-        # so the seed order is deterministic in the report.
+        # every trace program: the hand-written ones and the random ones
+        # from scripts/gen_random_trace_progs.py
         import glob
-        rnd = sorted(glob.glob(os.path.join(ROOT, "tests/traces/prog_rnd_*.hex")))
-        progs = sorted([p for p in (hand + rnd) if os.path.exists(p)])
-    bus_mode = "informational" if (COMPARE_BUS and not BUS_STRICT) else \
-               ("strict"        if BUS_STRICT else "off")
+        progs = sorted(glob.glob(os.path.join(ROOT, "tests/traces/*.hex")))
     src_label = {
         "c":         "C model",
         "iverilog":  "iverilog RTL",
@@ -386,8 +304,8 @@ def main():
         "netlist":   "gate-level netlist (" + os.environ.get("NETLIST_LABEL", "sky130 / LibreLane") + ")",
     }[source]
     print(f"{src_label} vs perfectz80 gate-level signal-timing comparison "
-          f"({phases} phases per program, {len(COMPARED)} ctrl pins; "
-          f"bus addr+data {bus_mode})")
+          f"({phases} phases per program: {len(COMPARED)} control pins and the address "
+          f"in every phase, the data under WR)")
     ok = True
     for p in progs:
         # a program may ask for a longer run in <prog>.phases (one number)
