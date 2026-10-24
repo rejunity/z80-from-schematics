@@ -58,9 +58,11 @@
 #if defined(__GNUC__)
 #define ZF_INLINE inline __attribute__((always_inline))
 #define ZF_NOINLINE __attribute__((noinline))
+#define ZF_FLATTEN __attribute__((flatten))     /* every call in it inlined */
 #else
 #define ZF_INLINE inline
 #define ZF_NOINLINE
+#define ZF_FLATTEN
 #endif
 
 /* register r as getr / setr (r) and getri / setri (ri) reach it, inlined
@@ -81,8 +83,11 @@ static ZF_INLINE void zf_set(z80_t *c, uint8_t r, bool ix, uint8_t v)
 }
 
 /* the ALU on the instruction's operation and flag mode (md): A and b, F and
-   Q as they stand, xy the bit ops' X / Y source; the result, F in *f */
-static inline uint8_t zf_alu(z80_t *c, uint8_t md, uint8_t b, uint8_t xy, uint8_t *f)
+   Q as they stand, xy the bit ops' X / Y source; the result, F in *f. Out
+   of line, with the model's ALU flattened into it: one call deep, where
+   GCC called zf_alu and it z80_alu (0.22 of each a Z80 instruction on
+   ZEXDOC), and one copy of z80_alu's 2 KB */
+static ZF_NOINLINE ZF_FLATTEN uint8_t zf_alu(z80_t *c, uint8_t md, uint8_t b, uint8_t xy, uint8_t *f)
 {
     const z80_control_t *ctl = &c->ctl;
     uint8_t r;
