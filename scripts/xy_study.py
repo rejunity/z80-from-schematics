@@ -271,7 +271,13 @@ def main():
     ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--corpus", default=None)
     ap.add_argument("--per-pattern", type=int, default=3)
+    ap.add_argument("--recheck", action="store_true",
+                    help="run our model again on the cases a previous run put on the die, against its values")
+    ap.add_argument("--record", default=None,
+                    help="with --recheck: write every case the die ran, with each emulator's F and the die's")
     a = ap.parse_args()
+    if a.recheck:
+        sys.exit(recheck(a.record))
     os.makedirs(OUT, exist_ok=True)
     rng = random.Random(a.seed)
     ops = opcodes()
@@ -358,6 +364,49 @@ def main():
     if a.corpus:
         corpus(a, die_set, sample, res, die, status)
 
+def recheck(record=None):
+    """our model (as built now) on every case the last run put on the die"""
+    import json, lzma
+    d = json.load(open(os.path.join(OUT, "results.json")))
+    want = set(d["die"])
+    text = []
+    for fn in ("singles.in", "seq.in"):
+        for blk in re.split(r"\n\s*\n", open(os.path.join(OUT, fn)).read().strip()):
+            if blk.split("\n", 1)[0].strip() in want: text.append(blk + "\n")
+    path = os.path.join(OUT, "recheck.in")
+    with open(path, "w") as f: f.write("\n".join(text))
+    res = run_oracles(path, only_ours=True)
+    bad = []
+    for n, die in d["die"].items():
+        o = res[n]["rz80"]
+        if tuple(o[:13]) != tuple(die[:13]) or o[15] != die[15]:
+            bad.append((n, [(REG[k], f"{o[k]:04x}", f"{die[k]:04x}") for k in range(16) if k != 14 and o[k] != die[k]]))
+    if record:
+        # one line per case: the die's F, then each emulator's (rz80 as built now, then
+        # as the run had it), '.' where an emulator did not run it to the same end
+        cases = d["cases"]
+        lines = ["# scripts/xy_study.py --recheck --record: every case the study ran on perfectz80.",
+                 "# case kind:class die_F rz80 rz80_at_run chips superzazu suzukiplan redcode   (F in hex,",
+                 "# '=' where it is the die's, '.' where the emulator refused the case or ended elsewhere)"]
+        for n in sorted(d["die"], key=lambda n: (cases[n]["class"], n)):
+            dief = d["die"][n][0] & 0xFF
+            row = [n, (cases[n]["kind"] + ":" + cases[n]["class"]).replace(" ", "_"), f"{dief:02x}"]
+            em = d["emus"][n]
+            ours_run = em.get("rz80")
+            cols = [res[n]["rz80"]] + [em.get(e) for e in EMUS]
+            for o in cols:
+                if o is None or o[15] < 0 or ours_run is None or o[11] != ours_run[11] or o[15] != ours_run[15]:
+                    row.append("."); continue
+                f = o[0] & 0xFF
+                row.append("=" if f == dief else f"{f:02x}")
+            lines.append(" ".join(row))
+        with lzma.open(record, "wt") as f: f.write("\n".join(lines) + "\n")
+        print(f"wrote {record}: {len(d['die'])} cases")
+    print(f"our model against the die: {len(d['die']) - len(bad)} of {len(d['die'])} cases match")
+    for n, diffs in bad[:60]:
+        print(f"  {n}: " + " ".join(f"{r}={o}/{e}" for r, o, e in diffs) + "  (ours/die)")
+    return 1 if bad else 0
+
 def report(cases, die_set, sample, res, die, status, a):
     L = ["# X / Y (F bits 5, 3): the emulators against each other and the die\n",
          f"{len(cases)} cases (seed {a.seed}): "
@@ -443,9 +492,10 @@ def corpus(a, die_set, sample, res, die, status):
             seen[key] += 1; keep.append(c)
     keep += [c for c in sample if c.name in die]
     os.makedirs(a.corpus, exist_ok=True)
-    with open(os.path.join(a.corpus, "tests.in"), "w") as f:
+    import lzma
+    with lzma.open(os.path.join(a.corpus, "tests.in.xz"), "wt", preset=9) as f:
         for c in keep: f.write(c.text() + "\n")
-    with open(os.path.join(a.corpus, "tests.expected"), "w") as f:
+    with lzma.open(os.path.join(a.corpus, "tests.expected.xz"), "wt", preset=9) as f:
         for c in keep:
             d, o = die[c.name], res[c.name]["rz80"]
             # IFF1, IFF2 and IM have no reader in perfectz80: our model's

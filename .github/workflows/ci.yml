@@ -38,6 +38,10 @@ jobs:
         run: make ctest
       - name: FUSE's 1356 cases through the C model
         run: make fuse
+      - name: X and Y (F bits 5, 3) corpus through the C model, the die's values
+        # tests/xyflags/, 4,061 cases scripts/xy_study.py found where the
+        # reference emulators disagree about F or differ from the die
+        run: make xyflags
       - name: Cringle's prelim through the C model
         run: make prelim
       - name: HALT-to-INT delays equal the die's
@@ -65,6 +69,8 @@ jobs:
         run: make bus_controls
       - name: FUSE's 1356 cases through the iverilog RTL
         run: make fuse_rtl
+      - name: X and Y corpus through the iverilog RTL
+        run: make xyflags_rtl
       # the chip flows' pin-timing SDC is generated from the NMOS Z80
       # datasheet table (asic/timing/); the committed one must match
       - name: NMOS pin-timing SDC up to date
@@ -177,6 +183,9 @@ jobs:
         # registers, WZ, PC, R, T-states and memory must match
         # tests.expected, or tests/fuse/silicon.expected (six cases).
         run: make fuse_pz80
+      - name: X and Y corpus on the die (perfectz80), its recorded values
+        # the 4,061 cases of tests/xyflags/ run on the die again (~5 min)
+        run: make xyflags_pz80
       - name: Upload per-program VCDs as artifact (open in GTKWave / Surfer)
         # compare_signal_timing.py + the pin-scenario runner emit
         # build/vcd/<prog>.<source>.vcd containing both our pins (top

@@ -159,6 +159,16 @@ testing, in this priority order:
      cases; the other six are checked against the die's values
      (`tests/fuse/silicon.expected`).
 
+### X and Y against the die
+
+[xy-flags.md](xy-flags.md) puts every case where the five of us disagree
+about F's X and Y (bits 5, 3) on perfectz80, from 39,786 random cases over
+every opcode, SCF / CCF after every opcode and behind prefixes: redcode
+agrees with the die in all 8,497 cases run there, floooh/chips in 63 %,
+superzazu in 47 %, suzukiplan in 35 %; ours, with the Q fix of branch
+`nmos-q`, in all of them. The cases are a test (`tests/xyflags/`, `make
+xyflags`, `xyflags_rtl`, `xyflags_pz80`).
+
 ## 6. How we use the oracles in practice
 
   - **`make lockstep`** (`scripts/lockstep_quint.c`) — runs our model +

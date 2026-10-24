@@ -41,6 +41,7 @@ job. What each harness accepts, and why:
 | FUSE, 1356 cases, C model | `tests/fuse/` | `make fuse` | `c-tests` | <1 s | 1356 / 1356 |
 | FUSE through the RTL (iverilog) | `tests/fuse/` | `make fuse_rtl` | `rtl-tests` | ~1.5 min | 1356 / 1356 |
 | FUSE on the die (perfectz80) | `tests/fuse/` | `make fuse_pz80` | `parity-tests` | ~1.5-3 min | 1356 / 1356 |
+| X and Y (F bits 5, 3): every case where the reference emulators disagree about F, with the die's values ([docs/xy-flags.md](../docs/xy-flags.md)) | `tests/xyflags/` | `make xyflags`, `xyflags_rtl`, `xyflags_pz80` | `c-tests`, `rtl-tests`, `parity-tests` | <1 s, ~1.5 min, ~5 min | 4061 / 4061 each |
 | Cringle prelim | `tests/zex/` | `make prelim` | `c-tests` | ~1 s | PASS |
 | ZEXDOC, ZEXALL (C model) | `tests/zex/` | `make zexdoc`, `make zexall` | `zexdoc`, `zexall` | ~20 min each | 67 / 67 each |
 | ZEXALL 14-test subset through the RTL | `tests/zex/` | `make zexall_subset_rtl` | `zexall-subset-rtl` (main, nightly) | 25-55 min | 14 / 14 |
@@ -327,13 +328,13 @@ on demand:
 
 | Job | When | Runs |
 |-----|------|------|
-| `c-tests` | always | `make ctest`, `fuse`, `prelim`, `halt2int`, `silicon_cycles`, `silicon_async`, `lockstep` |
-| `rtl-tests` | always | `make rtl`, `bus_controls`, `fuse_rtl`, `timing_sdc_check` |
+| `c-tests` | always | `make ctest`, `fuse`, `xyflags`, `prelim`, `halt2int`, `silicon_cycles`, `silicon_async`, `lockstep` |
+| `rtl-tests` | always | `make rtl`, `bus_controls`, `fuse_rtl`, `xyflags_rtl`, `timing_sdc_check` |
 | `basic-c-tests` | always | `make basic_c_tests` |
 | `basic-rtl-tests` | always | `make basic_rtl_tests` |
 | `z80test` | always | `make z80test` (~3 min) |
 | `z80test-rtl` (4 jobs) | always | `make z80test_rtl` for one variant each |
-| `parity-tests` | always | `make verilator`, `compare`, `perfectz80`, `perfectz80_rtl`, `pin_scenarios`, `pin_scenarios_rtl`, `fuse_pz80` |
+| `parity-tests` | always | `make verilator`, `compare`, `perfectz80`, `perfectz80_rtl`, `pin_scenarios`, `pin_scenarios_rtl`, `fuse_pz80`, `xyflags_pz80` |
 | `event-sweep` (4 shards) | always; `opcodes_reset` and fresh fuzz nightly | `make event_sweep` (shard 0 also re-runs 50 recorded cases on perfectz80 live) |
 | `librelane-netlist` | always | `make synth`, `iverilog_netlist`, `perfectz80_netlist`, `pin_scenarios_netlist` |
 | `librelane-basic-netlist` | always | `make synth`, `verilator_basic_netlist`, `basic_netlist_tests` |

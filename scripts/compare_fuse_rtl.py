@@ -130,7 +130,7 @@ def main():
 
     print(f"\n=== {LABEL} through RTL (iverilog) ===")
     print(f"{len(expd)} tests: {pass_ct} PASS, {fail_ct} FAIL, {len(missing)} missing  "
-          f"({len(fixes)} against {os.path.relpath(FIX, ROOT)})")
+          + (f"({len(fixes)} against {os.path.relpath(FIX, ROOT)})" if FIX != "/dev/null" else ""))
     if missing:
         print("no result from the RTL for: " + " ".join(missing[:20]))
     if stale:

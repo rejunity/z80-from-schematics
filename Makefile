@@ -11,9 +11,10 @@
 #   make all-tests  every gate that needs only a C compiler, iverilog and
 #                   Verilator, as CI runs them (~1.5 h)
 #
-#   instruction suites, C model: prelim zexdoc zexall z80test fuse
-#     (z80test_rtl, fuse_rtl, zexall_subset_rtl: the same through the RTL)
+#   instruction suites, C model: prelim zexdoc zexall z80test fuse xyflags
+#     (z80test_rtl, fuse_rtl, xyflags_rtl, zexall_subset_rtl: through the RTL)
 #   against the die (perfectz80): perfectz80 pin_scenarios event_sweep fuse_pz80
+#     xyflags_pz80; make xy_study: the oracles' X / Y against the die
 #     (perfectz80_rtl, pin_scenarios_rtl: the RTL as the trace source)
 #   make lockstep   our model and four other emulators, instruction by
 #                   instruction over ZEXDOC3
@@ -191,16 +192,21 @@ $(BIN)/fuse_pz80: $(SCRIPTS)/fuse_pz80.c $(SCRIPTS)/refs/perfectz80/perfectz80.c
 # xyflags runs it through the C model, xyflags_rtl through the RTL (iverilog),
 # xyflags_pz80 on the die. make xy_study runs the study again
 # (XY_STUDY_ARGS="--seed 2 --corpus tests/xyflags" writes a new corpus).
-xyflags: fuse_runner
-	@$(BIN)/fuse_runner tests/xyflags/tests.in tests/xyflags/tests.expected /dev/null
+XYFLAGS := $(BUILD)/xyflags
+$(XYFLAGS)/%: tests/xyflags/%.xz
+	@mkdir -p $(XYFLAGS)
+	@$(PYTHON) -c "import lzma, sys; sys.stdout.buffer.write(lzma.open(sys.argv[1]).read())" $< > $@
 
-xyflags_rtl: dirs
-	@FUSE_IN=tests/xyflags/tests.in FUSE_EXPECTED=tests/xyflags/tests.expected FUSE_FIX=/dev/null \
+xyflags: fuse_runner $(XYFLAGS)/tests.in $(XYFLAGS)/tests.expected
+	@$(BIN)/fuse_runner $(XYFLAGS)/tests.in $(XYFLAGS)/tests.expected /dev/null
+
+xyflags_rtl: dirs $(XYFLAGS)/tests.in $(XYFLAGS)/tests.expected
+	@FUSE_IN=$(XYFLAGS)/tests.in FUSE_EXPECTED=$(XYFLAGS)/tests.expected FUSE_FIX=/dev/null \
 	  FUSE_TB=$(BUILD)/tb_xyflags.v FUSE_VVP=$(BUILD)/tb_xyflags.vvp FUSE_LABEL="X / Y corpus" \
 	  $(PYTHON) $(SCRIPTS)/compare_fuse_rtl.py
 
-xyflags_pz80: $(BIN)/fuse_pz80
-	@$(BIN)/fuse_pz80 tests/xyflags/tests.in tests/xyflags/tests.expected
+xyflags_pz80: $(BIN)/fuse_pz80 $(XYFLAGS)/tests.in $(XYFLAGS)/tests.expected
+	@$(BIN)/fuse_pz80 $(XYFLAGS)/tests.in $(XYFLAGS)/tests.expected
 
 XY_STUDY_ARGS ?=
 xy_study: cmodel $(BIN)/fuse_pz80
@@ -785,7 +791,7 @@ test: ctest rtl bus_controls compare
 # runs them (CI adds the LibreLane netlist jobs and cfast_bench). ZEXDOC and
 # ZEXALL take ~20 min each, the pin sweep ~15 min on 8 cores, the Verilator
 # z80test variants 6-15 min each: about an hour and a half in all.
-all-tests: ctest fuse fuse_rtl fuse_pz80 prelim z80test z80test_rtl halt2int lockstep \
+all-tests: ctest fuse fuse_rtl fuse_pz80 xyflags xyflags_rtl xyflags_pz80 prelim z80test z80test_rtl halt2int lockstep \
            silicon_cycles silicon_async rtl bus_controls verilator compare perfectz80 perfectz80_rtl \
            pin_scenarios pin_scenarios_rtl basic_c_tests basic_rtl_tests event_sweep \
            cfast_identity cfast_single_identity zexdoc zexall zexall_subset_rtl
