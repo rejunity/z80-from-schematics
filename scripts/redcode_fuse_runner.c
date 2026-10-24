@@ -2,6 +2,10 @@
  * through redcode/Z80 instead of our C model. Mirrors the structure
  * of scripts/fuse_runner.c so the pass/fail tallies are directly
  * comparable. Final-state mode only (no per-cycle bus-event check).
+ * redcode runs as the Zilog NMOS model (Z80_MODEL_ZILOG_NMOS: SCF / CCF
+ * take X / Y through Q) and every case starts with Q = 0, as in
+ * fuse_runner.c; the six cases in tests/fuse/silicon.expected are checked
+ * against the die's values there.
  *
  * Build (alongside the prebuilt redcode_Z80.o):
  *   cc  -DZ80_STATIC -DZ80_WITH_LOCAL_HEADER -DZ80_WITH_EXECUTE \
@@ -14,7 +18,7 @@
  *
  * Run:
  *   build/bin/redcode_fuse_runner tests/fuse/tests.in \
- *                                 tests/fuse/tests.expected [max_show]
+ *                                 tests/fuse/tests.expected [silicon.expected]
  */
 #define _POSIX_C_SOURCE 200809L
 
@@ -56,9 +60,10 @@ static int parse_mem_line(const char* line, memblk_t* mb) {
     }
     return 1;
 }
+/* the next line that is not blank or a '#' comment */
 static int skip_blank_lines(FILE* f, char* line, size_t sz) {
     while (fgets(line, (int)sz, f)) {
-        if (line[0] != '\n' && line[0] != '\r' && line[0] != 0) return 1;
+        if (line[0] != '\n' && line[0] != '\r' && line[0] != 0 && line[0] != '#') return 1;
     }
     return 0;
 }
@@ -140,13 +145,30 @@ static void wire_callbacks(Z80 *cpu) {
     cpu->in           = cb_in;
     cpu->out          = cb_out;
     /* All optional callbacks default to NULL (set by memset). */
-    cpu->options      = 0;
+    cpu->options      = Z80_MODEL_ZILOG_NMOS;
+}
+
+/* tests/fuse/silicon.expected: the die's values where they differ from
+   tests.expected ('#' lines are comments) */
+static test_t fixes[32];
+static int    n_fix = 0;
+static void load_fixes(const char *path) {
+    FILE *f = fopen(path, "r");
+    if (!f) { perror(path); exit(2); }
+    while (n_fix < 32 && read_test_exp(f, &fixes[n_fix])) n_fix++;
+    fclose(f);
+}
+static const test_t *fix_for(const char *name) {
+    for (int i = 0; i < n_fix; i++)
+        if (strcmp(name, fixes[i].name) == 0) return &fixes[i];
+    return NULL;
 }
 
 int main(int argc, char** argv) {
     const char* in_path  = (argc>1) ? argv[1] : "tests/fuse/tests.in";
     const char* exp_path = (argc>2) ? argv[2] : "tests/fuse/tests.expected";
-    int  max_show        = (argc>3) ? atoi(argv[3]) : 12;
+    const char* fix_path = (argc>3) ? argv[3] : "tests/fuse/silicon.expected";
+    const int max_show   = 12;
     FILE* fi = fopen(in_path, "r");  if (!fi){perror(in_path); return 2;}
     FILE* fe = fopen(exp_path, "r"); if (!fe){perror(exp_path); return 2;}
 
@@ -157,8 +179,11 @@ int main(int argc, char** argv) {
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
 
+    load_fixes(fix_path);
     while (read_test_in(fi, &tin) && read_test_exp(fe, &texp)) {
         ntotal++;
+        const test_t *fx = fix_for(texp.name);
+        if (fx) texp = *fx;
         Z80 cpu;
         wire_callbacks(&cpu);
         z80_power(&cpu, 1);
@@ -179,6 +204,7 @@ int main(int argc, char** argv) {
         cpu.iff2     = tin.iff2;
         cpu.im       = tin.im;
         cpu.halt_line= tin.halted;
+        cpu.q        = 0;            /* no flags written by the previous instruction */
 
         /* Reset memory then apply per-test blocks. The "all 65536 bytes
          * matter" semantics of FUSE include reads from arbitrary

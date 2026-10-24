@@ -6,13 +6,14 @@ verification stack:
 | Oracle      | Author / source                                    | Style                | Vendor path                                |
 |-------------|----------------------------------------------------|----------------------|--------------------------------------------|
 | **superzazu**   | Nicolas Allemand, `github.com/superzazu/z80`     | clean C, instruction-stepped | `scripts/refs/superzazu_z80.{h,c}` |
-| **chips**       | Andre Weissflog (floooh), `github.com/floooh/chips` | tick-based single-header C, deeply silicon-faithful | `scripts/refs/chips_z80.h`     |
+| **floooh/chips** | Andre Weissflog (floooh), `github.com/floooh/chips` | tick-based single-header C, deeply silicon-faithful | `scripts/refs/chips_z80.h`     |
 | **suzukiplan** | Yoji Suzuki (suzukiplan), `github.com/suzukiplan/z80` | MAME-derived single-header C++ | `scripts/refs/suzukiplan_z80.hpp` |
 | **redcode**     | Manuel Sainz de Baranda, `github.com/redcode/Z80` | meticulously cited C, configurable per-variant (NMOS/CMOS/NEC/ST/Sharp) | `scripts/refs/redcode_z80/` + the Zeta C utility library |
 
 This document explains what each oracle covers, how they compare on
-Patrik Rak's `z80test` + the FUSE corpus, and which one we treat as
-the silicon-truth tie-breaker.
+Patrik Rak's `z80test` + the FUSE corpus, and how we settle
+disagreements: perfectz80, the transistor netlist of the Zilog NMOS die,
+decides (§5); the oracles are a cross-check, not a reference.
 
 ## 1. Why four oracles?
 
@@ -39,8 +40,8 @@ parity, not "0xBF when low byte is 0xFE"). Fix landed in commit
     single-stepping at the instruction boundary. Optimized for
     readability; less silicon-faithful on undocumented corners.
 
-  - **chips/z80.h** (2019+) — extracted from Andre Weissflog's `chips`
-    8-bit emulator collection (used in his Z80 / KC85 / CPC tools). One
+  - **floooh/chips `z80.h`** (2019+) — extracted from Andre Weissflog's
+    floooh/chips 8-bit emulator collection (used in his Z80 / KC85 / CPC tools). One
     of the first FOSS Z80 cores to model the per-tick bus state
     (rather than instruction-boundary), which is what makes it silicon-
     accurate on block instructions, MEMPTR/WZ, and timing-sensitive
@@ -70,35 +71,40 @@ parity, not "0xBF when low byte is 0xFE"). Fix landed in commit
 
 ## 3. Test-suite pass-fail matrix (current scoreboard)
 
-  Last refreshed: 2026-06-18 (commit `9f1acb2`).
+  Last refreshed: 2026-10-24, main 780418a. z80test: failed tests of
+  160 per variant, through each emulator's runner
+  (`scripts/{chips,superzazu,redcode}_z80test_runner.c`, our
+  `make z80test`).
 
-  | Suite              | Ours     | superzazu | chips    | suzukiplan | redcode  |
-  |--------------------|---------:|----------:|---------:|-----------:|---------:|
-  | **Rak z80doc**     | **0**    | 3         | 2        | n/a *      | **0**    |
-  | **Rak z80memptr**  | **0**    | 16        | **0**    | n/a *      | **0**    |
-  | **Rak z80full**    | **0**    | 20        | 10       | n/a *      | **0**    |
-  | FUSE corpus †      | 1348 + 8 | n/a       | n/a      | n/a        | 1348 ‡   |
-  | ZEXDOC             | PASS     | (oracle)  | (oracle) | (oracle)   | (oracle) |
-  | ZEXALL             | PASS     | (oracle)  | (oracle) | (oracle)   | (oracle) |
+  | Suite              | Ours     | superzazu | floooh/chips | suzukiplan | redcode  |
+  |--------------------|---------:|----------:|-------------:|-----------:|---------:|
+  | **Rak z80doc**     | **0**    | 3         | 2            | n/a *      | **0**    |
+  | **Rak z80flags**   | **0**    | 20        | 10           | n/a *      | **0**    |
+  | **Rak z80memptr**  | **0**    | 16        | **0**        | n/a *      | **0**    |
+  | **Rak z80full**    | **0**    | 20        | 10           | n/a *      | **0**    |
+  | **Rak z80ccf**     | 1 †      | 75        | 67           | n/a *      | **0**    |
+  | FUSE corpus ‡      | **1356** | n/a       | n/a          | n/a        | **1356** |
+  | ZEXDOC             | PASS     | (oracle)  | (oracle)     | (oracle)   | (oracle) |
+  | ZEXALL             | PASS     | (oracle)  | (oracle)     | (oracle)   | (oracle) |
 
-  \* suzukiplan crashes on a few undefined ED opcodes during the Rak
-  test sequence; we run it only through the 5-way lockstep
-  (`scripts/lockstep_quint.c`) rather than the Rak harness.
+  \* suzukiplan's runner prints no result: it crashes on a few undefined
+  ED opcodes during the Rak test sequence; we run it only through the
+  5-way lockstep (`make lockstep`).
 
-  † FUSE corpus: 1356 cases. "1348 + 8" means 1348 PASS, 8 of the
-  remaining listed in `tests/fuse/known-fuse-wrong.txt` as cases
-  where FUSE's expected output is incorrect vs. real silicon (see §5
-  below). 0 unexpected fails. Our model and redcode now both produce
-  PC = HALT_addr + 1 after a HALT (Brewer 2014); test `76` is the
-  newest addition to the known-FUSE-wrong list.
+  † z80ccf test 129 (`EX AF,AF'`): our models leave Q = the swapped-in F
+  after `EX AF,AF'`, the die (and redcode) clear it. One of the three Q
+  differences in [known-differences.md](known-differences.md); fixed on
+  branch `nmos-q`.
 
-  ‡ redcode end-to-end on FUSE (via `scripts/redcode_fuse_runner.c`)
-  produces the same 1348 PASS, 8 FAIL pattern (same cases on both
-  sides).
+  ‡ FUSE corpus: 1356 cases, each started with Q = 0, checked against
+  `tests/fuse/tests.expected` except six cases checked against the die's
+  values (`tests/fuse/silicon.expected`; `make fuse_pz80` runs the whole
+  corpus on perfectz80). redcode runs as `Z80_MODEL_ZILOG_NMOS` through
+  `scripts/redcode_fuse_runner.c` with the same expectations.
 
 ## 4. Distinctive strengths
 
-  - **chips** — first FOSS core to publish per-tick bus modeling.
+  - **floooh/chips** — first FOSS core to publish per-tick bus modeling.
     Strongest reference for instruction-level timing pin sequences.
 
   - **redcode** — by far the most thorough citations + per-variant
@@ -125,19 +131,20 @@ testing, in this priority order:
 
   2. **Patrik Rak's z80test** (validated against a real 48K Spectrum
      by Rak, refined by Chandler on NEC and Visual Z80 Remix) +
-     **Mark Woodmass's Z80 Test Suite** (HALT/EI/IFF2 timing on real
-     Spectrum hardware) + **boo-boo et al. 2006 MEMPTR paper** (real
-     Zilog Z80 testing, multiple chip samples). All three are explicit
-     real-hardware references; we treat them as the next-best evidence.
+     **Mark Woodmass's Z80 Test Suite** (flags and MEMPTR, values from a
+     NEC D780C-1; runs on branch `speccy`) + **boo-boo et al. 2006 MEMPTR
+     paper** (real Zilog Z80 testing, multiple chip samples). All three
+     are explicit real-hardware references; we treat them as the
+     next-best evidence.
 
   3. **redcode/Z80** — Manuel Sainz de Baranda cites real-hardware
      papers and reverse-engineering work line by line. When he
      deviates from documentation, it's because he believed silicon
      does. Strong third-party evidence.
 
-  4. **chips/z80.h** — Andre Weissflog's silicon-faithful tick-based
-     model. Where chips and redcode agree but FUSE disagrees, we
-     side against FUSE.
+  4. **floooh/chips `z80.h`** — Andre Weissflog's silicon-faithful
+     tick-based model. Where floooh/chips and redcode agree but FUSE
+     disagrees, we side against FUSE.
 
   5. **Sean Young's "Undocumented Z80 Documented"** — early systematic
      reverse-engineering work (2005 era). Authoritative for the
@@ -146,18 +153,22 @@ testing, in this priority order:
      in code comments but mark when a redcode/Banks finding supersedes
      it.
 
-  6. **FUSE** — useful per-cycle bus-event corpus but the
-     `tests.expected` was authored by Philip Kendall in 2006 from
-     FUSE's own Z80 core, never silicon-validated. Stale on at least
-     7 cases (see `tests/fuse/known-fuse-wrong.txt`). Treated as a
-     secondary cross-check, not authoritative.
+  6. **FUSE** — useful per-opcode corpus, but `tests.expected` was
+     authored by Philip Kendall in 2006 from FUSE's own Z80 core, never
+     silicon-validated. Run on the die, it is right in 1350 of 1356
+     cases; the other six are checked against the die's values
+     (`tests/fuse/silicon.expected`).
 
 ## 6. How we use the oracles in practice
 
-  - **`scripts/lockstep_quint.c`** — runs our model + all four
-    oracles in lockstep on ZEXDOC3 with a 5-way register-by-register
-    diff at every instruction boundary. Catches the first instruction
-    where our model diverges from any oracle. Sub-second on ~7M
+  - **`make lockstep`** (`scripts/lockstep_quint.c`) — runs our model +
+    all four oracles in lockstep on ZEXDOC3 with a 5-way
+    register-by-register diff at every instruction boundary. Catches the
+    first instruction where our model diverges from any oracle. F is
+    compared whole against redcode; superzazu, floooh/chips and
+    suzukiplan keep LDI's X / Y in a repeating LDIR (they predate Banks
+    2018), so their F is compared without bits 5 and 3 -- on ZEXDOC3 that
+    hides 20 LDIR repeats and nothing else. A few seconds for the 7.0 M
     instructions.
 
   - **`scripts/{chips,superzazu,suzukiplan,redcode}_z80test_runner.c`**
@@ -168,13 +179,17 @@ testing, in this priority order:
     bug (commit `07b257f`).
 
   - **`scripts/redcode_fuse_runner.c`** — runs all 1356 FUSE cases
-    through redcode end-to-end. The 8 redcode-FUSE failures (vs our
-    7) confirm FUSE-vs-silicon disagreements rather than per-emulator
-    bugs.
+    through redcode (Zilog NMOS model) end-to-end, with the same
+    expectations as `make fuse`: 1356 / 1356. Before the die check
+    (`make fuse_pz80`), redcode failing the same cases as our model was
+    the evidence that FUSE, not the emulators, was wrong on them.
 
-  - The lockstep is fast (sub-second per 7M instructions) so it runs
-    as part of every `ctest` run; the per-runner oracles are run on
-    demand when investigating a specific bug.
+  - The lockstep runs in CI's `c-tests` job on every push; the
+    per-runner oracles are built and run by hand when investigating a
+    specific bug (build lines: the CI's redcode flags are
+    `REDCODE_FLAGS` in the Makefile; the floooh/chips and superzazu
+    runners build with `cc -Iscripts`, superzazu also with
+    `scripts/refs/superzazu_z80.c`).
 
 ## 7. Adding a new oracle
 
@@ -205,5 +220,5 @@ If you want to add a fifth oracle (e.g. mz80, z80ex, zexall-cpm-z80):
   - Frank D. Cringle's `zexall.com` / `zexdoc.com`: <https://mdfs.net/Software/Z80/Exerciser/>
 
 See `docs/simplifications.md` §F1 for the canonical writeup of how each
-oracle disagreement was traced, and `tests/fuse/known-fuse-wrong.txt`
-for the case-by-case FUSE-vs-silicon list.
+oracle disagreement was traced, and `tests/fuse/silicon.expected` (with
+`tests/fuse/README.md`) for the case-by-case FUSE-vs-die list.
