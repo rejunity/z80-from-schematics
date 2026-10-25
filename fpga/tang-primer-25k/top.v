@@ -5,7 +5,7 @@
 //
 //   EXTERNAL_BUS=0  "sbc": a BASIC single-board computer. 64 KiB internal
 //     RAM with NASCOM BASIC 4.7 (or Tiny BASIC) preloaded, 68B50-style
-//     ACIA on the BL616 USB-UART at 115200 8N1, Z80 clock from the PLL
+//     ACIA on the BL616 USB-UART at 230400 8N1, Z80 clock from the PLL
 //     (CORE_HZ, 4 MHz). The dock's J3 header carries the Z80 bus as
 //     OUTPUTS in the chip-build pinout below (CLK included), so a logic
 //     analyser or an external bus display sees exactly what a Z80 would
@@ -62,7 +62,7 @@
 module top #(
     parameter CORE_HZ  = 4_000_000,             // sbc Z80 clock: 4_000_000 or 3_500_000; sim overrides to 4_166_667
     parameter SIM_CLK_DIV = 12,                 // simulation stand-in for the PLL: 50 MHz / 12
-    parameter BAUD     = 115_200,
+    parameter BAUD     = 230_400,
     parameter ROM_FILE = "rom.mem",
     parameter ROM_PROTECT_TOP = 16'h2000,       // NASCOM 4.7 ROM is 0x0000-0x1FD9
     parameter EXTERNAL_BUS = 1'b1               // 1: chip build (J3 is the live CPU bus); 0: BASIC sbc build

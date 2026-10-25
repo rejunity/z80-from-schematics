@@ -6,7 +6,7 @@ Two bitstreams from one `top.v` for the
 
 | build | what it is | clock | J3 header |
 |---|---|---|---|
-| **sbc** (`make sbc`) | BASIC single-board computer: rz80 + 64 KiB RAM with **NASCOM BASIC 4.7** preloaded + 68B50-style ACIA on the dock's BL616 USB-UART (**115200 8N1**) | internal, PLL → **4 MHz** | the Z80 bus as **outputs**, same pinout as the chip build; only /RESET and /NMI are inputs |
+| **sbc** (`make sbc`) | BASIC single-board computer: rz80 + 64 KiB RAM with **NASCOM BASIC 4.7** preloaded + 68B50-style ACIA on the dock's BL616 USB-UART (**230400 8N1**) | internal, PLL → **4 MHz** | the Z80 bus as **outputs**, same pinout as the chip build; only /RESET and /NMI are inputs |
 | **chip** (`make chip`) | Z80 chip replacement: the live CPU bus on J3, memory and peripherals are whatever you wire up | **external**, CLK in on J3-22 | a Z80's own pin directions |
 
 > Naming: Sipeed's 25K-LUT Tang board is the *Primer* 25K — the Nano
@@ -19,7 +19,8 @@ Two bitstreams from one `top.v` for the
 
 For the sbc build, connect a terminal to the dock's USB serial port:
 
-    screen /dev/cu.usbserial-* 115200      # macOS; Ctrl-A K to quit
+    screen /dev/cu.usbserial-* 230400      # macOS; Ctrl-A K to quit
+    tio -b 230400 /dev/cu.usbserial-*      # or tio (Ctrl-T Q to quit)
 
 Press Enter at the `Memory top?` cold-start prompt and you're at
 `Z80 BASIC Ver 4.7c` / `Ok`. The **H10 push-button** (key[0]) or a low
@@ -123,12 +124,49 @@ defeating clock-enable inference) and sources are staged into
 `build/` for the YoWASP sandbox. The two builds differ only in the
 `-chparam EXTERNAL_BUS` passed to yosys.
 
+## Serial: 230400 baud
+
+The console runs at **230400 8N1** (115200 before; set the terminal to
+match). The dock's BL616 bridge sets its UART from the rate the terminal asks
+for; 230400 has not been tried on a board yet.
+
+The UART (`uart.v`) runs off the Z80 clock, which is not a whole
+multiple of 230400: a bit is 4,000,000 / 230,400 = 17.36 Z80 clocks
+(15.19 with `CORE_HZ = 3_500_000`). Its bit timer is a phase
+accumulator: every clock it adds `BAUD / G`, and a bit ends where the sum
+passes `CORE_HZ / G` (`G` their greatest common divisor: 36 of 625 at
+4 MHz, a 10-bit register). The rate averages exactly 230400, and every
+bit edge lands within one Z80 clock of its ideal time (at worst 5.3 % of
+a bit at 4 MHz, 5.6 % at 3.5 MHz). That keeps the UART in the one clock
+domain everything else runs in: clocking it from the PLL instead would
+take a second domain and synchronisers to the ACIA for the same
+accuracy.
+
+The receiver restarts its accumulator at half a bit, plus one clock for
+its input synchroniser, at each start edge, so every sample lands within
+one clock of its bit's centre. `make sim_uart` (`tb_uart.v`, part of
+`make ci`) measures it at both clock rates, with the sender's start edge
+at 16 phases of the Z80 clock:
+
+| sender's rate error | 4 MHz: worst sample from the bit's centre (margin left) | 3.5 MHz |
+|---|---|---|
+| 0 | 5.5 % of a bit (44.5 %) | 6.0 % (44.0 %) |
+| ±1 % | 14.5 % (35.5 %) | 14.3 % (35.7 %) |
+| ±2 % | 23.9 % (26.1 %) | 23.6 % (26.4 %) |
+| ±3 % | 33.4 % (16.6 %) | 33.1 % (16.9 %) |
+
+Every byte still arrives with the sender 4.5 % off either way; USB
+bridges are within a fraction of a percent. Pasting still needs a
+per-character delay (1 ms is plenty): a character now arrives every
+43 µs, about 174 Z80 clocks at 4 MHz, less than BASIC spends on one.
+
 ## Simulation
 
     make sim        # Verilator, sbc build, fast serial (~seconds)
-    make sim_real   # true 115200 pacing — exercises the ROM's
+    make sim_real   # the hardware's pacing — exercises the ROM's
                     # interrupt-driven TX (TIE) path
-    make sim_tiny   # 1K Tiny BASIC (SIM_BAUD=115200: real pacing)
+    make sim_uart   # uart.v at 4 and 3.5 MHz against 230400: TX edges, RX at ±3 %
+    make sim_tiny   # 1K Tiny BASIC (SIM_BAUD=240000: the hardware's pacing)
     make ci         # all of these, both bitstreams, the Tiny BASIC
                     # bitstream and the top-level `make bus_controls`
 
@@ -201,5 +239,5 @@ The Makefile write-protects the ROM image rounded up to 1 KiB
 line), so Tiny BASIC's variables and stack at `0x0400`–`0x07FF` are RAM,
 and a different `ROM_HEX` rebuilds the image and the bitstreams. Pasting
 a long program can overrun the 32-byte RX FIFO (basic1K needs ~430 Z80
-clocks per input character, more than one takes at 115200 baud): give
+clocks per input character, more than one takes at 230400 baud): give
 the terminal a per-character delay (1 ms is plenty).

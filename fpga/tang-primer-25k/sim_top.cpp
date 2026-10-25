@@ -28,8 +28,23 @@
 #endif
 static const int CLK_DIV   = 12;       // top.v sim stand-in for PLLA+CLKDIV: 50 MHz / 12
 static const int CORE_HZ   = 50000000 / CLK_DIV;   // 4.17 MHz Z80 clock
-static const int BIT_TICKS =           // in half-input-clk (eval) steps
-    ((CORE_HZ + SIM_BAUD / 2) / SIM_BAUD) * CLK_DIV * 2;
+// A bit is CORE_HZ / SIM_BAUD Z80 clocks, which need not be whole (17.36
+// at the hardware's 230400 baud from 4 MHz). The host side keeps its bit
+// edges on the exact rate with a phase accumulator over eval steps, as a
+// real UART bridge's own clock would.
+static const long long STEPS_PER_SEC = 2LL * CLK_DIV * CORE_HZ;  // eval steps per second
+static const int BIT_TICKS =           // one bit in eval steps, rounded (pauses)
+    (int)((STEPS_PER_SEC + SIM_BAUD / 2) / SIM_BAUD);
+struct BitClock {                      // step() is true when a bit time has passed
+    long long acc = 0;
+    void start(long long phase) { acc = phase; }
+    bool step() {
+        acc += SIM_BAUD;
+        if (acc < STEPS_PER_SEC) return false;
+        acc -= STEPS_PER_SEC;
+        return true;
+    }
+};
 
 // `Vtop tiny` (make sim_tiny) runs the 1K Tiny BASIC ROM instead (model
 // built with RAM from 0x0400): one line typed per ">" prompt, and the
@@ -102,7 +117,7 @@ int main(int argc, char** argv) {
         send_byte('\r');
     };
 
-    int  rx_state = 0, rx_cnt = 0, rx_bit = 0;
+    int  rx_state = 0, rx_bit = 0;
     uint8_t rx_sh = 0;
     std::string tail;
     int stage = 0;
@@ -110,7 +125,9 @@ int main(int argc, char** argv) {
     int tiny_next = 0;        // tiny: next line to type
     const char* typing = nullptr;   // tiny: rest of the line being typed
 
-    long long tx_wait = 0, tx_cnt = 0;
+    long long tx_wait = 0;
+    BitClock tx_clk, rx_clk;
+    bool tx_run = false;
     long long steps = 0;
     long long btn_timer = 0;
     const long long BTN_PRESS  = 200000;   // ~2 ms in half-clk steps
@@ -133,32 +150,34 @@ int main(int argc, char** argv) {
         if (tx_wait > 0) {
             tx_wait--;
         } else if (!tx_levels.empty()) {
-            if (--tx_cnt <= 0) {
+            if (!tx_run || tx_clk.step()) {     // the next level, a bit after the last
+                if (!tx_run) tx_clk.start(0);
+                tx_run = true;
                 t->uart_rx = tx_levels.front();
                 tx_levels.pop();
-                tx_cnt = BIT_TICKS;
             }
+        } else if (tx_run && tx_clk.step()) {
+            tx_run = false;                     // the last level has had its bit
         }
 
         switch (rx_state) {
             case 0:
-                if (t->uart_tx == 0) { rx_state = 1; rx_cnt = BIT_TICKS / 2; }
+                if (t->uart_tx == 0) { rx_state = 1; rx_clk.start(STEPS_PER_SEC / 2); }
                 break;
             case 1:
-                if (--rx_cnt == 0) {
-                    if (t->uart_tx == 0) { rx_state = 2; rx_bit = 0; rx_sh = 0; rx_cnt = BIT_TICKS; }
+                if (rx_clk.step()) {
+                    if (t->uart_tx == 0) { rx_state = 2; rx_bit = 0; rx_sh = 0; }
                     else rx_state = 0;
                 }
                 break;
             case 2:
-                if (--rx_cnt == 0) {
+                if (rx_clk.step()) {
                     rx_sh |= (t->uart_tx & 1) << rx_bit;
-                    rx_cnt = BIT_TICKS;
                     if (++rx_bit == 8) rx_state = 3;
                 }
                 break;
             case 3:
-                if (--rx_cnt == 0) {
+                if (rx_clk.step()) {
                     putchar(rx_sh); fflush(stdout);
                     tail.push_back((char)rx_sh);
                     if (tail.size() > 256) tail.erase(0, tail.size() - 256);
