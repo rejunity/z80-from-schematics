@@ -6,9 +6,10 @@ test bug / reference ambiguity).
 
 Status legend:
 
+    open         found, not fixed yet; the note says where the fix stands
     accepted     conscious design choice; will not change
     watching     monitoring; no known test failure but worth keeping an eye on
-    resolved     fix has landed in both the C model and the RTL
+    resolved     fixed in every model that had it (the C model, the RTL, cfast)
 
 
 ## Differences
@@ -26,18 +27,30 @@ Status legend:
 | 9  | HALT PC convention                            | undocumented / convention | resolved |
 | 10 | `IN A,(n)` / `IN r,(C)` port-input value      | reference ambiguity       | resolved |
 | 11 | `DD 36` / `FD 36` cycle count                 | timing                    | resolved |
-| 12 | `INI` / `IND` / `INIR` / `INDR` flag set      | undocumented / flag       | watching |
-| 13 | `LDIR` / `LDDR` Q-leak into next instruction  | undocumented / flag       | watching |
+| 12 | `INI` / `IND` / `INIR` / `INDR` flag set      | undocumented / flag       | resolved |
+| 13 | `LDIR` / `LDDR` Q-leak into next instruction  | undocumented / flag       | resolved |
 | 14 | Pin-scenario vs perfectz80                    | timing                    | resolved |
 | 15 | RTL clocking: reset / BUSREQ settle vs C model | timing                    | resolved |
 | 16 | BUSREQ / BUSACK vs the NMOS Z80               | timing / bus              | resolved |
 | 17 | RESET / INT / NMI sweep vs perfectz80         | timing / interrupt        | resolved |
 | 18 | Refresh and idle address bus                  | timing / bus              | resolved |
-| 19 | RESET between an instruction and its write-back | timing / reset          | watching |
+| 19 | RESET between an instruction and its write-back | timing / reset          | resolved |
 | 20 | IM0: the instruction from the interrupting device | interrupt               | resolved |
 | 21 | HALT pin when an NMI response fetches a HALT byte | timing / interrupt      | resolved |
 | 22 | Pad drivers: when the bus floats              | bus                       | resolved |
 | 23 | INTA right after IM n                         | interrupt                 | resolved |
+| 24 | Nested NMI: IFF2                              | interrupt                 | resolved |
+| 25 | RESET in an M1's wait states                  | timing / reset            | resolved |
+| 26 | RESET in a bus grant                          | timing / reset / bus      | resolved |
+| 27 | NMI after RESET's release                     | timing / reset / interrupt | resolved |
+| 28 | The data latch                                | timing / bus              | resolved |
+| 29 | `EX AF,AF'` and Q                             | undocumented / flag       | resolved |
+| 30 | A prefix and Q                                | undocumented / flag       | resolved |
+| 31 | Q after a RESET                               | timing / reset / flag     | resolved |
+| 32 | WZ under a RESET cut                          | MEMPTR / reset            | resolved |
+| 33 | LD (IX+d),n's write data under a RESET        | timing / reset / bus      | resolved |
+
+33 rows: 32 resolved, row 3 accepted.
 
 Notes for each row:
 
@@ -50,11 +63,17 @@ Notes for each row:
      registers; the ASIC chip ties `por_n` off and RESET alone initialises
      the control state.
 
-  2. SCF / CCF X / Y flags — NMOS Q-register variant implemented: X / Y derived
-     from `(A | Q)`, where Q holds the F value left by the previous F-modifying
-     instruction (else 0). Brings FUSE to **1356 / 1356 (100 %)**. Mirrored to the
-     RTL (Q committed at instruction-done by comparing `rf_n[AF][7:0]` against
-     `rf[AF][7:0]`).
+  2. SCF / CCF X / Y flags — the Zilog NMOS Q variant: X / Y =
+     `A | (F XOR Q)`, where Q is the F the previous instruction wrote, or 0
+     when it wrote none -- so X / Y come from A alone right after a flag
+     write and from A | F after anything else. Q is committed with the flags:
+     in the next M1 for the classes whose writes wait for it (row 19), at the
+     instruction's end otherwise (C `wb_fire_op` / `wb_defer`, RTL `reg_q`).
+     Pinned by Patrik Rak's z80test (SCF, CCF, SCF+CCF, CCF+SCF in z80full and
+     z80flags; the NEC and ST variants are skipped as not this CPU), ZEXALL's
+     `<daa,cpl,scf,ccf>` and the FUSE corpus. Rows 29-31 are the corners
+     where the models' Q differed from the die's; the die has no Q register
+     (docs/flags.md "Q").
 
   3. `OUT (C),0` — NMOS outputs `0x00`; CMOS outputs `0xFF`. We implement
      NMOS (`0x00`).
@@ -102,12 +121,11 @@ Notes for each row:
      interrupt exit. The PC was correct at instruction boundaries but
      the intermediate trace diverged from perfectz80 by 145 / 200 phases
      on `prog13_halt_int`. The silicon-faithful convention now mirrors
-     perfectz80 exactly (bus addr 110 / 200 match, up from 107). FUSE
-     test `76` enters the known-FUSE-wrong list alongside the other
-     post-2014 silicon-faithful divergences. Mirrored to RTL
-     (`rtl/z80_core.v` `EXEC_HALT` + interrupt-accept paths). The
-     specific divergence redcode/Z80's end-to-end FUSE run also hit
-     (`/scripts/redcode_fuse_runner.c` reports the same `76 PC=0001`).
+     perfectz80 exactly. FUSE test `76` expects FUSE's own PC; the die's
+     (`make fuse_pz80`) is in `tests/fuse/silicon.expected`, which the
+     runners check instead. Mirrored to RTL
+     (`rtl/z80_core.v` `EXEC_HALT` + interrupt-accept paths); redcode/Z80
+     does the same (`scripts/redcode_fuse_runner.c` gives `76 PC=0001`).
 
  10. `IN A,(n)` / `IN r,(C)` port-input value — FUSE expects port reads to
      return the high byte of the I/O address bus (`A` for `IN A,(n)`, `B` for
@@ -133,22 +151,23 @@ Notes for each row:
        (commit `9f1acb2`). C and RTL synced.
      - **WZ = PC + 1** during repeat (commit `b654110`) per
        boo-boo et al. 2006 MEMPTR / Rak's z80memptr 1.2a.
-     `make z80test` now passes 160 / 160 / 160. Some FUSE cases
-     (`edba_1`, `edb2_1`, `edbb_1`, `edb3_1`, `edb9_2`) had their
-     expected pre-Banks values; listed in
-     [tests/fuse/known-fuse-wrong.txt](../tests/fuse/known-fuse-wrong.txt).
+     `make z80test` passes every variant. FUSE's `edba_1`, `edb2_1`,
+     `edbb_1`, `edb3_1` and `edb9_2` expect pre-Banks values; the die's
+     (`make fuse_pz80`) are in
+     [tests/fuse/silicon.expected](../tests/fuse/silicon.expected).
 
  13. `LDIR` / `LDDR` / `INIR` / `INDR` Q-leak into next instruction —
      **resolved 2026-06-18** as part of #12 (the Banks fold-in is
      exactly the "Q-flag carry-over" effect this row described).
 
  14. Pin-scenario vs perfectz80 (`make pin_scenarios` /
-     `pin_scenarios_rtl` / `pin_scenarios_netlist`) — fourteen trace
-     programs (`prog9_inta_im1`..`prog22_wait_cpir`) drive INT / NMI /
+     `pin_scenarios_rtl` / `pin_scenarios_netlist`) — fifteen trace
+     programs (`prog9_inta_im1`..`prog23_wb_irq`) drive INT / NMI /
      WAIT / BUSREQ / RESET through the `.events` sidecar and diff
-     against perfectz80 per-half-cycle. **Current status
-     (2026-10-20)**: 14 / 14 PASS through the RTL and through the C model,
-     the address included in every phase. Until then `perfectz80_runner` set NMI, INT and
+     against perfectz80 per-half-cycle. **15 / 15 PASS** through the C
+     model, the iverilog RTL and the LibreLane netlist, every control pin
+     and the address in every phase; CI fails on any difference. Until
+     2026-10-20 `perfectz80_runner` set NMI, INT and
      WAIT high again at every phase, so perfectz80 saw a one-phase pulse
      where the C model and the RTL held the scenario's level from its
      `lo` event to its `hi` event; it now holds the level too. That
@@ -173,40 +192,30 @@ Notes for each row:
      `+<pin>_lo / +<pin>_hi` plusargs, and the make targets fail on any
      control-pin or address difference.
 
-     Additionally, `scripts/compare_signal_timing.py` (used by
-     `make perfectz80` / `_rtl` / `_netlist`) compares `addr` and
-     `data_o` with an **address-bus don't-care tolerance**: phases
-     where no data transfer is in progress on either side (refresh
-     windows, idle phases between M-cycles, T1.P setup) are treated as
-     matches regardless of `addr` value; the refresh address itself is
-     gated separately (row 18). With the tolerance in place,
-     `addr` matches at **100 %** on 10/12 trace programs (8 hand + 4
-     random), with the residual 95-98 % on `prog_rnd_02` / `prog_rnd_03`
-     being the reset-register-init delta (row 1) surfacing via PUSH
-     instructions. `data_o` matches at **100 %** wherever a write
-     window is defined. Promote bus diffs to gating with `BUS_STRICT=1`
-     env var.
+     `scripts/compare_signal_timing.py` (`make perfectz80` / `_rtl` /
+     `_netlist`, the 14 trace programs) gates on the same: every control
+     pin and the address in every half-cycle (row 18), and the data the
+     CPU drives wherever WR is low on both sides.
 
  15. **RTL clocking (`cmos-clock`) — RTL vs C-model reset / BUSREQ
      settle**. The RTL now runs on the Z80 clock with every core register
      on the rising edge; the thin `rtl/z80_top.v` wrapper re-times pins
      and three inputs to the falling edge (`docs/clocking.md`). The
      retiming is trace-identical to the C model on `make compare`, FUSE,
-     Rak and BASIC. Deliberate residual RTL↔C differences, all confined
-     to the informational pin-scenario programs:
+     Rak and BASIC, and the event sweep runs the C model beside the RTL:
+     identical in every half-cycle of every case. The residual RTL↔C
+     differences the retiming left are gone:
      - **Reset** — resolved 2026-10-20: both models run the die's sampled
-       RESET (docs/timing.md "RESET"); `prog17_reset` and the sweep's 544
-       RESET cases match perfectz80.
+       RESET (docs/timing.md "RESET"); `prog17_reset` and the sweep's RESET
+       groups match perfectz80.
      - **BUSREQ release** — resolved 2026-10-20: both models grant and
        release as the die does (row 16).
-     - **Pins during a bus grant**: both now idle their strobes while
-       BUSACK is low. The previous 2× RTL kept driving the frozen
-       M-cycle's strobes.
-     - **M1 opcode latch under WAIT**: the RTL now, like the C model,
-       defers the opcode latch / PC++ / R++ until the rising edge that
-       ends the last Tw (the original 2× RTL double-latched).
-     Watching: fold the reset / BUSREQ settle into the RTL once the
-     pin-scenario gates become hard.
+     - **Pins during a bus grant**: both idle their strobes while BUSACK
+       is low. The previous 2× RTL kept driving the frozen M-cycle's
+       strobes.
+     - **M1 opcode latch under WAIT**: the RTL, like the C model, defers
+       the opcode latch / PC++ / R++ until the rising edge that ends the
+       last Tw (the original 2× RTL double-latched).
 
  16. **BUSREQ / BUSACK vs the NMOS Z80 — resolved 2026-10-20.** Found by
      sweeping BUSREQ through perfectz80; both models now do what the die
@@ -232,12 +241,15 @@ Notes for each row:
 
  17. RESET / INT / NMI / BUSREQ / WAIT sweep vs perfectz80 (`make
      event_sweep`, see [event-sweep.md](event-sweep.md), from hardesk) —
-     pulses at every T-state of 24 instructions, diffed per half-cycle
-     against perfectz80, the address and BUSACK included. **5879 of 5905
-     cases match (2026-10-20)**; the 26 in `tests/event_sweep/baseline.txt`
-     are row 19 (RESET in ADD HL,BC / INC BC's write-back), and CI fails on
-     any other difference. RESET is the die's sampled RESET with the special
-     reset and registers kept (row 1); BUSREQ the die's grant (row 16).
+     pulses at every T-state of 31 instructions and of every opcode,
+     diffed per half-cycle against perfectz80, the address, BUSACK and the
+     pads driven included, and F, WZ and Q in T4.P of every M1. The
+     default run, **51,126 cases, all match**,
+     the C model identical to the RTL in every half-cycle, and so does
+     `opcodes_reset` (27,768); CI fails on any difference (the sweep's
+     baseline of tolerated differences is gone). RESET is the die's sampled RESET with
+     the special reset and registers kept (row 1); BUSREQ the die's grant
+     (row 16).
 
  18. **Refresh and idle address bus vs perfectz80 — resolved
      2026-10-20.** The address now agrees with perfectz80 in every
@@ -259,28 +271,55 @@ Notes for each row:
        IDU / EA work of those T-states (468 of 2,215 phases differed);
        the pins now hold instead.
 
- 19. **RESET between an instruction and its write-back** — the die
-     finishes some results in the next M1, which a RESET that stops that
-     M1 early loses (perfectz80, RESET at every T-state; the register
-     dump after reset shows it):
-     - INC A: H and N in the next M1's T2, A and the other flags in T3;
-     - LD A,(HL): A in the next M1's T2; POP DE: DE in its T1; EX DE,HL:
-       the swap in its T3;
-     - ADD HL,rr: L as the die's M2 ends, H in the next M1's T1, the flags
-       in its T2 / T3; INC rr: the pair late in the M1's T5 / T6.
-     RZ80 writes every result on the instruction's last edge (ADD HL,rr
-     and INC rr theirs earlier still) and keeps them. The push SP-1, which
-     the die does on the edge that ends the previous cycle, is modelled.
-     The sweep's `reset_add_hl_bc` (20) and `reset_inc_bc` (6) cases are
-     these, in the baseline; RESET with WAIT is untested. Modelling it means
-     holding each class's writes until the T-state the die does them in.
-     The event sweep's `classes_reset` group (RESET at every T-state of one
-     opcode of every timing class, run by name) measures the rest: 170 of
-     2,210 cases in 27 classes differ the same way -- e.g. LD BC,nn: with
-     RESET from T5 the die hasn't written C yet and the RTL has, from T6
-     the die and the RTL have and the C model hasn't, from T8 both models
-     have written B and the die hasn't -- and in 84 of them the C model and
-     the RTL differ from each other.
+ 19. **RESET between an instruction and its write-back — resolved
+     2026-10-22.** The die writes results into the register file on its own
+     schedule, often in the next instruction's M1 (docs/timing.md "Register
+     write-back"), so a RESET that stops an instruction part-way leaves the
+     registers it hadn't written yet; the models wrote results on M-cycle
+     ends and kept them, and the C model and the RTL each on their own edges
+     (the event sweep's `classes_reset`: 170 of 2,210 cases differed from
+     perfectz80, 84 between the models). Measured on perfectz80 -- the
+     register file after RESET at every T-state of every opcode, also
+     followed by an INT or NMI response, and with WAIT and BUSREQ: a write in
+     a T-state's low half is kept by a cut ending on the next T-state or
+     later (a Tw after T2 is that T-state for T2's writes). The die's
+     nodes show where a result waits: in the ALU's operand latches, loaded
+     in the instruction's last half-cycle; the ALU runs again in the next
+     M1's T1 and T2, the register takes the result in T2.N, F in T3.N.
+     Both models now do the same -- the instruction ends with its writes
+     pending, its operands and decode where they are, and they land on the
+     edge that ends the next M1's T2 (CPI's F, EX AF,AF' on T1's), the
+     writes inside an instruction on the die's edges; nothing is written
+     early or put back. F after a cut on the next M1's T2 (RESET in an
+     instruction's last T-state) is neither the old flags nor the new: the
+     die writes its flag latches into F in the restart's first M1 as the cut
+     left them -- S old, Z preset to 1, P/V the parity of the result's bits
+     0-2, X and Y from the internal bus, per instruction class (cmodel
+     `f_cut()`, rtl `f_cut`), found on every opcode under twelve register
+     setups (21,708 cuts). The RESET sweeps showed three more: a cut in a
+     long internal M-cycle's T1 drives the die's address latch (WZ in JR,
+     DJNZ, (IX+d), CPI, RLD / RRD; WZ = HL+1 in ADD / ADC / SBC HL's second
+     internal cycle; PC from before a block repeat's -2), where the models
+     drove the cycle's IDU / EA work; an INTA's F stands from a cut on its
+     second wait state; and the RTL set Q after DD CB RES / SET, so a SCF /
+     CCF after them took X / Y from F (`fuzz_reset`, a case without RESET).
+     The sweep's RESET cases store every register after the reset (A and F,
+     IX, IY, the alternates); `classes_reset`, `fuzz_reset` and `reset_nmi`
+     run by default, `opcodes_reset` (RESET at every T-state of every
+     opcode) by name, and none of them differs; pin scenario
+     `prog23_wb_irq` has the writes land in an INTA cycle and an NMI
+     response. Nothing changes at an instruction boundary that a program
+     can see (the C model's `z80_arch()` shows the registers with the next
+     M1's writes made). The cost, on the pico-ice (UP5K): the SBC build
+     4,664 LCs (4,469 before; the write-back log this replaced 5,268), the
+     chip build 3,742 (3,667; 4,344), and the Z80 clock's Fmax up, 8.7 and
+     12.1 MHz (7.2 and 7.9 before) -- a byte read no longer reaches the ALU
+     in the half-cycle it is latched; F after a cut on T2 (`f_cut`) is
+     about 15-18 of the LCs. The iCEBreaker and iCESugar chip builds meet
+     their 8 MHz again (11.8, 12.5 MHz). At the merge the C model ran
+     ZEXDOC about 10 % slower than before (3.5 against 3.9 Minstr/s on an
+     i7-7700) and cfast's z80f_run about 20 % (27.8 against 35.4); cfast
+     has since more than made that up ([cfast/BENCHMARK.md](../cfast/BENCHMARK.md)).
  20. **IM0: the instruction from the interrupting device — resolved
      2026-10-21.** Found by the event sweep's `im0` group (twenty
      instructions handed over in INTA, perfectz80). On the die PC doesn't
@@ -328,36 +367,143 @@ Notes for each row:
      the INTA from the mode before the instruction (7 T, IM1's) and then
      added the RST's own T-state: the push came a T-state late. It now
      takes the mode the ending instruction sets.
+ 24. **Nested NMI: IFF2 — resolved 2026-10-21.** Found by the event sweep's
+     `fuzz` group (five cases: an NMI taken in the NMI handler, INT held,
+     two RETNs): perfectz80 takes the INT one instruction after the last
+     RETN, both models never did. An accepted NMI clears IFF1 and leaves
+     IFF2 alone on the die; the models did `IFF2 = IFF1; IFF1 = 0`, the
+     usual emulator rule, which is the same until an NMI comes while IFF1
+     is already off -- the nested NMI then cleared IFF2 too, and the RETNs
+     had no enable to bring back. Both models now clear IFF1 only.
+ 25. **RESET in an M1's wait states — resolved 2026-10-21.** The die's RES2
+     holds its sample in the low half of an M1's T2 only; in the wait states
+     WAIT adds after that T2 it takes the pin again, and the cut comes a
+     T-state earlier. The models counted a Tw as T2 (`t_state` stays 2) and
+     held RES2 through it; they now track the Tw (`in_tw`). Found by the
+     event sweep's `fuzz_reset`; the `reset_m1wait` group (264 cases)
+     sweeps it.
+ 26. **RESET in a bus grant — resolved 2026-10-21.** RES2 set in a granted
+     T-state releases the grant as BUSREQ would: BUSACK rises in that
+     T-state's low half and the reset idle follows, with nothing driven --
+     the bus is the DMA master's. The models held BUSACK half a T-state
+     longer and put the T1 cut pattern (MREQ, RD low) and its RD hold on
+     the bus. `reset_busreq` (312 cases).
+ 27. **NMI after RESET's release — resolved 2026-10-21.** An NMI edge is lost
+     while RES2 is set (the pin still followed), and taken once RES2 clears
+     -- in the last idle T-state before the restart too. The models ignored
+     NMI through the whole reset idle and lost an edge there. `reset_nmi`
+     (120 cases).
+ 28. **The data latch — resolved 2026-10-22** (C model only). The die takes
+     an opcode or INTA byte from the bus in the low half before the rising
+     edge that starts T3 (T2.N, the last Tw.N, an INTA's second automatic
+     Tw.N), and read data from T3's high half at its falling edge. The C
+     model took each half a clock earlier -- an opcode from T2.P, read data
+     from T2.N -- unseen while every harness held the byte through the
+     whole read. Found by the event sweep's `latch` group (the byte in one
+     half-cycle only, 268 cases); the RTL already took the die's edges.
+     docs/timing.md "The data latch".
+ 29. **`EX AF,AF'` and Q -- resolved 2026-10-24** (found the same day).
+     On the die `EX AF,AF'` writes no flags, so the next M1 reads AF instead
+     of writing pending flags and Q = 0: a SCF / CCF right after it takes X
+     / Y from A | F, with the F it swapped in. The models set Q to that F (C
+     `wb_defer`, RTL `reg_q_n`, cfast's `EXAF` step kind) and took X / Y from
+     A alone; Patrik Rak's z80ccf failed test 129 `EX AF,AF'` (CRC 3E5C2221,
+     expected 4CFA32A0). They set Q = 0 now; z80ccf passes 160 / 160 and is
+     in `make z80test` and the RTL matrix.
+ 30. **A prefix and Q -- resolved 2026-10-24** (found the same day). A
+     prefix's M1 is the M1 the flags the instruction before left pending
+     wait for, and a prefix writes none: Q = 0 for the opcode after DD, FD,
+     ED or CB. After a flag-writing instruction `DD 3F` (CCF) or `FD 37`
+     (SCF) takes X / Y from A | F (perfectz80, F pushed after the CCF: B8 on
+     the die, 90 in the models; after the SCF: A9 against 81); after ED and
+     CB, where no SCF / CCF can follow, it shows only in Q itself -- and in a
+     repeating block instruction, whose ED is fetched again. The models kept
+     Q through the prefix; `set_prefix_from_ir` (C) and the RTL's prefix
+     step clear it now.
+ 31. **Q after a RESET -- resolved 2026-10-24** (found the same day). The
+     flags an instruction left pending survive a RESET whose cut ends after
+     the T1 of the M1 they wait for -- its T1.N took them -- and before the
+     T3.N that writes them (an INTA's: by its second automatic Tw), and
+     another cut on the T1 of the M1 that restarts; that M1, at 0000,
+     writes them (F as row 19's `f_cut` left it), so a CCF first after the
+     restart takes X / Y from A alone (F = 45). Any other cut leaves none
+     pending: Q = 0 at the restart. The models left Q as it was at any cut (the `if
+     (!cut)` in C's `wb_fire_op` and `wb_fire`, and the RTL's): Q after
+     CP, BIT, INC, DEC and ADD HL,rr cut on the next M1's T2 was the old one
+     (6D, 65 against 45), and Q after a cut anywhere else was not cleared.
+     The `q_reset` group (512 cases) sweeps it.
 
-Add rows as new differences are discovered. Each "watching" row should gain a
-test that pins the chosen behaviour or escalates it.
+     The pin sweeps missed rows 29-31: Q shows only in the X / Y of a SCF or
+     CCF, and no sweep program ran one after `EX AF,AF'`, a prefix or a cut.
+     The sweep now compares Q, F and WZ with the die in every case
+     (docs/event-sweep.md "State"); the `q_*` groups aim at Q.
+ 32. **WZ under a RESET cut -- resolved 2026-10-24** (found the same day by
+     the sweep's state samples). The die writes WZ a byte at a time: a byte
+     read in that read's T3.N, an incrementer or adder result in T2.N of the
+     M-cycle that uses it (IX+d and PC+e: Z in T2.N, W in T5.N; DD CB d op: Z
+     in the op read's T2.N, W in the next M-cycle's), and LD A,(nn) / LD
+     (nn),A put (Q ^ F) | A in W in the operand read's T1.N -- what the M1's
+     AF access left on the bus with A -- IN A,(n) / OUT (n),A put A there; a
+     RESET cut ending on that T-state blocks the write, one ending later
+     keeps it. The models wrote WZ whole, at the start of the M-cycle, and
+     wrote the bytes read even when a cut ended on their read: after a RESET
+     that cut ~8 % of `opcodes_reset`'s instructions, WZ was another value
+     than the die's (every DD CB d op, the (IX+d) instructions, ADD / ADC /
+     SBC HL, JR, DJNZ, LD A,(rr), IN / OUT, CPI, the block repeats, LD
+     (nn), RST and the interrupt responses), and the C model and the RTL
+     differed from each other in DD CB d op and CPI. The models now write
+     the bytes read at once unless the cut ends on that read, and keep the
+     others waiting for their M-cycle (C `wz_later`, RTL `wzp_v`): they land
+     at its end, or at a cut that ends on a later T-state.
+ 33. **LD (IX+d),n's write data under a RESET -- resolved 2026-10-24**
+     (found the same day, once the sweep compared the data wherever both
+     sides drive it, not only under WR). LD (IX+d),n / LD (IY+d),n write n
+     from the data latch (`dlatch`, nodes 123 ...), where its read left it:
+     no write loads it from the internal bus. A RESET seen on the rising
+     edge that starts the write's T1 changes that: in the T1.N the latch
+     takes the d bus (`d_dl`, node 133), as any other write does, and the d
+     bus carries the u bus there, (W ^ 7F) | 18 with W the address's high
+     byte (all 256 checked on perfectz80); the pads show it from T1.N until
+     the cut ends the write, before WR. The models drove n
+     (`cls_dd36_reset_T16_p04` / `_p12`, `opr_dd36_T16`, `opr_fd36_T16`:
+     FD on the die, 99 in the models). They drive that byte now (C's
+     EXEC_LD_M_N, the RTL's `wd_ub`).
+
+Add rows as new differences are discovered. Each "open" or "watching" row
+should gain a test that pins the chosen behaviour or escalates it.
 
 
 ## Multi-oracle harness status
 
 | Oracle                                                     | Workload                                            | Result                                                    |
 |------------------------------------------------------------|-----------------------------------------------------|-----------------------------------------------------------|
-| Our RTL (Verilog) via iverilog + Verilator (`make compare`)| 8 trace programs × 400 phases                       | identical phase-by-phase across C, iverilog and Verilator |
-| superzazu C Z80   (`scripts/lockstep.c`)                   | 7.0 M instr (ZEXDOC3)                               | identical regs + memory                                   |
-| chips/z80.h pure-C (`scripts/lockstep_triple.c`)           | 7.0 M instr (ZEXDOC3)                               | identical regs (with chips's overlap-PC adjustment)       |
-| suzukiplan/z80 C++ (`scripts/lockstep_quad.c`)             | 7.0 M instr (ZEXDOC3)                               | identical regs across all four emulators                  |
-| redcode/Z80 (`scripts/lockstep_quint.c`)                   | 7.0 M instr (ZEXDOC3)                               | identical regs across all five emulators                  |
-| FUSE corpus (Kendall 2006) (`make fuse`)                   | 1356 cases                                          | **1348 PASS + 8 known-FUSE-wrong (silicon-faithful)**     |
-| FUSE through RTL via iverilog (`make fuse_rtl`)            | 1356 cases                                          | **1348 PASS + 8 known-FUSE-wrong (matches C)**            |
-| Patrik Rak z80test (`make z80test`)                        | doc / memptr / full (~470 micro-tests across three)  | **160 / 160 / 160 PASS** (all silicon-faithful)           |
-| ZEXALL 14-test subset via Verilator RTL (`make zexall_subset_rtl`) | 550 M instr through Verilator                 | **14 / 14** PASS; ~17 min on CI                            |
+| perfectz80, the die's transistor netlist (`make perfectz80` / `_rtl` / `_netlist`) | 14 trace programs, 200 phases each | every control pin, the address and the data under WR in every half-cycle: identical in the C model, the iverilog RTL and the LibreLane sky130 netlist |
+| perfectz80, pin scenarios (`make pin_scenarios` / `_rtl` / `_netlist`) | 15 INT / NMI / WAIT / BUSREQ / RESET programs | identical, the same three paths |
+| perfectz80, the event sweep (`make event_sweep`)           | 51,126 cases (+ `opcodes_reset`, 27,768)            | identical in every half-cycle, the pads driven and the registers after a RESET included, and F, WZ and Q in every state sample; the C model identical to the RTL |
+| Our RTL via iverilog + Verilator (`make compare`)          | 14 trace programs, 400 phases (more where a `.phases` file asks) | identical phase-by-phase across C, iverilog and Verilator |
+| cfast (`make cfast_identity`, `cfast_single_identity`)     | 3.84 G phases: ZEXDOC, z80test, the trace programs and pin scenarios, random soups and buses | every pin of every phase identical to the C model |
+| 5-way lockstep (`make lockstep`): superzazu, floooh/chips, suzukiplan, redcode | 7,022,691 instr. (ZEXDOC3)   | identical registers (F whole against redcode; X / Y masked for the three that predate the 2018 block-repeat flags) |
+| FUSE corpus (Kendall 2006) (`make fuse`)                   | 1356 cases                                          | **1356 PASS**, none skipped (6 against the die's values, `tests/fuse/silicon.expected`) |
+| FUSE through RTL via iverilog (`make fuse_rtl`)            | 1356 cases                                          | **1356 PASS**                                             |
+| FUSE on perfectz80 (`make fuse_pz80`)                      | 1356 cases                                          | **1356 PASS**: the die agrees with FUSE's values in 1350, with `silicon.expected` in the other 6 |
+| Patrik Rak z80test (`make z80test`, C model; `make z80test_rtl`, Verilator) | z80doc / z80flags / z80memptr / z80full / z80ccf, 160 tests each | **all pass** (the 4 SCF / CCF tests for NEC and ST parts are skipped as not this CPU); z80ccf failed test 129 until row 29 was resolved |
+| ZEXDOC / ZEXALL, C model (`make zexdoc`, `make zexall`)    | 5.76 G instr. each                                  | **67 / 67**, **67 / 67**                                  |
+| ZEXALL 14-test subset via Verilator RTL (`make zexall_subset_rtl`) | 550 M instr through Verilator                 | **14 / 14** PASS; ~25-55 min on CI                         |
 | Real KC85 silicon — sync   (`make silicon_cycles`)         | 50 classified opcodes (kc85-cpuclk.sr)              | **50 OK** (4 with /WAIT attribution); 0 emu mismatches    |
 | Real KC85 silicon — 20 MHz (`make silicon_async`)          | CPU clock + sub-T pin offsets + 9-opcode re-sample  | **CPU ≈ 1.767 MHz**, M1 / MREQ / RD / WR at spec offsets   |
+| The GF180 chip at transistor level (`asic/spice/chip.py`)  | reset and a 5-instruction program, tt / ss / ff     | pins identical to the RTL at every clock edge; 25 of 25 AC parameters met |
 | MAME Z80 differential                                      | —                                                   | resolved via suzukiplan (MAME's `z80.cpp` ties tightly to MAME's device framework) |
-| perfectz80 gate-level netlist                              | per-half-cycle pin trace on prog1 / prog2 / prog3_cb | **100 %** control-pin parity (signal-timing convention now matches the silicon falling-edge transition) |
 | Z80 Explorer (Qt) gate-level                               | n/a                                                 | not used — Qt-coupled; same Visual Z80 netlist already covered by perfectz80 |
 
 
-## Speed (no trace, same workload, this host)
+## Speed (no trace, same workload)
 
-    C model:                6.56  Minstr/s on ZEXDOC3 (~14 min for full ZEXALL)
-    Verilator RTL:          0.31  Minstr/s on ZEXDOC3 (~21× slower than C)
+    C model:                3.75 Minstr/s on ZEXDOC (CI's runner; ~26 min for ZEXDOC or ZEXALL)
+    Verilator RTL:          0.18 Minstr/s on the ZEXALL subset (CI; ~21x slower than C)
     perfectz80 gate level:  ~10   k  phases/s — use only for short, targeted comparisons
+
+cfast, the model generated into a phase engine, runs ZEXDOC about ten
+times faster than the C model: [cfast/BENCHMARK.md](../cfast/BENCHMARK.md).
 
 
 ## See also

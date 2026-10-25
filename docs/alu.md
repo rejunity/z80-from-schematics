@@ -22,9 +22,9 @@ the low-nibble pass naturally.
 ```
 
 - `alu_op`: `ADD ADC SUB SBC AND XOR OR CP` plus internal helpers used by the
-  sequencer (`INC` and `DEC` reuse ADD/SUB with b=1 and a carry-in/flag policy;
-  16-bit ops run the nibble unit four times: lo, hi of low byte, lo, hi of high byte,
-  threading carry).
+  sequencer (`INC` and `DEC` reuse ADD/SUB with b=1 and a carry-in/flag policy).
+  The flag mode (`FLAG_*`, docs/flags.md) also routes NEG, LD A,I / R, IN r,(C),
+  RRD / RLD and the block instructions through the ALU.
 - Subtraction is performed as `a + (~b) + 1` (two's complement) so add and subtract
   share the adder; `HF`/`CF` are read from the inter-nibble and final carries with the
   sub-polarity applied (borrow = ~carry for the flag sense the Z80 reports).
@@ -43,10 +43,19 @@ the low-nibble pass naturally.
 
 ## 16-bit operations
 
-`ADD/ADC/SBC HL,rp` and the address-path increment/decrement use a 16-bit add built
-from the 4-bit unit (four passes) for `ADD/ADC/SBC HL`, while the dedicated address
-incrementer/decrementer (`z80_addr`) handles PC/SP/R/`(rp)±` updates — matching the
-Z80, where the IDU (increment/decrement unit) is separate from the main ALU.
+`ADD/ADC/SBC HL,rp` don't go through the nibble unit: the C model computes them in
+one step (`do_add16` / `do_adc16` in `cmodel/z80_core.c`), the RTL in one shared
+16-bit adder/subtractor next to the ALU, with the half-carry from the carry into
+bit 12. The die runs them byte by byte through the ALU in two internal M-cycles
+(docs/simplifications.md A3); the models keep those M-cycles and write the low
+byte, the high byte and F on the die's edges.
+
+The address-side increments are not ALU work either, as on the Z80, where the IDU
+(increment/decrement unit) is separate from the main ALU: in the RTL one IDU in
+`rtl/z80_addr.v` forms PC+1, SP±1, rp±1, the block pointer steps and the MEMPTR +1
+rules, an effective-address adder next to it PC+e and IX/IY+d, and R's 7-bit
+refresh increment has a small incrementer of its own; the C model does the same
+arithmetic inline.
 
 ## Verification
 

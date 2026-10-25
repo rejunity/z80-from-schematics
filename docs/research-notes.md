@@ -9,9 +9,9 @@ schematics, PLA tables, transistor-level work, and gate-level simulations as a
 > knowledge rather than from a live crawl of each URL in this working session.
 > URLs are recorded as the canonical locations for re-verification. Every behavioral
 > claim that matters is ultimately pinned by an executable test (unit vectors,
-> ZEXDOC/ZEXALL, and C↔RTL trace comparison), so the test suite — not this prose —
-> is the final authority. Where a fact is subtle and not yet test-pinned it is
-> listed under **Open questions**.
+> ZEXDOC/ZEXALL, z80test, C↔RTL trace comparison and the perfectz80 sweeps), so the
+> test suite — not this prose — is the final authority. The questions this file
+> started with, and what settled each, are under **Questions** at the end.
 
 ## Source-conflict precedence (from the brief)
 
@@ -75,7 +75,25 @@ because Zilog never specified it. ZEXALL + die analysis are the practical arbite
   transitions. The ultimate tiebreaker for "what does the silicon actually do."
 - **Trust:** Very high for behavior; it *is* the netlist of a real die.
 - **Type:** Gate-level simulation (primary behavioral evidence).
-- **Use here:** Reference for resolving any timing/flag ambiguity the docs leave open.
+- **Use here:** Reference for resolving any timing/flag ambiguity the docs leave open,
+  run as perfectz80 (next entry).
+
+### perfectz80 — the Visual Z80 netlist as a C switch-level simulator
+- **Source:** `scripts/refs/perfectz80/`: Michael Steil / Brian and Barry Silverman's
+  perfect6502 simulator (`netlist_sim.c`) with the Z80 netlist (`netlist_z80.h`) as
+  floooh's v6502r carries it (provenance in `THIRD_PARTY_NOTICES.md`).
+- **Contributes:** the die's behaviour at half-cycle resolution: every pin, which pads
+  are driven, and any internal node (register bits, latches, the T-state ring).
+- **Trust:** Very high; it is the netlist of a Zilog NMOS die. Its limits: no analog
+  timing (events land on half-cycle boundaries) and its power-up state (5555 in
+  every pair) is one possible state of a real part.
+- **Type:** Gate-level simulation (primary behavioral evidence).
+- **Use here:** the tie-breaker. `make perfectz80` / `_rtl` / `_netlist` and the pin
+  scenarios compare it with the C model, the RTL and the synthesised netlist every
+  half-cycle; `make event_sweep` drives RESET / INT / NMI / BUSREQ / WAIT and the data
+  bus through it at every T-state of every opcode (recorded traces in
+  `tests/event_sweep/pz80/`). Most of docs/known-differences.md's rows 14-31 were found
+  this way.
 
 ### "Decoding Z80 opcodes" — Cristian Dinu (z80.info)
 - **URL:** http://www.z80.info/decoding.htm
@@ -122,8 +140,9 @@ because Zilog never specified it. ZEXALL + die analysis are the practical arbite
 - **Trust:** Very high — corroborated by Richard Chandler on NEC + Visual Z80
   Remix in Rak's v1.2a (z80test PR #3).
 - **Use here:** `cmodel/z80_core.c` + `rtl/z80_core.v` INIR/INDR/OTIR/OTDR
-  repeat branches; the four affected FUSE cases (`edba_1`, `edb2_1`,
-  `edbb_1`, `edb3_1`) live in `tests/fuse/known-fuse-wrong.txt`.
+  repeat branches; for the four affected FUSE cases (`edba_1`, `edb2_1`,
+  `edbb_1`, `edb3_1`) the runners check the die's values in
+  `tests/fuse/silicon.expected` (`make fuse_pz80`).
 
 ### Banks 2018 — block-instruction repeat-M-cycle flag fold-in
 - **URLs:**
@@ -138,8 +157,8 @@ because Zilog never specified it. ZEXALL + die analysis are the practical arbite
 - **Trust:** Very high (silicon-traced).
 - **Use here:** Block-repeat branches in `cmodel/z80_core.c` and
   `rtl/z80_core.v`; mirrors redcode's `INXR_OTXR_COMMON` (`scripts/refs/
-  redcode_z80/Z80.c`). FUSE's `edb9_2` CPDR-repeat case is one of the
-  known-FUSE-wrong entries.
+  redcode_z80/Z80.c`). For FUSE's `edb9_2` CPDR-repeat case the runners
+  check the die's value in `tests/fuse/silicon.expected`.
 
 ### Brewer 2014 — Z80 HALT-PC convention + Woodmass 2021 HALT2INT verification
 - **URLs:**
@@ -152,20 +171,21 @@ because Zilog never specified it. ZEXALL + die analysis are the practical arbite
   HALT2INT v3 is the real-hardware verification on a 48K Spectrum.
 - **Trust:** Very high.
 - **Use here:** `cmodel/z80_core.c` EXEC_HALT + NMI/INT begin_next paths;
-  `rtl/z80_core.v` likewise. `make halt2int` runs a focused CPU-only
-  HALT-to-INT T-state-timing probe (silicon range 3..8 T-states across
-  the M-cycle window). The Spectrum ULA contention and ROM dependencies
-  that prevent the full HALT2INT v3 from running headless on a CPU-only
-  model are tracked in `tests/woodmass/README.md`. FUSE's `76` is in
-  `tests/fuse/known-fuse-wrong.txt`.
+  `rtl/z80_core.v` likewise. `make halt2int` checks the INT-to-INTA
+  delay at ten INT positions in a HALT against the die's (perfectz80:
+  6 5 4 7 6 5 4 7 6 5 T-states). HALT2INT v3 itself needs a Spectrum
+  (its ULA contention and ROM); it isn't vendored. For FUSE's `76` the
+  runners check the die's PC in `tests/fuse/silicon.expected`.
 
-### SCF/CCF flag behavior (the "flags" investigations)
-- **Contributes:** SCF/CCF set XF/YF from a combination of A and the previous F —
-  notably this differs between original NMOS Z80 and CMOS variants and even between
-  chip batches. We target the common NMOS behavior validated by ZEXALL.
-- **Trust:** Medium-high; documented variability. Rule (2)/(3).
+### SCF/CCF flag behavior (the "flags" investigations, Q)
+- **Contributes:** SCF/CCF set XF/YF from A and the previous F: on Zilog NMOS parts
+  X / Y = `A | (F XOR Q)`, where Q is the F the previous instruction wrote, else 0
+  (Patrik Rak's z80test, which also tells NEC and ST parts apart; redcode/Z80's Zilog
+  NMOS model). It differs between makers and between NMOS and CMOS.
+- **Trust:** High for Zilog NMOS: z80test's CRCs were taken on real Spectrums, and
+  perfectz80 settles the corners (docs/known-differences.md rows 29-31). Rule (2)/(3).
 - **Type:** Reverse-engineering + tests.
-- **Use here:** `docs/flags.md`; flagged as a known variant in `docs/known-differences.md`.
+- **Use here:** `docs/flags.md`, `docs/undocumented.md`; docs/known-differences.md row 2.
 
 ### sigrok-dumps Z80 logic-analyzer captures (real KC85/4 silicon)
 - **URL:** https://github.com/sigrokproject/sigrok-dumps/tree/master/z80/kc85
@@ -222,7 +242,7 @@ because Zilog never specified it. ZEXALL + die analysis are the practical arbite
   M1, MREQ, RD all deassert at end of T2 / start of T3 during an opcode
   fetch). WRn is observed only at offset 1 (writes assert WR at T2.N).
 - *"Emulator" column*: cross-references our two-phase `PHI_P / PHI_N`
-  model in `cmodel/z80.c` and `cmodel/z80_timing.c`. PHI_N is the
+  model in `cmodel/z80_core.c` and `cmodel/z80_timing.c`. PHI_N is the
   T-state's second half (Z80 clock falling-edge region), where MREQ/RD
   assert during an MRD cycle and M1 deasserts at the T2.N edge — exactly
   the offsets the LWLA observed.
@@ -260,7 +280,8 @@ corrected; the kc85 capture earned its place as the gold standard.
 - **Trust:** High behaviorally, but it is a behavioral core, not a structural one — so
   it is a *comparison reference*, never the design authority (per brief).
 - **Type:** Mature emulator.
-- **Use here:** `tests/mame_compare/` oracle; differences logged in known-differences.
+- **Use here:** not run: MAME's `z80.cpp` is tied to MAME's device framework. The
+  lockstep's four C / C++ emulators stand in (docs/known-differences.md, oracle table).
 
 ### Other mature C cores (e.g. z80 by superzazu, FUSE's z80)
 - **Contributes:** Cross-checks for documented behavior and convenient test vectors
@@ -269,7 +290,10 @@ corrected; the kc85 capture earned its place as the gold standard.
 - **Trust:** Medium-high. Rule (5). FUSE test vectors are especially valuable because
   they encode *cycle-accurate bus events*, matching our trace philosophy.
 - **Type:** Emulator cores + test vectors.
-- **Use here:** Candidate import into `tests/generated/` and timing-trace checks.
+- **Use here:** superzazu/z80 in the lockstep; the FUSE corpus in `tests/fuse/`
+  (`make fuse`, `make fuse_rtl`, and `make fuse_pz80` on the die: registers, memory
+  and T-states, not the bus events; for the six cases where the die differs from
+  FUSE's expected values the runners check the die's, `tests/fuse/silicon.expected`).
 
 ### redcode/Z80 by Manuel Sainz de Baranda
 - **URL:** https://github.com/redcode/Z80
@@ -284,8 +308,9 @@ corrected; the kc85 capture earned its place as the gold standard.
 - **Use here:** Vendored under `scripts/refs/redcode_z80/` plus the Zeta C
   utility library. Drives the 5-way lockstep
   (`scripts/lockstep_quint.c`), our Rak runner
-  (`scripts/redcode_z80test_runner.c`), and our FUSE end-to-end runner
-  (`scripts/redcode_fuse_runner.c`).
+  (`scripts/redcode_z80test_runner.c`), our FUSE end-to-end runner
+  (`scripts/redcode_fuse_runner.c`), and is one of the emulators in cfast's
+  benchmark (`cfast/BENCHMARK.md`).
 
 ### Existing Verilog/VHDL Z80 cores (TV80, etc.)
 - **Trust:** Secondary behavioral references only, per the brief — not design authority.
@@ -297,22 +322,25 @@ corrected; the kc85 capture earned its place as the gold standard.
 
 ---
 
-## Open questions (to be pinned by tests / die evidence)
+## Questions
 
-1. **SCF/CCF XF/YF exact formula** and its NMOS vs CMOS variance. Plan: implement the
-   NMOS formula (`YF/XF` from `A | F` or `A` depending on prior op), validate via
-   ZEXALL `<scf>`/`<ccf>` tests, document the chosen variant.
-2. **WZ update on every instruction class.** Plan: encode WZ updates per control row,
-   validate via ZEXALL `bit` tests and the MEMPTR document's table.
-3. **Exact interrupt-acceptance timing** (sampling point of INT/NMI relative to last
-   T-state, and the extra T-states of the IM0/IM2 acknowledge cycle). Plan: match
-   Zilog timing diagram first, refine against visual Z80 if a mismatch appears.
-4. **Block-instruction (LDIR/CPIR/…) undocumented XF/YF** derived from `A + transferred
-   byte`. Plan: implement per the documented community formula, validate via ZEXALL.
-5. **`OUT (C),0` vs `OUT (C),255`** for the undocumented ED70/ED71 result byte (NMOS
-   outputs 0). Plan: implement NMOS, log as variant.
-6. **DDCB/FDCB "hidden" register copy** for the undocumented `LD r,(IX+d)` rotate/bit
-   forms. Plan: implement, validate via ZEXALL `<ddcb>`.
+The questions this file started with, and what settled them:
 
-Each of these has a corresponding entry seeded (or to be seeded) in
-`docs/known-differences.md` and an acceptance test.
+1. **SCF/CCF XF/YF exact formula** and its NMOS vs CMOS variance — Zilog NMOS:
+   `A | (F XOR Q)` (docs/undocumented.md), pinned by z80test, ZEXALL `<daa,cpl,scf,ccf>`
+   and FUSE. Three corners of Q that differed from perfectz80 (`EX AF,AF'`, a prefix, a
+   RESET cut; docs/known-differences.md rows 29-31) are fixed; the die has no Q register
+   (docs/flags.md "Q"), and the event sweep now checks Q against it in every case.
+2. **WZ update on every instruction class** — the MEMPTR rules in docs/undocumented.md,
+   pinned by z80memptr (160 / 160), ZEXALL's BIT tests and FUSE (which records WZ).
+3. **Exact interrupt-acceptance timing** — INT at the rising edge that starts the last
+   T-state, NMI from an edge of any width, the IM0 / IM2 acknowledge cycles:
+   perfectz80 through the event sweep (docs/timing.md "Interrupt acknowledge",
+   docs/known-differences.md rows 17, 20, 23, 24).
+4. **Block-instruction (LDIR/CPIR/…) undocumented XF/YF** — the single-step formulas
+   plus David Banks' repeat fold-in (Y / X from PC bits 13 / 11), pinned by ZEXALL,
+   z80test and FUSE.
+5. **`OUT (C),0` vs `OUT (C),255`** — NMOS outputs 0 (docs/known-differences.md row 3,
+   accepted).
+6. **DDCB/FDCB "hidden" register copy** — `op (IX+d)` with z != 6 also writes r[z]
+   (docs/undocumented.md), pinned by ZEXALL and FUSE.

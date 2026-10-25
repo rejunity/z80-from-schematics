@@ -182,6 +182,13 @@ def prepare_netlist(src, dst):
     return dropped, n_caps
 
 
+# The core clock's root crosses 50 % this long after the CLK pin crosses the
+# pad's threshold, rising / falling (ns; probed in the fine runs; the leaves
+# follow 0.4-1.1 ns later).
+CLK_ROOT = {"tt": (2.9, 2.1), "ss": (4.3, 3.5), "ff": (2.1, 1.4)}
+TMAX = 10.0       # ns: the longest step, where the chip has settled
+
+
 def clock_breaks(corner, edges, vdd):
     """[times]: corners for a source that only makes breakpoints, over the
     core clock's edges. ngspice's step control (on the devices' charges,
@@ -192,14 +199,19 @@ def clock_breaks(corner, edges, vdd):
     clocks still (both seen, at tt and at ff). After a breakpoint ngspice
     restarts with a tenth of the gap to the next, so corners every 0.5 ns,
     from just before the pin's ramp crosses the pad's threshold (pads.json)
-    to 7 ns after it, keep those steps at 0.2 ns or less."""
+    until 1 ns after the clock's root has crossed 50 % (CLK_ROOT), keep those
+    steps at 0.2 ns or less. From there the switching chip keeps its own
+    steps short (0.03-0.1 ns), and more corners would only restart them.
+    The edge that releases RESET keeps them to 7 ns after the threshold."""
     dc = json.load(open(os.path.join(HERE, "pads", "gf180mcu", "pads.json")))["corners"][corner]["cells"][
         "gf180mcu_fd_io__in_s"]["dc"]
     r = EDGE / 0.8
+    trst = next(t0 for t0, c, rst, kv in edges if rst == 1)
     out = []
     for t0, clk, rst, kv in edges:
         t_sw = t0 - r / 2 + r * (dc["vt_rise"] / vdd if clk else 1 - dc["vt_fall"] / vdd)
-        out += [t_sw - 0.5 + 0.5 * k for k in range(16)]
+        lead = 7.0 if t0 == trst else CLK_ROOT[corner][0 if clk else 1] + 1.0
+        out += [t_sw - 0.5 + 0.5 * k for k in range(int(lead / 0.5) + 2)]
     assert all(b > a for a, b in zip(out, out[1:])) and out[0] > 0
     return out
 
@@ -305,7 +317,7 @@ def deck(work, corner, edges, threads, tstop, t_from=0.0):
         if t_from > 0:
             L.append(f".include {state_file(work, corner, t_from)}")
     L += [".control", f"set num_threads={threads}", "set wr_singlescale", "set wr_vecnames", "option numdgt=7",
-          f"save {save}", f"tran 0.1n {tstop - t_from:.3f}n 0 2n uic", f"wrdata {dat} {save}"] + end + [
+          f"save {save}", f"tran 0.1n {tstop - t_from:.3f}n 0 {TMAX:g}n uic", f"wrdata {dat} {save}"] + end + [
           "rusage all", "quit", ".endc", ".end"]
     open(sp, "w").write("\n".join(L) + "\n")
     print(f"chip: {sp}: {dropped} fill cells dropped, {n_caps} lumped capacitors, {len(win)} read windows, "
@@ -361,14 +373,39 @@ def load(dat):
     return [x * 1e9 for x in w["time"]], {p: w[f"v({node(p)})"] for p in PINS if p not in ("VDD", "VSS")}, w["v(men)"]
 
 
+def slope(t, v, k):
+    """v's tangent at timepoint k for a monotone cubic through the
+    timepoints (Fritsch-Carlson: flat where v turns)"""
+    d0 = (v[k] - v[k - 1]) / (t[k] - t[k - 1]) if k > 0 else None
+    d1 = (v[k + 1] - v[k]) / (t[k + 1] - t[k]) if k + 1 < len(t) else None
+    if d0 is None or d1 is None:
+        return d1 if d0 is None else d0
+    if d0 * d1 <= 0:
+        return 0.0
+    h0, h1 = t[k] - t[k - 1], t[k + 1] - t[k]
+    return 3 * (h0 + h1) / ((2 * h1 + h0) / d0 + (h1 + 2 * h0) / d1)
+
+
 def crossing(t, v, level, rising, after, within=150.0):
     """the first time in (after, after + within] that v passes level
-    upwards (rising) or downwards"""
+    upwards (rising) or downwards, on the monotone cubic through the
+    timepoints around it: on a slow pin edge ngspice takes steps up to TMAX,
+    and a straight line across one put the crossing up to 0.6 ns off the
+    fine runs' (2 ns steps), the cubic within 0.25 ns"""
     k = max(bisect.bisect_right(t, after), 1)
     while k < len(t) and t[k] <= after + within:
         a, b = v[k - 1] - level, v[k] - level
         if (rising and a < 0 <= b) or (not rising and a > 0 >= b):
-            return t[k - 1] + (t[k] - t[k - 1]) * (-a) / (b - a) if b != a else t[k]
+            if b == a:
+                return t[k]
+            h, m0, m1 = t[k] - t[k - 1], slope(t, v, k - 1), slope(t, v, k)
+            f = lambda s: ((2 * s ** 3 - 3 * s ** 2 + 1) * a + (s ** 3 - 2 * s ** 2 + s) * h * m0
+                           + (3 * s ** 2 - 2 * s ** 3) * b + (s ** 3 - s ** 2) * h * m1)
+            lo, hi = 0.0, 1.0           # f(0) = a and f(1) = b straddle 0: bisect
+            for _ in range(40):
+                mid = (lo + hi) / 2
+                lo, hi = (lo, mid) if (f(mid) >= 0) == rising else (mid, hi)
+            return t[k - 1] + h * (lo + hi) / 2
         k += 1
     return None
 

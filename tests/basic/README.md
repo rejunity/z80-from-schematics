@@ -1,17 +1,20 @@
 # Z80 BASIC ROMs run on our emulator
 
-Two ROMs vendored here for the `basic` branch. Driven by
+Two BASIC ROMs, driven by
 [`scripts/basicrunner.c`](../../scripts/basicrunner.c):
 
   - `make basic`     — runs NASCOM BASIC 4.7 interactively (C model)
   - `make tinybasic` — runs the 1 KiB Tiny BASIC interactively (C model)
 
-Plus two non-interactive regression suites that feed canned scripts in and
-assert against expected substrings in the BASIC output:
+Plus three non-interactive regression suites that feed canned scripts in
+and assert against expected substrings in the BASIC output (CI runs all
+three, on every push):
 
-  - `make basic_c_tests`   — canned-script regression via C model     (~0.5 s)
-  - `make basic_rtl_tests` — same canned-script regression via Verilator RTL
-    (`~1 s` sim + Verilator build time)
+  - `make basic_c_tests`       — canned-script regression via C model     (~0.5 s)
+  - `make basic_rtl_tests`     — the same through the Verilator RTL
+    (a few seconds of simulation + the Verilator build)
+  - `make basic_netlist_tests` — the same on the LibreLane-synthesised
+    sky130 netlist (Verilator, gate level; needs `make synth`)
 
 ## NASCOM BASIC 4.7 (RC2014 build)
 File: `nascom_basic_4_7_rc2014.hex`  (Intel HEX, 8154 bytes of ROM 0x0000-0x1FD9)
@@ -123,9 +126,10 @@ Each subtest is a pair of files in `scripts/`:
   - `<name>.in`     — lines fed to BASIC stdin (CR-LF terminated, with a
     one-space prefix on lines after the first to compensate for the
     NASCOM "drop first char after Ok\n" quirk).
-  - `<name>.expect` — substrings that must appear in BASIC's stdout, in
-    file order. Lines beginning with `#` are comments. The **last
-    non-comment line** is treated specially (see "sentinel" below).
+  - `<name>.expect` — substrings that must each appear in BASIC's stdout;
+    a missing one fails the subtest. Lines beginning with `#` are
+    comments. The **last non-comment line** is treated specially (see
+    "sentinel" below).
 
 Filename prefix selects ROM + autostart mode:
 

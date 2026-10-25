@@ -4,6 +4,8 @@ The root [`LICENSE`](../LICENSE) defines the component scope.
 
 - `MIT.txt`: standard MIT license with Renaldas Zioma's copyright notice.
 - `CERN-OHL-W-2.0.txt`: unmodified CERN hardware license text.
+- `Apache-2.0.txt`: standard Apache License 2.0 text for the PDK pad
+  libraries modified in `asic/spice/pads/`.
 - `GPL-2.0-only.txt`, `GPL-3.0-only.txt`, `LGPL-3.0-only.txt`: standard GNU
   license texts for bundled third-party material. An upstream “or later”
   grant remains “or later”; these filenames do not narrow it.

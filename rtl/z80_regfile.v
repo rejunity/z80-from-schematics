@@ -53,8 +53,7 @@ module z80_regfile (
     output wire [15:0] bc, de, hl, af, bc2, de2, hl2, af2,
     output wire [15:0] ix, iy, sp, pc, wz,
     // after this edge
-    output wire [15:0] pc_next,         // PC (the next M1 address at an instruction boundary)
-    output wire [7:0]  f_next           // F (EX AF,AF' renames AF on the same edge)
+    output wire [15:0] pc_next          // PC (the next M1 address at an instruction boundary)
 );
     integer i, ri;
 
@@ -128,7 +127,6 @@ module z80_regfile (
         if (pc_clr) rf_n[`RFP_PC] = 16'h0000;
     end
     assign pc_next = rf_n[`RFP_PC];
-    assign f_next  = xaf_n ? rf_n[7][7:0] : rf_n[3][7:0];
 
     // 0x5555 matches perfectz80's gate-level Visual-Z80 netlist boot
     // pattern (see cmodel/z80_core.c z80_reset()); PC resets to 0.

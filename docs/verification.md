@@ -1,203 +1,109 @@
 # Verification
 
-Living record of the verification state. Updated at each checkpoint.
+The verification state of the C model, the RTL and cfast, layer by layer:
+what checks what, against which reference, with which `make` target and
+CI job. [tests/README.md](../tests/README.md) has the per-suite detail;
+[known-differences.md](known-differences.md) lists every difference from
+the die found so far, open and resolved.
 
-## Verification layers
-1. **C unit tests** (`tests/common/`): ALU, flags, DAA, rotates, BIT/SET/RES, PLA row
-   matching, timing sequencer, bus-cycle traces. Run via `make ctest`.
-2. **Generated instruction tests** (`tests/generated/`, `scripts/gen_tests.py`):
-   per-opcode init→expected over boundary inputs and flag-relevant classes.
-3. **Compatibility suites** (`tests/zex/`): ZEXDOC then ZEXALL via `make zexdoc/zexall`.
-4. **Timing traces** (`tests/traces/`): shared-format bus-cycle traces for fetch, mem
-   r/w, I/O r/w, refresh, INTA, WAIT, HALT, BUSREQ/BUSACK, NMI, IM0/1/2.
-5. **C ↔ RTL comparison** (`make compare`): same programs through the C model, iverilog
-   sim, AND Verilator sim; traces diffed phase-by-phase across all three.
-6. **FUSE corpus** (`make fuse`): 1356 per-opcode tests with register / flag
-   / IFF / IM / HALTED / cycle-count / memory diff per case. **Note**: FUSE's
-   `tests.expected` was authored by Philip Kendall in 2006 for FUSE itself
-   and was never silicon-validated; 7 cases differ from real silicon (see
-   `tests/fuse/known-fuse-wrong.txt`). The runner tallies those as
-   "known-FUSE-wrong" rather than FAIL so the gate stays at 100 % on the
-   silicon-faithful side.
-7. **Multi-oracle lockstep** (`scripts/lockstep_quint.c`): our C model vs the
-   superzazu, chips/z80, suzukiplan/z80 and redcode/Z80 industry references —
-   five-way register diff after every instruction on a CP/M `.com`. See
-   [docs/oracles.md](oracles.md) for the per-oracle lineage and matrix.
-8. **Patrik Rak z80test** (`make z80test`): doc / memptr / full ~470 tests
-   covering documented + undocumented behavior, MEMPTR / WZ, SCF / CCF Q-leak,
-   Banks block-instruction repeat fold-in. All silicon-validated (Rak on real
-   48K Spectrum; Chandler on NEC + Visual Z80 Remix). **160 / 160 / 160 PASS.**
-8. **Gate-level signal trace** (`scripts/perfectz80_runner.c` + `scripts/compare_signal_timing.py`):
-   our C model vs the Brian Silverman / Visual Z80 netlist port (perfectz80), pin
-   trace at every clock half-cycle.
+No check tolerates a failure: every suite below passes in full, and a
+single difference fails its target and its CI job. No list of exceptions
+is left: the pin sweep's baseline of known differences is gone (it was
+empty once the last of them was fixed), and FUSE's six cases where FUSE's
+expected values are not the die's are checked against the die's values
+(`tests/fuse/silicon.expected`), not skipped.
 
-## Acceptance gates
-- C model: all unit + generated tests pass; ZEXDOC + ZEXALL pass; FUSE pass rate ≥ 99%;
-  per-instruction state matches superzazu, chips/z80, suzukiplan/z80 on a representative
-  CP/M workload.
-- RTL: `make rtl` elaborates clean (no latches/initial in synth RTL); iverilog and
-  Verilator both produce traces identical to the C model phase-by-phase on the trace
-  corpus.
+## References
 
-## Current status
+The die is the reference wherever it can be: **perfectz80**, the
+transistor netlist of the Zilog NMOS Z80 from the Visual Z80 die scan
+(Brian Silverman et al.; `scripts/refs/perfectz80/`), simulated
+switch-level, ~10 k half-cycles a second. Then suites whose expected values
+came from real chips: Patrik Rak's z80test (CRCs recorded on real
+Spectrums), Cringle's ZEXDOC / ZEXALL (CRCs from a real Z80), the sigrok
+logic-analyser captures of a KC85 (a U880, the East German Z80 clone),
+and Mark Woodmass's 2008 suite (a NEC D780C-1; on branch `speccy`). FUSE's
+corpus came from FUSE's own core, so it is checked on the die
+(`make fuse_pz80`). Four other emulators are a cross-check, not a
+reference.
 
-| Area                                                       | C model      | RTL          | C ↔ RTL parity              |
-|------------------------------------------------------------|--------------|--------------|-----------------------------|
-| Build scaffold                                             | done         | done         | n/a                         |
-| Timing sequencer (phase / T / M, WAIT hook)                | done         | done         | done                        |
-| ALU + flags (8-bit, inc / dec, rot-A, DAA / CPL / SCF / CCF) | done         | done         | done                        |
-| Register file + WZ / MEMPTR                                | done         | done         | done                        |
-| M1 fetch + refresh + core 8-bit ops                        | done         | done         | done                        |
-| Memory r / w + (HL) RMW ops                                | done         | done         | done                        |
-| 16-bit load / inc / dec / ADD HL                           | done         | done         | done                        |
-| Branch / call / ret / rst / push / pop / DJNZ / JR         | done         | done         | done                        |
-| I/O (IN / OUT n,A), EX / EXX / EX(SP)                      | done         | done         | done                        |
-| CB prefix (rot / shift / BIT / RES / SET)                  | done         | done         | done                        |
-| ED prefix (ADC / SBC, LD I/R, NEG, IM, RETI / RETN, …)     | done         | done         | done                        |
-| ED block ops (LDI .. OTDR)                                 | done         | done         | done                        |
-| DD / FD (IX / IY, IXH / IXL, (IX+d))                       | done         | done         | done                        |
-| DDCB / FDCB (op (IX+d) + undoc copy)                       | done         | done         | done                        |
-| Interrupts: NMI / INT IM0·1·2 / EI-delay                   | done         | done         | NMI (prog8) parity verified |
-| HALT (loop + interrupt release)                            | done         | done         | full-run parity restored    |
-| WAIT insertion / BUSREQ-BUSACK                             | done         | done         | done                        |
-| Refresh (R inc, {I,R} on bus)                              | done         | done         | done                        |
-| Undocumented (X / Y, MEMPTR, SCF / CCF Q variant)          | done         | done         | done                        |
-| ZEXDOC                                                     | **67 / 67**  | —            | n/a (run on C model)        |
-| ZEXALL                                                     | **67 / 67**  | —            | n/a (run on C model)        |
+## Layers
 
-### prelim.com — PASSING
-`make prelim` runs the preliminary instruction test through the C model and prints
-"Preliminary tests complete" with no errors. This exercises basic + IX/IY behavior and
-confirms the CP/M harness (loader, BDOS shim, PC seeding) works end-to-end.
+| # | Layer | Target | CI job | Result |
+|---|-------|--------|--------|--------|
+| 1 | C unit tests (`tests/common/`, 13 binaries) | `make ctest` | `c-tests` | 1069 / 1069 checks |
+| 2 | FUSE corpus, final state of 1356 cases | `make fuse`, `make fuse_rtl` | `c-tests`, `rtl-tests` | 1356 / 1356 (C model and RTL) |
+| 3 | FUSE corpus on the die | `make fuse_pz80` | `parity-tests` | 1356 / 1356 |
+| 4 | Cringle's exercisers through the C model | `make prelim`, `make zexdoc`, `make zexall` | `c-tests`, `zexdoc`, `zexall` | PASS, 67 / 67, 67 / 67 |
+| 5 | ZEXALL's 14 most error-prone tests through the RTL | `make zexall_subset_rtl` | `zexall-subset-rtl` (main, nightly) | 14 / 14 |
+| 6 | Patrik Rak z80test: z80doc, z80flags, z80memptr, z80full | `make z80test`, `make z80test_rtl` | `z80test`, `z80test-rtl` (one variant per job) | 160 / 160 each, C model and RTL |
+| 7 | C model ↔ iverilog ↔ Verilator, every phase of 14 trace programs | `make compare` | `parity-tests` | identical |
+| 8 | Trace programs against the die: control pins, address and data under WR every half-cycle | `make perfectz80`, `make perfectz80_rtl` | `parity-tests` | 14 / 14, C model and RTL |
+| 9 | Pin scenarios against the die (15 programs driving INT / NMI / WAIT / BUSREQ / RESET) | `make pin_scenarios`, `make pin_scenarios_rtl` | `parity-tests` | 15 / 15, C model and RTL |
+| 10 | The pin sweep against the die: pins and pad drivers every half-cycle, F, WZ and Q in T4.P of every M1, 51,126 cases (RESET / INT / NMI / BUSREQ / WAIT at every T-state, every opcode, 86 timing classes, the data latch, the Q / WZ groups, combinations, fuzz); C model = RTL every half-cycle | `make event_sweep` | `event-sweep` (4 shards; nightly also RESET at every half-cycle of every opcode, 27,768 cases, and fresh fuzz) | 51,126 / 51,126 |
+| 11 | Synthesised netlist (LibreLane, sky130) against the die: trace programs and pin scenarios | `make perfectz80_netlist`, `make pin_scenarios_netlist` | `librelane-netlist` | 14 / 14, 15 / 15 |
+| 12 | BASIC ROMs (NASCOM 4.7c, 1K Tiny BASIC) on the C model, the RTL and the netlist | `make basic_c_tests`, `basic_rtl_tests`, `basic_netlist_tests` | `basic-c-tests`, `basic-rtl-tests`, `librelane-basic-netlist` | 4 / 4 subtests each |
+| 13 | HALT-to-INT delays, ten INT positions, equal to the die's | `make halt2int` | `c-tests` | 10 / 10 |
+| 14 | Lockstep with superzazu, floooh/chips, suzukiplan and redcode/Z80 over ZEXDOC3 | `make lockstep` | `c-tests` | 7,022,691 instructions identical |
+| 15 | Real silicon: per-opcode T-states and pin-edge offsets from the KC85 captures | `make silicon_cycles`, `make silicon_async` | `c-tests` | PASS |
+| 16 | Model changes: every pin of every phase against a reference revision (3.84 G phases: ZEXDOC, prelim, z80test, trace programs, pin scenarios, random soups and buses under random pin events) | `make phase_identity` | — (run by hand) | identical |
+| 17 | cfast against the model, both frames and the single header, the same scenarios | `make cfast_identity`, `make cfast_single_identity` | `cfast-bench` (cfast_identity) | identical |
+| 18 | Bus-contract testbenches: WAIT edges, writes through Tw, INTA, decoder skew | `make bus_controls` | `rtl-tests` | PASS |
 
-### ZEX harness (make zexdoc / zexall / prelim)
-The CP/M harness is in place: `tests/zex/{prelim,zexdoc,zexall}.com`, `scripts/zexrunner.c`
-(loader + BDOS shim for console functions 2/9, exit trap at 0x0000, BDOS trap at 0x0005),
-and `scripts/run_zex.py`. Both **ZEXDOC** and **ZEXALL** run to completion against the C
-model and report **67/67 PASS** (5.76 B instructions each). Cross-checked by lockstep
-diff against the superzazu C Z80 reference (`scripts/lockstep.c`): identical registers
-and memory at every instruction across the full run.
+Beyond `ci.yml`: `targets.yml` builds the core for every FPGA board and
+ASIC PDK and runs their simulations (main pushes, nightly); `transistor.yml`
+runs the whole GF180 chip at transistor level against the RTL and the
+datasheet's AC limits (by hand); `spice-pads.yml` re-characterises the I/O
+pads in ngspice and fails when they drift from the committed results
+beyond small numeric tolerances; `macos.yml` builds and runs the cfast
+identities on macOS (main pushes). Woodmass's 2008 suite (Flags 47 / 47,
+MEMPTR 58 / 58) runs on branch `speccy` (`make speccy_woodmass`), outside
+the regular set; see [tests/woodmass/README.md](../tests/woodmass/README.md).
 
-`make zexdoc` and `make zexall` rebuild zexrunner first; running the binary directly
-after editing C-side code requires `make zexrunner` (or a top-level `make cmodel`, which
-now also relinks `$(BIN)/zexrunner` and `$(BIN)/tracegen` — earlier the cmodel target
-only rebuilt the library, leaving stale runner binaries on disk).
+`make all-tests` runs every layer except those on the LibreLane netlist
+(11, and 12's netlist leg); `make test` is the quick subset (ctest, rtl,
+bus_controls, compare).
 
-### Test results (current)
-- **C unit tests**: ALU (incl. exhaustive 2^17 add/sub verification of the nibble ALU),
-  flags, exec (functional + exact T-state timing), PLA, CB/ED/DDCB/DD-FD prefixes, ED
-  block ops, and the interrupt subsystem (NMI/INT IM0·1·2/HALT/EI-delay). All pass
-  (`make ctest`).
-- **ZEXDOC / ZEXALL**: 67/67 each.
-- **C ↔ iverilog ↔ Verilator parity** (`make compare`): all 8 trace programs (prog1,
-  prog2, prog3_cb, prog4_ed, prog5_ddfd, prog6_block, prog7_ddcb, prog8_nmi) produce
-  identical phase-by-phase traces across all three (400 phases each).
-- **FUSE corpus** (`make fuse`): **1348 PASS + 8 known-FUSE-wrong**. The 8
-  exceptions all live in `tests/fuse/known-fuse-wrong.txt` with
-  silicon-validation citations: Banks-2018 block fold-in (edb9_2 CPDR
-  repeat), Sean Young §4.1 Q-leak SCF/CCF (37_1 / 3f), boo-boo 2006
-  MEMPTR (edba_1 INDR / edbb_1 OTDR / edb2_1 INIR / edb3_1 OTIR with
-  BC=1), Brewer 2014 / Woodmass HALT2INT 2021 HALT-PC convention
-  (test `76`). We deliberately sit on the silicon-faithful side; the
-  pre-Banks/pre-MEMPTR/pre-Brewer FUSE expecteds are the outliers.
-- **FUSE through RTL** (`make fuse_rtl`): **1348 PASS + 8 known-FUSE-wrong
-  (matches C model)**. The earlier 14 testbench-init artifacts (post-reset
-  M1 with stale m_addr) and the iverilog-12 sensitivity bug on `rf[hlp]`
-  through `always @*` function calls were fixed earlier in the project.
-- **Patrik Rak z80test** (`make z80test`): **160 / 160 / 160 PASS** since
-  the 2026-06-18 silicon-faithfulness sweep: ULA-idle port-parity, SCF/CCF
-  Q-leak formula correction, Banks-2018 LDIR/LDDR/CPIR/CPDR/INIR/INDR/
-  OTIR/OTDR repeat-M-cycle YF/XF (and HF/PF/CF for IO-block) fold-in. All
-  three variants (z80doc, z80memptr, z80full) clean.
-- **5-oracle lockstep** (`scripts/lockstep_quint.c`): our C model +
-  superzazu C + chips/z80 + suzukiplan/z80 + redcode/Z80 all report
-  identical PC/AF/BC/DE/HL/IX/IY/SP after every one of **7,022,691
-  instructions** of ZEXDOC3.
-- **Gate-level signal trace** (`scripts/compare_signal_timing.py`,
-  `make perfectz80`): perfectz80 (pure-C Visual Z80 netlist port, no
-  Qt) vs C model on 200 phases of all 12 trace programs
-  (`prog1..prog8` + `prog_rnd_01..04`): **12 / 12 PASS, 100 %
-  control-pin parity**, with informational addr / data_o diffs on
-  three random programs traceable to C1 (reset register init at
-  `0xFFFF` vs perfectz80's `0x5555`). Same per-phase parity through
-  the iverilog RTL (`make perfectz80_rtl`, 12/12 PASS) and through
-  the LibreLane sky130-synthesised netlist
-  (`make perfectz80_netlist`, 12/12 PASS — the "ultimate test"). CI
-  uploads per-program `.vcd` files (both our pins at top scope and
-  perfectz80's pins under `perfectz80.*` scope in the same file) as
-  the `parity-vcds` + `netlist-vcds` artifacts (14-day retention).
-- **Pin-scenario programs** (`make pin_scenarios` /
-  `pin_scenarios_rtl` / `pin_scenarios_netlist`): 14 INT / NMI /
-  WAIT / BUSREQ / RESET scenarios driven through the `.events`
-  sidecar. All 14 match perfectz80 in every phase (control pins and
-  address) on the C model, the iverilog RTL and the gate-level
-  netlist, and the targets gate CI. Until 2026-10-21 the INT
-  scenarios (`prog9`, `prog12`, `prog16`, `prog19`, `prog20`) pulsed
-  INT for 1-3 T-states between the CPU's sampling edges, so no
-  interrupt was ever taken and they passed without testing it; they
-  now hold INT across an instruction's end. The earlier HALT-pin,
-  WAIT, BUSREQ, RESET and SP-init differences are listed in
-  `docs/known-differences.md` row 14.
-- **HALT-to-INT timing probe** (`make halt2int`): focused regression
-  inspired by Mark Woodmass's HALT2INT v3 (2021). Sweeps INT-pulse
-  timing across the HALT NOP M-cycle and verifies the INT-to-INTA
-  delay stays in the silicon-faithful 3..8 T-state range (per
-  Brewer 2014 + Z80 datasheet). Output on the current model: all 10
-  sweep samples in 4..7 T (PASS). Complements the HALT-PC
-  convention flip — together they cover the silicon properties
-  HALT2INT v3 measures on real hardware without depending on
-  Spectrum ULA contention modeling.
-- **Speed**: C model 6.56 Minstr/s, Verilator 0.31 Minstr/s, perfectz80 ~10 kphases/s.
+## What each layer catches
 
-### Verilator
-The Verilator testbench (`tests/verilator/sim_main.cpp`, top `z80_top`) is complete
-and `make verilator` now builds it cleanly under Apple clang 21 (post-Xcode-update) +
-Verilator 5.042 from Homebrew. The earlier toolchain block (Apple clang 14 / libc++17
-SDK mismatch) is resolved. `make compare` runs both iverilog and Verilator and confirms
-all three (C, iverilog, Verilator) agree on every phase.
+  - **Instruction results** (layers 1-6, 12, 14): every documented and
+    undocumented result: flags with X and Y, WZ (MEMPTR), the block
+    instructions' repeat flags, Q (the flags SCF / CCF read their X and Y
+    from), I / R, interrupts and HALT.
+  - **Timing** (layers 7-11, 13, 15): every pin in every half-cycle,
+    against the die, under every pin event the sweep places, plus the pad
+    drivers (which pins the die drives or floats when).
+  - **Equivalence of implementations** (layers 7, 10, 16, 17): C model =
+    RTL = synthesised netlist = cfast, phase by phase.
 
-### FUSE through the RTL (`make fuse_rtl`)
-Direct end-to-end run of the 1356-case FUSE suite against the Verilog RTL via
-iverilog. `scripts/gen_fuse_tb.py` parses `tests/fuse/tests.{in,expected}` and emits
-a single ~70k-line `tests/iverilog/tb_fuse.v` with all tests inlined as procedural
-blocks (hierarchical pokes into `dut.u_core.rf[]`, `.reg_i`, …, `.reg_q`, the
-test memory loaded byte-by-byte, then `run_tstates(ts_target)` rising edges (one per
-T-state — the clock is the Z80 clock), then a
-`$display` dump). The driver `scripts/compare_fuse_rtl.py` compiles, runs `vvp`, and
-diffs against `tests.expected`.
+What the event sweep reads besides the pins: F, WZ and Q, recorded from
+perfectz80 next to the pins and compared in T4.P of every M1 (docs/event-sweep.md
+"State"). Before, no layer read the die's internal state beyond what the
+pins show and what FUSE's final state includes; the state samples found
+three Q differences and WZ under a RESET cut (known-differences.md rows
+29-32, all resolved). The rest of the die's registers are still compared
+only through what the programs store.
 
-**Result: 1356/1356 (100%) PASS** through the RTL. The first-run gap (1342/1356)
-turned out to be two distinct issues, both fixed:
+## Notes from the record
 
-1. **Testbench in-flight M1 from wrong address.** After `do_reset()` the RTL has
-   already begun an M1 fetch with `m_addr=0` (from reset). The per-test pokes set
-   `dut.rf[PC]` but not `dut.m_addr`, so for tests with non-zero PC the in-flight
-   M1 read `mem[0]` (junk) instead of `mem[PC]`. For RST tests where the test's
-   PC=0 and `mem[0]` happened to be the test's RST opcode, this caused the RST to
-   execute twice — once from the in-flight M1, once for real. Fix: also poke
-   `dut.m_addr = test_pc` after the do_reset, mirroring what `z80_set_pc()` does
-   on the C side.
+FUSE through the RTL first passed 1342 of 1356; two issues, both fixed:
+the testbench pokes `m_addr` as well as PC after reset (the in-flight
+M1 otherwise read `mem[0]`), and the ALU operand mux reads `rf[hlp]`
+through a continuous wire, as iverilog 12's `always @*` did not see the
+array index through a function call.
 
-2. **iverilog 12 sensitivity bug on `rf[hlp]` through functions.** The ALU
-   operand mux called `getri(rf_src_w)` which internally read `rf[hlp][...]`.
-   iverilog's `always @*` failed to propagate the array-index dependency through
-   the function call, so when `idx_w` transitioned 0→2 under DD/FD prefix the mux
-   did not re-fire — it kept the unprefixed H/L value. Fix: replace the function
-   with a continuous wire (`getri_src_val` / `getri_dst_val`) that reads
-   `rf[hlp][...]` directly in the wire's RHS, so iverilog sees the dependency
-   and the wire re-evaluates correctly.
-
-This is independent of the transitive argument from `make compare` (C ≡ iverilog ≡
-Verilator phase-by-phase over the 8 trace programs); both stand on their own.
+The pin scenarios with INT once pulsed it between the CPU's sampling
+edges, so no interrupt was ever taken and they passed without testing
+it; since 2026-10-21 they hold INT across an instruction's end.
 
 ## See also
 
   - [architecture.md](architecture.md) — the shared C / RTL design contract.
-  - [known-differences.md](known-differences.md) — every deliberate or watching
-    divergence, plus the multi-oracle status table.
+  - [known-differences.md](known-differences.md) — every difference from
+    the die, open and resolved, plus the multi-oracle status table.
+  - [event-sweep.md](event-sweep.md) — the pin sweep.
+  - [oracles.md](oracles.md) — the other emulators.
   - [real-silicon-traces.md](real-silicon-traces.md) — how the sigrok KC85
     captures are used as a real-silicon T-state / sub-T-state oracle.
-  - [research-notes.md](research-notes.md) — catalog of sources informing this
-    core and the source-conflict precedence we follow.
-
-(Updated as work proceeds. See git log for per-checkpoint detail.)
+  - [research-notes.md](research-notes.md) — catalog of sources informing
+    this core and the source-conflict precedence we follow.

@@ -4,10 +4,12 @@
 iverilog RTL and into the perfectz80 transistor-level netlist at every
 T-state of a set of instructions, in IM1, IM2 and IM0, and of one opcode of
 every timing class the die has; it runs every opcode with BUSREQ and WAIT
-walked through it. It compares the two half-cycle by half-cycle -- the pins,
-the address and which pads the die drives -- and runs every case through
-the C model too, which must match the RTL in every half-cycle. CI runs it
-on every push, in four shards, from perfectz80's recorded traces.
+walked through it, and drives the data bus itself to find which half-cycle's
+byte each kind of read takes. It compares the two half-cycle by half-cycle
+-- the pins, the address and which pads the die drives -- and F, WZ and Q,
+where they have settled on both (below), and runs every case through the C
+model too, which must match the RTL in every half-cycle.
+CI runs it on every push, in four shards, from perfectz80's recorded traces.
 
 Files:
 
@@ -17,7 +19,6 @@ Files:
 - `scripts/pz80_pads.c`: which of perfectz80's pads the die drives
 - `tests/event_sweep/pz80/`: perfectz80's recorded traces, one file per group
 - `scripts/event_sweep_c.c`: C model side (`--c-model`)
-- `tests/event_sweep/baseline.txt`: cases where the RTL differs today
 
 ## How a case works
 
@@ -38,7 +39,8 @@ case gives one (the IM2 vector, or the opcode in IM0). In IM0 it can hand
 over more bytes, one per INTA cycle or memory read until it has none left,
 as the die takes them: the opcode after a prefix in another INTA cycle, the
 operands as memory reads at the interrupted PC. An opcode fetch from memory
-ends its instruction. I/O reads see FF.
+ends its instruction. An IN reads what an OUT wrote to its address (FF
+before).
 
 Times are counted from the rising edge that starts the marker fetch's T1.
 A pulse is placed at T-state `n` of the target (`M4` is the marker's T4, `T1`
@@ -58,13 +60,100 @@ Two cases react to the pins, the same way on every side:
   (not a refresh) or IORQ, so every bus cycle gets the wait states its
   sampling edges see.
 
+### The data window (`latch`)
+
+Every other case puts a read's byte on the bus for the whole read. A
+`latch` case puts it there in one half-cycle only and a decoy in every
+other half-cycle of the read, from its T1.P to its T3.N: the same window
+on every side (`-D r0,r1,w,vv,dd` on perfectz80 and the C model,
+`+dwin=...` on the RTL; half-cycles counted from the marker's T1 like the
+pulses). The decoy changes what the program does -- ADD A,C for LD A,(HL),
+another stored byte, another IM2 table entry, a NOP for IM0's RST 38 -- so
+a side that takes it shows other pins. perfectz80's own bus writes a read's
+byte after each rising edge; inside a window the harness sets the byte it
+would write -- memory, I/O or the INTA vector at the read's address -- to the
+window's before that edge, so the bus never carries another byte for a
+moment. The reads, each also with one Tw (WAIT low across the edge that
+samples it):
+
+- opcode fetch: LD A,(HL); a DD prefix; the opcode after it;
+- memory read: LD A,(HL); LD A,n's operand; POP BC's two bytes; LD
+  A,(IX+d)'s displacement; DD CB d op's d and op (read, not fetched);
+- I/O read: IN A,(n); IN D,(C); INI;
+- INTA: the IM2 vector (40, decoy BF); the IM0 opcode (RST 38, decoy NOP).
+
+The report has a grid per kind of read: the half-cycle whose byte
+perfectz80 takes, and `!` where the RTL takes another (docs/timing.md
+"The data latch" has the result).
+
 A case matches when:
 - every control pin agrees in every half-cycle;
 - the address agrees in every half-cycle: transfers, refreshes (I:R), and
   the internal and idle T-states, where the bus keeps its last address;
 - BUSACK is one of the control pins;
-- the data agrees wherever both sides drive WR;
-- the same pads are driven in every half-cycle.
+- the data agrees on every pad both sides drive (the writes, and LD
+  (IX+d),n's under a RESET before WR: known difference 33);
+- the same pads are driven in every half-cycle;
+- F, WZ and Q agree in every state sample (below).
+
+### State: F, WZ and Q
+
+Pins show a register only once the program stores it; F, WZ (MEMPTR) and Q
+can stay hidden for many instructions, or for good. So each side also dumps
+them with the pins, every half-cycle: perfectz80 its F (the live AF bank,
+node `ex_af`), its WZ (`reg_w`, `reg_z`) and P, which is node 3273 low --
+the die has no Q register (docs/flags.md "Q"): an M1 that writes the flags
+the instruction before it left pending pulls 3273 low until the next M1,
+and the die's Q is F there, else 0. The C model dumps `rf[RFP_AF]`'s F,
+`rf[RFP_WZ]` and `q`; the RTL `r_af`'s F, `r_wz` and `reg_q`.
+
+The models don't make their writes on the die's edges: the die writes F in
+T3.N of the next M1, the models on the edge that ends its T2; the die
+writes WZ a byte at a time on its own edges, the models a byte read at
+once and the rest at the end of the M-cycle (a RESET cut leaves the bytes
+the die had written: docs/timing.md "Register write-back"). So the state
+is compared where it has settled on every side: in T4.P of every M1-type
+cycle (an opcode fetch, an INTA, the fetch an NMI discards, the first
+half-cycle of whose refresh is T3.P). By then the die has made the
+writes the instruction before left for that M1 (T1.N, T2.N, T3.N), the
+models theirs (the edges that end T1 and T2), and none has started the new
+instruction's: this is the state the instruction before left, as the next
+one meets it. It is a definition, not a tolerance: an M1 every instruction
+has, at the one point every side agrees what it means. A RESET that cuts
+an M1 before its T3 leaves no sample in it; the M1 that restarts at 0000
+has one.
+
+Between the two models the comparison is stricter: F, WZ and Q in every
+half-cycle, like the pins.
+
+The groups aimed at the state:
+
+- `q_ops`: every opcode program of `opcodes`, then SCF, and then CCF, with A
+  = 42 and F = A9 before it (X and Y set in F, clear in A, so an SCF or CCF
+  after a flag writer differs from one after anything else);
+- `q_seq`: a flag writer (CP n, INC B, BIT 3,B, CPI, ADD HL,BC, SCF, LD A,I),
+  one of 33 instructions or prefix chains that write no flags (EX AF,AF',
+  EXX, EX DE,HL, POP AF, loads, DI / EI, IM 1, LD I,A / R,A, ED 00 / 77 /
+  7F, DD, FD, DD DD, FD DD, DD FD, DD ED 00, JR, JP, CALL, IN / OUT, LD
+  SP,HL, EX (SP),HL; and OR A, which does), then SCF or CCF;
+- `q_events`: six short sequences (CP n, SCF; CP n, EX AF,AF', CCF; CP n,
+  DD SCF; INC B, NOP, CCF; ADD HL,BC, SCF; CP n, HALT) with INT in IM0,
+  IM1 and IM2, a 1 T NMI, a 4 T RESET, 1 T and 4 T BUSREQ and 1 T and 3 T
+  WAIT from every T-state;
+- `q_reset`: 4 T RESET at every T-state of eleven flag writers (CP n, INC B,
+  DEC B, BIT 3,B, ADD HL,BC, ADC HL,BC, CPI, LD A,I, SCF, NEG, RL B) and of EX
+  AF,AF', and of the M1 after each, the code at 0000 starting with CCF, so the
+  restart shows the Q the RESET left;
+- `wz_int`: INT and a 1 T NMI from every T-state of each of 38 instructions
+  that load WZ (MEMPTR) -- loads through (nn), (BC), (DE), JP, CALL, RET,
+  RST, JR, DJNZ, EX (SP),HL, the 16-bit adds, IN / OUT, RLD / RRD, the
+  indexed ones, BIT n,(HL), LDI ... OUTD;
+- `blk_events`: two rounds of each of the eight repeating block
+  instructions, with INT and a 1 T NMI at every T-state and a 4 T RESET, 1 T
+  BUSREQ and 1 T WAIT at one position per T-state.
+
+`q_reset` and the RESET cases of `q_events` and `blk_events` run CCF first
+at 0000 (`dump_pre`), before the register dump.
 
 Instructions under test:
 - INC A (no memory access)
@@ -107,7 +196,20 @@ Instructions under test:
 | `im0_combo` | IM0 CALL 1234 after INC A; NMI, WAIT, BUSREQ or RESET (as in `im2_combo`) from every T-state of it |
 | `opcodes` | every opcode -- 1,841 programs: unprefixed, CB, ED, DD / FD and DD CB / FD CB, the flag-dependent ones also with F = 00 and FF, DJNZ also with B = 1, INIR / OTIR / INDR / OTDR with B = 2 -- each plain, with the BUSREQ walk, with the WAIT walk, with INT from the marker's T4 (EI) and with a 1 T NMI at its T1 |
 | `classes` | one opcode of each of the 68 timing classes the instructions above don't cover (`CLASS_REPS`): 1 T NMI, INT until INTA, 1 T and 4 T BUSREQ, 1 T and 3 T WAIT from every T-state |
-| `classes_reset` | 4 T RESET from every T-state of the same 68 (run by name: `--groups classes_reset`; known difference 19) |
+| `classes_reset` | 4 T RESET from every T-state of the same 68 |
+| `fuzz` | 2,000 random cases (seed 1): 3-10 instructions drawn from every opcode program, a random F and BC, IM0 (an RST byte), IM1 or IM2 (vector 40, 41 or FF), EI or not, and one to three NMI / INT / WAIT / BUSREQ pulses of random widths in the first 40 T-states, 200 T run |
+| `fuzz_reset` | the same with RESET among the pins |
+| `reset_m1wait` | 4 T RESET at every quarter T-state while 1, 2 or 4 T of WAIT stretch the M1 of INC A and LD A,(HL) (known difference 25) |
+| `reset_busreq` | 4 T RESET at every quarter T-state around a 2 T and a 6 T BUSREQ from the T1 of INC A, LD A,(HL) and PUSH BC (known difference 26) |
+| `reset_nmi` | a 1 T NMI at every quarter T-state from 2 T before RESET's release to 8 T after it, RESET 3, 4 and 6 T (known difference 27) |
+| `opcodes_reset` | 4 T RESET from every T-state of every opcode program of `opcodes`, one position per T-state (run by name: `--groups opcodes_reset`; known difference 19) |
+| `latch` | the data window: the right byte in one half-cycle of fifteen reads -- opcode fetches, memory and I/O reads, INTA in IM2 and IM0 -- from T1.P to T3.N, without and with a Tw; and each read with the byte all through it (268 cases) |
+| `q_ops` | every opcode program, then SCF, and then CCF (A = 42, F = A9 before it) |
+| `q_seq` | a flag writer, an instruction or prefix chain that writes no flags, then SCF or CCF |
+| `q_events` | INT (IM0 / 1 / 2), NMI, RESET, BUSREQ and WAIT from every T-state of six short Q sequences |
+| `q_reset` | 4 T RESET from every T-state of eleven flag writers and EX AF,AF' and the M1 after them; CCF first at 0000 |
+| `wz_int` | INT and NMI from every T-state of 38 instructions that load WZ |
+| `blk_events` | two rounds of each repeating block instruction: INT and NMI at every T-state, RESET, BUSREQ and WAIT at one position per T-state |
 
 The timing classes: the `opcodes` group's programs grouped by perfectz80's
 control pins in their plain run and their BUSREQ and WAIT walks, 86 of
@@ -133,7 +235,7 @@ that half sees the pulse. The sweep therefore shows whether the chip's
 input logic can catch such a pulse; it does not test the data sheet's
 minimum widths, which depend on analog timing.
 
-## Results (rejunity `sweep-all`, 21 October 2026)
+## Results (main, 24 October 2026)
 
 | group | cases | match | differ |
 |---|---|---|---|
@@ -141,7 +243,7 @@ minimum widths, which depend on analog timing.
 | nmi | 984 | 984 | 0 |
 | nmi_short | 1184 | 1184 | 0 |
 | nmi_reentry | 43 | 43 | 0 |
-| reset | 206 | 180 | 26 |
+| reset | 206 | 206 | 0 |
 | reset_release | 64 | 64 | 0 |
 | reset_wait | 32 | 32 | 0 |
 | reset_short | 240 | 240 | 0 |
@@ -154,20 +256,39 @@ minimum widths, which depend on analog timing.
 | im0_combo | 300 | 300 | 0 |
 | opcodes | 9205 | 9205 | 0 |
 | classes | 13260 | 13260 | 0 |
-| classes_reset (run by name) | 2210 | 2040 | 170 |
+| classes_reset | 2210 | 2210 | 0 |
+| fuzz | 2000 | 2000 | 0 |
+| fuzz_reset | 2000 | 2000 | 0 |
+| reset_m1wait | 264 | 264 | 0 |
+| reset_busreq | 312 | 312 | 0 |
+| reset_nmi | 120 | 120 | 0 |
+| latch | 268 | 268 | 0 |
+| q_ops | 3682 | 3682 | 0 |
+| q_seq | 462 | 462 | 0 |
+| q_events | 2448 | 2448 | 0 |
+| q_reset | 512 | 512 | 0 |
+| wz_int | 3712 | 3712 | 0 |
+| blk_events | 2464 | 2464 | 0 |
+| opcodes_reset (run by name) | 27768 | 27768 | 0 |
 
-The default run, 30,672 cases, matches perfectz80 in all but 26 -- the
-pads driven included -- and the C model matches the RTL in every
-half-cycle of all of them. The 26 in the baseline are RESET stopping
-ADD HL,BC or INC BC in the T-states where the die still writes their
-result (docs/known-differences.md row 19): the register dump after reset
-differs, the pins do not. `classes_reset`, RESET at every T-state of the
-68 classes, shows how far row 19 reaches: 170 cases in 27 classes (LD
-rr,nn, LD rr,(nn), JR, DJNZ, RST, IN r,(C), the DD / FD index forms, LDI /
-CPI / INI / OUTI and their repeats) store other registers after the reset
-than the die, and in 84 of them the C model and the RTL differ from each
-other too -- each writes some results at another T-state. It joins the
-default run when row 19 is fixed.
+The default run, 51,126 cases, matches perfectz80 in every one -- the pads
+driven, F, WZ and Q in every state sample and, after a RESET, every
+register the reset keeps included -- and the C model matches the RTL in
+every half-cycle of all of them, F, WZ and Q included; so does
+`opcodes_reset`, RESET at every T-state of every opcode program (27,768
+cases). Nothing is tolerated. While the differences were being fixed, a
+baseline file listed each differing case so that CI failed only on new
+ones; the last were known difference 19's 26 cases of RESET stopping ADD
+HL,BC or INC BC in the T-states where the die still writes their result
+(and `classes_reset`, 170 of 2,210 differing, `reset_nmi`, 72, and
+`fuzz_reset`, 65, ran by name). With the baseline empty the file and
+`--update-baseline` were removed: any difference fails the run.
+
+The state samples came with HARNESS_VERSION 2 (24 October 2026). On
+main's models then, 38,557 of the 69,689 cases of every group and
+`opcodes_reset` differed from the die, all in the state: Q after any
+RESET (the restart's), after a prefix and after EX AF,AF', and WZ under a
+RESET cut (known differences 29-32).
 
 When the sweep was written (main `ec3c5d2`, 2287 cases) 809 differed.
 Since then:
@@ -209,51 +330,78 @@ Since then:
   the rising edge that ends the NMI response's second push, which the die
   and the RTL lose and the C model kept (`nmir_entry_gap12_p12`); it loses
   it now.
+- The data latch (`latch`): perfectz80 and the RTL take an opcode or INTA
+  byte from the bus in T2.N (the last Tw.N) and read data from T3.P; the C
+  model took each half a clock earlier, which no other group could see
+  (known difference 28). It takes the die's edges now.
+- The register write-back (known difference 19): what a RESET part-way
+  through an instruction leaves -- the die's write edges, F after a cut on
+  the next M1's T2 from its flag latches, the address latch a cut shows in
+  a long internal M-cycle's T1, the T2 writes of a cycle WAIT stretches.
+  The RESET cases dump every register after the reset.
 
 `build/event_sweep/report.md` has the per-instruction grids.
 `build/event_sweep/diff/` has a side-by-side trace for every differing case.
 
-## The baseline
+## Failing
 
-`tests/event_sweep/baseline.txt` has one line per case that differs today:
+`make event_sweep` fails on any case that differs from perfectz80 and,
+with `--c-model` (as the make target and CI run it), on any half-cycle
+where the C model differs from the RTL. There is no list of tolerated
+differences: a change that makes a case differ from the die is a bug to
+fix, never an entry to skip.
+`build/event_sweep/diff/<case>.txt` shows the first differing half-cycles
+side by side.
 
-```
-<case> <first differing half-cycle> <what differs> <hash of the RTL's compared pins>
-```
+## The fuzz
 
-`make event_sweep` fails in two situations:
-
-- **New difference:** a case differs that isn't listed.
-- **Changed difference:** a listed case now differs in another way. Any
-  change in the RTL's pins for that case changes the hash.
-
-A listed case that now matches is reported as a warning.
-
-After an intended RTL change:
-
-```
-make event_sweep EVENT_SWEEP_ARGS=--update-baseline
-git diff tests/event_sweep/baseline.txt
-```
-
-Review the baseline diff with `build/event_sweep/diff/<case>.txt` before
-committing it.
+The groups above place one or two events where they were written to; the
+fuzz puts random code, modes and pins together (`fuzz_cases()`): case i of
+a seed is always the same, so a difference reproduces with
+`--groups fuzz --fuzz-seed S --fuzz-n N --match fuzz_sS_0000i`. The default
+run has seed 1's 2,000 cases, from perfectz80's recorded traces; CI's
+nightly run also tries 500 cases of a fresh seed (its run id), perfectz80
+live, and fails on any difference. When it was added, seed 1 found two
+things nothing else had: a nested NMI's IFF2 (known difference 24) and the
+RTL testbench answering every IN with FF where perfectz80's harness and the
+C system return what an OUT wrote. `fuzz_reset` (with RESET) then found three
+RESET rules the targeted groups had missed -- a Tw after an M1's T2, a bus
+grant, an NMI right after the release (known differences 25-27) -- each
+swept since by a group of its own; then, with row 19, a cut on the Tw of a
+write that WAIT stretched (a push's second SP-1, made in that write's T2)
+and the RTL's Q after DD CB RES / SET (an NMI-only case).
 
 ## perfectz80's recorded traces
 
 perfectz80 is the slow side: a transistor-level netlist, about 10,000
 half-cycles a second. `tests/event_sweep/pz80/<group>.txt.xz` holds its
-output for every case of the group, keyed by what the run depends on: the
-harness and perfectz80's sources (`event_sweep_pz80.c`, `pz80_pads.c`,
-`scripts/refs/perfectz80/`), the program's bytes, the options and the
-pulses as perfectz80 resolves them (whole half-cycles). A run takes a
-recorded trace where one exists and runs perfectz80 for the rest: CI runs
-only the RTL and the C model. Changing the harness or perfectz80 makes
-every recorded trace stale, and a new or changed case has none:
+output for every case of the group, keyed by what the run depends on:
+perfectz80's sources (`scripts/refs/perfectz80/`), `pz80_pads.c`, the
+harness's version (`HARNESS_VERSION` in `event_sweep_pz80.c`), the
+program's bytes, the options and the pulses as perfectz80 resolves them
+(whole half-cycles). A run takes a recorded trace where one exists and runs
+perfectz80 for the rest: CI runs only the RTL and the C model. A new or
+changed case has none:
 
 ```
 make event_sweep EVENT_SWEEP_ARGS=--record      # rewrites the files of the groups run
 ```
+
+The harness's own source isn't part of the key: an option only new cases
+use, like the data window, leaves every recorded trace valid. A change that
+alters what an existing case prints must bump `HARNESS_VERSION`, which
+makes every recorded trace stale -- record every group again.
+`--verify-recorded N` runs N of the run's recorded cases through perfectz80
+live and fails if any prints something else than its recording, which
+catches a forgotten bump: CI's shard 0 checks 50 random ones on every push
+(the seed is printed; `--verify-seed S` repeats a sample). The data window
+came in this way: 50 recorded cases from all 23 groups printed their
+recordings byte for byte with the new harness, and the recordings were
+re-keyed, not run again.
+
+HARNESS_VERSION 2 (F, WZ and P next to the pins) recorded every group
+again: 69,689 cases with `opcodes_reset`, 68,028 perfectz80 runs, 2 h 30
+min on 5 jobs.
 
 `--no-cache` runs perfectz80 for every case.
 
@@ -261,6 +409,7 @@ Useful options (`scripts/event_sweep.py --help`):
 - `--groups nmi,reset` and `--match inc_hl` run a subset.
 - `--shard K/N` runs every Nth case from the Kth (CI's four jobs).
 - `--record` writes perfectz80's traces; `--no-cache` ignores them.
+- `--verify-recorded N` runs N recorded cases live and fails on a difference.
 - `--classes` prints the opcodes' timing classes.
 - `--phases 16` runs the full 1/16-T grid.
 - `--jobs N` sets the parallelism.

@@ -5,7 +5,9 @@
 #   run_zex.py <prelim|zexdoc|zexall> [max_instr]
 #
 # Runs build/bin/zexrunner on tests/zex/<which>.com, streams its output, and
-# classifies the result by scanning for the exerciser's "ERROR"/"OK" markers.
+# classifies the result: PASS only when the exerciser prints its completion
+# banner with no "ERROR" line; a run that stops early (the instruction limit,
+# or a jump to 0000 before the banner) fails.
 # ===========================================================================
 import os, sys, subprocess
 
@@ -39,17 +41,17 @@ def main():
     complete = "complete" in text.lower()
 
     print("\n---- run_zex summary ----")
-    if limit:
-        print(f"INCOMPLETE: instruction limit reached (coverage gap — see docs/verification.md)")
-        return 3
     if err:
         print("FAIL: exerciser reported CRC mismatch(es)")
         return 1
-    if complete:
+    if limit:
+        print(f"FAIL: instruction limit reached before {which} completed")
+        return 3
+    if complete and proc.returncode == 0:
         print(f"PASS: {which} completed with no errors")
         return 0
-    print(f"DONE: {which} terminated (no explicit completion banner detected)")
-    return 0
+    print(f"FAIL: {which} ended without its completion banner (exit {proc.returncode})")
+    return 4
 
 if __name__ == "__main__":
     sys.exit(main())

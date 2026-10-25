@@ -32,11 +32,11 @@ static void test_functional(void)
 
     z80_sys_run_instrs(&s, 10); /* 9 ops + HALT */
 
-    CHECK_EQ_U(s.cpu.rf[RFP_AF] >> 8, 0x00, "A after XOR A");
-    CHECK_EQ_U(z80_get_r8(&s.cpu, REG_B), 0x03, "B");
-    CHECK_EQ_U(z80_get_r8(&s.cpu, REG_C), 0xAA, "C = (HL)");
-    CHECK_EQ_U(s.cpu.rf[RFP_HL], 0x4001, "HL after INC");
-    CHECK_EQ_U(s.cpu.rf[RFP_AF] & 0xFF, (Z80_ZF | Z80_PF), "F after XOR A");
+    CHECK_EQ_U(z80_arch(&s.cpu)->rf[RFP_AF] >> 8, 0x00, "A after XOR A");
+    CHECK_EQ_U(z80_get_r8(z80_arch(&s.cpu), REG_B), 0x03, "B");
+    CHECK_EQ_U(z80_get_r8(z80_arch(&s.cpu), REG_C), 0xAA, "C = (HL)");
+    CHECK_EQ_U(z80_arch(&s.cpu)->rf[RFP_HL], 0x4001, "HL after INC");
+    CHECK_EQ_U(z80_arch(&s.cpu)->rf[RFP_AF] & 0xFF, (Z80_ZF | Z80_PF), "F after XOR A");
     CHECK_EQ_U(s.mem[0x4000], 0x08, "mem[4000] = A");
     CHECK_EQ_U(s.mem[0x4001], 0xAA, "mem[4001] = AA");
     CHECK(s.cpu.halted, "halted after HALT");
