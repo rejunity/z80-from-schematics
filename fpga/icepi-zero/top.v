@@ -2,7 +2,7 @@
 //
 // Two builds from this one file (EXTERNAL_BUS):
 //   sbc   (0) NASCOM BASIC 4.7 (RC2014 build) on the rz80 core, console
-//             over the board's FTDI USB-UART (115200 8N1). A single-board
+//             over the board's FTDI USB-UART (230400 8N1). A single-board
 //             computer in the Grant Searle / RC2014 sense: CPU + ROM + RAM
 //             + ACIA, all inside the FPGA, with the CPU bus mirrored on the
 //             40-pin header for probing.
@@ -65,7 +65,7 @@ module top #(
     parameter EXTERNAL_BUS = 0,                 // 0 = sbc, 1 = chip (see header comment)
     parameter CORE_HZ     = 4_000_000,          // sbc Z80 clock from the PLL: 4_000_000 or 3_500_000
     parameter SIM_CLK_DIV = 12,                 // simulation stand-in: 50 MHz / 12 = 4.17 MHz
-    parameter BAUD        = 115_200,
+    parameter BAUD        = 230_400,
     parameter ROM_FILE    = "rom.mem",
     parameter ROM_PROTECT_TOP = 16'h2000        // NASCOM 4.7 ROM is 0x0000-0x1FD9
 ) (

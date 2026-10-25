@@ -5,7 +5,7 @@ the 40-pin header with an external clock (see [Chip build](#chip-build)).
 
 The sbc build is a Z80 single-board computer in one FPGA: the rz80 core (`rtl/z80_top.v`),
 64 KiB of RAM with **NASCOM BASIC 4.7** (RC2014 build) preloaded, and a
-68B50-style ACIA on the board's FTDI USB-UART at **115200 8N1**. Target:
+68B50-style ACIA on the board's FTDI USB-UART at **230400 8N1**. Target:
 [IcePi Zero](https://github.com/cheyao/icepi-zero) (Lattice ECP5
 **LFE5U-25F**, CABGA256, 50 MHz MEMS oscillator).
 
@@ -18,7 +18,8 @@ The sbc build is a Z80 single-board computer in one FPGA: the rz80 core (`rtl/z8
 
 Then connect a terminal to the board's USB serial port:
 
-    screen /dev/cu.usbserial-* 115200      # macOS; Ctrl-A K to quit
+    screen /dev/cu.usbserial-* 230400      # macOS; Ctrl-A K to quit
+    tio -b 230400 /dev/cu.usbserial-*      # or tio (Ctrl-T Q to quit)
 
 Press Enter at the `Memory top?` cold-start prompt and you're at
 `Z80 BASIC Ver 4.7c` / `Ok`. **Button 0** resets the Z80 (RAM survives,
@@ -104,12 +105,49 @@ which hid the hold paths from yosys' clock-enable inference and cost
 about 3,000 LUT4 (10,244 -> 7,446 for the whole SoC). `z80_top`'s
 negative-edge flops map onto ECP5's inverted-clock FF mode.
 
+## Serial: 230400 baud
+
+The console runs at **230400 8N1** (115200 before; set the terminal to
+match). The board's FTDI USB-UART divides its own clock to within 0.2 % of
+230400 (it goes up to 3 Mbaud).
+
+The UART (`uart.v`) runs off the Z80 clock, which is not a whole
+multiple of 230400: a bit is 4,000,000 / 230,400 = 17.36 Z80 clocks
+(15.19 with `CORE_HZ = 3_500_000`). Its bit timer is a phase
+accumulator: every clock it adds `BAUD / G`, and a bit ends where the sum
+passes `CORE_HZ / G` (`G` their greatest common divisor: 36 of 625 at
+4 MHz, a 10-bit register). The rate averages exactly 230400, and every
+bit edge lands within one Z80 clock of its ideal time (at worst 5.3 % of
+a bit at 4 MHz, 5.6 % at 3.5 MHz). That keeps the UART in the one clock
+domain everything else runs in: clocking it from the PLL instead would
+take a second domain and synchronisers to the ACIA for the same
+accuracy.
+
+The receiver restarts its accumulator at half a bit, plus one clock for
+its input synchroniser, at each start edge, so every sample lands within
+one clock of its bit's centre. `make sim_uart` (`tb_uart.v`, part of
+`make ci`) measures it at both clock rates, with the sender's start edge
+at 16 phases of the Z80 clock:
+
+| sender's rate error | 4 MHz: worst sample from the bit's centre (margin left) | 3.5 MHz |
+|---|---|---|
+| 0 | 5.5 % of a bit (44.5 %) | 6.0 % (44.0 %) |
+| ±1 % | 14.5 % (35.5 %) | 14.3 % (35.7 %) |
+| ±2 % | 23.9 % (26.1 %) | 23.6 % (26.4 %) |
+| ±3 % | 33.4 % (16.6 %) | 33.1 % (16.9 %) |
+
+Every byte still arrives with the sender 4.5 % off either way; USB
+bridges are within a fraction of a percent. Pasting still needs a
+per-character delay (1 ms is plenty): a character now arrives every
+43 µs, about 174 Z80 clocks at 4 MHz, less than BASIC spends on one.
+
 ## Simulation
 
     make sim            # Verilator, ~seconds  (needs verilator in PATH)
-    make sim_real       # same at true 115200 pacing (exercises the TIE path)
+    make sim_real       # same at the hardware's serial pacing (exercises the TIE path)
+    make sim_uart       # uart.v at 4 and 3.5 MHz against 230400: TX edges, RX at ±3 %
     make sim_iverilog   # same script through iverilog, much slower
-    make sim_tiny       # Verilator, 1K Tiny BASIC (SIM_BAUD=115200: real pacing)
+    make sim_tiny       # Verilator, 1K Tiny BASIC (SIM_BAUD=240000: the hardware's pacing)
     make ci             # all of these, both bitstreams and the Tiny BASIC bitstream
 
 All three boot the *real* ROM through the *real* top-level — PLL stand-in
@@ -160,5 +198,5 @@ A different `ROM_HEX` rebuilds the image and the bitstreams. The port map
 is already decoded, Tiny BASIC needs no `/INT`, and the `/WAIT` flow
 control absorbs its unpolled output. Pasting a long program can still
 overrun the 32-byte RX FIFO: basic1K needs ~430 Z80 clocks per input
-character, more than a character takes at 115200 baud, so give the
+character, more than a character takes at 230400 baud, so give the
 terminal a per-character delay (1 ms is plenty).

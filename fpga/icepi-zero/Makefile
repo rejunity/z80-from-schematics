@@ -10,10 +10,11 @@
 #   make         both bitstreams (= make bit);  make sbc / make chip for one
 #   make sim     Verilator smoke test of the sbc build: boot BASIC, answer
 #                prompts over UART
-#   make sim_real  same at true 115200 pacing (exercises the TIE path)
+#   make sim_real  same at the hardware's serial pacing (exercises the TIE path)
 #   make sim_tiny  Verilator: the 1K Tiny BASIC ROM, console transcript
 #                compared byte for byte with the C model's (add
-#                SIM_BAUD=115200 for real pacing)
+#                SIM_BAUD=240000 for the hardware's pacing)
+#   make sim_uart  uart.v at 4 and 3.5 MHz against BAUD: TX edges, RX at +-3 %
 #   make sim_iverilog  the boot script through iverilog (slow cross-check)
 #   make prog MODE=sbc|chip    load bitstream to SRAM (lost on power-cycle)
 #   make flash MODE=sbc|chip   write bitstream to SPI flash (persistent)
@@ -71,7 +72,7 @@ MODE ?= sbc
 # stem of the pattern rules below without any directory part
 STEM = $(notdir $*)
 
-.PHONY: all venv bit sbc chip sim sim_real sim_tiny sim_iverilog prog flash timing ci clean distclean FORCE
+.PHONY: all venv bit sbc chip sim sim_real sim_tiny sim_iverilog prog flash timing sim_uart ci clean distclean FORCE
 all: bit
 
 # ---- toolchain venv (created before any tools are installed/used) ----
@@ -157,10 +158,13 @@ VERILATOR ?= verilator
 # Simulation Z80 clock is the /12 stand-in for the PLL: 4.1667 MHz, so
 # -GCORE_HZ overrides the UART divisors to match.
 # Default: fast serial (16 Z80 clks/bit) so framing doesn't dominate sim
-# time. `make sim_real` runs at true 115200 -- that pacing is what
-# exercises the ROM's interrupt-driven TX (TIE) path.
+# time. `make sim_real` runs at the hardware's pacing -- 17.36 Z80 clocks
+# a bit, i.e. 230400 baud at 4 MHz, which is 240000 baud at the sim's
+# 4.17 MHz -- and that pacing is what exercises the ROM's interrupt-driven
+# TX (TIE) path. (make keeps trailing spaces: no inline comments here.)
 SIM_CORE_HZ := 4166667
 SIM_BAUD  ?= 260417
+SIM_BAUD_REAL := 240000
 
 # One object dir per baud: SIM_BAUD is baked into the model (-G/-D), so
 # `make sim_real` after `make sim` must not reuse the fast binary.
@@ -177,7 +181,7 @@ sim: $(OBJ_DIR)/Vtop $(BUILD)/rom.mem
 	cd $(BUILD) && ./obj_dir_$(SIM_BAUD)/Vtop
 
 sim_real:
-	$(MAKE) sim SIM_BAUD=115200
+	$(MAKE) sim SIM_BAUD=$(SIM_BAUD_REAL)
 
 # Tiny BASIC: its own ROM image and model (RAM from 0x0400), whatever
 # ROM_HEX says; sim_top.cpp's `tiny` script.
@@ -207,6 +211,22 @@ $(BUILD)/tb_top.vvp: $(BUILD)/src $(BUILD)/rom.mem tb_top.v
 sim_iverilog: $(BUILD)/tb_top.vvp
 	cd $(BUILD) && $(VVP) tb_top.vvp
 
+# ---- the UART at the hardware's clock-to-baud ratio ----
+# tb_uart.v runs uart.v at the sbc's 4 MHz and at the 3.5 MHz option
+# against top.v's BAUD: every TX bit edge against its ideal time and the
+# bytes as an ideal receiver reads them, and RX from a sender off by up
+# to 3 % either way, its start edge at 16 phases of the clock (each
+# sample's distance from its bit's centre is printed). A few seconds.
+UART_BAUD := $(shell sed -n 's/^ *parameter BAUD *= *\([0-9_]*\).*/\1/p' top.v | tr -d _)
+sim_uart:
+	@mkdir -p $(BUILD)
+	@for hz in 4000000 3500000; do \
+	  $(IVERILOG) -g2012 -P tb_uart.CLK_HZ=$$hz -P tb_uart.BAUD=$(UART_BAUD) \
+	    -o $(BUILD)/tb_uart_$$hz.vvp uart.v tb_uart.v || exit 1; \
+	  $(VVP) -n $(BUILD)/tb_uart_$$hz.vvp > $(BUILD)/tb_uart_$$hz.log; cat $(BUILD)/tb_uart_$$hz.log; \
+	  grep -q '^PASS' $(BUILD)/tb_uart_$$hz.log || exit 1; \
+	done
+
 # ---- board ----
 prog: $(BUILD)/top_$(MODE).bit
 	$(OPENFPGALOADER) -b icepi-zero $(BUILD)/top_$(MODE).bit
@@ -217,8 +237,8 @@ flash: $(BUILD)/top_$(MODE).bit
 # ---- CI (.github/workflows/fpga-board.yml) ----
 # Both bitstreams, the Tiny BASIC bitstream (build_tiny/) and every
 # simulation, Tiny BASIC at both serial pacings.
-ci: sbc chip sim sim_real sim_tiny sim_iverilog
-	$(MAKE) sim_tiny SIM_BAUD=115200
+ci: sim_uart sbc chip sim sim_real sim_tiny sim_iverilog
+	$(MAKE) sim_tiny SIM_BAUD=$(SIM_BAUD_REAL)
 	$(MAKE) sbc BUILD=build_tiny ROM_HEX=$(TINY_HEX)
 
 clean:
