@@ -25,8 +25,8 @@ static void test_functional(void)
     int n = 0; while (!s.cpu.halted && n < 100000) { z80_sys_step_instr(&s); n++; }
 
     CHECK_EQ_U(s.mem[0x9003], 0x03, "(IX+3) after RLC,RLC,SET");
-    CHECK_EQ_U(z80_get_r8(&s.cpu, REG_B), 0x02, "DDCB undoc copy to B");
-    CHECK_EQ_U(s.cpu.rf[RFP_AF] & Z80_ZF, 0, "BIT 0,(IX+3) of 0x03 -> Z clear");
+    CHECK_EQ_U(z80_get_r8(z80_arch(&s.cpu), REG_B), 0x02, "DDCB undoc copy to B");
+    CHECK_EQ_U(z80_arch(&s.cpu)->rf[RFP_AF] & Z80_ZF, 0, "BIT 0,(IX+3) of 0x03 -> Z clear");
     CHECK(s.cpu.halted, "halted");
 }
 

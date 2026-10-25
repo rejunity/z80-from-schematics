@@ -133,9 +133,10 @@ int main(int argc, char** argv) {
         cpins = cz_step_one(&C, cpins);
 
         /* compare main regs (PC, AF, BC, DE, HL, IX, IY, SP) across all three */
-        uint16_t maf = M->cpu.rf[RFP_AF], mbc = M->cpu.rf[RFP_BC], mde = M->cpu.rf[RFP_DE];
-        uint16_t mhl = M->cpu.rf[RFP_HL], mix = M->cpu.rf[RFP_IX], miy = M->cpu.rf[RFP_IY];
-        uint16_t msp = M->cpu.rf[RFP_SP], mpc2 = M->cpu.rf[RFP_PC];
+        const z80_t *MA = z80_arch(&M->cpu);   /* the writes of the next M1 made */
+        uint16_t maf = MA->rf[RFP_AF], mbc = MA->rf[RFP_BC], mde = MA->rf[RFP_DE];
+        uint16_t mhl = MA->rf[RFP_HL], mix = MA->rf[RFP_IX], miy = MA->rf[RFP_IY];
+        uint16_t msp = MA->rf[RFP_SP], mpc2 = MA->rf[RFP_PC];
         uint16_t saf = (S.a<<8) | sz_reff(&S), sbc=(S.b<<8)|S.c, sde=(S.d<<8)|S.e;
         uint16_t shl = (S.h<<8)|S.l, six = S.ix, siy = S.iy, ssp = S.sp, spc = S.pc;
         /* chips's PC is one past the logical end-of-instruction PC (overlap M1) */

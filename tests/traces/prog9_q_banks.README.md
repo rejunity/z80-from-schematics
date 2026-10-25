@@ -18,9 +18,10 @@ independent bugs that the existing trace programs (`prog1`..`prog8`,
      chained after an unrelated `LD r,n`: SCF writes F, but if F's
      value happens to match the pre-SCF value, the comparator says
      "no modification" and Q gets zeroed. The next SCF then leaks
-     the WRONG bits via `Y/X = A | (F XOR Q)`. The C model uses a
-     separate `c->f_modified` flag set by `z80_setF()`, so it doesn't
-     have this bug.
+     the WRONG bits via `Y/X = A | (F XOR Q)`. Both models now take
+     "this instruction writes F" from its class, never from the value:
+     Q is committed with the flags (C `wb_fire_op` / `wb_defer`, RTL
+     `reg_q` at the fire).
 
   2. **Banks INXR/OTXR `pf_arg` formula**. The repeat-iteration
      formula is `parity((t & 7) ^ newB ^ ((newB ± 1) & 7))`. The RTL
@@ -31,7 +32,7 @@ program chained SCF/CCF or ran the block-repeat instructions far
 enough to trigger the Banks fold-in. Both bugs were caught by Rak's
 `z80full` 007 SCF+CCF + 102 INIR→NOP' + 103 INDR→NOP' through
 `sim_z80test.cpp`, but only after the Verilator run completed
-(~5 min). This program reproduces both bug families in ~1200 phases.
+(~5 min). This program reproduces both bug families in 741 phases.
 
 ## Program flow
 
@@ -53,14 +54,16 @@ shows up as a mismatched `data_out`.
 ## Verifying
 
   - `make compare` runs all `tests/traces/*.hex` through C, iverilog
-    and Verilator and diffs every phase.
+    and Verilator and diffs every phase; `prog9_q_banks.phases` gives
+    this one 1200 phases, past its HALT at phase 741 (the default 400
+    would stop after LDIR).
   - `python3 scripts/compare_traces.py tests/traces/prog9_q_banks.hex 1200`
     runs just this one. Expect `PASS (1200 phases identical)` on both
     iverilog and Verilator legs.
 
 If a future change re-introduces either bug class, this will fire
-inside the C-tests CI job (under 10 seconds wall-clock), instead of
-the ~15-minute Rak-on-RTL job.
+inside CI's parity job (`make compare`, seconds), instead of the
+Rak-on-RTL job (~30 min).
 
 See also: `docs/oracles.md` for the rationale on why every silicon-
 faithful change needs a parity oracle that runs in the C-tests

@@ -16,6 +16,12 @@ the same contract as constraints.
     make -C asic/gf180mcu pin_timing GRADE=6    # the 6 MHz grade
     asic/timing/pin_timing.py --write-sdc asic/timing/z80_chip_nmos4.sdc
 
+The chip directories (`asic/gf180mcu/`, `asic/gf180mcu-9t/`,
+`asic/ihp-sg13g2/`) are on the `asic-<pdk>` branches, which the Targets
+workflow merges into main before it builds them; each chip's job runs the
+4 MHz check after the layout and fails on any parameter. On main, `make
+timing_sdc_check` keeps the committed SDC in step with the JSON.
+
 ## What is measured
 
 OpenSTA loads the chip's netlist, its parasitics and the cell, pad and
@@ -81,16 +87,17 @@ needed ~9 ns of hold before it did.
 
 The three chips at 4 MHz, PASS at every corner (GF180: tt 25 °C 5 V,
 ss 125 °C 4.5 V, ff -40 °C 5.5 V; IHP: typ, slow 125 °C, fast -40 °C),
-with the pads as simulated and measured at the datasheet's levels; in
-brackets the PDK's pad libraries at 50 %:
+with the pads as simulated and measured at the datasheet's levels -- the
+Targets run on main `a5a33c7` (2026-10-24); in brackets an earlier run
+with the PDK's pad libraries at 50 %:
 
 | | GF180, 7-track | GF180, 9-track | IHP SG13G2 |
 |---|---|---|---|
 | Output pads | `bi_t` 4 mA, slow slew, 5 V | the same | 16 mA, 3.3 V |
-| Output delays (limits 65-150 ns) | 7-45 ns (13-43) | 7-45 ns (12-43) | 9-25 ns (10-25) |
-| Opcode setup TsD(Cr) at the slow corner (limit 35 ns) | 23.2 ns, +11.8 (+8.9) | 25.0 ns, +10.0 (+7.1) | 6.7 ns, +28.3 (+25.2) |
+| Output delays (limits 65-150 ns) | 7-47 ns (13-43) | 7-46 ns (12-43) | 9-25 ns (10-25) |
+| Opcode setup TsD(Cr) at the slow corner (limit 35 ns) | 22.8 ns, +12.2 (+8.9) | 23.6 ns, +11.4 (+7.1) | 5.0 ns, +30.0 (+25.2) |
 | Tightest input hold, fast corner | +6.4 ns (+0.6) | +6.4 ns (+0.6) | +1.8 ns (+0.5) |
-| 6 / 8 MHz (Z80B / Z80H) | PASS / PASS | PASS / PASS | PASS / PASS |
+| 6 / 8 MHz (Z80B / Z80H), checked by hand | PASS / PASS | PASS / PASS | PASS / PASS |
 
 The separations keep 20 ns or more (24 at 50 %): measured at 1.5 V, a
 5 V output's low pulse is shorter, its falling edge crossing late and its

@@ -2,15 +2,20 @@
 # gen_fuse_tb.py - read tests/fuse/tests.in and emit a single Verilog testbench
 # (tests/iverilog/tb_fuse.v) that runs every case through z80_core via direct
 # hierarchical register pokes, then prints each test's final state in a format
-# the driver compares against tests.expected.
+# the driver (compare_fuse_rtl.py) compares against tests.expected and
+# tests/fuse/silicon.expected: the registers, and every memory byte that
+# either the case's input or its expected state names.
 #
 # Usage:  python3 scripts/gen_fuse_tb.py
 import os, sys, re
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-IN_PATH  = os.path.join(ROOT, "tests/fuse/tests.in")
-EXP_PATH = os.path.join(ROOT, "tests/fuse/tests.expected")
-TB_PATH  = os.path.join(ROOT, "tests/iverilog/tb_fuse.v")
+# FUSE_IN / FUSE_EXPECTED / FUSE_FIX / FUSE_TB run another corpus in the same
+# format (tests/xyflags/, make xyflags_rtl)
+IN_PATH  = os.environ.get("FUSE_IN")       or os.path.join(ROOT, "tests/fuse/tests.in")
+EXP_PATH = os.environ.get("FUSE_EXPECTED") or os.path.join(ROOT, "tests/fuse/tests.expected")
+FIX_PATH = os.environ.get("FUSE_FIX")      or os.path.join(ROOT, "tests/fuse/silicon.expected")
+TB_PATH  = os.environ.get("FUSE_TB")       or os.path.join(ROOT, "tests/iverilog/tb_fuse.v")
 
 def parse_tests(path):
     """Yield dicts with the parsed FUSE test inputs."""
@@ -46,13 +51,11 @@ def emit_test(t):
     # reset, then per-test setup
     body.append(f'        // ===== test {t["name"]} =====')
     body.append('        do_reset();')
-    # set test memory (the post-reset in-flight M1 will already have started
-    # fetching from mem[0] = previous test's leftover; for the 14 known-fail
-    # tests this affects state, but the cleaner per-test memory zero-fill
-    # approach caused more failures than it fixed — see git history)
+    # memory: all zero, as for the C model's runner, then the case's bytes
+    body.append('        clear_mem();')
     for addr, bytes_ in t["mem"]:
         for i, b in enumerate(bytes_):
-            body.append(f'        mem[16\'h{(addr+i)&0xFFFF:04x}] = 8\'h{b:02x};')
+            body.append(f'        poke(16\'h{(addr+i)&0xFFFF:04x}, 8\'h{b:02x});')
     # poke registers, including the _n shadows so the next clock commits cleanly
     pokes = [
         (f"`RFP_AF", t["af"]),  (f"`RFP_BC", t["bc"]),
@@ -74,9 +77,9 @@ def emit_test(t):
     body.append(f'        `core.iff2       = 1\'b{t["iff2"]};   `core.iff2_n    = 1\'b{t["iff2"]};')
     body.append(f'        `core.im         = 2\'d{t["im"]};')
     body.append(f'        `core.halted     = 1\'b{t["halted"]}; `core.halted_n  = 1\'b{t["halted"]};')
-    # Q convention: F before the test was the Q value (last F-modifying instr's F).
-    body.append(f'        `core.reg_q      = 8\'h{t["af"] & 0xFF:02x}; `core.reg_q_n = 8\'h{t["af"] & 0xFF:02x};')
-    body.append(f'        `core.f_modified = 1\'b0; `core.f_modified_n = 1\'b0;')
+    # Q = 0: no flags written by the previous instruction, as on the die after
+    # loading the registers (scripts/fuse_pz80.c), and in fuse_runner.c
+    body.append("        `core.reg_q      = 8'h00; `core.reg_q_n = 8'h00;")
     # Minimal bus-state poke: m_addr alone, mirroring what z80_set_pc does on
     # the C side (cmodel/z80_core.c). Without this, the in-flight post-reset
     # M1 still has m_addr=0 (from reset) and reads mem[0] instead of mem[PC]
@@ -94,17 +97,22 @@ def emit_test(t):
     body.append('                 `core.rfl[`RFP_AF2], `core.rfl[`RFP_BC2], `core.rfl[`RFP_DE2], `core.rfl[`RFP_HL2],')
     body.append('                 `core.rfl[`RFP_IX], `core.rfl[`RFP_IY], `core.rfl[`RFP_SP], `core.rfl[`RFP_PC], `core.rfl[`RFP_WZ],')
     body.append('                 `core.reg_i, `core.reg_r, `core.iff1, `core.iff2, `core.im, `core.halted, cycle_count);')
-    # dump memory that the expected output cares about
-    for addr, bytes_ in t["mem"]:
+    # dump every byte the case's input or its expected state names
+    seen = set()
+    for addr, bytes_ in t["mem"] + t["exp_mem"]:
         for i in range(len(bytes_)):
-            body.append(f'        $display("MEM %s %04h %02h", "{t["name"]}", 16\'h{(addr+i)&0xFFFF:04x}, mem[16\'h{(addr+i)&0xFFFF:04x}]);')
+            a = (addr + i) & 0xFFFF
+            if a in seen: continue
+            seen.add(a)
+            body.append(f'        $display("MEM %s %04h %02h", "{t["name"]}", 16\'h{a:04x}, mem[16\'h{a:04x}]);')
     return "\n".join(body)
 
-def parse_expected_tstates(path):
-    """Return {name: final_tstates} parsed from tests.expected."""
+def parse_expected(path):
+    """{name: (final_tstates, [(addr, [bytes...]), ...])} from a
+    tests.expected-format file ('#' lines are comments)."""
     out = {}
     with open(path) as f:
-        text = f.read()
+        text = "".join(ln for ln in f if not ln.startswith("#"))
     blocks = re.split(r"\n\s*\n", text.strip())
     for blk in blocks:
         lines = [ln for ln in blk.split("\n") if ln.strip()]
@@ -117,16 +125,22 @@ def parse_expected_tstates(path):
         # lines[i] is regs line; lines[i+1] is state line
         if i + 1 >= len(lines): continue
         state = lines[i + 1].split()
+        mem = []
+        for ln in lines[i + 2:]:
+            parts = ln.split()
+            if not parts or parts[0] == "-1": break
+            mem.append((int(parts[0], 16), [int(p, 16) for p in parts[1:] if p != "-1"]))
         # i r iff1 iff2 im halted tstates
-        out[name] = int(state[6])
+        out[name] = (int(state[6]), mem)
     return out
 
 def main():
     tests = list(parse_tests(IN_PATH))
-    final_ts = parse_expected_tstates(EXP_PATH)
-    # patch each test's tstates target with the expected (final) value
+    expected = parse_expected(EXP_PATH)
+    expected.update(parse_expected(FIX_PATH))
+    # run each test to its expected (final) T-state count
     for t in tests:
-        t["tstates"] = final_ts.get(t["name"], t["tstates"])
+        t["tstates"], t["exp_mem"] = expected.get(t["name"], (t["tstates"], []))
     body = "\n\n".join(emit_test(t) for t in tests)
     tb = f"""// AUTO-GENERATED by scripts/gen_fuse_tb.py — do not edit by hand.
 // Runs the FUSE / Frank D. Cringle z80 tests through z80_top via iverilog.
@@ -166,7 +180,10 @@ module tb_fuse;
         else                        din = 8'h00;
     end
     always @(negedge clk) begin
-        #1 if (!mreq_n && !wr_n) mem[addr] <= data_out;
+        #1 if (!mreq_n && !wr_n) begin
+            mem[addr] <= data_out;
+            dirty_add(addr);
+        end
     end
 
     always #5 clk = ~clk;           // period 10 = one T-state
@@ -203,6 +220,35 @@ module tb_fuse;
     endtask
 
     integer i;
+    // every byte a case set or the CPU wrote, zeroed before the next case
+    // (all of memory if the list overflows)
+    reg  [15:0] dirty [0:4095];
+    integer     ndirty = 0;
+    task dirty_add;
+        input [15:0] a;
+        begin
+            if (ndirty < 4096) dirty[ndirty] = a;
+            ndirty = ndirty + 1;
+        end
+    endtask
+    task poke;
+        input [15:0] a;
+        input [7:0]  v;
+        begin
+            mem[a] = v;
+            dirty_add(a);
+        end
+    endtask
+    task clear_mem;
+        begin
+            if (ndirty > 4096)
+                for (i = 0; i < 65536; i = i + 1) mem[i] = 8'h00;
+            else
+                for (i = 0; i < ndirty; i = i + 1) mem[dirty[i]] = 8'h00;
+            ndirty = 0;
+        end
+    endtask
+
     initial begin
         for (i = 0; i < 65536; i = i + 1) mem[i] = 8'h00;
 {body}

@@ -1,0 +1,41 @@
+# Corrections to tests.expected, from the die. scripts/fuse_pz80.c (make
+# fuse_pz80) runs every case of tests.in on perfectz80, the transistor
+# netlist of the Zilog NMOS die; these six are the only cases where the die
+# ends in a different state than tests.expected says (FUSE's values came from
+# FUSE's own core). The runners (make fuse, make fuse_rtl) check the cases
+# below against these values instead; the format is tests.expected's, without
+# the bus-event lines, which no runner here reads.
+
+# HALT: the die's PC moves past the HALT byte; the halted M1s fetch from
+# there, and an interrupt pushes that address. FUSE leaves PC on the HALT.
+76
+0200 cf98 90d8 a169 0000 0000 0000 0000 0000 0000 0000 0001 0000
+00 01 0 0 0 1 4
+
+# INIR / OTIR / INDR / OTDR with B not reaching 0, so the instruction repeats:
+# the repeat's 5-T cycle sets WZ = PC + 1, and its flags take X / Y from PC's
+# high byte and H / P/V from one more step of the B calculation (Banks 2018;
+# z80memptr and z80flags check the same).
+edb2_1
+8a00 0940 d98c 37cf 0000 0000 0000 0000 0000 0000 0000 0000 0001
+00 02 0 0 0 0 21
+37ce 0a -1
+
+edb3_1
+3403 02e0 41b9 1d7d 0000 0000 0000 0000 0000 0000 0000 0000 0001
+00 02 0 0 0 0 21
+
+edba_1
+2500 059f d40d 6b54 0000 0000 0000 0000 0000 0000 0000 0000 0001
+00 02 0 0 0 0 21
+6b55 06 -1
+
+edbb_1
+0903 033b be49 1dcf 0000 0000 0000 0000 0000 0000 0000 0000 0001
+00 02 0 0 0 0 21
+
+# CPDR repeating (BC not 0, no match): X / Y come from PC's high byte (7A:
+# both set), not from A - (HL) - H.
+edb9_2
+ffaf 0007 a171 c748 0000 0000 0000 0000 0000 0000 0000 7a45 7a46
+00 02 0 0 0 0 21

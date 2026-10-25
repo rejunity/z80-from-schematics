@@ -1,0 +1,6 @@
+# INT low from the start: taken after each EI + target (the response clears
+# IFF1, the handler returns with it clear). NMI falls in DEC IXL's opcode
+# fetch: taken after it, while INT waits for an EI.
+0     int  0
+2897  nmi  0
+2905  nmi  1

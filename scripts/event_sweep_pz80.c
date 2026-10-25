@@ -5,7 +5,7 @@
 
    Usage: event_sweep_pz80 [-e events] [-r run_T] [-m marker] [-i]
                            [-a int_at] [-H hold_addr -T hold_T] [-v vec]
-                           [-o ops] [-B] [-W] prog.hex
+                           [-o ops] [-B] [-W] [-D r0,r1,w,vv,dd] prog.hex
 
    -B walks BUSREQ through the instruction: low from the marker on, and
    each grant released for one T-state (high when BUSACK is seen low, low
@@ -14,9 +14,29 @@
    a refresh) or IORQ, so each bus cycle gets the wait states its sampling
    edges see.
 
+   -D is a data window: in half-cycles r0 .. r1 (from the marker's T1, as
+   the events count them; r0 a read's T1.P) the data bus carries dd,
+   except in half-cycle w, where it carries vv (vv and dd in hex). Outside
+   the window the bus is the system's as usual. The bytes are put on the
+   bus from the start of each half-cycle: perfectz80's own bus (cpu_step)
+   writes a read's byte after each rising edge in the read, so the byte it
+   would write there -- memory, I/O or the INTA vector at the read's
+   address -- is set to the window's value before that edge, and the bus
+   never carries anything else in a window half-cycle. (No read's byte is
+   written at the rising edge that starts its T1: the strobes are not
+   active yet.)
+
    Each line also has the pads the die drives (scripts/pz80_pads.c): the
    address pads, the data pads, and MREQ IORQ RD WR M1 RFSH HALT BUSAK
-   (bit 0 first), in hex.
+   (bit 0 first), in hex; then F (of the live AF bank, node ex_af), WZ
+   and P: 1 while node 3273 is low. The flags an instruction writes wait
+   for the next M1 (an INTA, a prefix's, the one that restarts after a
+   RESET): the latch 541 / 1587 holds them pending from its T1.N, and
+   its T3.N writes them into F (rl_wr with the AF word line) where an M1
+   with nothing pending reads AF; 3273 goes low with the latch and stays
+   low until the next M1's T1.N. So SCF and CCF, which take X and Y from
+   A and that access, see Q = F where P is set in their M1 and Q = 0
+   where not (docs/flags.md "Q").
 
    The interrupting device: -v is the byte it puts on the bus in INTA (hex,
    FF if not given), -o more bytes (hex, first byte first, e.g. -o 3412)
@@ -34,6 +54,14 @@
    half-cycle: the netlist settles after each write, so internal latches
    that are transparent during that half see it. */
 #define _POSIX_C_SOURCE 200809L   /* getopt/optarg under -std=c99 on glibc */
+
+/* The recorded traces (tests/event_sweep/pz80/) are keyed by this, by
+   perfectz80's sources and by pz80_pads.c, not by this file's text: bump it
+   when a change here alters what an existing case prints (then record
+   every group again); an option only new cases use leaves it alone.
+   scripts/event_sweep.py --verify-recorded runs a sample of recorded
+   cases live and fails on any difference (CI). */
+#define HARNESS_VERSION 2
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -42,6 +70,9 @@
 #include "pz80_pads.h"
 
 extern uint8_t cpu_memory[0x10000];
+extern uint8_t cpu_io[0x10000];
+
+#define FLAGS_WRITTEN_N 3273     /* low: this M1 wrote the flags left pending (P) */
 
 typedef struct { int pin, lo, hi; } pulse_t;
 static pulse_t pulses[8];
@@ -83,8 +114,9 @@ int main(int argc, char **argv) {
     const char *events = NULL;
     int run = 100, marker = 0x0200, inta_release = 0, int_at = -1, hold = -1, hold_t = 0, vec = 0xff, opt;
     int busreq_walk = 0, wait_walk = 0;
+    int dw_r0 = -1, dw_r1 = -1, dw_w = -1; unsigned dw_v = 0, dw_d = 0;   /* -D */
     uint8_t ops[8]; int n_ops = 0;
-    while ((opt = getopt(argc, argv, "e:r:m:ia:H:T:v:o:BW")) != -1) {
+    while ((opt = getopt(argc, argv, "e:r:m:ia:H:T:v:o:BWD:")) != -1) {
         switch (opt) {
         case 'e': events = optarg; break;
         case 'r': run = atoi(optarg); break;
@@ -96,6 +128,11 @@ int main(int argc, char **argv) {
         case 'v': vec = (int)strtol(optarg, NULL, 16) & 0xff; break;
         case 'B': busreq_walk = 1; break;
         case 'W': wait_walk = 1; break;
+        case 'D':
+            if (sscanf(optarg, "%d,%d,%d,%x,%x", &dw_r0, &dw_r1, &dw_w, &dw_v, &dw_d) != 5) {
+                fprintf(stderr, "bad -D\n"); return 2;
+            }
+            break;
         case 'o':
             for (n_ops = 0; n_ops < 8 && optarg[2 * n_ops] && optarg[2 * n_ops + 1]; n_ops++) {
                 char b[3] = {optarg[2 * n_ops], optarg[2 * n_ops + 1], 0};
@@ -126,6 +163,9 @@ int main(int argc, char **argv) {
        (cpu_memory holds it for that read, restored when the read ends) */
     int dev_pos = 0, was_read = 0, was_inta = 0, dev_addr = -1;
     uint8_t dev_saved = 0;
+    /* -D: the memory and I/O bytes a window half-cycle stood in for, and
+       the INTA vector, put back after the window */
+    int dw_addr = -1; uint8_t dw_mem = 0, dw_io = 0, dw_vec = 0;
     for (int h = 0; h < 2 * 4000; h++) {
         bool clk = cpu_readCLK(st);
         bool m1 = cpu_readM1(st), mreq = cpu_readMREQ(st), iorq = cpu_readIORQ(st), rd = cpu_readRD(st);
@@ -152,6 +192,12 @@ int main(int argc, char **argv) {
         if (!found && !m1 && a == (unsigned)marker) { found = 1; mark = clk ? h : h - 1; }
         if (found) {
             int rel = h - mark;
+            if (dw_r0 >= 0 && rel >= dw_r0 && rel <= dw_r1)    /* -D: this half-cycle's byte */
+                cpu_writeDataBus(st, (uint8_t)(rel == dw_w ? dw_v : dw_d));
+            if (dw_addr >= 0 && rel > dw_r1) {
+                cpu_memory[dw_addr] = dw_mem; cpu_io[dw_addr] = dw_io; cpu_setIntVec(dw_vec);
+                dw_addr = -1;
+            }
             /* Reactive pins, from the pins just after this half-cycle's edge. */
             if (inta_release && !m1 && !iorq) drive(st, 1, true);
             if (int_at >= 0 && !m1 && !mreq && a == (unsigned)int_at) drive(st, 1, false);
@@ -173,12 +219,27 @@ int main(int argc, char **argv) {
             }
             apply_events(st, rel);
             if (wait_low && !cpu_readRESET(st)) { wait_low = false; cpu_writeWAIT(st, true); }
-            printf("%d %d %04x %02x %d %d %d %d %d %d %d %d %04x %02x %02x\n", rel, cpu_readCLK(st) ? 1 : 0,
-                   cpu_readAddressBus(st), cpu_readDataBus(st),
+            printf("%d %d %04x %02x %d %d %d %d %d %d %d %d %04x %02x %02x %02x %04x %02x\n", rel,
+                   cpu_readCLK(st) ? 1 : 0, cpu_readAddressBus(st), cpu_readDataBus(st),
                    cpu_readMREQ(st), cpu_readIORQ(st), cpu_readRD(st), cpu_readWR(st),
                    cpu_readM1(st), cpu_readRFSH(st), cpu_readHALT(st), cpu_readBUSAK(st),
-                   pz80_addr_driven(st), pz80_data_driven(st), pz80_ctl_driven(st));
+                   pz80_addr_driven(st), pz80_data_driven(st), pz80_ctl_driven(st),
+                   cpu_readF(st), (unsigned)(cpu_readW(st) << 8 | cpu_readZ(st)),
+                   cpu_read_node(st, FLAGS_WRITTEN_N) ? 0 : 1);
             if (rel >= 2 * run - 1) break;
+            /* -D: a rising edge next inside the window, the read's address
+               on the bus: the byte perfectz80's bus puts on after it is the
+               window's */
+            if (dw_r0 >= 0 && !cpu_readCLK(st) && rel >= dw_r0 && rel + 1 <= dw_r1) {
+                unsigned wa = cpu_readAddressBus(st);
+                if (dw_addr < 0) {
+                    dw_addr = (int)wa; dw_mem = cpu_memory[wa]; dw_io = cpu_io[wa]; dw_vec = cpu_getIntVec();
+                }
+                if (wa == (unsigned)dw_addr) {   /* the read's address (no read starts at a rising edge) */
+                    uint8_t v = (uint8_t)(rel + 1 == dw_w ? dw_v : dw_d);
+                    cpu_memory[wa] = v; cpu_io[wa] = v; cpu_setIntVec(v);
+                }
+            }
         }
         cpu_step(st);
     }
