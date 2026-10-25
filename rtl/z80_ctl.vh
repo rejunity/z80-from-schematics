@@ -13,7 +13,8 @@
 localparam [2:0] AL_ABUS = 3'd0,   // the address-side bus
                  AL_IDU  = 3'd1,   // abus +1 / -1 / -2
                  AL_EA   = 3'd2,   // effective-address adder
-                 AL_A16  = 3'd3;   // 16-bit ALU sum (ADD HL,rp internal cycle)
+                 AL_WZ   = 3'd3,   // WZ (internal M-cycles: JR, DJNZ, (IX+d), CPI, RLD, ...)
+                 AL_WZP  = 3'd4;   // WZ as the bytes landing on this edge leave it (wzp_v)
 // address-side bus source
 localparam [2:0] AB_REG  = 3'd0,   // register pair, see RI_*
                  AB_NN   = 3'd1,   // {rbyte, Z}: the operand word nn as W arrives
@@ -38,13 +39,20 @@ localparam [1:0] VEC_RST = 2'd0, VEC_NMI = 2'd1, VEC_IM = 2'd2;
 localparam [1:0] SP_HOLD = 2'd0, SP_IDU = 2'd1, SP_ABUS = 2'd2;
 localparam [2:0] WZ_HOLD = 3'd0, WZ_IDU = 3'd1, WZ_ALO = 3'd2, WZ_EA = 3'd3,
                  WZ_Z = 3'd4, WZ_W = 3'd5, WZ_IV = 3'd6, WZ_VEC = 3'd7;
+// WZ bytes the die writes inside the M-cycle starting (z80_core's wzp):
+// their value -- the incrementer, the EA adder, A ({A, -}), (Q ^ F) | A
+// ({.., -}: what LD A,(nn) / LD (nn),A take from the M1's AF access),
+// {I, vector}, or the one waiting kept (DD CB d op's W)
+localparam [2:0] WZP_NONE = 3'd0, WZP_IDU = 3'd1, WZP_EA = 3'd2, WZP_A = 3'd3,
+                 WZP_QFA = 3'd4, WZP_IV = 3'd5, WZP_KEEP = 3'd6;
 // pair write port source
 localparam [1:0] PW_IDU = 2'd0, PW_A16 = 2'd1, PW_WZ = 2'd2;
 // byte write port destination / source
 localparam [3:0] BW_RI = 4'd0, BW_R8 = 4'd1, BW_A = 4'd2, BW_B = 4'd3,
                  BW_DDCB = 4'd4, BW_HLPL = 4'd5, BW_HLPH = 4'd6,
                  BW_RPL = 4'd7, BW_RPH = 4'd8;
-localparam [2:0] BS_RI = 3'd0, BS_ALU = 3'd1, BS_RB = 3'd2, BS_CB = 3'd3, BS_BD = 3'd4;
+localparam [2:0] BS_RI = 3'd0, BS_ALU = 3'd1, BS_RB = 3'd2, BS_CB = 3'd3, BS_BD = 3'd4,
+                 BS_A16 = 3'd5, BS_PH = 3'd6;   // the 16-bit sum's low byte; its high byte, held
 // flag port source
 localparam [2:0] FS_ALU = 3'd0, FS_A16 = 3'd1, FS_BLD = 3'd2, FS_BCP = 3'd3, FS_BIO = 3'd4;
 // interrupt enables

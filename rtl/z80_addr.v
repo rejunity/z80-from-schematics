@@ -18,6 +18,7 @@
 module z80_addr (
     // register file (logical pairs) and address temporaries
     input  wire [15:0] pc, sp, wz, hl, de, bc,
+    input  wire [15:0] wzp,             // WZ as the waiting bytes leave it (AL_WZP)
     input  wire [15:0] hlp,             // HL / IX / IY of the current instruction
     input  wire [15:0] rp,              // rp[p] / rp2[p] named by the PLA
     input  wire [7:0]  rbyte,           // the byte read this T-state
@@ -25,7 +26,6 @@ module z80_addr (
     input  wire [7:0]  i_reg,           // I
     input  wire [7:0]  tmp8,            // read-data latch (INTA vector)
     input  wire [7:0]  b_dec,           // B-1 (OUTI port address)
-    input  wire [15:0] a16,             // 16-bit ALU sum (ADD HL,rp internal cycle)
     // control word
     input  wire [2:0]  ctl_ab,
     input  wire [2:0]  ctl_ri,
@@ -75,7 +75,8 @@ module z80_addr (
             AL_ABUS: al_in = abus;
             AL_IDU:  al_in = idu;
             AL_EA:   al_in = ea;
-            default: al_in = a16;
+            AL_WZP:  al_in = wzp;
+            default: al_in = wz;            // AL_WZ
         endcase
     end
 endmodule

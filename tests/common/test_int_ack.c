@@ -57,7 +57,7 @@ static void run_case(unsigned mode, uint8_t opcode, unsigned extra_wait, bool fr
     CHECK_EQ_U(refreshes,4,"two refresh T states");
     CHECK_EQ_U(waits,extra_wait,"inserted waits");
     uint16_t sp=(mode==0 && (opcode==0xc3 || opcode==0)) ? 0x9000 : 0x8ffe;
-    CHECK_EQ_U(s.cpu.rf[RFP_SP],sp,"stack depth");
+    CHECK_EQ_U(z80_arch(&s.cpu)->rf[RFP_SP],sp,"stack depth");
     CHECK_EQ_U(ops_left,0,"IM0 operands read");
     if(sp==0x8ffe) {
         /* IM0 CALL pushes the interrupted PC: the operands came from the

@@ -11,7 +11,7 @@ you agree to license your contribution under the license of the component
 you are changing, as described in [`LICENSE`](LICENSE):
 
 - Original C model, support software, tests, and documentation: **MIT**.
-- Original hardware sources in `rtl/` and `librelane/`: **CERN-OHL-W-2.0**.
+- Original hardware sources in `rtl/` and `asic/librelane/`: **CERN-OHL-W-2.0**.
 - Third-party components: their existing upstream terms.
 
 You retain your copyright. No copyright assignment or additional right to

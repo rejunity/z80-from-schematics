@@ -46,7 +46,8 @@ once per T-state and reads, in order:
 2. **clock-high-half work** (this rising edge): NMI edge detect against the
    live `nmi_n`; the M1/INTA latch from the live `data_in`; the WAIT
    decision from `wait_n_neg` (the falling-edge sample of T2 / Tw, UM0080);
-   BUSREQ; the T-state advance and the whole micro-sequencer.
+   BUSREQ as `busreq_rise` (its level at the rising edge that started
+   this T-state); the T-state advance and the whole micro-sequencer.
 
 `phi` is gone. `t_state`, `m_cycle`, `bus_op` and friends advance once per
 rising edge. The register file, ALU, PLA, flags — untouched.
@@ -99,11 +100,11 @@ the edge. That is why `*_pos` is a next-state function.
 | `wait_n` | falling edge of T2 (memory), of the automatic Tw (I/O), of the second automatic Tw (INTA) | `wait_n_neg` |
 | `int_n` | the rising edge that starts T_last (PS0178 Figure 8; perfectz80) | `int_n_rise` (wrapper posedge flop) |
 | `nmi_n` | falling-edge detect, both halves; a pulse of any width (TwNMI) | live **and** `nmi_n_neg`, through the wrapper's NMI pulse catcher |
-| `busreq_n` | instruction boundary; every rising edge while granted | live |
+| `busreq_n` | the rising edge that starts a T-state: in an M-cycle's last T-state it decides the grant, in a granted T-state the release (PS0178 TsBUSREQ / ThBUSREQ; perfectz80) | `busreq_rise` (wrapper posedge flop) |
 | `reset_n` | every rising edge (the die's master-slave flip-flop) | `res_rise` (wrapper posedge flop) |
 
-Ten falling-edge flops in total (8 data + NMI + WAIT), two rising-edge
-flops (INT, RESET). Active-low control inputs reset to their *inactive* (high)
+Ten falling-edge flops in total (8 data + NMI + WAIT), three rising-edge
+flops (INT, BUSREQ, RESET). Active-low control inputs reset to their *inactive* (high)
 level, so they want a DFF with async **set**, not reset.
 
 The half-cycle model says "INT sampled at T_last.P": the level an input
@@ -138,7 +139,8 @@ reaches the core exactly as before.
   picks the native cell when the liberty offers one; if a flow has put the
   negedge cells on a don't-use list it will instead insert an inverter on
   the clock pin — **check the mapped netlist**. Expected count here:
-  `PW + 10 = 43` negedge flops (33 former `b` bits + 10 input samplers:
+  `PW + 10 = 45` negedge flops (the former's 35 `b` bits -- `PW`, the pin
+  image with the pad enables `addr_drive` and `ctl_drive` -- + 10 input samplers:
   `data_in[7:0]`, `nmi_n`, `wait_n`), plus the NMI pulse catcher, which
   is clocked by `nmi_n` itself.
 - The negedge→posedge paths (`*_neg` sampler → core, former `a`↔`b`) are
@@ -153,7 +155,7 @@ reaches the core exactly as before.
   set_input_delay -clock clk -clock_fall -min <d> [get_ports {data_in[*] nmi_n wait_n}]
   ```
 
-- Scan: GF180's documented scan flops are rising-edge only. The 44 negedge
+- Scan: GF180's documented scan flops are rising-edge only. The 45 negedge
   flops can be left out of automatic scan (inputs are controllable from
   pins, outputs observable on pins) or given an explicit test mux into a
   small falling-edge chain.
@@ -178,10 +180,10 @@ ill-defined were cleaned up along the way:
   refresh MREQ throughout the DMA). Strobes now idle while granted, as in
   the C model.
 
-Still informational-only differences versus the C model (as before, see
-`docs/known-differences.md`): the reset-assert filter / release settle and
-the 2-phase BUSREQ release settle the C model carries from the perfectz80
-analysis are not in the RTL.
+No differences from the C model remain: both run the die's RESET and
+BUSREQ (docs/known-differences.md rows 1, 15, 16), and the event sweep
+runs the C model beside the RTL, identical in every half-cycle of every
+case.
 
 
 Four bus-contract behaviours that were first fixed in the 2× core (by
@@ -200,8 +202,10 @@ pinned by `make bus_controls` (`tests/iverilog/tb_bus_controls.v`,
 - **INTA**: M1 stays low through both automatic wait states, IORQ overlaps
   M1 from Tw1.N to the end of Tw2, WAIT is sampled at Tw2's falling edge,
   the vector is consumed on the rising edge that ends the last Tw, and the
-  refresh tail occupies T3/T4. IM0 decodes the bus-supplied opcode (RST,
-  CALL, JP, NOP) without a fetch or PC increment.
+  refresh tail occupies T3/T4. IM0 runs the instruction the device
+  hands over: the opcode after a prefix comes in another INTA cycle, the
+  operands as memory reads at the interrupted PC, and PC holds until the
+  instruction ends (docs/timing.md "Interrupt acknowledge").
 - **Nothing between edges reaches a pin**: every pin is `a ^ b` of two
   flops, so forcing `t_state` / `bus_op` / `ir` inside the core between
   edges changes nothing externally (the decoder-skew injection test).
@@ -219,7 +223,9 @@ falling edge. The testbenches (`tests/iverilog/tb_z80*.v`,
 `tests/verilator/sim_main.cpp`) toggle `clk` once per phase, apply the pin
 events just after the edge that starts the phase, capture memory writes
 from the settled pins, and print the phase bit themselves (the core no
-longer has `dbg_phi`). Reset is released in the clock-low half; the first
-rising edge after release enters T1.P of the M1 at PC=0 and is trace line 0,
-which keeps the existing C↔RTL and perfectz80 alignment (`PZ_OFFSET`)
+longer has `dbg_phi`). Power-on (`por_n`) comes first, then RESET is held
+across a couple of T-states and released in a clock-low half; the core
+samples RESET on rising edges and enters T1.P of the M1 at PC=0 on the
+third one after the release (docs/timing.md "RESET"). That T1.P is trace
+line 0, which keeps the C↔RTL and perfectz80 alignment (`PZ_OFFSET`)
 intact.

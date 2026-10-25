@@ -25,10 +25,10 @@ static void test_ldir(void)
     CHECK_EQ_U(s.mem[0x9101], 0x22, "LDIR[1]");
     CHECK_EQ_U(s.mem[0x9102], 0x33, "LDIR[2]");
     CHECK_EQ_U(s.mem[0x9103], 0x44, "LDIR[3]");
-    CHECK_EQ_U(s.cpu.rf[RFP_BC], 0x0000, "LDIR BC=0");
-    CHECK_EQ_U(s.cpu.rf[RFP_HL], 0x9004, "LDIR HL");
-    CHECK_EQ_U(s.cpu.rf[RFP_DE], 0x9104, "LDIR DE");
-    CHECK_EQ_U(s.cpu.rf[RFP_AF] & Z80_PF, 0, "LDIR PV clear (BC=0)");
+    CHECK_EQ_U(z80_arch(&s.cpu)->rf[RFP_BC], 0x0000, "LDIR BC=0");
+    CHECK_EQ_U(z80_arch(&s.cpu)->rf[RFP_HL], 0x9004, "LDIR HL");
+    CHECK_EQ_U(z80_arch(&s.cpu)->rf[RFP_DE], 0x9104, "LDIR DE");
+    CHECK_EQ_U(z80_arch(&s.cpu)->rf[RFP_AF] & Z80_PF, 0, "LDIR PV clear (BC=0)");
 }
 
 static void test_cpir(void)
@@ -46,9 +46,9 @@ static void test_cpir(void)
     s.mem[0x9002] = 0x03; s.mem[0x9003] = 0x04;
     run_to_halt(&s);
 
-    CHECK_EQ_U(s.cpu.rf[RFP_HL], 0x9003, "CPIR HL past match");
-    CHECK_EQ_U(s.cpu.rf[RFP_BC], 0x0001, "CPIR BC");
-    CHECK_EQ_U(s.cpu.rf[RFP_AF] & Z80_ZF, Z80_ZF, "CPIR found -> Z set");
+    CHECK_EQ_U(z80_arch(&s.cpu)->rf[RFP_HL], 0x9003, "CPIR HL past match");
+    CHECK_EQ_U(z80_arch(&s.cpu)->rf[RFP_BC], 0x0001, "CPIR BC");
+    CHECK_EQ_U(z80_arch(&s.cpu)->rf[RFP_AF] & Z80_ZF, Z80_ZF, "CPIR found -> Z set");
 }
 
 static void test_lddr(void)
@@ -67,8 +67,8 @@ static void test_lddr(void)
 
     for (int i = 0; i < 4; i++)
         CHECK_EQ_U(s.mem[0x9100 + i], (uint8_t)(0xA0 + i), "LDDR copy");
-    CHECK_EQ_U(s.cpu.rf[RFP_BC], 0x0000, "LDDR BC=0");
-    CHECK_EQ_U(s.cpu.rf[RFP_HL], 0x8FFF, "LDDR HL");
+    CHECK_EQ_U(z80_arch(&s.cpu)->rf[RFP_BC], 0x0000, "LDDR BC=0");
+    CHECK_EQ_U(z80_arch(&s.cpu)->rf[RFP_HL], 0x8FFF, "LDDR HL");
 }
 
 int main(void)

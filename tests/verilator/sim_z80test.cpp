@@ -12,9 +12,10 @@
 //     idle pattern -- matches redcode's cpu_in convention; required
 //     for Rak's INI/IND test CRCs)
 //
-//   sim_z80test <variant.tap> [max_instr] [max_allowed_fails]
+//   sim_z80test <variant.tap> [max_instr]
 //
-// Exits 0 when observed failures <= max_allowed, non-zero otherwise.
+// Exits 0 when the suite prints "all tests passed", 1 when it reports
+// failures, 2 when it ends without a verdict. No failure is tolerated.
 //
 // Verilator is ~20x slower than the C model so this is gated to the
 // silicon-faithfulness CI job and run on demand; the C runner stays
@@ -69,12 +70,11 @@ static int load_tap(const char *path, unsigned char *mem,
 }
 
 int main(int argc, char** argv) {
-    if (argc < 2) {
-        std::fprintf(stderr, "usage: %s <variant.tap> [max_instr] [max_allowed_fails]\n", argv[0]);
+    if (argc < 2 || argc > 3) {
+        std::fprintf(stderr, "usage: %s <variant.tap> [max_instr]\n", argv[0]);
         return 2;
     }
     long long max_instr   = (argc > 2) ? std::atoll(argv[2]) : 10000000000LL;
-    int       max_allowed = (argc > 3) ? std::atoi(argv[3]) : 0;
 
     uint16_t load_addr = 0; size_t code_len = 0;
     if (load_tap(argv[1], mem, &load_addr, &code_len) != 0) {
@@ -175,29 +175,20 @@ int main(int argc, char** argv) {
     std::printf("phases: %lld  (~%lld instructions)  elapsed: %.2f s  (%.2f Minstr/s)\n",
                 phases, instr, secs, (double)instr / secs / 1e6);
 
-    // Verdict parsing matches scripts/z80test_runner.c.
-    int failures = -1;
-    const char *p = std::strstr(captured, "Result: ");
-    if (p) {
-        if (std::strstr(p, "all tests passed")) {
-            failures = 0;
-            std::printf("verdict: PASS (all 160 tests passed)\n");
-        } else {
-            int n = 0;
-            if (std::sscanf(p, "Result: %d", &n) == 1) failures = n;
-            if (failures >= 0 && failures <= max_allowed) {
-                std::printf("verdict: PASS (%d failure(s); within tolerance %d)\n",
-                            failures, max_allowed);
-            } else {
-                std::printf("verdict: FAIL (%d failure(s); tolerance %d)\n",
-                            failures, max_allowed);
-            }
-        }
+    // Verdict parsing matches scripts/z80test_runner.c: the suite's last
+    // line is "Result: all tests passed." or "Result: N of M tests failed."
+    int rc = 2, failed = 0, total = 0;
+    const char *res = std::strstr(captured, "Result: ");
+    if (res && std::strstr(res, "all tests passed")) {
+        std::printf("verdict: PASS (all tests passed)\n");
+        rc = 0;
+    } else if (res && std::sscanf(res, "Result: %d of %d", &failed, &total) == 2) {
+        std::printf("verdict: FAIL (%d of %d tests failed)\n", failed, total);
+        rc = 1;
     } else {
-        std::printf("verdict: INCOMPLETE (no Result: line captured -- max_instr too low?)\n");
+        std::printf("verdict: FAIL (no result line -- max_instr too low?)\n");
     }
 
-    int rc = (failures >= 0 && failures <= max_allowed) ? 0 : 1;
     std::free(captured);
     delete t;
     return rc;
