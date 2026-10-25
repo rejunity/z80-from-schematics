@@ -11,9 +11,10 @@
 #   make all-tests  every gate that needs only a C compiler, iverilog and
 #                   Verilator, as CI runs them (~1.5 h)
 #
-#   instruction suites, C model: prelim zexdoc zexall z80test fuse
-#     (z80test_rtl, fuse_rtl, zexall_subset_rtl: the same through the RTL)
+#   instruction suites, C model: prelim zexdoc zexall z80test fuse xyflags
+#     (z80test_rtl, fuse_rtl, xyflags_rtl, zexall_subset_rtl: through the RTL)
 #   against the die (perfectz80): perfectz80 pin_scenarios event_sweep fuse_pz80
+#     xyflags_pz80; make xy_study: the oracles' X / Y against the die
 #     (perfectz80_rtl, pin_scenarios_rtl: the RTL as the trace source)
 #   make lockstep   our model and four other emulators, instruction by
 #                   instruction over ZEXDOC3
@@ -86,7 +87,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
-.PHONY: cfast cfast_bench cfast_identity cfast_single cfast_single_identity pinhash phase_identity zexrunner_tick timing_sdc timing_sdc_check equiv all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl fuse_pz80 all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist event_sweep basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test verilator_z80test z80test_rtl halt2int halt2int_probe lockstep
+.PHONY: xyflags xyflags_rtl xyflags_pz80 xy_study cfast cfast_bench cfast_identity cfast_single cfast_single_identity pinhash phase_identity zexrunner_tick timing_sdc timing_sdc_check equiv all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl fuse_pz80 all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist event_sweep basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test verilator_z80test z80test_rtl halt2int halt2int_probe lockstep
 
 all: cmodel ctest
 
@@ -151,10 +152,11 @@ $(BIN)/z80test_runner: $(SCRIPTS)/z80test_runner.c $(CMODEL_LIB) $(CMODEL_HDRS)
 # Patrik Rak's z80test variants through the C model, one after another;
 # any failed test fails the target. z80doc: documented flags; z80flags: all
 # flags, X and Y included; z80memptr: MEMPTR (WZ) through BIT n,(HL);
-# z80full: all of it. Each variant prints 160 results (the NEC and ST
-# SCF/CCF tests report "Skipped" on a Zilog part).
+# z80full: all of it; z80ccf: SCF and CCF after every instruction (Q).
+# Each variant prints 160 results (the NEC and ST SCF/CCF tests report
+# "Skipped" on a Zilog part).
 # Z80TEST_VARIANTS="z80full" runs a subset (CI's z80test-rtl matrix does).
-Z80TEST_VARIANTS ?= z80doc z80flags z80memptr z80full
+Z80TEST_VARIANTS ?= z80doc z80flags z80memptr z80full z80ccf
 z80test: z80test_runner
 	@set -e; for v in $(Z80TEST_VARIANTS); do \
 	  stdbuf -oL $(BIN)/z80test_runner $(TESTS)/z80test/$$v.tap 8000000000; \
@@ -181,6 +183,38 @@ fuse_pz80: $(BIN)/fuse_pz80
 $(BIN)/fuse_pz80: $(SCRIPTS)/fuse_pz80.c $(SCRIPTS)/refs/perfectz80/perfectz80.c $(SCRIPTS)/refs/perfectz80/netlist_sim.c
 	@mkdir -p $(BIN)
 	$(CC) -std=c99 -O2 -I$(SCRIPTS) $^ -o $@
+
+# F's X and Y (bits 5, 3), and the rest of F, as the die has them:
+# tests/xyflags/ is every case scripts/xy_study.py found where the reference
+# emulators (ours, floooh/chips, superzazu, suzukiplan, redcode/Z80) do not
+# all agree about F, or where one of them differs from perfectz80, with the
+# die's values in tests.expected (FUSE's format; docs/oracles.md "X and Y").
+# xyflags runs it through the C model, xyflags_rtl through the RTL (iverilog),
+# xyflags_pz80 on the die. make xy_study runs the study again
+# (XY_STUDY_ARGS="--seed 2 --corpus tests/xyflags" writes a new corpus).
+XYFLAGS := $(BUILD)/xyflags
+$(XYFLAGS)/%: tests/xyflags/%.xz
+	@mkdir -p $(XYFLAGS)
+	@$(PYTHON) -c "import lzma, sys; sys.stdout.buffer.write(lzma.open(sys.argv[1]).read())" $< > $@
+
+xyflags: fuse_runner $(XYFLAGS)/tests.in $(XYFLAGS)/tests.expected
+	@$(BIN)/fuse_runner $(XYFLAGS)/tests.in $(XYFLAGS)/tests.expected /dev/null
+
+xyflags_rtl: dirs $(XYFLAGS)/tests.in $(XYFLAGS)/tests.expected
+	@FUSE_IN=$(XYFLAGS)/tests.in FUSE_EXPECTED=$(XYFLAGS)/tests.expected FUSE_FIX=/dev/null \
+	  FUSE_TB=$(BUILD)/tb_xyflags.v FUSE_VVP=$(BUILD)/tb_xyflags.vvp FUSE_LABEL="X / Y corpus" \
+	  $(PYTHON) $(SCRIPTS)/compare_fuse_rtl.py
+
+xyflags_pz80: $(BIN)/fuse_pz80 $(XYFLAGS)/tests.in $(XYFLAGS)/tests.expected
+	@$(BIN)/fuse_pz80 $(XYFLAGS)/tests.in $(XYFLAGS)/tests.expected
+
+XY_STUDY_ARGS ?=
+xy_study: cmodel $(BIN)/fuse_pz80
+	@mkdir -p $(BUILD)/xy
+	$(CC) -std=gnu11 -O2 -w $(REDCODE_FLAGS) -c $(BENCH_REFS)/redcode_z80/Z80.c -o $(BUILD)/xy/redcode_Z80.o
+	$(CXX) -std=gnu++17 -O2 -w -I$(SCRIPTS) -I$(CMODEL) $(REDCODE_FLAGS) \
+	  $(SCRIPTS)/xy_oracles.cpp $(BUILD)/xy/redcode_Z80.o $(CMODEL_LIB) -o $(BUILD)/xy/xy_oracles
+	@$(PYTHON) $(SCRIPTS)/xy_study.py $(XY_STUDY_ARGS)
 
 # FUSE through the RTL (iverilog). Generates tb_fuse.v from tests.in, builds
 # with iverilog, runs vvp, diffs results against tests.expected and
@@ -403,10 +437,8 @@ pin_scenarios_netlist: iverilog_netlist $(BIN)/perfectz80_runner
 # pulses at every 1/16 T), BUSREQ / WAIT walks, every opcode, the timing
 # classes, the data latch, combinations and random fuzz; the die's traces
 # are recorded in tests/event_sweep/pz80/. Fails on any difference from the
-# die not listed in tests/event_sweep/baseline.txt (empty: none is
-# tolerated), and on any half-cycle where the C model differs from the RTL;
-# see docs/event-sweep.md. EVENT_SWEEP_ARGS=--update-baseline rewrites the
-# baseline from a run.
+# die, and on any half-cycle where the C model differs from the RTL; see
+# docs/event-sweep.md.
 event_sweep: $(BUILD)/tb_event_sweep.vvp $(BIN)/event_sweep_pz80 $(BIN)/event_sweep_c
 	@$(PYTHON) $(SCRIPTS)/event_sweep.py --c-model $(EVENT_SWEEP_ARGS)
 
@@ -767,7 +799,7 @@ test: ctest rtl bus_controls compare
 # runs them (CI adds the LibreLane netlist jobs and cfast_bench). ZEXDOC and
 # ZEXALL take ~20 min each, the pin sweep ~15 min on 8 cores, the Verilator
 # z80test variants 6-15 min each: about an hour and a half in all.
-all-tests: ctest fuse fuse_rtl fuse_pz80 prelim z80test z80test_rtl halt2int lockstep \
+all-tests: ctest fuse fuse_rtl fuse_pz80 xyflags xyflags_rtl xyflags_pz80 prelim z80test z80test_rtl halt2int lockstep \
            silicon_cycles silicon_async rtl bus_controls verilator compare perfectz80 perfectz80_rtl \
            pin_scenarios pin_scenarios_rtl basic_c_tests basic_rtl_tests event_sweep \
            cfast_identity cfast_single_identity zexdoc zexall zexall_subset_rtl

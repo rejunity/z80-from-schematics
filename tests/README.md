@@ -23,7 +23,7 @@ job. What each harness accepts, and why:
 |------|-----------------|----------------|
 | z80test (`make z80test`, `z80test_rtl`) | nothing: any failed test fails (the old allowed-failure argument is gone) | 0 |
 | FUSE (`make fuse`, `fuse_rtl`, `fuse_pz80`) | nothing; six cases are checked against the die's values (`tests/fuse/silicon.expected`) instead of FUSE's, and all six are checked on the die | 0 skipped |
-| Pin sweep (`make event_sweep`) | differences listed in `tests/event_sweep/baseline.txt`, which is empty | 0 |
+| Pin sweep (`make event_sweep`) | nothing: any difference from the die fails (the baseline file of known differences is gone) | 0 |
 | perfectz80 compares (`make perfectz80`, `pin_scenarios`, `_rtl`, `_netlist`) | nothing: control pins, address and the data under WR every half-cycle, and trace lengths | 0 |
 | ZEX (`make prelim`, `zexdoc`, `zexall`, the subset) | nothing: a run passes only with the completion banner and no `ERROR` | 0 |
 | Lockstep (`make lockstep`) | F's X and Y (bits 5, 3) of the three emulators that predate Banks 2018 (superzazu, floooh/chips, suzukiplan): on ZEXDOC3 they differ only after 20 LDIR repeats. Against redcode/Z80 F is compared whole | X / Y of 3 oracles |
@@ -41,16 +41,17 @@ job. What each harness accepts, and why:
 | FUSE, 1356 cases, C model | `tests/fuse/` | `make fuse` | `c-tests` | <1 s | 1356 / 1356 |
 | FUSE through the RTL (iverilog) | `tests/fuse/` | `make fuse_rtl` | `rtl-tests` | ~1.5 min | 1356 / 1356 |
 | FUSE on the die (perfectz80) | `tests/fuse/` | `make fuse_pz80` | `parity-tests` | ~1.5-3 min | 1356 / 1356 |
+| X and Y (F bits 5, 3): every case where the reference emulators disagree about F, with the die's values ([docs/xy-flags.md](../docs/xy-flags.md)) | `tests/xyflags/` | `make xyflags`, `xyflags_rtl`, `xyflags_pz80` | `c-tests`, `rtl-tests`, `parity-tests` | <1 s, ~1.5 min, ~5 min | 4061 / 4061 each |
 | Cringle prelim | `tests/zex/` | `make prelim` | `c-tests` | ~1 s | PASS |
 | ZEXDOC, ZEXALL (C model) | `tests/zex/` | `make zexdoc`, `make zexall` | `zexdoc`, `zexall` | ~20 min each | 67 / 67 each |
 | ZEXALL 14-test subset through the RTL | `tests/zex/` | `make zexall_subset_rtl` | `zexall-subset-rtl` (main, nightly) | 25-55 min | 14 / 14 |
-| Patrik Rak z80test: z80doc, z80flags, z80memptr, z80full | `tests/z80test/` | `make z80test` | `z80test` | ~2 min | 160 / 160 each |
+| Patrik Rak z80test: z80doc, z80flags, z80memptr, z80full, z80ccf | `tests/z80test/` | `make z80test` | `z80test` | ~3 min | 160 / 160 each |
 | The same through the RTL (Verilator) | `tests/z80test/` | `make z80test_rtl` | `z80test-rtl` (one job per variant) | 6-15 min a variant | 160 / 160 each |
 | BASIC ROMs (NASCOM 4.7c, 1K Tiny BASIC) | `tests/basic/` | `make basic_c_tests`, `basic_rtl_tests` | `basic-c-tests`, `basic-rtl-tests` | ~1 s / ~1 min | 4 / 4 subtests |
 | C ↔ iverilog ↔ Verilator, every phase | `tests/traces/` | `make compare` | `parity-tests` | ~10 s | 14 / 14 programs identical |
 | Trace programs vs the die | `tests/traces/` | `make perfectz80`, `perfectz80_rtl` | `parity-tests` | ~20 s each | 14 / 14 |
 | Pin scenarios vs the die | `tests/traces/pin_scenarios/` | `make pin_scenarios`, `pin_scenarios_rtl` | `parity-tests` | ~15 s each | 15 / 15 |
-| The pin sweep vs the die (37,846 cases; C model = RTL) | `tests/event_sweep/`, `scripts/event_sweep.py` | `make event_sweep` | `event-sweep` (4 shards) | ~15 min on 8 cores | 37,846 / 37,846 |
+| The pin sweep vs the die, F, WZ and Q included (51,126 cases; C model = RTL) | `tests/event_sweep/`, `scripts/event_sweep.py` | `make event_sweep` | `event-sweep` (4 shards) | ~20 min on 8 cores | 51,126 / 51,126 |
 | Bus-contract testbenches | `tests/iverilog/tb_{bus_controls,wait_edge,wait_write,int_ack}.v` | `make bus_controls` | `rtl-tests` | ~1 s | PASS |
 | Tang Primer header regressions (this FPGA branch) | `tests/iverilog/tb_wait_top.v`, `tb_reset_top.v` | `make bus_controls` | `rtl-tests` | ~2 s | `fpga/tang-primer-25k/top.v`'s chip build, 1 MHz external CLK on the header: /WAIT honoured on falling edges only; RESET release swept over 200 phases, first M1 at 0000 with WAIT stretching |
 | HALT-to-INT delays vs the die's | `scripts/halt2int_probe.c` | `make halt2int` | `c-tests` | <1 s | 10 / 10 |
@@ -119,12 +120,9 @@ there). A run passes only when it prints `Tests complete` with no
 
 The strictest single-Z80 suite, as ZX Spectrum `.tap` files: 160 tests per
 variant, CRCs recorded on real hardware. `make z80test` runs z80doc,
-z80flags, z80memptr and z80full through the C model, `make z80test_rtl`
-through the RTL; all pass, and any failed test fails the target. The fifth
-vendored variant, z80ccf (flags after a CCF following each instruction:
-it exposes Q), fails test 129 (`EX AF,AF'`) on main, one of the three Q
-differences listed in [docs/known-differences.md](../docs/known-differences.md);
-branch `nmos-q` fixes them and adds z80ccf to the set. See
+z80flags, z80memptr, z80full and z80ccf (the flags after a CCF following
+each instruction: it exposes Q) through the C model, `make z80test_rtl`
+through the RTL; all pass, and any failed test fails the target. See
 [z80test/README.md](z80test/README.md).
 
 
@@ -172,13 +170,19 @@ keeps them as artifacts. See [traces/README.md](traces/README.md).
 ### 7. The pin sweep — `scripts/event_sweep.py`
 
 The RTL and the C model against perfectz80, half-cycle by half-cycle,
-pins and pad drivers, in 37,846 cases: RESET / INT / NMI pulses at every
-T-state of a set of instructions (sub-T pulses at every 1/16 T), BUSREQ
-and WAIT walked through instructions, every opcode, one opcode of each
-of 86 timing classes, interrupt modes 0 and 2, the data latch, combined
-events and 2,000 random fuzz cases (plus 500 fresh ones every night).
-perfectz80's side comes from recordings in `tests/event_sweep/pz80/`.
-The C model must equal the RTL in every half-cycle. An extra group,
+pins and pad drivers, and F, WZ and Q in T4.P of every M1 (the die's Q
+read from its pending-flags node), in 51,126 cases: RESET / INT / NMI
+pulses at every T-state of a set of instructions (sub-T pulses at every
+1/16 T), BUSREQ and WAIT walked through instructions, every opcode, one
+opcode of each of 86 timing classes, interrupt modes 0 and 2, the data
+latch, combined events, 2,000 random fuzz cases (plus 500 fresh ones
+every night), and the groups aimed at Q, F and WZ: every opcode followed
+by SCF and CCF, the instructions and prefixes between a flag writer and
+SCF / CCF, every pin at every T-state around them, RESET after flag
+writers, interrupts in the WZ loaders and in the repeating block
+instructions. perfectz80's side comes from recordings in
+`tests/event_sweep/pz80/`. The C model must equal the RTL in every
+half-cycle, F, WZ and Q included. An extra group,
 `opcodes_reset` (RESET at every half-cycle of every opcode, 27,768
 cases, recorded), runs in the nightly CI run only (`--groups
 opcodes_reset`; about 10 more minutes a shard). See
@@ -284,7 +288,6 @@ and `scripts/redcode_fuse_runner.c` are there for investigation; see
 
 | What | Why not | Where it runs |
 |------|---------|---------------|
-| z80ccf (`tests/z80test/z80ccf.tap`) | test 129 fails on main until the Q fix | branch `nmos-q` adds it to `make z80test` |
 | Mark Woodmass's Z80 Test Suite 2008 (`tests/woodmass/`) | a Spectrum program: needs the 48K ROM, the ULA's keyboard and interrupts | branch `speccy`: `make speccy_woodmass`, Flags 47 / 47, MEMPTR 58 / 58 ([woodmass/README.md](woodmass/README.md)) |
 | Full ZEXALL through the RTL (`make zexall_rtl`) | several hours in Verilator | by hand; CI runs the 14-test subset, and ZEXALL through the C model |
 | `make phase_identity` | needs a reference revision | by hand, for model changes |
@@ -328,13 +331,13 @@ on demand:
 
 | Job | When | Runs |
 |-----|------|------|
-| `c-tests` | always | `make ctest`, `fuse`, `prelim`, `halt2int`, `silicon_cycles`, `silicon_async`, `lockstep` |
-| `rtl-tests` | always | `make rtl`, `bus_controls`, `fuse_rtl`, `timing_sdc_check` |
+| `c-tests` | always | `make ctest`, `fuse`, `xyflags`, `prelim`, `halt2int`, `silicon_cycles`, `silicon_async`, `lockstep` |
+| `rtl-tests` | always | `make rtl`, `bus_controls`, `fuse_rtl`, `xyflags_rtl`, `timing_sdc_check` |
 | `basic-c-tests` | always | `make basic_c_tests` |
 | `basic-rtl-tests` | always | `make basic_rtl_tests` |
 | `z80test` | always | `make z80test` (~3 min) |
 | `z80test-rtl` (4 jobs) | always | `make z80test_rtl` for one variant each |
-| `parity-tests` | always | `make verilator`, `compare`, `perfectz80`, `perfectz80_rtl`, `pin_scenarios`, `pin_scenarios_rtl`, `fuse_pz80` |
+| `parity-tests` | always | `make verilator`, `compare`, `perfectz80`, `perfectz80_rtl`, `pin_scenarios`, `pin_scenarios_rtl`, `fuse_pz80`, `xyflags_pz80` |
 | `event-sweep` (4 shards) | always; `opcodes_reset` and fresh fuzz nightly | `make event_sweep` (shard 0 also re-runs 50 recorded cases on perfectz80 live) |
 | `librelane-netlist` | always | `make synth`, `iverilog_netlist`, `perfectz80_netlist`, `pin_scenarios_netlist` |
 | `librelane-basic-netlist` | always | `make synth`, `verilator_basic_netlist`, `basic_netlist_tests` |

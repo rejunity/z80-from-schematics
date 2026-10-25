@@ -10,10 +10,12 @@
 import os, sys, re
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-IN_PATH  = os.path.join(ROOT, "tests/fuse/tests.in")
-EXP_PATH = os.path.join(ROOT, "tests/fuse/tests.expected")
-FIX_PATH = os.path.join(ROOT, "tests/fuse/silicon.expected")
-TB_PATH  = os.path.join(ROOT, "tests/iverilog/tb_fuse.v")
+# FUSE_IN / FUSE_EXPECTED / FUSE_FIX / FUSE_TB run another corpus in the same
+# format (tests/xyflags/, make xyflags_rtl)
+IN_PATH  = os.environ.get("FUSE_IN")       or os.path.join(ROOT, "tests/fuse/tests.in")
+EXP_PATH = os.environ.get("FUSE_EXPECTED") or os.path.join(ROOT, "tests/fuse/tests.expected")
+FIX_PATH = os.environ.get("FUSE_FIX")      or os.path.join(ROOT, "tests/fuse/silicon.expected")
+TB_PATH  = os.environ.get("FUSE_TB")       or os.path.join(ROOT, "tests/iverilog/tb_fuse.v")
 
 def parse_tests(path):
     """Yield dicts with the parsed FUSE test inputs."""
