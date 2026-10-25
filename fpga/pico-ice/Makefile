@@ -13,8 +13,9 @@
 #   make sim_real  same at the hardware's serial pacing (exercises the TIE path)
 #   make sim_tiny  Verilator: the 1K Tiny BASIC ROM, console transcript
 #                compared byte for byte with the C model's (add
-#                SIM_BAUD=57143 for the hardware's pacing)
+#                SIM_BAUD=115200 for the hardware's pacing)
 #   make sim_iverilog  the boot script through iverilog (slow cross-check)
+#   make sim_uart  uart.v at 4 and 3.5 MHz against BAUD: TX edges, RX at +-3 %
 #   make sim_chip  iverilog smoke test of the chip build: an external clock,
 #                memory and output port on the header pins run a program
 #   make sim_pnr the boot script on the routed sbc netlist, as packed into
@@ -83,7 +84,7 @@ MODE ?= sbc
 # stem of the pattern rules below without any directory part
 STEM = $(notdir $*)
 
-.PHONY: all venv bin sbc chip sim sim_real sim_tiny sim_iverilog sim_chip sim_pnr sim_pnr_tiny prog flash uf2 timing ci clean distclean FORCE
+.PHONY: all venv bin sbc chip sim sim_real sim_tiny sim_iverilog sim_chip sim_pnr sim_pnr_tiny prog flash uf2 timing sim_uart ci clean distclean FORCE
 all: bin
 
 # ---- toolchain venv (created before any tools are installed/used) ----
@@ -183,13 +184,13 @@ VERILATOR ?= verilator
 # 12 MHz input (x1), so the same /6 divider gives a 2 MHz Z80 clock;
 # -GCORE_HZ overrides the UART divisors to match. Default: fast serial
 # (16 Z80 clks/bit) so framing doesn't dominate sim time. `make sim_real`
-# uses the hardware's pacing instead -- 35 Z80 clocks per bit, i.e. 115200
-# baud at 4 MHz, which is 57143 baud at the sim's 2 MHz -- and that pacing
+# uses the hardware's pacing instead -- 17.36 Z80 clocks per bit, i.e.
+# 230400 baud at 4 MHz, which is 115200 baud at the sim's 2 MHz -- and that pacing
 # is what exercises the ROM's interrupt-driven TX (TIE) path. (make keeps
 # trailing spaces, so no inline comments on these lines.)
 SIM_CORE_HZ := 2000000
 SIM_BAUD  ?= 125000
-SIM_BAUD_REAL := 57143
+SIM_BAUD_REAL := 115200
 # One object dir per baud: SIM_BAUD is baked into the model (-G/-D), so
 # `make sim_real` after `make sim` must not reuse the fast binary.
 OBJ_DIR   := $(BUILD)/obj_dir_$(SIM_BAUD)
@@ -244,6 +245,22 @@ $(BUILD)/tb_chip.vvp: $(BUILD)/src tb_chip.v
 sim_chip: $(BUILD)/tb_chip.vvp
 	cd $(BUILD) && $(VVP) tb_chip.vvp
 
+# ---- the UART at the hardware's clock-to-baud ratio ----
+# tb_uart.v runs uart.v at the sbc's 4 MHz and at the 3.5 MHz option
+# against top.v's BAUD: every TX bit edge against its ideal time and the
+# bytes as an ideal receiver reads them, and RX from a sender off by up
+# to 3 % either way, its start edge at 16 phases of the clock (each
+# sample's distance from its bit's centre is printed). A few seconds.
+UART_BAUD := $(shell sed -n 's/^ *parameter BAUD *= *\([0-9_]*\).*/\1/p' top.v | tr -d _)
+sim_uart:
+	@mkdir -p $(BUILD)
+	@for hz in 4000000 3500000; do \
+	  $(IVERILOG) -g2012 -P tb_uart.CLK_HZ=$$hz -P tb_uart.BAUD=$(UART_BAUD) \
+	    -o $(BUILD)/tb_uart_$$hz.vvp uart.v tb_uart.v || exit 1; \
+	  $(VVP) -n $(BUILD)/tb_uart_$$hz.vvp > $(BUILD)/tb_uart_$$hz.log; cat $(BUILD)/tb_uart_$$hz.log; \
+	  grep -q '^PASS' $(BUILD)/tb_uart_$$hz.log || exit 1; \
+	done
+
 # ---- post-place-and-route simulation: the routed sbc netlist ----
 # nextpnr's routed netlist (top_sbc.pnr.json) is the design as icepack
 # packs it into the bitstream: every ICESTORM_LC with its LUT and flop as
@@ -254,7 +271,7 @@ sim_chip: $(BUILD)/tb_chip.vvp
 # testbench clock -- the same x1 stand-in as the RTL sims, so the Z80 runs
 # at 2 MHz; sim_pnr_io.v turns the pads into wires, sim_pnr_cells.v models
 # the PLL and SPRAM cells. The netlist has CORE_HZ = 4 MHz and BAUD =
-# 115200 baked in, 35 Z80 clocks per bit, which the testbench sees as
+# 230400 baked in, 17.36 Z80 clocks per bit, which the testbench sees as
 # SIM_BAUD_REAL at 2 MHz: `make sim_real`'s pacing, and each script ends
 # on the same clock as the RTL at that pacing.
 #   make sim_pnr        the boot script on build/'s routed netlist
@@ -311,7 +328,7 @@ uf2: $(BUILD)/top_$(MODE).uf2
 # Both bitstreams and their UF2 images, the Tiny BASIC bitstream
 # (build_tiny/) and every simulation, Tiny BASIC at both serial pacings
 # and on its routed netlist.
-ci: sbc chip $(BUILD)/top_sbc.uf2 $(BUILD)/top_chip.uf2 sim sim_real sim_tiny sim_iverilog sim_chip sim_pnr
+ci: sim_uart sbc chip $(BUILD)/top_sbc.uf2 $(BUILD)/top_chip.uf2 sim sim_real sim_tiny sim_iverilog sim_chip sim_pnr
 	$(MAKE) sim_tiny SIM_BAUD=$(SIM_BAUD_REAL)
 	$(MAKE) sbc BUILD=build_tiny ROM_HEX=$(TINY_HEX)
 	$(MAKE) sim_pnr_tiny

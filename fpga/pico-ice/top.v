@@ -5,7 +5,7 @@
 //
 //   EXTERNAL_BUS=0  "sbc": a BASIC single-board computer. NASCOM BASIC 4.7
 //     (RC2014 build) in an 8 KiB block-RAM ROM, 32 KiB RAM in one SPRAM,
-//     68B50-style ACIA at 115200 8N1 on the RP2040's USB-UART bridge, Z80
+//     68B50-style ACIA at 230400 8N1 on the RP2040's USB-UART bridge, Z80
 //     clock from the PLL (CORE_HZ, 4 MHz). The headers carry the Z80 bus
 //     as OUTPUTS in the chip-build pinout below (CLK included), so a logic
 //     analyser sees what a Z80 would drive; /RESET (SW2) is the one input.
@@ -97,7 +97,7 @@
 
 module top #(
     parameter CORE_HZ  = 4_000_000,             // sbc Z80 clock: 4_000_000 or 3_500_000; sim overrides to 2_000_000
-    parameter BAUD     = 115_200,
+    parameter BAUD     = 230_400,
     parameter ROM_FILE = "rom.mem",             // 8 KiB image for 0x0000-0x1FFF (hex2mem.py ... 8192)
     parameter ROM_PROTECT_TOP = 16'h2000,       // first writable ROM-window address; 0x2000 = none
     parameter EXTERNAL_BUS = 1'b1               // 1: chip build (headers are the live CPU bus); 0: BASIC sbc build

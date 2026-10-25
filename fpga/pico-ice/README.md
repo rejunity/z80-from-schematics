@@ -6,7 +6,7 @@ Two bitstreams from one `top.v` for the
 
 | build | what it is | clock | headers |
 |---|---|---|---|
-| **sbc** (`make sbc`) | BASIC single-board computer: rz80 + 8 KiB ROM with **NASCOM BASIC 4.7** + 32 KiB RAM + 68B50-style ACIA on the RP2040's USB-UART bridge (**115200 8N1**) | internal: RP2040's 12 MHz → PLL 24 MHz → ÷6 → **4 MHz** | the Z80 bus as **outputs**, same pins as the chip build; SW2 = /RESET |
+| **sbc** (`make sbc`) | BASIC single-board computer: rz80 + 8 KiB ROM with **NASCOM BASIC 4.7** + 32 KiB RAM + 68B50-style ACIA on the RP2040's USB-UART bridge (**230400 8N1**) | internal: RP2040's 12 MHz → PLL 24 MHz → ÷6 → **4 MHz** | the Z80 bus as **outputs**, same pins as the chip build; SW2 = /RESET |
 | **chip** (`make chip`) | Z80 chip replacement: the live CPU bus on the headers, memory and peripherals are whatever you wire up | **external**, CLK in on Pmod 1 pin 10 (ICE44) | CLK, D0–D7, /MREQ, /RD, /WR, A0–A12 (25 pins, see [Pinout](#pinout)) |
 
     make venv              # once: python venv + pip-installed YoWASP toolchain
@@ -37,9 +37,10 @@ For the sbc build, open the BASIC console. The stock firmware enumerates
 **three** USB serial ports: #0 is its own help shell, **#1 is the UART bridge
 to the FPGA**, #2 an SPI bridge. On Linux that is normally the middle one:
 
-    screen /dev/ttyACM1 115200      # Ctrl-A K to quit; macOS: the 2nd /dev/cu.usbmodem*
+    screen /dev/ttyACM1 230400      # Ctrl-A K to quit; macOS: the 2nd /dev/cu.usbmodem*
+    tio -b 230400 /dev/cu.usbmodem…  # or tio (Ctrl-T Q to quit), the same 2nd port
 
-Set the terminal to **115200**: the bridge programs the RP2040's UART with
+Set the terminal to **230400**: the bridge programs the RP2040's UART with
 whatever baud rate the host opens the port at (and opening any of the
 ports at 1200 baud reboots the RP2040 into its USB bootloader — the
 Arduino convention). Press Enter at the `Memory top?` cold-start prompt
@@ -69,7 +70,7 @@ schematic netlist (sources at the end).
   firmware v1.1 changed it from 48 MHz, so anything from v1.1 on).
 * **UART**: the stock firmware bridges USB-CDC #1 to the RP2040's UART0:
   GPIO0 (TX) → **ICE27**, GPIO1 (RX) ← **ICE25**, at the baud rate the host
-  sets (115200 default).
+  sets (115200 until a terminal sets one; open it at 230400).
 * **Buttons**: **SW2** → **ICE10**, active low (10 kΩ pull-up, 100 nF to
   GND), and the same net is a header hole. **SW1** resets the RP2040 (solder
   jumper J4 can reassign it to RP2040 GPIO28).
@@ -163,8 +164,8 @@ clock, no clock enable, nothing resamples the clock.
   directly: the iCE40 PLL cannot output below 16 MHz, and an odd divider
   has no 50 % duty without using both input edges — and with a core that
   works on both edges, both half-periods matter. `CORE_HZ = 3_500_000`
-  sets DIVF 55 (VCO 672 MHz → 21 MHz) for exactly 3.5 MHz. At 4 MHz the
-  UART divisor is 35: 114,286 baud, −0.8 %. The CLK header pin outputs
+  sets DIVF 55 (VCO 672 MHz → 21 MHz) for exactly 3.5 MHz. At 4 MHz a
+  UART bit is 17.36 Z80 clocks ([Serial: 230400 baud](#serial-230400-baud)). The CLK header pin outputs
   the same 4 MHz.
 * **chip**: CLK on ICE44 (`SB_GB_IO`, global-buffer input G6) drives
   `z80_top` directly. Every rising edge is a T-state; opcodes are taken at
@@ -264,13 +265,52 @@ first, which would turn every async-reset flop into sync-reset plus a mux,
 defeat clock-enable inference and cost thousands of LUTs (the core would
 not fit the UP5K).
 
+## Serial: 230400 baud
+
+The console runs at **230400 8N1** (115200 before; set the terminal to
+match). The RP2040's stock firmware programs its UART at whatever rate the
+terminal opens the port at, so the board side needs nothing new (its
+fractional divider is within 0.1 % of 230400); it still has no flow
+control, and its FIFO holds 32 bytes.
+
+The UART (`uart.v`) runs off the Z80 clock, which is not a whole
+multiple of 230400: a bit is 4,000,000 / 230,400 = 17.36 Z80 clocks
+(15.19 with `CORE_HZ = 3_500_000`). Its bit timer is a phase
+accumulator: every clock it adds `BAUD / G`, and a bit ends where the sum
+passes `CORE_HZ / G` (`G` their greatest common divisor: 36 of 625 at
+4 MHz, a 10-bit register). The rate averages exactly 230400, and every
+bit edge lands within one Z80 clock of its ideal time (at worst 5.3 % of
+a bit at 4 MHz, 5.6 % at 3.5 MHz). That keeps the UART in the one clock
+domain everything else runs in: clocking it from the PLL instead would
+take a second domain and synchronisers to the ACIA for the same
+accuracy.
+
+The receiver restarts its accumulator at half a bit, plus one clock for
+its input synchroniser, at each start edge, so every sample lands within
+one clock of its bit's centre. `make sim_uart` (`tb_uart.v`, part of
+`make ci`) measures it at both clock rates, with the sender's start edge
+at 16 phases of the Z80 clock:
+
+| sender's rate error | 4 MHz: worst sample from the bit's centre (margin left) | 3.5 MHz |
+|---|---|---|
+| 0 | 5.5 % of a bit (44.5 %) | 6.0 % (44.0 %) |
+| ±1 % | 14.5 % (35.5 %) | 14.3 % (35.7 %) |
+| ±2 % | 23.9 % (26.1 %) | 23.6 % (26.4 %) |
+| ±3 % | 33.4 % (16.6 %) | 33.1 % (16.9 %) |
+
+Every byte still arrives with the sender 4.5 % off either way; USB
+bridges are within a fraction of a percent. Pasting still needs a
+per-character delay (1 ms is plenty): a character now arrives every
+43 µs, about 174 Z80 clocks at 4 MHz, less than BASIC spends on one.
+
 ## Simulation
 
     make sim            # Verilator, sbc build, fast serial (~10 s)
     make sim_real       # same at the hardware's serial pacing (TIE path)
+    make sim_uart       # uart.v at 4 and 3.5 MHz against 230400: TX edges, RX at ±3 %
     make sim_iverilog   # the boot script through iverilog (~6 min)
     make sim_chip       # iverilog, chip build: external bus on the pins (~2 s)
-    make sim_tiny       # Verilator, 1K Tiny BASIC (SIM_BAUD=57143: hardware pacing)
+    make sim_tiny       # Verilator, 1K Tiny BASIC (SIM_BAUD=115200: hardware pacing)
     make sim_pnr        # the boot script on the *routed* sbc netlist, as in the bitstream (~1.5 min)
     make sim_pnr_tiny   # Tiny BASIC on its own bitstream's routed netlist (build_tiny/)
     make ci             # all of these, both bitstreams (+ UF2) and the Tiny BASIC bitstream
@@ -283,8 +323,8 @@ then presses SW2 with a bouncy release and expects the warm-start prompt.
 The PLL is a black box in simulation: its output is replaced by the 12 MHz
 input (×1), so the same ÷6 divider gives a 2 MHz Z80 clock and the sim
 builds set `CORE_HZ` to match. `make sim` runs the UART at 16 Z80 clocks
-per bit; `make sim_real` at 35, the hardware's ratio (115200 baud at
-4 MHz).
+per bit; `make sim_real` at 17.36, the hardware's ratio (230400 baud
+at 4 MHz).
 
 Verilator result on this branch:
 
@@ -315,8 +355,8 @@ bitstream, every logic cell's LUT and flop as placed, the EBR ROM image,
 SPRAM, global buffers and pads, on yosys' iCE40 cell models. `sim_pnr.py`
 ties the inputs nextpnr left unrouted to the level the hardware reads
 there and drives the PLL's dedicated clock paths from the testbench clock
-(the same ×1 stand-in, so 2 MHz); the netlist's UART divisor is the
-hardware's, 35 Z80 clocks per bit, so this is `make sim_real`'s pacing,
+(the same ×1 stand-in, so 2 MHz); the netlist's UART timer is the
+hardware's, 17.36 Z80 clocks per bit, so this is `make sim_real`'s pacing,
 and both BASICs finish on exactly the RTL's clock at that pacing. It is a
 zero-delay check of function: timing is nextpnr's job, and icepack's bit
 encoding of the `.asc` is not covered.
@@ -346,7 +386,7 @@ different `ROM_HEX` rebuilds the image and the bitstreams. Tiny BASIC
 writes its output without polling TDRE; the `/WAIT` flow control holds
 each such write until the line is free. Pasting a long program can still
 overrun the 32-byte RX FIFO (basic1K needs ~430 Z80 clocks per input
-character, more than one takes at 115200 baud), and the RP2040's
+character, more than one takes at 230400 baud), and the RP2040's
 USB-UART bridge drops bytes beyond its own 32-byte FIFO too: give the
 terminal a per-character delay (1 ms is plenty).
 
