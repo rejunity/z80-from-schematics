@@ -6,7 +6,7 @@
 //   EXTERNAL_BUS=0  "sbc": a BASIC single-board computer. NASCOM BASIC 4.7
 //     (RC2014 build) in an 8 KiB block-RAM ROM, 32 KiB of SPRAM, and a
 //     68B50-style ACIA on the FT2232H's second channel (the board's USB
-//     serial port) at 115200 8N1; Z80 clock 4 MHz from the PLL. The PMODs
+//     serial port) at 230400 8N1; Z80 clock 4 MHz from the PLL. The PMODs
 //     carry the bus as OUTPUTS in the chip-build pinout below (CLK
 //     included), so a logic analyser sees what a Z80 would drive.
 //
@@ -91,7 +91,7 @@
 
 module top #(
     parameter CORE_HZ  = 4_000_000,             // sbc Z80 clock: 4_000_000 or 3_500_000 (PLL 48 / 42 MHz, /12)
-    parameter BAUD     = 115_200,
+    parameter BAUD     = 230_400,
     parameter ROM_FILE = "rom.mem",             // 8 KiB image for 0x0000-0x1FFF (hex2mem.py ... 8192)
     parameter ROM_PROTECT_TOP = 16'h2000,       // NASCOM 4.7 ROM is 0x0000-0x1FD9; writes below are dropped
     parameter EXTERNAL_BUS = 1'b1               // 1: chip build (PMODs are the live CPU bus); 0: BASIC sbc build
