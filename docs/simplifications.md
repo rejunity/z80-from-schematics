@@ -1,11 +1,16 @@
 # Unsimplifications audit
 
-Catalog of every modeling shortcut found in the C model and the Verilog RTL
-that deviates from the real Z80 silicon (Zilog UM0080 / die reverse-engineering /
-perfectz80 / Z80 Explorer). The `unsimplify` branch removes them.
+Catalog of the modeling shortcuts found in the C model and the Verilog RTL
+where they deviate from the real Z80 silicon (Zilog UM0080 / die
+reverse-engineering / perfectz80 / Z80 Explorer), and what became of each.
+The audit started on the `unsimplify` branch; the items marked done or
+resolved have landed on main since.
 
 Sorted by category. Each entry: **where**, **what we do now**, **what the
-silicon does**, **fix plan**, **status**.
+silicon does**, **fix plan**, **status**. A shortcut here is a difference
+in how the model is built, not in what it does: the pins and the
+registers a program sees match perfectz80 (docs/known-differences.md
+lists where they don't).
 
 ## A. Datapath blocks the silicon has, that we collapsed
 
@@ -21,12 +26,13 @@ not produce flags:
 - R-register refresh increment (low 7 bits only — bit 7 preserved)
 - PC + signed displacement (`JR`, `JR cc`, `DJNZ`)
 
-We do all of these as inline `+ 16'd1` / `- 16'd1` / `+ {{8{disp[7]}}, disp}` in
-`rtl/z80_core.v` and `cmodel/z80_core.c`. The wip-like-z80-microarch branch had
-a `z80_idu` module but it never merged.
+The C model does all of these as inline `+ 1` / `- 1` / `+ (int8_t)disp` in
+`cmodel/z80_core.c`; the RTL did too, in `rtl/z80_core.v`, until
+optimise-luts gave it an IDU (`rtl/z80_addr.v`, below). The
+wip-like-z80-microarch branch had a `z80_idu` module that never merged.
 
-**Fix**: add `cmodel/z80_idu.c` + `rtl/z80_idu.v`, route all the inline 16-bit
-add/sub-1 + disp-add through it.
+**Fix**: one IDU in each, every inline 16-bit add/sub-1 and displacement add
+routed through it.
 
 **Status**: RTL done (optimise-luts): `rtl/z80_addr.v` has one IDU on the
 address-side bus for every 16-bit +/-1 (PC+1, SP+/-1, rp+/-1, block pointer
@@ -38,26 +44,28 @@ ends the refresh). C model: still inline arithmetic.
 
 ### A2. Inline 8-bit ALU ops outside `z80_alu`
 
-EXEC_NEG, EXEC_LD_A_IR, EXEC_IN_C, EXEC_RRD / EXEC_RLD, EXEC_BLOCK
-(LDI/CPI/INI/OUTI variants) compute their result and flags **inline** in the
-sequencer (`rtl/z80_core.v` / `cmodel/z80_core.c`) instead of going through the
-ALU. This was deferred during the c-like-verilog refactor; the new ALU modes
-exist on the wip branch but never merged.
+EXEC_NEG, EXEC_LD_A_IR, EXEC_IN_C, EXEC_RRD / EXEC_RLD and EXEC_BLOCK
+(LDI/CPI/INI/OUTI variants) used to compute their result and flags
+**inline** in the sequencer instead of going through the ALU.
 
-**Fix**: extend `z80_alu` with `FLAG_NEG`, `FLAG_LD_A_I`, `FLAG_IN`, `FLAG_RRD`,
-`FLAG_RLD`, `FLAG_BLOCK_LD`, `FLAG_BLOCK_CP`, `FLAG_BLOCK_IO` modes. Move the
-inlined formulas there. The sequencer calls `z80_alu(...)` like everything else.
+**Fix**: `z80_alu` modes `FLAG_NEG`, `FLAG_LD_A_I`, `FLAG_IN`, `FLAG_RRD`,
+`FLAG_RLD`, `FLAG_BLOCK_LD`, `FLAG_BLOCK_CP`, `FLAG_BLOCK_IO`.
 
-**Status**: pending.
+**Status**: done, in both: the C model's `alu_eval` (`cmodel/z80_core.c`)
+and the RTL's ALU select (`rtl/z80_core.v`) pick these modes and call
+`z80_alu` / `rtl/z80_alu.v` like every other instruction
+(`cmodel/z80.h` lists each mode's port use).
 
 ### A3. Inline 16-bit ADD/ADC/SBC HL,rp (should be byte-twice ALU)
 
-`EXEC_ADD_HL_RP` / `EXEC_ADC16` / `EXEC_SBC16` compute the 16-bit result inline
-(`rtl/z80_core.v` line 279 has a comment: *"16-bit ADD HL,rp (inline; IDU/ALU
-detail handled in C model too)"*).
+`EXEC_ADD_HL_RP` / `EXEC_ADC16` / `EXEC_SBC16` compute the 16-bit result in
+one step: `do_add16` / `do_adc16` in `cmodel/z80_core.c`, a 16-bit adder in
+`rtl/z80_core.v`.
 
 The real Z80 does these byte-at-a-time on the 4-bit ALU: low byte first, then
-high byte with the carry chained. Our 8-bit `z80_alu` already implements the
+high byte with the carry chained, in its two internal M-cycles of 4 and 3
+T-states (which the models now keep, known difference 16; a RESET cut
+between them leaves the low byte written, row 19). Our 8-bit `z80_alu` already implements the
 byte-twice structure for 8-bit ADD/SUB; the 16-bit ops should be two ALU passes
 with explicit `cf2` / `hf2` carry forwarding.
 
@@ -66,9 +74,12 @@ either as two passes driven by the sequencer or as one 16-bit-shaped mode that
 internally calls the 8-bit nibble code twice. Either way the inline
 `rf[hlp] + rf[rp_sel_w]` in core goes away.
 
-**Status**: partly: the RTL now has one shared 16-bit adder/subtractor (with the
+**Status**: partly: the RTL has one shared 16-bit adder/subtractor (with the
 half-carry taken from the carry into bit 12) for all three instructions, next
-to the ALU; it is still one pass, not byte-twice through `z80_alu`.
+to the ALU; it is still one pass, not byte-twice through `z80_alu`. The C
+model computes the result in one pass too, then writes it on the die's
+edges: the low byte in the first internal M-cycle, the high byte in the
+second, F in the next M1 (`a16_hold`).
 
 ### A4. Register file as flat 13×16 array
 
@@ -91,7 +102,8 @@ behind four exchange flip-flops (EXX bank, AF bank, DE/HL swap per bank);
 EX / EXX flip them, no data moves. WZ is the operand latch as on the die,
 so the old `tmpl` / `tmp16` temporaries are gone. PC / SP / WZ are loads of
 the same file rather than a separate `z80_sysreg`; I and R stay in the core.
-C model: still copies on EX / EXX.
+C model: still copies on EX / EXX (`wb_fire`, in the next M1 as the die
+flips its flip-flops).
 
 ## B. Timing / phase shortcuts
 
@@ -113,68 +125,98 @@ verification path noted.
 
 ### B2. NMI sampling (RESOLVED)
 
-NMI is edge-triggered. The edge capture (`prev_nmi_n` → `nmi_pending`)
-does run on every `z80_phase_step()` call (sticky-latch behaviour), but
-the **acceptance gate** is exactly the silicon-spec sample point: the
-rising edge of the last T-state of the last M-cycle. See
-`cmodel/z80_core.c:1182` — `if (!c->stalled && c->t_state == c->m_len && c->phi == 0)`
-samples `nmi_pending` into `nmi_sampled` only at T_last.P. The RTL
-mirrors this at `rtl/z80_core.v:374`. Verified via `prog8_nmi` + the
-pin-scenario NMI programs (`prog10_halt_nmi`, `prog19_nmi_in_int`).
+NMI is edge-triggered. `z80_phase_step()` latches a falling edge of `nmi_n`
+in every phase (`nmi_pending`), except while RES2 is set and during the NMI
+response itself, where the die loses an edge; the decision is the sample
+at the rising edge of the last T-state of the M-cycle (`nmi_sampled`, with
+INT's). The RTL takes a pulse of any width through `z80_top`'s pulse
+catcher (`nmi_hold`), as the die's NMI flip-flop does. Pinned by the event
+sweep's `nmi`, `nmi_short`, `nmi_reentry` and `reset_nmi` groups and the
+pin scenarios `prog8_nmi`, `prog10_halt_nmi`, `prog19_nmi_in_int`
+(known differences 17, 24, 27).
 
 **Status**: resolved.
 
 ### B3. INT sampling (RESOLVED)
 
-INT is level-triggered, sampled at the rising edge of the last T-state
-of the last M-cycle. Same gate as B2: `cmodel/z80_core.c:1183`
-samples `!int_n` into `int_sampled` at T_last.P. RTL at
-`rtl/z80_core.v:375`.
+INT is level-triggered, sampled at the rising edge that starts the last
+T-state of the M-cycle (PS0178 Figure 8, TsINT / ThINT; perfectz80):
+`int_sampled` in the C model, `z80_top`'s `int_n_rise` in the RTL. Pinned by
+the event sweep's `int`, `im2` and `im0` groups.
 
 **Status**: resolved.
 
-### B4. Latch + deassert co-phase (RESOLVED)
+### B4. Data latch and strobe edges (RESOLVED)
 
-Used to combine `data latch` and `MREQ/RD deassert` at T3.N. Fixed in
-`97c09fb` — latch now at T_last.P, deassert at T_last.N.
+The die takes an opcode or an INTA byte at the rising edge that ends T2 (or
+the last Tw) from the bus in its low half, and read data at T3's falling
+edge from the bus in its high half; MREQ / RD rise on their own edges
+(T3.P in an M1, T3.N in a read). The C model's `is_latch_phase()` and the
+RTL's `latch_pos` / `latch_neg` take those edges (known difference 28,
+the event sweep's `latch` group).
 
 **Status**: resolved.
 
 ## C. Reset state
 
-### C1. Force registers to 0xFFFF on reset
+### C1. Register values at power-on and after RESET (RESOLVED)
 
-`cmodel/z80_core.c` `z80_reset()`: forces all 13 rf pairs to 0xFFFF "for
-deterministic C↔RTL compare". Real silicon leaves these UNDEFINED at power-up
-(though reset does force `PC=0, I=0, R=0, IFF1=IFF2=0, IM=0` per Zilog UM0080).
+The model used to force every register pair to 0xFFFF on reset "for
+deterministic C↔RTL compare". perfectz80 comes up with every pair at 5555
+and keeps every register across RESET; only PC, I, R, IFF1 / IFF2 and IM
+are cleared. The power-on reset (`z80_reset()`, RTL `por_n`) now loads 5555
+and RESET keeps every register, WZ and the exchange flip-flops (known
+difference 1, docs/timing.md "RESET"). The real NMOS part comes up with
+random registers; the ASIC chip ties `por_n` off.
 
-perfectz80's Visual-Z80 netlist comes up at `0x5555` (the silicon-faithful
-value). Our `0xFFFF` makes `make perfectz80` show informational addr / data
-diffs on `prog_rnd_02` (`ffff` vs `5555`), `prog_rnd_03` (`feff` vs `5455`
-after `DEC BC`), `prog_rnd_04` (`data_o ff` vs `55` from PUSH AF). The
-diffs are gated as informational because the trace programs PASS overall
-(100% control-pin parity).
-
-**Fix**: in RTL, leave undefined regs at `'X` (synthesis-friendly default). In
-C, leave them at whatever `z80_init()` (which is `memset` 0) gave them.
-External test harnesses (FUSE / lockstep / compare) explicitly poke their start
-state anyway. Document in `docs/known-differences.md` row 1 as resolved.
-
-**Status**: pending.
+**Status**: resolved.
 
 ## D. Q register
 
-### D1. EX AF,AF' Q-bump (RESOLVED)
+Q is the F the previous instruction wrote, or 0 (docs/undocumented.md);
+SCF / CCF take X / Y from `A | (F XOR Q)`. The die has no Q register: Q
+is whether the M1 that starts an instruction wrote flags the one before
+left pending (docs/flags.md "Q"). The models keep Q as a register (`q`,
+`reg_q`); three corners differed from the die, found with perfectz80 on
+2026-10-24 and fixed the same day.
 
-The EX AF,AF' handler swaps `rf[AF] ↔ rf[AF2]` and also sets
-`f_modified = true` (`cmodel/z80_core.c:413`). At instruction-done the
-Q commit (`cmodel/z80_core.c:1058`) snapshots the swapped F so the next
-SCF/CCF sees the right value via `(A | Q)`. RTL mirrors this at
-`rtl/z80_core.v:497` (sets `f_modified_n = 1'b1` after the bank swap);
-the RTL Q commit at line 1010-1016 detects F modification by comparing
-`rf_n[AF][7:0]` vs `rf[AF][7:0]` instead of an explicit flag, which
-captures the swap. Verified in the z80full test: row 129 EX AF,AF' is
-OK.
+### D1. EX AF,AF' sets Q (RESOLVED — known difference 29)
+
+The models ended EX AF,AF' with Q = the F it swaps in (`wb_defer` in
+`cmodel/z80_core.c`, `reg_q_n` in `rtl/z80_core.v`, the `EXAF` step kind in
+`cfast/gen_fast.py`); the die leaves Q = 0, so a SCF / CCF after it takes
+X / Y from A | F. An earlier version of this entry called the bump
+correct because z80full's test 129 passes -- but z80full doesn't follow
+EX AF,AF' with a CCF. z80ccf does, and failed its test 129 (CRC 3E5C2221,
+expected 4CFA32A0).
+
+**Fix**: Q = 0 at the end of EX AF,AF'. z80ccf passes 160 / 160.
+
+**Status**: resolved.
+
+### D2. A prefix keeps Q (RESOLVED — known difference 30)
+
+A prefix's M1 takes the flags left pending and writes none: Q = 0 for the
+opcode after DD, FD, ED or CB. The models carried Q through the prefix, so
+`DD 3F` / `FD 37` after a flag write took X / Y from A alone.
+
+**Fix**: Q = 0 when a prefix is decoded (`set_prefix_from_ir`, the RTL's
+prefix step).
+
+**Status**: resolved.
+
+### D3. A RESET cut and Q (RESOLVED — known difference 31)
+
+The flags left pending survive a RESET whose cut ends from the T2 of the
+M1 they wait for to the T3 whose low half writes them (an INTA's: to its
+second automatic Tw) -- the T1.N took them -- and another cut on the T1 of
+the M1 that restarts; that M1 writes them (F as `f_cut` left it, row 19):
+Q is that F. Any other cut leaves none pending: Q = 0. The models
+left Q as it was at any cut (`if (!cut)` in `wb_fire_op` / `wb_fire` and the
+RTL's fire).
+
+**Fix**: Q = the F the fire leaves (0 for a CPI / INI / OUTI cut on T1,
+which writes none), and Q = 0 at any cut outside that window.
 
 **Status**: resolved.
 
@@ -211,175 +253,36 @@ of the falling-edge sample.
 
 ## F. Other audit candidates
 
-### F1. Block-op M-cycle structure (z80test rows 12, 13)
+### F1. Block-instruction flags and the z80test failures (RESOLVED)
 
-The current INI/IND flag computation matches Sean Young's spec exactly
-(`cmodel/z80_alu.c:371-382`):
-- `k = data + ((C ± 1) & 0xFF)`
-- HF/CF = `k & 0x100`
-- NF = `data[7]`
-- PF = `parity((k & 7) ^ newB)`
-- SF/ZF/XY from `newB = B - 1`
+Patrik Rak's z80test used to fail INI / IND (z80doc and z80full 098 /
+099), INIR→NOP' / INDR→NOP' (z80memptr and z80full 102 / 103), SCF / CCF
+(z80full 001 / 002, then 007 SCF+CCF) and LDIR→NOP' / LDDR→NOP' (z80full
+089 / 090) -- the same CRCs as superzazu, floooh/chips and redcode, so
+first taken for a corner every emulator misses (`make z80test` carried
+baselines of 2 / 2 / 10 failures). Each had its own cause (known
+differences 12 and 13):
 
-…and yet Patrik Rak's `z80test`:
-- z80doc tests 098 (INI) and 099 (IND) fail CRC.
-- z80memptr tests 102 (INIR→NOP') and 103 (INDR→NOP') fail CRC.
-- z80full tests 001 (SCF), 002 (CCF), 089 (LDIR→NOP'), 090 (LDDR→NOP'),
-  098, 099, 102, 103 fail CRC.
+- **INI / IND**: the port value. Rak's CRCs were captured on a 48K
+  Spectrum, whose ULA answers an idle read with `(addr & 1) ? FF : BF`;
+  the runners now return that (`io_ula_idle` in `cmodel/z80_sim.h`).
+- **The repeats' flags**: in the 5-T internal M-cycle of a repeating
+  LDIR / LDDR / CPIR / CPDR / INIR / INDR / OTIR / OTDR the die
+  overwrites Y and X from PC bits 13 and 11, and INxR / OTxR also H and
+  P/V (David Banks 2018; `blk_rep_f` in the C model, mirrored in the
+  RTL).
+- **WZ in INxR / OTxR's repeat**: WZ = PC + 1 (boo-boo et al.'s MEMPTR
+  paper, Rak's z80memptr).
+- **SCF / CCF**: X / Y = `A | (F XOR Q)`, not `A | Q` (redcode's Zilog NMOS
+  model).
 
-**Oracle triangulation**: separate runners (`scripts/superzazu_z80test_runner.c`
-and `scripts/chips_z80test_runner.c`) run the same `.tap` files through
-the **superzazu/z80** and **floooh/chips/z80.h** reference emulators
-(both in `scripts/refs/`).
+Now z80doc, z80memptr, z80full, z80flags and z80ccf pass: 160 tests each,
+the SCF / CCF variants for NEC and ST parts skipped by the suite as not
+this CPU. z80ccf failed one test, 129, until D1 was fixed.
 
-Summary by variant (current — post the 2026-06-18 WZ flip + redcode
-ZILOG_NMOS preset):
-
-| Variant     | Ours fails | superzazu | chips | redcode |
-|-------------|-----------:|----------:|------:|--------:|
-| z80doc      | 2          | 3         | 2     | 2       |
-| z80memptr   | **0**      | 16        | **0** | **0**   |
-| z80full     | 10         | 20        | 10    | 2       |
-
-Pre-flip baseline (for reference): ours = 2 / 2 / 10, redcode = 2 / 0 / 6.
-
-redcode (Manuel Sainz de Baranda's `github.com/redcode/Z80`) was added
-as a 4th oracle on 2026-06-18 via `scripts/redcode_z80test_runner.c` +
-`scripts/lockstep_quint.c` (5-way lockstep). It advertises explicit
-MEMPTR + Q-factor modelling. Vendored under
-`scripts/refs/redcode_z80/` with the Zeta C utility library.
-
-CRC details for the contested tests:
-
-| Test                    | Our CRC     | superzazu CRC | chips CRC   | Expected    |
-|-------------------------|-------------|---------------|-------------|-------------|
-| z80doc 098 INI          | `505701FA`  | `658766F9`    | `505701FA`  | `07D1B0D1`  |
-| z80doc 099 IND          | `6A4034D1`  | `5F9053D2`    | `6A4034D1`  | `3DC685FA`  |
-| z80full 001 SCF         | `45FC79B5`  | `45FC79B5`    | `45FC79B5`  | `D841BD8A`  |
-| z80full 002 CCF         | `A206B5E3`  | `A206B5E3`    | `A206B5E3`  | `3FBB71DC`  |
-| z80full 089 LDIR→NOP'   | `9DC743B5`  | `9DC743B5`    | `9DC743B5`  | `CC93B5EC`  |
-| z80full 090 LDDR→NOP'   | `9C1DEA50`  | `9C1DEA50`    | `9C1DEA50`  | `CD491C09`  |
-| z80full 098 INI         | `A7F6C1B0`  | `DA84C3B3`    | `A7F6C1B0`  | `03DA7534`  |
-| z80full 099 IND         | `E81CDF03`  | `E093F698`    | `E81CDF03`  | `4C306B87`  |
-| z80memptr 102 INIR→NOP' | `0A537B63`  | `4A74FCE9`    | **PASS**    | `F3B1BE2F`  |
-| z80memptr 103 INDR→NOP' | `0A537B63`  | `4A74FCE9`    | **PASS**    | `F3B1BE2F`  |
-
-**Findings**:
-
-1. **SCF/CCF/LDIR→NOP'/LDDR→NOP' (z80full 1/2/89/90)** — all three
-   emulators produce **bit-identical CRCs**, all differing from Rak's
-   silicon-derived expected the same way. Strong evidence this is a
-   real silicon-faithfulness quirk that THE ENTIRE open-source emulator
-   community misses the same way. Probably gate-level INTERNAL Q-mux
-   exposure during the block-op M-cycle sequence, not the
-   per-instruction commit the emulators model.
-
-2. **INI/IND (z80doc/z80full 98/99)** — ours and chips produce
-   **identical CRCs**; superzazu differs. We agree with chips, superzazu
-   is the outlier — but neither chips's nor our CRC matches Rak's
-   expected. So we have a chips-compatible bug, and Rak expects
-   something else entirely.
-
-3. **z80memptr 102/103 INIR→NOP', INDR→NOP'** — **chips AND redcode
-   both pass these.** Investigation found the difference: chips's INIR
-   (scripts/refs/chips_z80.h line 1541) and redcode's INIR/INDR both
-   set `WZ = PC + 1` during the repeat iteration's internal M-cycle
-   (rewinding PC by 2 first). Our model does the same `WZ = PC + 1`
-   for LDIR/LDDR/CPIR/CPDR repeats but NOT for INIR/INDR/OTIR/OTDR.
-
-   **Attempted fix** (earlier session, reverted): applied the
-   `WZ = PC + 1` on repeat to both INIR/INDR and OTIR/OTDR. Result:
-   - z80memptr: 2 failures → **0 failures** (clean 160/160). ✓
-   - **BUT FUSE broke** on `edba_1` (INDR) and `edbb_1` (OTDR): FUSE
-     expects `WZ = BC ± 1` (the M2 setting), not `WZ = PC + 1`.
-
-   **redcode probe** (`/tmp/redcode_fuse_probe.c`, 2026-06-18) confirmed
-   this is universal: redcode produces `WZ = PC + 1 = 0x0001` on FUSE
-   edba_1 / edb2_1 (final iteration of INDR/INIR with BC=1), matching
-   chips and Rak z80memptr expectations, NOT matching FUSE's
-   `0x069E` / `0x0A41`. For single-shot ED A2 (INI) and ED AA (IND),
-   redcode matches FUSE exactly.
-
-   So FUSE and Rak disagree on what silicon does for INIR/INDR/OTIR/OTDR
-   end-state WZ when the repeat aborts (BC=1→0). All silicon-faithful
-   modern emulators (chips, redcode) — including redcode which has
-   explicit Q-factor and MEMPTR engineering — produce `WZ = PC + 1`,
-   matching Rak. FUSE's `WZ = BC ± 1` expected values for these
-   specific 4 cases appear to be pre-2013 outliers.
-
-   **Resolution (2026-06-18, commit `b654110`)**: Flipped to
-   silicon-faithful `WZ = PC + 1`. Trade as expected:
-   - `make fuse` 1356/1356 → 1352/1356 + 4 known-FUSE-wrong
-     (edba_1, edbb_1, edb2_1, edb3_1 enumerated in
-     `tests/fuse/known-fuse-wrong.txt`). `fuse_runner.c` +
-     `compare_fuse_rtl.py` skip these so make fuse / make fuse_rtl
-     stay green.
-   - `make z80test` z80memptr 158/160 → **160/160**.
-   - C model + RTL synced (`cmodel/z80_core.c:854`, `:884`;
-     `rtl/z80_core.v:950`, `:967`).
-
-4. **Overall scoreboard** (current, post-flip):
-   - **10 z80full failures**, vs superzazu **20**, vs chips **10**, vs redcode **2**.
-   - **0 z80memptr failures**, vs superzazu **16**, vs chips **0**, vs redcode **0**.
-   - **2 z80doc failures**, vs superzazu **3**, vs chips **2**, vs redcode **2**.
-   - Significantly more silicon-faithful than superzazu; we tie chips on
-     z80doc/z80memptr but redcode wins z80full outright (-8 vs us). The
-     redcode advantage comes from its `Z80_MODEL_ZILOG_NMOS` preset
-     (`LD_A_IR_BUG | XQ | YQ`) — the XQ/YQ bits implement a per-instruction
-     SCF/CCF Q-leak that fixes z80full 001/002 + ST-variant skips
-     5/6, which is the closest match to Patrik's silicon-derived expectations.
-
-5. **redcode INI / IND remaining failures (z80doc + z80full 098/099)** —
-   2026-06-18 investigation. With `Z80_MODEL_ZILOG_NMOS` enabled, redcode
-   fails exactly the same INI/IND CRC as we do and as chips does:
-   - z80doc 098 INI:  redcode/chips/ours produce **identical** `505701FA`; Rak expects `07D1B0D1`.
-   - z80doc 099 IND:  redcode/chips/ours produce **identical** `6A4034D1`; Rak expects `3DC685FA`.
-   - z80full 098 INI: redcode/chips/ours produce **identical** `A7F6C1B0`; Rak expects `03DA7534`.
-   - z80full 099 IND: redcode/chips/ours produce **identical** `E81CDF03`; Rak expects `4C306B87`.
-
-   Three independent implementations of Sean Young's documented INI/IND
-   formula (`PF = parity((data + (C ± 1)) & 7) ^ B_new`, `HF/CF = k & 0x100`,
-   `SF/ZF/X/Y from B_new`, `NF = data[7]`) converge on the same CRC and
-   the same disagreement with Rak's expected.
-
-   **Lead investigated and ruled out**: Rak's `tests.asm:10, :1008-1022`
-   tags `.ini` / `.ind` with `db incheck` — meaning the test runner
-   first issues `IN A, (0xFE)` and aborts the test if the byte != `0xBF`
-   (the Spectrum ULA idle-state return). One hypothesis was that Rak's
-   expected CRC was captured with IN data = `0xBF` for ALL ports during
-   the loop, and our runners' "0xFF except port 0xFE" returned different
-   bytes. Verified empirically: pinning ALL ports to `0xBF` in the
-   redcode runner produced the **same CRC** as the default config
-   (`505701FA`), and pinning ALL ports to `0x42` aborted the test at
-   the incheck guard before any CRC was computed. So Rak's INI / IND
-   test only ever issues INs to port `0xFE` (already returning `0xBF`
-   in our setup), and the CRC discrepancy is therefore NOT IN-data-driven.
-
-   The Banks/Helcmanovsky/rofl0r/Sainz de Baranda 2018-2023 reverse-
-   engineering work covers INIR/INDR/OTIR/OTDR **repeat-iteration**
-   flags (PCi.13/PCi.11 fold-ins during the extra 5-T M-cycle) but not
-   the **single-shot** INI/IND CRC. Either Rak's silicon captured a
-   chip variant whose single-shot INI/IND formula nobody has decoded,
-   or Rak's test threads in a Q-leak / state-dependent fold-in we
-   haven't found. **Not fixable via redcode options alone.** Documented
-   as an industry-wide silicon-faithfulness gap; pursuit deferred to
-   when somebody decodes the missing piece.
-
-**False lead** (commit `093f95b`, reverted in commit `b4f5aca`): once
-theorised Q-leak persistence. Broke ZEXALL's `<daa,cpl,scf,ccf>` CRC
-(run `27650481834`). Per Sean Young §4.1, Q DOES reset to 0 after any
-non-F-modifying instruction. Original behaviour was correct.
-
-**Cross-check: redcode end-to-end on FUSE** (2026-06-18, via
-`scripts/redcode_fuse_runner.c`): **1348 / 1356 PASS**. The 8 failures
-break down as:
-
-- 4 `INxR`/`OTxR` BC=1→0 WZ cases (`edb2_1`, `edb3_1`, `edba_1`, `edbb_1`)
-  — exactly the FUSE↔Rak disagreement above; redcode sides with Rak.
-- 2 SCF/CCF Q-leak X/Y bits (`37_1`, `3f`).
-- 1 CPDR X-flag bit (`edb9_2`).
-- 1 HALT PC convention (`76`) — FUSE expects PC stays at HALT addr,
-  redcode advances PC past it (the more common modern model).
+**False lead** (commit `093f95b`, reverted in `b4f5aca`): a Q that
+persisted across instructions broke ZEXALL's `<daa,cpl,scf,ccf>` CRC (run
+`27650481834`). Q is 0 after any instruction that doesn't write F.
 
 **FUSE corpus provenance** (researched 2026-06-18):
 - The 1356-case `tests.in` / `tests.expected` was **authored by Philip
@@ -398,64 +301,49 @@ break down as:
   (Zilog chips, multiple testers), confirmed by Patrik Rak's 2012
   validation on a real 48K Spectrum, and refined by Richard Chandler
   on NEC Z80 + Visual Z80 Remix in Rak's v1.2a (z80test PR #3).
-- Bottom line: FUSE `tests.expected` is emulator-derived and stale on
-  `INxR`/`OTxR`; Rak (post-v1.2a) reflects real hardware. We
-  document this in `tests/fuse/README.md` and accept that our
-  FUSE 1356/1356 score includes 4 cases where FUSE itself is wrong
-  vs silicon.
 
-**Remaining fix path**: items (1), (2), and the Rak-vs-FUSE WZ trade-off
-in (3) are all silicon-faithfulness corners. (3) is now well-evidenced:
-3 independent silicon-faithful oracles (chips, redcode, Rak z80memptr)
-agree FUSE is the outlier. The next concrete step is flipping our
-INxR/OTxR repeat WZ to `PC+1`, accepting FUSE 1352/1356 and gaining
-Rak z80memptr 160/160. Tracked under
-[known-differences.md](known-differences.md) rows 12, 13 at
-`make z80test` baselines 2 / 2 / 10.
+**FUSE on the die** (`make fuse_pz80`): perfectz80 agrees with FUSE's
+expected values in 1350 of the 1356 cases. The other six -- the four INxR /
+OTxR WZ cases (`edb2_1`, `edb3_1`, `edba_1`, `edbb_1`), CPDR's X / Y
+(`edb9_2`) and HALT's PC (`76`) -- are in `tests/fuse/silicon.expected`,
+which the C model, the RTL and redcode/Z80 (`scripts/redcode_fuse_runner.c`)
+are checked against instead: 1356 / 1356 each, none skipped. SCF / CCF's
+`37_1` and `3f` were the runners' doing (they started with Q = F; the die
+has Q = 0 after the registers are loaded).
 
-### F2. SCF / CCF "ST" variants (Toshiba CMOS)
+### F2. SCF / CCF for other CPUs (NEC, ST)
 
-`z80full` tests 005 SCF (ST) and 006 CCF (ST) fail by design — they
-test the **Toshiba CMOS** variant of SCF/CCF (no Q-leak). We model
-Zilog NMOS (with Q-leak). Documented in [known-differences.md](known-differences.md)
-row 2; intentional NMOS-correct default. A runtime Toshiba switch is a
-future enhancement (deferred — no current use case demands it).
+z80test's SCF (NEC) / CCF (NEC) / SCF (ST) / CCF (ST) tests (003-006) are
+the X / Y of other makers' parts; the suite finds which kind of CPU it runs
+on and skips the others. RZ80 models the Zilog NMOS part. A runtime switch
+to another maker's SCF / CCF is not planned (no current use case).
 
-### F3. SCF / CCF NMOS variants (Q-leak)
+### F3. Validated as silicon-faithful (no change needed)
 
-`z80full` tests 001 SCF and 002 CCF also fail CRC even though our SCF/
-CCF implements the documented NMOS Q-leak (X/Y from `(A | Q)`). Likely
-same root cause as F1 — Q-leak timing during NOP-chain pipelines.
-
-### F4. Validated as silicon-faithful (no change needed)
-
-- **DDCB/FDCB displacement compute folding**: matches FUSE 1356/1356
-  and `make perfectz80` control-pin 100 %; documented at known-
-  differences.md row 11 as resolved.
-- **NMI/INT M1-ack suppress-decode**: matches `prog8_nmi` trace +
-  perfectz80 control pins. The pin combination during INTA (M1+IORQ
-  asserted together) does suppress the decode pipeline correctly.
+- **DDCB/FDCB displacement compute folding**: matches FUSE's DDCB / FDCB
+  cases and perfectz80's pins (the event sweep's `opcodes` group runs every
+  DD CB / FD CB opcode); known-differences row 11.
+- **NMI/INT M1-ack suppress-decode**: matches `prog8_nmi` and perfectz80's
+  pins. The pin combination during INTA (M1+IORQ asserted together) does
+  suppress the decode pipeline correctly.
 
 ## Plan
 
 ### Resolved
-B1 (M1 deassert), B2 (NMI sample), B3 (INT sample), B4 (latch/deassert
-co-phase), D1 (EX AF Q-bump).
+A2 (ALU modes), B1 (M1 deassert), B2 (NMI sample), B3 (INT sample), B4
+(data latch), C1 (reset state), D1-D3 (Q), F1 (block flags, SCF / CCF).
 
-### Remaining work, sorted by leverage × risk
+### Open
+None. D1-D3 (Q: EX AF,AF', prefixes, RESET cuts; known differences
+29-31) were resolved on 2026-10-24.
 
-1. **C1**: reset-state un-force. Small (one constant change). Would
-   close known-differences row 1 and bring the perfectz80 `addr` /
-   `data_o` match from 95-98 % to 100 % on `prog_rnd_02` / `prog_rnd_03`.
-2. **F1**: block-op Q-leak timing during repeat termination. Medium-
-   large. Would close z80doc 2/2, z80memptr 2/2, ~6 of z80full 10.
-3. **A2**: move inline 8-bit ALU ops into `z80_alu` modes (cleanup).
-4. **A3**: 16-bit ALU ops via byte-twice in `z80_alu` (cleanup).
-5. **A1**: introduce `z80_idu` module (well understood, prototype on a
-   wip branch).
-6. **A4**: register file restructure (large).
-7. **E1**: internal bus segments (largest; defer until A1–A4 done).
+### Remaining structural work, sorted by leverage × risk
 
-After each: full gate run (`make all-tests`) — must stay 100 % across every
-existing oracle (FUSE, fuse_rtl, compare, lockstep, silicon_cycles,
-silicon_async, perfectz80).
+1. **A1 / A4 in the C model**: one IDU path and exchange flip-flops
+   instead of inline arithmetic and copies (the RTL has both).
+2. **A3**: 16-bit ADD / ADC / SBC byte-twice through `z80_alu`.
+3. **E1**: internal data-bus segments (largest; the RTL has the
+   address-side bus).
+
+After each: every CI gate, the event sweep (`make event_sweep`) and
+`make cfast_identity` -- the pins and registers must stay identical.

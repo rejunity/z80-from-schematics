@@ -1,7 +1,7 @@
 # LibreLane gate-level flow
 
-The goal of the `tests-librelane` branch — the **ultimate test**: take
-our Verilog RTL, push it through LibreLane to a real synthesized
+The **ultimate test** (built on the `tests-librelane` branch, on main
+since): take our Verilog RTL, push it through LibreLane to a real synthesized
 **gate-level netlist** on an open PDK (sky130), then run the resulting
 netlist through `iverilog` against the same trace programs our existing
 C / RTL / perfectz80 tests use. If the synthesized gates produce the
@@ -9,9 +9,10 @@ same per-half-cycle pin behavior as our source RTL and the perfectz80
 Visual-Z80 netlist, the design is silicon-faithful all the way down to
 the cells.
 
-End deliverable: `make perfectz80_netlist` — a third comparison path
-alongside `make perfectz80` (C model) and `make perfectz80_rtl` (source
-iverilog RTL), this one driving a yosys-synthesized sky130 netlist.
+`make perfectz80_netlist` is a third comparison path alongside `make
+perfectz80` (C model) and `make perfectz80_rtl` (source iverilog RTL), this
+one driving a yosys-synthesized sky130 netlist; `make pin_scenarios_netlist`
+runs the pin scenarios on it and `make basic_netlist_tests` the BASIC ROMs.
 
 
 ## Scope
@@ -38,11 +39,6 @@ iverilog RTL), this one driving a yosys-synthesized sky130 netlist.
     zero-delay) timing of the cell library models. This is enough for
     *logical* gate-level correctness; real timing closure is a separate
     project.
-  - **No pin-scenario programs in v1.** The pin-scenarios under
-    `tests/traces/pin_scenarios/` need the `.events` sidecar wired into
-    the iverilog testbench — both `tb_z80.v` and `tb_z80_netlist.v`.
-    Since `tb_z80.v` doesn't have it yet either, this is a separate
-    followup ([tests/README.md](../tests/README.md) "Forward-looking").
 
 ### Why "ultimate test"
 
@@ -66,8 +62,8 @@ into combinational paths, etc.
 
 (From a scout of `rtl/*.v`.)
 
-  - 5 files of synthesizable Verilog; top module `z80_top`
-    (`rtl/z80_top.v`) wrapping the engine `z80_core`.
+  - 8 files of synthesizable Verilog (`rtl/*.v`, plus the `.vh` includes);
+    top module `z80_top` (`rtl/z80_top.v`) wrapping the engine `z80_core`.
   - Single clock (`clk` = the Z80 clock); one async reset (`por_n`, power-on);
     RESET (`reset_n`) is a synchronous input, as on the die.
   - **No** `initial`, `$display`, `$readmem*`, `$finish`, `$random` in
@@ -75,7 +71,7 @@ into combinational paths, etc.
   - **No** latches inferred — all `always @*` blocks are complete-case
     combinational; all storage is `always @(posedge clk …)` in the core
     and, in `z80_top` only, `always @(negedge clk …)` for the 10 input
-    samplers and the 33 falling-edge half of the pin former (see
+    samplers and the 35 falling-edge bits of the pin former (see
     `docs/clocking.md`). Both edges hang off the one `clk` net — no
     inverted/derived clock. Expect native negedge cells in the mapped
     netlist (sky130 `dfrtn`/`dfbbn`, GF180 `dffnrnq`/`dffnsnq`).
@@ -126,26 +122,31 @@ LibreLane install bundles the PDK as a dependency — no separate install
 step.
 
 
-## Concrete steps
+## How it works
 
-### Step 1 — LibreLane config (`asic/librelane/config.json`)
+### The LibreLane config (`asic/librelane/config.json`)
 
 ```json
 {
   "DESIGN_NAME": "z80_top",
   "VERILOG_FILES": [
-    "../rtl/z80_alu.v",
-    "../rtl/z80_pla.v",
-    "../rtl/z80_timing.v",
-    "../rtl/z80_core.v",
-    "../rtl/z80_top.v"
+    "dir::../../rtl/z80_alu.v",
+    "dir::../../rtl/z80_pla.v",
+    "dir::../../rtl/z80_timing.v",
+    "dir::../../rtl/z80_execute.v",
+    "dir::../../rtl/z80_regfile.v",
+    "dir::../../rtl/z80_addr.v",
+    "dir::../../rtl/z80_core.v",
+    "dir::../../rtl/z80_top.v"
   ],
   "CLOCK_PORT": "clk",
   "CLOCK_NET": "clk",
   "CLOCK_PERIOD": 50,
   "DESIGN_IS_CORE": true,
   "PDK": "sky130A",
-  "STD_CELL_LIBRARY": "sky130_fd_sc_hd"
+  "STD_CELL_LIBRARY": "sky130_fd_sc_hd",
+  "RUN_LINTER": false,
+  "RUN_HEURISTIC_DIODE_INSERTION": false
 }
 ```
 
@@ -153,155 +154,55 @@ step.
 a small design. We don't care about the actual target frequency for a
 sim-only flow; synthesis just needs a clock to constrain on.
 
-### Step 2 — Synthesis-only runner (`asic/librelane/run_synth.sh`)
+### The synthesis runner (`asic/librelane/run_synth.sh`)
 
-Invoke the LibreLane Classic flow stopping at `Yosys.Synthesis`:
+`make synth` runs it. It calls `librelane --to Checker.YosysSynthChecks
+./config.json` -- synthesis plus its two checkers (unmapped cells; yosys
+`check` problems such as multiple drivers or inferred latches) and
+nothing after -- then links the latest run's netlist,
+`asic/librelane/runs/<timestamp>/final/nl/z80_top.nl.v`, to
+`build/synth/z80_top.nl.v` and writes the PDK_ROOT it was synthesised
+against to `build/synth/pdk_root.path` (from the environment, the run's
+`resolved.json`, or `~/.volare`).
 
-```python
-from librelane.flows import Flow
-flow = Flow.factory.get("Classic")(
-    config_file="config.json",
-    design_dir=".",
-)
-flow.start(last_run="latest", to="Yosys.Synthesis")
-```
+### The gate-level testbench (`tests/iverilog/tb_z80_netlist.v`)
 
-Output netlist path:
-`asic/librelane/runs/<timestamp>/final/nl/z80_top.nl.v`. The Makefile
-sym-links the latest run's netlist into `build/synth/z80_top.nl.v` for
-stable paths.
+A mirror of `tests/iverilog/tb_z80.v`: the same memory, program loader,
+14-column trace dump and plusargs (`+prog=`, `+phases=`, `+nmi=` and the
+pin scenarios' `+<pin>_lo / +<pin>_hi`), instantiating `z80_top` from the
+synthesized netlist (synthesis keeps the port list). `make
+iverilog_netlist` compiles it with `-DFUNCTIONAL` (the sky130 cells'
+zero-delay functional models -- much faster than the spec-block timing
+models and enough for logical correctness) and the cell models from the
+PDK_ROOT in `build/synth/pdk_root.path`; `USE_POWER_PINS` stays undefined,
+so the cells tie off their power pins.
 
-(Exact LibreLane Python API may have moved between versions. The
-fallback if the `flow.start(to=...)` form doesn't exist: run from the
-CLI as `librelane --to Yosys.Synthesis config.json`. We'll resolve at
-execution time.)
+### The comparisons
 
-### Step 3 — Gate-level testbench (`tests/iverilog/tb_z80_netlist.v`)
+`scripts/compare_signal_timing.py --rtl=netlist` runs `vvp
+build/tb_z80_netlist.vvp +prog=<prog> +phases=<N>` and diffs the trace
+against perfectz80 like the C and RTL paths:
 
-Mirror of `tests/iverilog/tb_z80.v` (same memory + program loader +
-14-column trace dump), but:
+- `make perfectz80_netlist`: every trace program in `tests/traces/` -- 14:
+  `prog1` .. `prog10_exchange` and the four seeded-random `prog_rnd_*` --
+  200 phases each;
+- `make pin_scenarios_netlist`: the 15 pin scenarios with their `.events`;
+- `make basic_netlist_tests`: the BASIC ROMs' canned scripts on the same
+  netlist built with Verilator (`sim_basic.cpp`; Verilator 5.030-5.048, see
+  README.md).
 
-  - Includes the sky130 cell-model Verilog:
-    ```verilog
-    `include "<PDK>/sky130A/libs.ref/sky130_fd_sc_hd/verilog/primitives.v"
-    `include "<PDK>/sky130A/libs.ref/sky130_fd_sc_hd/verilog/sky130_fd_sc_hd.v"
-    ```
-  - The `<PDK>` path comes from a `+pdk=` plusarg or environment variable
-    (`PDK_ROOT`); the Makefile sets it from `nix-shell --run env`'s
-    `PDK_ROOT`.
-  - Instantiates `z80_top` from the synthesized netlist (same module
-    name, same port list — synthesis preserves the port interface).
-  - Does NOT define `USE_POWER_PINS` — the cell models auto-tieoff their
-    `VPWR`/`VGND`/`VPB`/`VNB` pins in that mode.
-  - Same `dump` task, same `+prog=` / `+phases=` plusargs.
+Each fails on any control-pin, address or (under WR) data difference in
+any half-cycle.
 
-### Step 4 — Make targets
+### CI
 
-```make
-PDK_ROOT ?= $(shell nix-shell -p librelane --run 'echo $$PDK_ROOT' 2>/dev/null)
-LIBRELANE = nix run github:librelane/librelane --
-
-# Synthesis: librelane → sky130 netlist
-synth: $(BUILD)/synth/z80_top.nl.v
-
-$(BUILD)/synth/z80_top.nl.v: rtl/*.v asic/librelane/config.json asic/librelane/run_synth.sh
-	@mkdir -p $(BUILD)/synth
-	asic/librelane/run_synth.sh    # links the latest run's netlist into $(BUILD)/synth/
-
-# Gate-level iverilog testbench
-iverilog_netlist: synth $(BUILD)/tb_z80_netlist.vvp
-
-$(BUILD)/tb_z80_netlist.vvp: tests/iverilog/tb_z80_netlist.v $(BUILD)/synth/z80_top.nl.v
-	iverilog -g2012 -DFUNCTIONAL -o $@ $^ \
-	  -I $(PDK_ROOT)/sky130A/libs.ref/sky130_fd_sc_hd/verilog
-
-# Gate-level vs perfectz80 — the gate of record for this branch
-perfectz80_netlist: iverilog_netlist $(BIN)/perfectz80_runner
-	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --rtl=netlist 200 \
-	  tests/traces/prog1.hex tests/traces/prog2.hex \
-	  tests/traces/prog3_cb.hex tests/traces/prog4_ed.hex \
-	  tests/traces/prog_rnd_01.hex
-```
-
-`-DFUNCTIONAL` is the sky130 cell-lib flag that picks the zero-delay
-functional model — much faster than the spec-block timing model and
-sufficient for logical correctness.
-
-### Step 5 — Compare-script `--rtl=netlist` arm
-
-`scripts/compare_signal_timing.py` already supports `--rtl=iverilog` and
-`--rtl=verilator`. Adding `--rtl=netlist` is a one-line dispatch — it
-runs `vvp build/tb_z80_netlist.vvp +prog=<prog> +phases=<N>` and parses
-the same 14-column trace.
-
-### Step 6 — Program set
-
-All 12 programs that the C and source-RTL legs run: 8 hand-crafted
-(`prog1.hex`..`prog8_nmi.hex`) + 4 seeded-random (`prog_rnd_01.hex`..
-`prog_rnd_04.hex`). 200 phases each. Gate-level iverilog is ~5-10×
-slower than RTL — so ~10-30 s per program. Total: under 7 min of sim
-after synthesis.
-
-The 5-program starter set (`prog1`, `prog2`, `prog3_cb`, `prog4_ed`,
-`prog_rnd_01`) confirmed control-pin parity locally — synthesis-time
-green — before expanding to the full 12. Pin-scenarios stay C-only
-until `.events` lands in the iverilog testbenches (separate followup).
-
-### Step 7 — CI job (`librelane-netlist`)
-
-New job in `.github/workflows/ci.yml`. Decision: **every push** during
-development (the user wants fast feedback while iterating; the cost is
-~5 min/push assuming cache hits).
-
-```yaml
-librelane-netlist:
-  name: LibreLane gate-level sim vs perfectz80
-  runs-on: ubuntu-latest
-  timeout-minutes: 45
-  steps:
-    - uses: actions/checkout@v5
-    - uses: DeterminateSystems/nix-installer-action@main
-    - uses: DeterminateSystems/magic-nix-cache-action@main   # GitHub Actions cache for /nix/store
-    - name: Install LibreLane (nix profile)
-      run: nix profile install github:librelane/librelane
-    - name: Cache synthesized netlist on rtl/ + config hash
-      id: synth-cache
-      uses: actions/cache@v4
-      with:
-        path: build/synth/z80_top.nl.v
-        key: synth-${{ hashFiles('rtl/*.v', 'asic/librelane/config.json', 'asic/librelane/run_synth.sh') }}
-    - name: Install C toolchain + iverilog
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends \
-          build-essential python3 iverilog
-    - name: Run synthesis (skipped on cache hit)
-      if: steps.synth-cache.outputs.cache-hit != 'true'
-      run: make synth
-    - name: Run gate-level sim vs perfectz80
-      run: make perfectz80_netlist
-    - uses: actions/upload-artifact@v6
-      if: always()
-      with:
-        name: synth-netlist
-        path: build/synth/z80_top.nl.v
-        retention-days: 30
-```
-
-Cache key is hash of `rtl/*.v` + the LibreLane config + the runner
-script. Any change to RTL or to the flow re-runs synthesis; most pushes
-don't touch those, so most CI runs skip the slow synth step and just
-do the ~30 s gate-level sim.
-
-### Step 8 — `tests/README.md` row
-
-Once green, add a row to the Quick Reference table:
-
-| LibreLane gate-level vs perfectz80 | `asic/librelane/` + `tests/iverilog/tb_z80_netlist.v` | `make perfectz80_netlist` | ~5 min cold / ~30 s warm | yosys-synthesized sky130 netlist diffed against the Visual-Z80 gate-level netlist |
-
-Plus a new short category section in tests/README.md explaining the
-flow.
-
+`.github/workflows/ci.yml`'s `librelane-netlist` job installs LibreLane
+through Nix (the fossi-foundation cache, see Tooling), caches the
+synthesized netlist on a hash of `rtl/*.v` and the flow's config and
+script -- most pushes skip synthesis -- and runs `make
+perfectz80_netlist` and `make pin_scenarios_netlist`, uploading the
+netlist and the per-program VCDs. `librelane-basic-netlist` runs the
+BASIC ROMs on the same netlist. Both run on every push.
 
 ## Risks / gotchas
 
@@ -344,18 +245,14 @@ flow.
    ~3 GB. Subsequent runs share it.
 
 
-## What this branch ships when done
+## Files
 
-  - `docs/librelane-flow.md` — **this file**, kept up to date.
-  - `asic/librelane/config.json` + `asic/librelane/run_synth.sh` — flow config.
-  - `tests/iverilog/tb_z80_netlist.v` — gate-level testbench.
-  - `Makefile` — new targets `synth`, `iverilog_netlist`,
-    `perfectz80_netlist`, `verilator_basic_netlist`,
-    `basic_netlist_tests`.
-  - `scripts/compare_signal_timing.py` — `--rtl=netlist` arm.
-  - `.github/workflows/ci.yml` — `librelane-netlist` job (12 trace
-    programs, every push) + `librelane-basic-netlist` job (BASIC ROM
-    canned scripts, every push, ~9 min wall clock).
-  - `tests/README.md` — new row + category section.
-
-Merge to `main` when the gate is green on the 5-program starter set.
+  - `asic/librelane/config.json` + `asic/librelane/run_synth.sh` — the flow.
+  - `tests/iverilog/tb_z80_netlist.v` — the gate-level testbench.
+  - `Makefile` — `synth`, `iverilog_netlist`, `perfectz80_netlist`,
+    `pin_scenarios_netlist`, `verilator_basic_netlist`, `basic_netlist_tests`.
+  - `scripts/compare_signal_timing.py` — its `--rtl=netlist` path.
+  - `.github/workflows/ci.yml` — the `librelane-netlist` and
+    `librelane-basic-netlist` jobs.
+  - The full RTL-to-GDS flows (floorplan, placement, routing, STA) are on
+    the `asic-<pdk>` branches; see the project's site.

@@ -89,10 +89,12 @@ int main(int argc, char** argv) {
     auto t1 = std::chrono::steady_clock::now();
     double secs = std::chrono::duration<double>(t1 - t0).count();
 
+    bool hit_limit = instr >= max_instr;
     printf("\n=== sim_zex (Verilator): %s ===\n", argv[1]);
-    printf("phases executed: %lld  (~%lld instructions)\n", phases, instr);
+    printf("phases executed: %lld  (~%lld instructions)%s\n", phases, instr,
+           hit_limit ? " (LIMIT REACHED)" : "");
     printf("elapsed: %.2f s  (%.2f Mphases/s; ~%.2f Minstr/s)\n",
            secs, phases / secs / 1e6, instr / secs / 1e6);
     delete t;
-    return 0;
+    return hit_limit ? 3 : 0;      // as zexrunner: the limit is a failure
 }

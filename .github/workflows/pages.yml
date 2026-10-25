@@ -2,10 +2,9 @@
 # from the latest runs on main: Targets' bitstreams, GDS, layout renders and
 # pads at transistor level (targets.yml), and the whole chip at transistor
 # level when transistor.yml has run (its own page, transistor/), and the
-# latest cfast benchmark (ci.yml's cfast-bench: from main, or from the
-# branch cmodel-fast until cfast is on main). Pages replaces the whole site
-# on every deploy, so one job builds it from all of them, after Targets or
-# Transistor finishes on main, and by hand.
+# latest cfast benchmark (ci.yml's cfast-bench). Pages replaces the whole
+# site on every deploy, so one job builds it from all of them, after Targets
+# or Transistor finishes on main, and by hand.
 name: Pages
 
 on:
@@ -67,16 +66,19 @@ jobs:
 
       - name: The latest cfast benchmark, if there is one
         run: |
-          for b in main cmodel-fast; do
-            for id in $(gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --branch "$b" --limit 10 \
-                          --json databaseId -q '.[].databaseId'); do
-              if gh run download "$id" -R "$GITHUB_REPOSITORY" -n cfast-bench -D dist/cfast-bench 2>/dev/null; then
-                echo "cfast-bench from ci.yml run $id ($b)" >> "$GITHUB_STEP_SUMMARY"
-                exit 0
-              fi
-            done
+          # Completed runs only, each tried in a directory of its own: a
+          # download that fails part-way leaves files behind, and gh never
+          # overwrites a file, so every later try would fail on them too
+          # (a run still in progress did that on 238a688).
+          for id in $(gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --branch main --status completed \
+                        --limit 10 --json databaseId -q '.[].databaseId'); do
+            if gh run download "$id" -R "$GITHUB_REPOSITORY" -n cfast-bench -D "dl/cfast-bench-$id"; then
+              mv "dl/cfast-bench-$id" dist/cfast-bench
+              echo "cfast-bench from ci.yml run $id" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
           done
-          echo "no cfast-bench artifact on main or cmodel-fast" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "no cfast-bench artifact on main" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Build the site
         run: python3 .github/scripts/dist.py site dist site

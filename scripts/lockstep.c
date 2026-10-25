@@ -58,6 +58,7 @@ int main(int argc, char** argv){
         uint8_t op0=RMEM[pc],op1=RMEM[pc+1],op2=RMEM[pc+2],op3=RMEM[pc+3];
         sz80_step(&z);
         z80_sys_step_instr(s);
+        const z80_t *ar = z80_arch(&s->cpu);   /* the writes of the next M1 made */
         /* memory check: full 64K every step (memcmp on 64K is fast) */
         if (memcmp(RMEM, s->mem, 65536) != 0) {
             int da=-1; for(int i=0;i<65536;i++) if(RMEM[i]!=s->mem[i]){da=i;break;}
@@ -67,23 +68,23 @@ int main(int argc, char** argv){
             printf("  REF : pc%04x af%04x bc%04x de%04x hl%04x ix%04x iy%04x sp%04x\n",
                 z.pc,(z.a<<8)|reff(&z),(z.b<<8)|z.c,(z.d<<8)|z.e,(z.h<<8)|z.l,z.ix,z.iy,z.sp);
             printf("  MINE: pc%04x af%04x bc%04x de%04x hl%04x ix%04x iy%04x sp%04x\n",
-                s->cpu.rf[RFP_PC],s->cpu.rf[RFP_AF],s->cpu.rf[RFP_BC],s->cpu.rf[RFP_DE],
-                s->cpu.rf[RFP_HL],s->cpu.rf[RFP_IX],s->cpu.rf[RFP_IY],s->cpu.rf[RFP_SP]);
+                ar->rf[RFP_PC],ar->rf[RFP_AF],ar->rf[RFP_BC],ar->rf[RFP_DE],
+                ar->rf[RFP_HL],ar->rf[RFP_IX],ar->rf[RFP_IY],ar->rf[RFP_SP]);
             return 1;
         }
-        uint8_t mf=s->cpu.rf[RFP_AF]&0xFF, rf=reff(&z);
+        uint8_t mf=ar->rf[RFP_AF]&0xFF, rf=reff(&z);
         unsigned raf=(z.a<<8)|rf;
-        if (z.pc != s->cpu.rf[RFP_PC] || raf != s->cpu.rf[RFP_AF] ||
-            ((z.b<<8)|z.c)!=s->cpu.rf[RFP_BC] || ((z.d<<8)|z.e)!=s->cpu.rf[RFP_DE] ||
-            ((z.h<<8)|z.l)!=s->cpu.rf[RFP_HL] || z.ix!=s->cpu.rf[RFP_IX] ||
-            z.iy!=s->cpu.rf[RFP_IY] || z.sp!=s->cpu.rf[RFP_SP]) {
+        if (z.pc != ar->rf[RFP_PC] || raf != ar->rf[RFP_AF] ||
+            ((z.b<<8)|z.c)!=ar->rf[RFP_BC] || ((z.d<<8)|z.e)!=ar->rf[RFP_DE] ||
+            ((z.h<<8)|z.l)!=ar->rf[RFP_HL] || z.ix!=ar->rf[RFP_IX] ||
+            z.iy!=ar->rf[RFP_IY] || z.sp!=ar->rf[RFP_SP]) {
             printf("DIVERGENCE at step %lld, after instruction @%04x: %02x %02x %02x %02x\n",
                 n, pc, op0,op1,op2,op3);
             printf("  REF : pc%04x af%04x bc%04x de%04x hl%04x ix%04x iy%04x sp%04x\n",
                 z.pc,raf,(z.b<<8)|z.c,(z.d<<8)|z.e,(z.h<<8)|z.l,z.ix,z.iy,z.sp);
             printf("  MINE: pc%04x af%04x bc%04x de%04x hl%04x ix%04x iy%04x sp%04x\n",
-                s->cpu.rf[RFP_PC],s->cpu.rf[RFP_AF],s->cpu.rf[RFP_BC],s->cpu.rf[RFP_DE],
-                s->cpu.rf[RFP_HL],s->cpu.rf[RFP_IX],s->cpu.rf[RFP_IY],s->cpu.rf[RFP_SP]);
+                ar->rf[RFP_PC],ar->rf[RFP_AF],ar->rf[RFP_BC],ar->rf[RFP_DE],
+                ar->rf[RFP_HL],ar->rf[RFP_IX],ar->rf[RFP_IY],ar->rf[RFP_SP]);
             return 1;
         }
     }
