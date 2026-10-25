@@ -43,6 +43,7 @@
 #define SPECCY_TERM_H
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 
 enum { GLYPHS_AUTO, GLYPHS_OCTANTS, GLYPHS_BRAILLE, GLYPHS_QUADRANTS, GLYPHS_BARS };
 typedef struct {
@@ -52,6 +53,10 @@ typedef struct {
     int  quad_rows;   /* quadrants: 96, 48 (half-height); 0: 96 if they fit   */
     bool crisp;       /* mode 80, half-height quadrants, bars: no blends     */
     bool fullwidth;   /* mode 80: double-width characters                    */
+    int  cols, rows;  /* a size of our own instead of the terminal's (0: ask) */
+    FILE *out;        /* where it all goes; NULL: stdout                     */
+    bool ack;         /* end each frame with CSI 5 n: the terminal answers   */
+                      /* CSI 0 n once it has read that far (the link's lag)  */
 } term_opts_t;
 
 bool term_open(const term_opts_t *o);
@@ -63,8 +68,22 @@ void term_resize(void);
    its bitmap bit in 7 (ula.h), the paper's top-left pixel at (px, py); font is the 96 glyphs (768
    bytes, codes 32-127) mode 80 matches text against, or NULL. */
 void term_frame(const uint8_t *fb, int w, int h, int px, int py, const uint8_t *font);
-/* The window title. */
+/* The window title (sent only when it changes). */
 void term_title(const char *s);
+/* Every byte sent so far. */
+uint64_t term_bytes(void);
+/* Bytes written but not yet taken by the other end of the terminal device
+   (TIOCOUTQ: a serial line's queue, a macOS pty's); -1 where unknown. */
+long term_backlog(void);
+/* Stop (or start) asking for the CSI 0 n replies; or ask once, alone. */
+void term_ack(bool on);
+void term_ping(void);
+/* Bytes waiting for the link to take them (a terminal's output goes out
+   without blocking); keep writing them for up to this long, sleeping the
+   rest; or wait until they have all gone. */
+size_t term_queued(void);
+void term_pump(double seconds);
+void term_drain(void);
 /* The mode in use, the glyphs it draws ("octants", "braille", "quadrants",
    "half-height quadrants", "half-width bars" or "half blocks") and the
    terminal's size. */

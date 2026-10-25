@@ -64,6 +64,8 @@ typedef struct {
     int      tap_gap;              /* frames of no key before the next tap  */
     uint64_t last_tap;             /* the tap before                        */
     int      released;             /* frames since it ended                 */
+    /* the terminal's CSI 0 n replies to term.c's CSI 5 n, one a frame */
+    unsigned acks;
     /* commands */
     bool     quit, reset, turbo_toggle, resized;
     const char *note;              /* why a native mode was not used       */
@@ -85,5 +87,8 @@ void keys_tap(keys_t *k, uint64_t zx, int frames);
 void keys_type(keys_t *k, const char *s);
 static inline bool keys_busy(const keys_t *k) { return k->qh != k->qt || k->tap_frames > 0 || k->tap_gap > 0; }
 const char *keys_mode_name(int mode);
+/* The input reads what the terminal sends back (replies to queries come
+   in among the keys): every mode but the console's raw keycodes. */
+bool keys_reads_replies(const keys_t *k);
 int keys_mode_by_name(const char *name);
 #endif

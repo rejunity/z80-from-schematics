@@ -231,6 +231,100 @@ them, so a stroke one pixel tall is drawn two tall rather than dropped.
   is exact, because the xterm colour cube's levels 215 and 255 are the
   Spectrum's normal and bright intensities.
 
+## A slow link
+
+Each frame sends only the cells that changed, but a game that scrolls
+changes most of them every frame. Measured in 24-bit colour, every frame
+drawn (`--measure`, below), bytes a frame and what 50 frames a second
+need:
+
+| Game (Spectrum Computing, "Available") | What moves | Octants 128×48 | Braille 128×48 | Half blocks 256×96 | Text 64×24 |
+|---|---|---|---|---|---|
+| Zynaps | the game, scrolling sideways | 4,528 B · 227 KB/s | 1,867 · 94 | 9,397 · 471 | 3,249 · 163 |
+| Stop the Express | its demo, scrolling sideways | 3,872 · 194 | 1,243 · 62 | 8,208 · 411 | 1,908 · 96 |
+| Moon Cresta | the game, a starfield | 2,365 · 118 | 1,331 · 67 | 4,737 · 237 | 1,859 · 93 |
+| Uridium | its demo, the dreadnought scrolling past | 1,125 · 56 | 287 · 14 | 2,666 · 134 | 483 · 24 |
+| Deathchase | the game, trees rushing at the bike | 419 · 21 | 217 · 11 | 861 · 43 | 244 · 12 |
+| Exolon | the game, flip-screen (for contrast) | 323 · 16 | 204 · 10 | 822 · 41 | 309 · 16 |
+
+The biggest single frames, where the whole screen changes colour, reach
+58 KB in octants and 133 KB in half blocks (Uridium); a frame where the
+whole picture moves is 14-15 KB in octants. 256 colours (`--colors 256`)
+take about a fifth off (Zynaps in octants: 3,627 B a frame). Over a serial line at 230,400 baud (23,040 bytes a second, 10
+bits a byte) or 115,200 (11,520), the frames a second each gets, octants:
+
+| Game | 115,200: game slowed / skipping | 230,400: game slowed / skipping |
+|---|---|---|
+| Zynaps | 2.5 / 1.1 | 5.1 / 2.0 |
+| Stop the Express | 3.0 / 1.0 | 6.0 / 2.0 |
+| Moon Cresta | 4.9 / 2.0 | 9.7 / 6.3 |
+| Uridium | 10.2 / 2.0 | 20.5 / 3.9 |
+| Deathchase | 27.5 / 10.0 | 50 / 50 |
+| Exolon | 35.7 / 16.7 | 50 / 50 |
+
+"Slowed" draws every frame and the game runs at that many frames a
+second; "skipping" keeps the game at the Spectrum's 50.08 Hz and draws
+every n-th frame, each carrying n frames' changes -- for scrolling, nearly
+a whole screen, so the line carries one every half second or so. (Means
+over a minute or so of each game; the bursts are larger.)
+
+Measured: each game through a pty whose far end reads 23,040 or 11,520
+bytes a second and answers `CSI 5 n`, 20 s of play straight after
+`--fast-until`, octants in 24-bit colour. In every run the game ran 19.95
+s of the Spectrum's time in 19.95 s, and its last screen was the same,
+cell for cell, as an unthrottled run's:
+
+| Game | 230,400 baud: frames drawn a second | 115,200 baud |
+|---|---|---|
+| Deathchase | 32.2 | 23.9 |
+| Exolon | 17.9 | 6.3 |
+| Uridium | 12.6 | 2.2 |
+| Moon Cresta | 6.3 | 2.7 |
+| Zynaps | 4.5 | 1.1 |
+| Stop the Express | 1.8 | 0.8 |
+
+speccy keeps the game at its own speed and skips drawing when the link is
+behind:
+
+- **Even steps.** It draws every frame, every 2nd (25 a second), every
+  3rd (16.7) and so on. Every half second it looks back: if the link was
+  behind when a frame was due, the step goes up one; once the link has
+  kept up for a second, it comes down to the lowest step that would keep
+  the link at most 85 % busy (from how busy it was at this step). A step
+  down that does not hold makes the next try wait longer (up to 8 s).
+- **Knowing the link is behind**, through whatever lies between:
+  - after each frame speccy sends `CSI 5 n`, and the terminal answers `CSI
+    0 n` once it has read everything before it, in order with the keys:
+    the time to the answer is how long the frame took to get there,
+    through a pty, ssh's buffers, a serial line or the terminal's own
+    parser. A frame still unanswered a whole drawing period (n frames)
+    after the quickest recent answer means the link is behind at this
+    step, and the frames' time on the way (beyond the quickest answer) is
+    how busy it was. When nothing is on its way, a question alone, at
+    most once a second (4 bytes), gives the quickest answer without a
+    frame in it. The answers are
+    drained before speccy hands the terminal back, so none reaches the
+    shell. Terminals that do not answer within 2 s are not asked again;
+    the console's raw keycodes and Windows get no questions.
+  - the output goes out without blocking, through a second open of the
+    terminal device (stdout's file flags, shared with the shell, are left
+    alone): what the device does not take waits in speccy, and nothing
+    new is drawn until it has gone. A big frame never stops the game.
+  - `TIOCOUTQ`, where the device reports its queue (serial lines; Linux
+    ptys always say 0).
+  - `--baud N`: a budget of N/10 bytes a second, for a serial line at N
+    baud (or to try one), with a 200 ms burst; there the bytes sent are
+    how busy it is. Without answers or a budget, the bytes the device took
+    while the queue was full stand for what the link takes.
+- **The picture stays right.** A frame is only ever sent whole, and the
+  next one is the difference from it, so whatever is skipped, the screen
+  ends up exactly as drawn without skipping (tested below).
+- `--min-fps F` draws at least F frames a second, the game waiting for the
+  link when it cannot keep up; `--no-skip` draws every frame and waits
+  (the game slows, as before).
+- `--stats` puts the frames drawn and emulated a second, bytes a frame,
+  KB/s and frames skipped in the title, and a summary on exit.
+
 ## Keys
 
 A Spectrum program reads the keyboard as a matrix of keys held down, so it
@@ -287,7 +381,18 @@ matching the ROM font. `--save-scr` also writes the screen as a `.scr`.
 For programs that want keys: `--type F:TEXT` types from frame F (`\n` is
 ENTER), `--type-on S:TEXT` types whenever the screen shows S (and prints
 that screen), `--exit-on S` stops when it shows S, and `--shot F:NAME`
-writes `NAME.scr` and `NAME.txt` after frame F.
+writes `NAME.scr` and `NAME.txt` after frame F. `--type` works without
+`--frames` too, and `--fast-until N` runs flat out to frame N, so a game
+reaches the same frame with the same keys every time.
+
+`--measure FILE` (with `--frames`) draws every frame into a terminal of
+its own (`--size CxR`, default the mode's) and writes the bytes each one
+would send; `--measure-from F` starts at frame F, `--measure-every D`
+draws every D-th frame, and on POSIX `--measure-set GLYPHS:D,...` forks
+one measurer per mode and step at frame F, so a game loads once. The
+tables above come from it; the skipping was tested through a pty whose
+far end reads 23,040 or 11,520 bytes a second and answers `CSI 5 n` like
+a terminal.
 Patrik Rak's z80test tapes load through the ROM and run:
 
 ```

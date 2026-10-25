@@ -7,9 +7,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #ifdef _WIN32
 #include <windows.h>
 #else
+#include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
 #endif
@@ -132,6 +136,15 @@ static cell_t *cur, *prev;
 static bool redraw = true;
 static char *out;
 static size_t out_len, out_cap;
+static uint64_t sent;                            /* bytes, all told */
+static FILE *dst;                                /* opt.out or stdout */
+/* What the link has not taken yet. On a terminal the output goes through
+   a second, non-blocking open of the same tty (stdout's own file flags,
+   shared with the shell, stay as they are): a frame bigger than the
+   device's buffer then waits here instead of stopping the emulation. */
+static char *q;
+static size_t q_len, q_off, q_cap;
+static int qfd = -1;
 
 static void put(const char *s, size_t n)
 {
@@ -156,15 +169,133 @@ static void put_utf8(uint32_t c)
     put(b, n);
 }
 
+static double mono_seconds(void)
+{
+#ifdef _WIN32
+    static LARGE_INTEGER freq;
+    LARGE_INTEGER c;
+    if (!freq.QuadPart)
+        QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&c);
+    return (double)c.QuadPart / (double)freq.QuadPart;
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+#endif
+}
+
+static void q_write(void)
+{
+#ifndef _WIN32
+    while (q_off < q_len) {
+        ssize_t n = write(qfd, q + q_off, q_len - q_off);
+        if (n > 0)
+            q_off += (size_t)n;
+        else if (n < 0 && errno == EINTR)
+            continue;
+        else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)
+            q_off = q_len;                       /* the terminal is gone: drop it */
+        else
+            break;                               /* the link is full */
+    }
+    if (q_off == q_len)
+        q_off = q_len = 0;
+#endif
+}
+
 static void flush_out(void)
 {
-    fwrite(out, 1, out_len, stdout);
-    fflush(stdout);
+    if (qfd >= 0) {
+        if (q_off && q_len + out_len > q_cap) {
+            memmove(q, q + q_off, q_len - q_off);
+            q_len -= q_off;
+            q_off = 0;
+        }
+        if (q_len + out_len > q_cap) {
+            q_cap = (q_len + out_len) * 2;
+            q = realloc(q, q_cap);
+        }
+        memcpy(q + q_len, out, out_len);
+        q_len += out_len;
+        q_write();
+    } else {
+        fwrite(out, 1, out_len, dst);
+        fflush(dst);
+    }
+    sent += out_len;
     out_len = 0;
+}
+
+size_t term_queued(void) { return q_len - q_off; }
+
+void term_pump(double seconds)
+{
+    double end = mono_seconds() + seconds;
+#ifndef _WIN32
+    if (qfd >= 0)
+        q_write();
+    while (qfd >= 0 && q_off < q_len) {
+        int ms = (int)((end - mono_seconds()) * 1000);
+        if (ms <= 0)
+            return;
+        struct pollfd p = { qfd, POLLOUT, 0 };
+        if (poll(&p, 1, ms) > 0)
+            q_write();
+    }
+#endif
+    double left = end - mono_seconds();
+    if (left > 0) {
+#ifdef _WIN32
+        Sleep((DWORD)(left * 1000));
+#else
+        struct timespec ts = { (time_t)left, (long)((left - (double)(time_t)left) * 1e9) };
+        nanosleep(&ts, NULL);
+#endif
+    }
+}
+
+void term_drain(void)
+{
+#ifndef _WIN32
+    while (qfd >= 0 && q_off < q_len) {
+        struct pollfd p = { qfd, POLLOUT, 0 };
+        int r = poll(&p, 1, 1000);
+        if (r > 0 && (p.revents & (POLLERR | POLLHUP | POLLNVAL))) {
+            q_off = q_len = 0;                   /* the terminal is gone */
+            break;
+        }
+        if (r > 0)
+            q_write();
+    }
+#endif
+}
+
+uint64_t term_bytes(void) { return sent; }
+void term_ack(bool on) { opt.ack = on; }
+void term_ping(void)
+{
+    puts_("\x1b[5n");
+    flush_out();
+}
+
+long term_backlog(void)
+{
+#if defined(TIOCOUTQ) && !defined(_WIN32)
+    int n;
+    if (!opt.out && ioctl(fileno(dst), TIOCOUTQ, &n) == 0)
+        return n;
+#endif
+    return -1;
 }
 
 static void query_size(void)
 {
+    if (opt.cols && opt.rows) {
+        cols = opt.cols;
+        rows = opt.rows;
+        return;
+    }
 #ifdef _WIN32
     CONSOLE_SCREEN_BUFFER_INFO info;
     if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &info)) {
@@ -185,6 +316,15 @@ static void query_size(void)
 bool term_open(const term_opts_t *o)
 {
     opt = *o;
+    dst = opt.out ? opt.out : stdout;
+#ifndef _WIN32
+    fflush(stdout);
+    if (!opt.out && isatty(STDOUT_FILENO)) {
+        const char *tn = ttyname(STDOUT_FILENO);
+        if (tn)
+            qfd = open(tn, O_WRONLY | O_NOCTTY | O_NONBLOCK);
+    }
+#endif
     if (!opt.colors) {
         const char *ct = getenv("COLORTERM");
         opt.colors = ct && (!strcmp(ct, "truecolor") || !strcmp(ct, "24bit")) ? 24 : 256;
@@ -206,16 +346,25 @@ bool term_open(const term_opts_t *o)
     if (!opt.colors) opt.colors = 24;
 #endif
     glyph_tables();
-    fputs("\x1b[?1049h\x1b[?25l\x1b[2J", stdout);
-    fflush(stdout);
+    puts_("\x1b[?1049h\x1b[?25l\x1b[2J");
+    flush_out();
     term_resize();
     return true;
 }
 
 void term_close(void)
 {
-    fputs("\x1b[0m\x1b[?25h\x1b[?1049l", stdout);
-    fflush(stdout);
+    puts_("\x1b[0m\x1b[?25h\x1b[?1049l");
+    flush_out();
+    term_drain();
+#ifndef _WIN32
+    if (qfd >= 0)
+        close(qfd);
+    qfd = -1;
+    free(q);
+    q = NULL;
+    q_len = q_off = q_cap = 0;
+#endif
     free(cur);
     free(prev);
     free(out);
@@ -256,8 +405,14 @@ void term_size(int *c, int *r) { *c = cols; *r = rows; }
 
 void term_title(const char *s)
 {
-    printf("\x1b]2;%s\x07", s);
-    fflush(stdout);
+    static char last[256];
+    if (!strcmp(s, last))
+        return;
+    snprintf(last, sizeof last, "%s", s);
+    puts_("\x1b]2;");
+    puts_(s);
+    puts_("\x07");
+    flush_out();
 }
 
 /* ---------------------------------------------------------- the cells */
@@ -793,6 +948,8 @@ void term_frame(const uint8_t *fb, int w, int h, int px, int py, const uint8_t *
         }
     }
     puts_("\x1b[0m\x1b[?2026l");
+    if (opt.ack)
+        puts_("\x1b[5n");
     flush_out();
     memcpy(prev, cur, (size_t)cols * (size_t)rows * sizeof *cur);
     redraw = false;

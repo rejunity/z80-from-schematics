@@ -257,6 +257,12 @@ const char *keys_mode_name(int mode)
     return "none";
 }
 
+bool keys_reads_replies(const keys_t *k)
+{
+    return k->mode == KEYS_LEGACY || k->mode == KEYS_KITTY || k->mode == KEYS_EVDEV ||
+           k->mode == KEYS_MACOS;
+}
+
 int keys_mode_by_name(const char *name)
 {
     for (int m = KEYS_AUTO; m <= KEYS_WINDOWS; m++)
@@ -673,6 +679,8 @@ static void terminal_bytes(keys_t *k, unsigned char *buf, int *plen)
                 if (intro == 'O') {               /* SS3: arrows, F1-F4 */
                     if (k->mode == KEYS_LEGACY && final >= 'A' && final <= 'D')
                         legacy_seq(k, "", final);
+                } else if (final == 'n' && !strcmp(params, "0")) {
+                    k->acks++;                    /* status OK: a frame got there */
                 } else if (!params[0] && (final == 'I' || final == 'O')) {
                     k->focused = final == 'I';   /* focus in / out */
                     if (!k->focused)
