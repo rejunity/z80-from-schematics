@@ -10,10 +10,11 @@
 #   make venv    create .venv and pip-install the YoWASP toolchain
 #   make         both bitstreams;  make sbc / make chip for one
 #   make sim     Verilator smoke test of the sbc build (fast serial)
-#   make sim_real  same at true 115200 pacing (exercises the TIE path)
+#   make sim_real  same at true 230400 pacing (exercises the TIE path)
 #   make sim_tiny  Verilator: the 1K Tiny BASIC ROM, console transcript
 #                compared byte for byte with the C model's (add
-#                SIM_BAUD=115200 for real pacing)
+#                SIM_BAUD=230400 for real pacing)
+#   make sim_uart  uart.v at 4 and 3.5 MHz against BAUD: TX edges, RX at +-3 %
 #   make sim_iverilog  the boot script through iverilog (slow cross-check)
 #   make sim_gl  the boot script on the synthesized sbc netlist (iCE40 cell models)
 #   make sim_chip  chip build on an external RAM: RTL and synthesized netlist
@@ -80,7 +81,7 @@ MODE ?= sbc
 # stem of the pattern rules below without any directory part
 STEM = $(notdir $*)
 
-.PHONY: all venv bin sbc chip sim sim_real sim_tiny sim_iverilog sim_gl sim_chip sim_pnr sim_pnr_tiny prog timing pins ci clean distclean FORCE
+.PHONY: all venv bin sbc chip sim sim_real sim_tiny sim_iverilog sim_gl sim_chip sim_pnr sim_pnr_tiny prog timing pins sim_uart ci clean distclean FORCE
 all: bin
 
 # ---- toolchain venv (created before any tools are installed/used) ----
@@ -182,7 +183,7 @@ VERILATOR ?= verilator
 # for its 48 MHz output: top.v's real /12 divider makes the 4 MHz Z80
 # clock, so CORE_HZ keeps its default and only the baud rate changes.
 # Default: fast serial (16 Z80 clks/bit) so framing doesn't dominate sim
-# time. `make sim_real` runs at true 115200 -- that pacing is what
+# time. `make sim_real` runs at true 230400 -- that pacing is what
 # exercises the ROM's interrupt-driven TX (TIE) path.
 SIM_BAUD ?= 250000
 # One object dir per baud: SIM_BAUD is baked into the model (-G/-D), so
@@ -201,7 +202,7 @@ sim: $(OBJ_DIR)/Vtop $(BUILD)/rom.mem
 	cd $(BUILD) && ./obj_dir_$(SIM_BAUD)/Vtop
 
 sim_real:
-	$(MAKE) sim SIM_BAUD=115200
+	$(MAKE) sim SIM_BAUD=230400
 
 # Tiny BASIC: its own ROM image and model (RAM from 0x0400), whatever
 # ROM_HEX says; sim_top.cpp's `tiny` script.
@@ -248,12 +249,12 @@ $(BUILD)/gl/top_%_gl.v: $(BUILD)/top_%.json
 	cd $(BUILD) && $(YOSYS) -q -p 'read_json top_$(STEM).json; write_verilog -noattr gl/top_$(STEM)_gl.v'
 
 # sbc: the BASIC boot script on the netlist (Verilator). The netlist has
-# BAUD = 115200 baked in, so this runs at real serial pacing.
+# BAUD = 230400 baked in, so this runs at real serial pacing.
 $(BUILD)/gl/obj/Vtop: $(BUILD)/gl/top_sbc_gl.v $(BUILD)/gl/cells_sim.v sim_pll.v sim_top.cpp
 	rm -rf $(BUILD)/gl/obj
 	cd $(BUILD)/gl && $(VERILATOR) --cc --exe --build -j 4 -O1 \
 	  -Wno-fatal -Wno-lint -Wno-style --no-timing -DNO_ICE40_DEFAULT_ASSIGNMENTS \
-	  --top-module top --Mdir obj -CFLAGS -DSIM_BAUD=115200 \
+	  --top-module top --Mdir obj -CFLAGS -DSIM_BAUD=230400 \
 	  cells_sim.v ../../sim_pll.v top_sbc_gl.v ../../sim_top.cpp \
 	  > verilator.log 2>&1 || (tail -20 verilator.log; exit 1)
 
@@ -275,6 +276,22 @@ sim_chip: $(BUILD)/tb_chip_rtl.vvp $(BUILD)/gl/tb_chip_gl.vvp
 	@echo "== chip build, synthesized netlist"
 	@$(VVP) -n $(BUILD)/gl/tb_chip_gl.vvp
 
+# ---- the UART at the hardware's clock-to-baud ratio ----
+# tb_uart.v runs uart.v at the sbc's 4 MHz and at the 3.5 MHz option
+# against top.v's BAUD: every TX bit edge against its ideal time and the
+# bytes as an ideal receiver reads them, and RX from a sender off by up
+# to 3 % either way, its start edge at 16 phases of the clock (each
+# sample's distance from its bit's centre is printed). A few seconds.
+UART_BAUD := $(shell sed -n 's/^ *parameter BAUD *= *\([0-9_]*\).*/\1/p' top.v | tr -d _)
+sim_uart:
+	@mkdir -p $(BUILD)
+	@for hz in 4000000 3500000; do \
+	  $(IVERILOG) -g2012 -P tb_uart.CLK_HZ=$$hz -P tb_uart.BAUD=$(UART_BAUD) \
+	    -o $(BUILD)/tb_uart_$$hz.vvp uart.v tb_uart.v || exit 1; \
+	  $(VVP) -n $(BUILD)/tb_uart_$$hz.vvp > $(BUILD)/tb_uart_$$hz.log; cat $(BUILD)/tb_uart_$$hz.log; \
+	  grep -q '^PASS' $(BUILD)/tb_uart_$$hz.log || exit 1; \
+	done
+
 # ---- post-place-and-route simulation: the routed sbc netlist ----
 # nextpnr's routed netlist (top_sbc.pnr.json) is the design as icepack
 # packs it into the bitstream: every ICESTORM_LC with its LUT and flop as
@@ -283,8 +300,8 @@ sim_chip: $(BUILD)/tb_chip_rtl.vvp $(BUILD)/gl/tb_chip_gl.vvp
 # left unrouted to the level the hardware reads there and feeds the PLL's
 # dedicated clock paths from the testbench clock (as sim_pll.v does);
 # sim_pnr_io.v turns the pads into wires, sim_pnr_cells.v models the PLL
-# and SPRAM cells. BAUD = 115200 is baked in, so this is real serial
-# pacing, and each script ends on the same clock as the RTL at 115200.
+# and SPRAM cells. BAUD = 230400 is baked in, so this is real serial
+# pacing, and each script ends on the same clock as the RTL at 230400.
 #   make sim_pnr        the boot script on build/'s routed netlist
 #   make sim_pnr_tiny   Tiny BASIC on build_tiny/'s (built if needed)
 PNR_DIR := $(BUILD)/pnr
@@ -306,7 +323,7 @@ $(PNR_DIR)/obj/Vtop: $(PNR_DIR)/top_sbc_pnr.v sim_pnr_cells.v sim_top.cpp
 	rm -rf $(PNR_DIR)/obj
 	cd $(PNR_DIR) && $(VERILATOR) --cc --exe --build -j 4 -O1 \
 	  -Wno-fatal -Wno-lint -Wno-style --no-timing -DNO_ICE40_DEFAULT_ASSIGNMENTS \
-	  --top-module top --Mdir obj -CFLAGS -DSIM_BAUD=115200 \
+	  --top-module top --Mdir obj -CFLAGS -DSIM_BAUD=230400 \
 	  cells_sim.v ../../sim_pnr_cells.v top_sbc_pnr.v ../../sim_top.cpp \
 	  > verilator.log 2>&1 || (tail -20 verilator.log; exit 1)
 
@@ -332,8 +349,8 @@ prog: $(BUILD)/top_$(MODE).bin
 # ---- CI (.github/workflows/fpga-board.yml) ----
 # Both bitstreams, the Tiny BASIC bitstream (build_tiny/) and every
 # simulation, Tiny BASIC at both serial pacings and on its routed netlist.
-ci: sbc chip sim sim_real sim_tiny sim_iverilog sim_gl sim_chip sim_pnr
-	$(MAKE) sim_tiny SIM_BAUD=115200
+ci: sim_uart sbc chip sim sim_real sim_tiny sim_iverilog sim_gl sim_chip sim_pnr
+	$(MAKE) sim_tiny SIM_BAUD=230400
 	$(MAKE) sbc BUILD=build_tiny ROM_HEX=$(TINY_HEX)
 	$(MAKE) sim_pnr_tiny
 
