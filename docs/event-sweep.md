@@ -9,7 +9,9 @@ byte each kind of read takes. It compares the two half-cycle by half-cycle
 -- the pins, the address and which pads the die drives -- and F, WZ and Q,
 where they have settled on both (below), and runs every case through the C
 model too, which must match the RTL in every half-cycle.
-CI runs it on every push, in four shards, from perfectz80's recorded traces.
+CI runs it on every push, in four shards, from perfectz80's recorded traces
+alone (`make event_sweep_recorded`), and perfectz80 live against every
+recording on main and nightly (`make event_sweep_verify`).
 
 Files:
 
@@ -17,7 +19,9 @@ Files:
 - `tests/iverilog/tb_event_sweep.v`: RTL side (1/16-T event resolution)
 - `scripts/event_sweep_pz80.c`: perfectz80 side
 - `scripts/pz80_pads.c`: which of perfectz80's pads the die drives
-- `tests/event_sweep/pz80/`: perfectz80's recorded traces, one file per group
+- `tests/event_sweep/pz80/`: perfectz80's recorded traces, one file per group,
+  and `MANIFEST.txt`: the harness id they were recorded with, each file's
+  cases, sha256 and the commit it was recorded at
 - `scripts/event_sweep_c.c`: C model side (`--c-model`)
 
 ## How a case works
@@ -380,12 +384,23 @@ perfectz80's sources (`scripts/refs/perfectz80/`), `pz80_pads.c`, the
 harness's version (`HARNESS_VERSION` in `event_sweep_pz80.c`), the
 program's bytes, the options and the pulses as perfectz80 resolves them
 (whole half-cycles). A run takes a recorded trace where one exists and runs
-perfectz80 for the rest: CI runs only the RTL and the C model. A new or
-changed case has none:
+perfectz80 for the rest (`make event_sweep`); `--recorded-only` never runs
+it and fails on a case with no recording (`make event_sweep_recorded`, CI's
+`event-sweep` job), and without `--c-model` it needs nothing but iverilog
+and Python (`make event_sweep_rtl`, a slice of it in CI's no-C `rtl-tests`
+job). A repository with the recordings but not perfectz80's sources takes
+the harness id from `MANIFEST.txt`; `EVENT_SWEEP_PZ80` and
+`EVENT_SWEEP_TB_VVP` point the script at its copies. A new or changed case
+has no recording:
 
 ```
 make event_sweep EVENT_SWEEP_ARGS=--record      # rewrites the files of the groups run
+scripts/event_sweep.py --groups latch --record --no-cache --pz80-only   # perfectz80 alone
+make record_pz80                                 # every group again, ~12 CPU-hours
 ```
+
+Each file written starts with a `#` line naming its group, the harness, the
+commit and the command, and `MANIFEST.txt` is rewritten.
 
 The harness's own source isn't part of the key: an option only new cases
 use, like the data window, leaves every recorded trace valid. A change that
@@ -393,8 +408,13 @@ alters what an existing case prints must bump `HARNESS_VERSION`, which
 makes every recorded trace stale -- record every group again.
 `--verify-recorded N` runs N of the run's recorded cases through perfectz80
 live and fails if any prints something else than its recording, which
-catches a forgotten bump: CI's shard 0 checks 50 random ones on every push
-(the seed is printed; `--verify-seed S` repeats a sample). The data window
+catches a forgotten bump: CI's shard 0 checks 50 random ones from every group
+on every push (`make event_sweep_verify EVENT_SWEEP_VERIFY=50`; the seed is
+printed, `--verify-seed S` repeats a sample). `--verify-recorded all` with
+`--pz80-only` runs perfectz80 alone on every recorded case of the selection
+(`make event_sweep_verify`): CI's `pz80-recordings` job does it for all
+77,235 traces, `opcodes_reset` included, in eight shards on main pushes and
+nightly -- about 0.55 CPU-s a case, 12 CPU-hours in all, ~30 min a shard. The data window
 came in this way: 50 recorded cases from all 23 groups printed their
 recordings byte for byte with the new harness, and the recordings were
 re-keyed, not run again.
@@ -409,7 +429,9 @@ Useful options (`scripts/event_sweep.py --help`):
 - `--groups nmi,reset` and `--match inc_hl` run a subset.
 - `--shard K/N` runs every Nth case from the Kth (CI's four jobs).
 - `--record` writes perfectz80's traces; `--no-cache` ignores them.
-- `--verify-recorded N` runs N recorded cases live and fails on a difference.
+- `--recorded-only` never runs perfectz80 and fails on a case not recorded.
+- `--verify-recorded N|all` runs N (or all) recorded cases live and fails on a
+  difference; `--pz80-only` runs no model alongside.
 - `--classes` prints the opcodes' timing classes.
 - `--phases 16` runs the full 1/16-T grid.
 - `--jobs N` sets the parallelism.

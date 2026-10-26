@@ -14,27 +14,50 @@
 # read the file, the RTL testbenches (iverilog, Verilator, the netlist)
 # take it as per-pin +<pin>_lo=N +<pin>_hi=M plusargs.
 #
+# perfectz80's side is recorded: tests/traces/pz80/<prog>.txt holds
+# perfectz80_runner's output for the program, its .events and the phase
+# count, under a header naming them (sha1s), the harness (perfectz80, its
+# simulator and the runner, hashed) and the command that wrote it. A run
+# takes the recording when the header matches and runs perfectz80 live
+# otherwise; --recorded never runs it and fails on a missing or stale
+# recording (CI, and repositories without perfectz80 or a C compiler).
+#
 # Usage:
-#   scripts/compare_signal_timing.py [phases] [prog...]
-#   scripts/compare_signal_timing.py --rtl=iverilog [phases] [prog...]
-#   scripts/compare_signal_timing.py --rtl=verilator [phases] [prog...]
-#   scripts/compare_signal_timing.py --rtl=netlist  [phases] [prog...]
+#   scripts/compare_signal_timing.py [mode] [--rtl=SRC] [phases] [prog...]
+#     --rtl=c (default) | iverilog | verilator | netlist
+#     mode: (none)  the recording if it matches, else perfectz80 live
+#           --recorded         recordings only (fails on a missing or stale one)
+#           --live             perfectz80 live, recordings ignored
+#           --record           perfectz80 live, written to tests/traces/pz80/
+#                              (no model runs)
+#           --verify-recorded  perfectz80 live, which must print every
+#                              recording byte for byte (no model runs)
 #
 # --rtl=netlist is the LibreLane gate-level path: feeds the synthesized
 # sky130 netlist (build/tb_z80_netlist.vvp) through iverilog and diffs
 # against perfectz80. See docs/librelane-flow.md.
-import os, sys, subprocess
+#
+# PZ80_TRACES (the recordings' directory) and TB_VVP / TB_NETLIST_VVP (the
+# testbench builds) in the environment point elsewhere, for a repository
+# that carries copies of them.
+import hashlib, os, re, subprocess, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TRACEGEN = os.path.join(ROOT, "build", "bin", "tracegen")
 PZ80     = os.path.join(ROOT, "build", "bin", "perfectz80_runner")
 VVP      = "vvp"
-TB_VVP   = os.path.join(ROOT, "build", "tb_z80.vvp")
+TB_VVP   = os.environ.get("TB_VVP", os.path.join(ROOT, "build", "tb_z80.vvp"))
 # TB_NETLIST_VVP in the environment selects another netlist build (the
 # FPGA-mapped ones from `make luts_netlist`).
 TB_NETLIST_VVP = os.environ.get("TB_NETLIST_VVP",
                                 os.path.join(ROOT, "build", "tb_z80_netlist.vvp"))
 VERILATOR_SIM = os.path.join(ROOT, "build", "obj_dir", "sim_z80")
+# perfectz80's recorded traces (--record writes them)
+RECORDED = os.environ.get("PZ80_TRACES", os.path.join(ROOT, "tests", "traces", "pz80"))
+# Bumped when a change to how this script runs perfectz80_runner changes
+# what it prints for a program it ran before (the runner's own source, the
+# netlist and the simulator are hashed into the harness id anyway).
+TRACE_HARNESS_VERSION = 1
 
 # tracegen cols: t phi m addr data_o data_i mreq iorq rd wr m1 rfsh halt busack
 # pz80 cols:    phase addr data_o data_i mreq iorq rd wr m1 rfsh halt
@@ -202,9 +225,84 @@ def hex_for_readmemh(prog):
                 g.write(body + "\n")
     return out
 
-def compare(prog, phases, source="c"):
+def harness_id():
+    """perfectz80 -- its netlist, its simulator -- and perfectz80_runner,
+    hashed: a recorded trace holds while they are unchanged. None in a
+    repository that has the recordings but not perfectz80 (the header is
+    then taken as it is: the repository it was copied from checks it)."""
+    runner = os.path.join(ROOT, "scripts", "perfectz80_runner.c")
+    refs = os.path.join(ROOT, "scripts", "refs", "perfectz80")
+    if not (os.path.exists(runner) and os.path.isdir(refs)):
+        return None
+    h = hashlib.sha1(f"perfectz80_runner v{TRACE_HARNESS_VERSION}\n".encode())
+    for f in [runner] + sorted(os.path.join(refs, f) for f in os.listdir(refs)
+                               if f.endswith((".c", ".h"))):
+        h.update(open(f, "rb").read())
+    return h.hexdigest()[:16]
+
+def sha1_of(path):
+    return hashlib.sha1(open(path, "rb").read()).hexdigest() if path else "none"
+
+def recording_path(prog):
+    return os.path.join(RECORDED, os.path.splitext(os.path.basename(prog))[0] + ".txt")
+
+def recording_wants(prog, events, pz_phases, hid):
+    """the header a recording of this run must carry"""
+    want = {"program-sha1": sha1_of(prog), "events-sha1": sha1_of(events),
+            "phases": str(pz_phases)}
+    if hid is not None:
+        want["harness"] = hid
+    return want
+
+def read_recording(prog, events, pz_phases, hid):
+    """(perfectz80's recorded output, None), or (None, why there is none)"""
+    path = recording_path(prog)
+    rel = os.path.relpath(path, ROOT)
+    if not os.path.exists(path):
+        return None, f"no recording ({rel})"
+    head, body = {}, []
+    for ln in open(path):
+        if ln.startswith("#"):
+            m = re.match(r"#\s*([a-z0-9-]+):\s*(.*)", ln)
+            if m:
+                head[m.group(1)] = m.group(2).strip()
+        else:
+            body.append(ln)
+    for k, v in recording_wants(prog, events, pz_phases, hid).items():
+        if head.get(k) != v:
+            return None, (f"{rel} is stale: its {k} is {head.get(k)}, this run's {v} "
+                          f"(make record_pz80_traces)")
+    return "".join(body), None
+
+def git_head():
+    try:
+        return subprocess.run(["git", "-C", ROOT, "rev-parse", "--short", "HEAD"],
+                              capture_output=True, text=True).stdout.strip() or "unknown"
+    except OSError:
+        return "unknown"
+
+def write_recording(prog, events, pz_phases, hid, text, command):
+    path = recording_path(prog)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    head = [f"# perfectz80's trace of {os.path.relpath(prog, ROOT)}"
+            + (f" with {os.path.relpath(events, ROOT)}" if events else "")
+            + ": perfectz80_runner's output (phase addr data_o data_i mreq iorq rd wr m1 rfsh halt)",
+            f"# generator: {command}",
+            f"# rz80: {git_head()}"]
+    head += [f"# {k}: {v}" for k, v in recording_wants(prog, events, pz_phases, hid).items()]
+    with open(path, "w") as f:
+        f.write("\n".join(head) + "\n" + text)
+    return path
+
+def events_of(prog):
     events = prog[:-4] + ".events" if prog.endswith(".hex") else prog + ".events"
-    events = events if os.path.exists(events) else ""
+    return events if os.path.exists(events) else ""
+
+def pz80_live(prog, phases, events):
+    return run([PZ80, prog, str(phases + PZ_OFFSET)] + ([events] if events else []))
+
+def compare(prog, phases, source="c", mode="", hid=None):
+    events = events_of(prog)
     event_plusargs = parse_events_to_plusargs(events)
     if source == "c":
         tg_argv = [TRACEGEN, prog, str(phases)] + ([events] if events else [])
@@ -229,12 +327,20 @@ def compare(prog, phases, source="c"):
         emit_label = "gate-level netlist"
     else:
         raise SystemExit(f"unknown source: {source}")
-    pz_argv = [PZ80,     prog, str(phases + PZ_OFFSET)] + ([events] if events else [])
+    name = os.path.basename(prog)
+    text, why = (None, "--live") if mode == "live" else read_recording(prog, events, phases + PZ_OFFSET, hid)
+    if text is None:
+        if mode == "recorded":
+            print(f"  {name}: FAIL: {why}"); return False
+        if not os.path.exists(PZ80):
+            print(f"  {name}: FAIL: {why}, and no perfectz80_runner to run live"); return False
+        if mode != "live":
+            print(f"  {name}: perfectz80 live: {why}")
+        text = pz80_live(prog, phases, events)
     c = parse_tracegen(run(tg_argv))
-    g = parse_pz80(run(pz_argv))
+    g = parse_pz80(text)
     g = g[PZ_OFFSET:]                 # drop pz80's pre-M1 idle phase(s)
     n = min(len(c), len(g))
-    name = os.path.basename(prog)
     suffix = " + events" if events else ""
     if n == 0 or len(c) != len(g):
         print(f"  {name}: FAIL ({len(c)} phases from {source}, {len(g)} from perfectz80)"); return False
@@ -267,27 +373,59 @@ def compare(prog, phases, source="c"):
     print(f"  {name}: {head}{suffix} ({n} phases, data under WR in {data_compared})")
     return is_ok
 
+def record_or_verify(mode, phases, progs):
+    """--record / --verify-recorded: perfectz80 alone, live"""
+    if not os.path.exists(PZ80):
+        raise SystemExit("missing perfectz80_runner (make build/bin/perfectz80_runner)")
+    hid = harness_id()
+    command = "make record_pz80_traces (scripts/compare_signal_timing.py --record)"
+    bad = 0
+    for p in progs:
+        ph = program_phases(p, phases)
+        events = events_of(p)
+        text = pz80_live(p, ph, events)
+        name = os.path.basename(p)
+        if mode == "record":
+            path = write_recording(p, events, ph + PZ_OFFSET, hid, text, command)
+            print(f"  {name}: recorded {os.path.relpath(path, ROOT)} ({text.count(chr(10))} lines)")
+            continue
+        rec, why = read_recording(p, events, ph + PZ_OFFSET, hid)
+        if rec is None:
+            bad += 1; print(f"::error::{name}: {why}")
+        elif rec != text:
+            bad += 1
+            print(f"::error::{name}: perfectz80 now prints something else than "
+                  f"{os.path.relpath(recording_path(p), ROOT)} (make record_pz80_traces)")
+        else:
+            print(f"  {name}: perfectz80 live = its recording")
+    if mode == "verify":
+        print(f"{len(progs) - bad} of {len(progs)} recordings identical to perfectz80 live")
+    return 1 if bad else 0
+
+def program_phases(p, phases):
+    # a program may ask for a longer run in <prog>.phases (one number)
+    side = os.path.splitext(p)[0] + ".phases"
+    if os.path.exists(side):
+        return max(phases, int(open(side).read().split()[0]))
+    return phases
+
 def main():
-    # Parse --rtl=<source> before positional args (keeps existing
-    # callers — they pass no flag — backward-compatible).
+    # Parse the mode and --rtl=<source> before positional args (keeps
+    # existing callers — they pass no flag — backward-compatible).
     argv = sys.argv[1:]
-    source = "c"
-    if argv and argv[0].startswith("--rtl="):
-        source = argv.pop(0).split("=", 1)[1]
-    elif argv and argv[0] == "--rtl":
-        argv.pop(0)
-        source = "iverilog" if not argv else argv.pop(0)
+    source, mode = "c", ""
+    modes = {"--recorded": "recorded", "--live": "live", "--record": "record",
+             "--verify-recorded": "verify"}
+    while argv and (argv[0] in modes or argv[0].startswith("--rtl")):
+        a = argv.pop(0)
+        if a in modes:
+            mode = modes[a]
+        elif a.startswith("--rtl="):
+            source = a.split("=", 1)[1]
+        else:
+            source = "iverilog" if not argv else argv.pop(0)
     if source not in ("c", "iverilog", "verilator", "netlist"):
         raise SystemExit(f"unknown --rtl source: {source}")
-    if source == "c"        and not os.path.exists(TRACEGEN):
-        raise SystemExit("missing tracegen (make tracegen)")
-    if source == "iverilog" and not os.path.exists(TB_VVP):
-        raise SystemExit("missing tb_z80.vvp (make iverilog)")
-    if source == "verilator" and not os.path.exists(VERILATOR_SIM):
-        raise SystemExit("missing sim_z80 (make verilator)")
-    if source == "netlist" and not os.path.exists(TB_NETLIST_VVP):
-        raise SystemExit("missing tb_z80_netlist.vvp (make iverilog_netlist)")
-    if not os.path.exists(PZ80):     raise SystemExit("missing perfectz80_runner")
     phases = int(argv[0]) if argv else 200
     rest = argv[1:]
     if rest:
@@ -297,23 +435,33 @@ def main():
         # from scripts/gen_random_trace_progs.py
         import glob
         progs = sorted(glob.glob(os.path.join(ROOT, "tests/traces/*.hex")))
+    if mode in ("record", "verify"):
+        return record_or_verify(mode, phases, progs)
+    if source == "c"        and not os.path.exists(TRACEGEN):
+        raise SystemExit("missing tracegen (make tracegen)")
+    if source == "iverilog" and not os.path.exists(TB_VVP):
+        raise SystemExit("missing tb_z80.vvp (make iverilog)")
+    if source == "verilator" and not os.path.exists(VERILATOR_SIM):
+        raise SystemExit("missing sim_z80 (make verilator)")
+    if source == "netlist" and not os.path.exists(TB_NETLIST_VVP):
+        raise SystemExit("missing tb_z80_netlist.vvp (make iverilog_netlist)")
+    if mode == "live" and not os.path.exists(PZ80):
+        raise SystemExit("missing perfectz80_runner")
     src_label = {
         "c":         "C model",
         "iverilog":  "iverilog RTL",
         "verilator": "Verilator RTL",
         "netlist":   "gate-level netlist (" + os.environ.get("NETLIST_LABEL", "sky130 / LibreLane") + ")",
     }[source]
-    print(f"{src_label} vs perfectz80 gate-level signal-timing comparison "
+    pz_label = {"recorded": "perfectz80's recorded traces", "live": "perfectz80 live"}.get(
+        mode, "perfectz80 (recorded, live where a recording is missing)")
+    print(f"{src_label} vs {pz_label}: gate-level signal-timing comparison "
           f"({phases} phases per program: {len(COMPARED)} control pins and the address "
           f"in every phase, the data under WR)")
+    hid = harness_id()
     ok = True
     for p in progs:
-        # a program may ask for a longer run in <prog>.phases (one number)
-        ph = phases
-        side = os.path.splitext(p)[0] + ".phases"
-        if os.path.exists(side):
-            ph = max(phases, int(open(side).read().split()[0]))
-        if not compare(p, ph, source=source): ok = False
+        if not compare(p, program_phases(p, phases), source=source, mode=mode, hid=hid): ok = False
     return 0 if ok else 1
 
 if __name__ == "__main__":

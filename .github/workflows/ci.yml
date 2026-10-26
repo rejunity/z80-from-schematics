@@ -1,9 +1,10 @@
 name: CI
 
 # Every push, PR, nightly run and manual dispatch runs every job below,
-# except zexall-subset-rtl (Verilator, ~25-55 min): main pushes, the
-# nightly run and dispatch only. No job tolerates a failure: every suite
-# must pass in full.
+# except zexall-subset-rtl (Verilator, ~25-55 min) and pz80-recordings
+# (perfectz80 live against every recording of the pin sweep, 8 x ~30 min):
+# main pushes, the nightly run and dispatch only. No job tolerates a
+# failure: every suite must pass in full.
 on:
   push:
     branches: ['**']
@@ -54,27 +55,46 @@ jobs:
         run: make lockstep
 
   rtl-tests:
-    name: RTL (iverilog elaboration + FUSE through RTL)
+    name: RTL with iverilog and Python only (FUSE, X / Y, perfectz80's recorded traces and sweep)
     runs-on: ubuntu-latest
+    # No C toolchain installed, and CC=false CXX=false: any C build fails the
+    # job. The RTL against every recorded comparison with the die, as a
+    # repository without perfectz80 or the C model (a chip's) runs them.
+    timeout-minutes: 30
+    env:
+      NO_C: CC=false CXX=false
     steps:
       - uses: actions/checkout@v5
-      - name: Install C + iverilog
+      - name: Install iverilog (no C toolchain)
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential python3 iverilog
+          sudo apt-get install -y --no-install-recommends python3 iverilog
       - name: RTL elaboration smoke (iverilog)
-        run: make rtl
+        run: make rtl $NO_C
       - name: Registered bus controls and decoder skew
-        run: make bus_controls
+        run: make bus_controls $NO_C
       - name: FUSE's 1356 cases through the iverilog RTL
-        run: make fuse_rtl
+        # tests.expected, and the die's values where they differ
+        # (tests/fuse/silicon.expected; fuse_pz80 checks them on the die)
+        run: make fuse_rtl $NO_C
       - name: X and Y corpus through the iverilog RTL
-        run: make xyflags_rtl
+        # the die's values (tests/xyflags/; xyflags_pz80 checks them)
+        run: make xyflags_rtl $NO_C
+      - name: Trace programs vs perfectz80's recorded traces (iverilog RTL)
+        # every half-cycle: the control pins, the address, the data under
+        # WR (tests/traces/pz80/; verify_pz80_traces checks them live)
+        run: make perfectz80_rtl $NO_C
+      - name: Pin scenarios vs perfectz80's recorded traces (iverilog RTL)
+        # the 15 programs with their .events (INT / NMI / WAIT / BUSREQ / RESET)
+        run: make pin_scenarios_rtl $NO_C
+      - name: The pin sweep's RTL against perfectz80's recordings, a 1/32 slice
+        # ~1,600 cases across every group (the event-sweep job runs all of
+        # them, with the C model); perfectz80 is never run
+        run: make event_sweep_rtl EVENT_SWEEP_ARGS="--shard 0/32" $NO_C
       # the chip flows' pin-timing SDC is generated from the NMOS Z80
       # datasheet table (asic/timing/); the committed one must match
       - name: NMOS pin-timing SDC up to date
-        run: make timing_sdc_check
+        run: make timing_sdc_check $NO_C
 
   basic-c-tests:
     name: BASIC ROM via C model (NASCOM 4.7c + Tiny BASIC)
@@ -145,7 +165,7 @@ jobs:
         run: make z80test_rtl Z80TEST_VARIANTS=${{ matrix.variant }}
 
   parity-tests:
-    name: Parity (C vs iverilog vs Verilator, and vs the die in perfectz80)
+    name: Parity (C vs iverilog vs Verilator), the C model vs the die's recordings, the recordings on perfectz80
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -158,26 +178,21 @@ jobs:
         run: make verilator
       - name: C vs iverilog vs Verilator parity (10 hand + 4 random trace programs)
         run: make compare
-      - name: C model vs perfectz80 (signal-timing)
+      - name: C model vs perfectz80's recorded traces (signal-timing)
         # Every half-cycle: the control pins, the address and the data
-        # under WR; any difference fails.
+        # under WR; any difference fails. The 14 trace programs, random
+        # ones (prog_rnd_01..04, scripts/gen_random_trace_progs.py)
+        # included; the iverilog RTL runs them in rtl-tests.
         run: make perfectz80
-      - name: iverilog RTL vs perfectz80 (signal-timing)
-        # Same 14 trace programs, but the trace source is the iverilog RTL
-        # testbench (build/tb_z80.vvp) rather than the C model. Random
-        # programs (prog_rnd_01..04 from scripts/gen_random_trace_progs.py)
-        # give opcode-mix coverage no hand-written program would have.
-        run: make perfectz80_rtl
-      - name: Pin-scenario programs vs perfectz80 — C path
+      - name: Pin-scenario programs vs perfectz80's recorded traces — C path
         # 15 trace programs (prog9..prog23) that drive INT / NMI / WAIT /
         # BUSREQ / RESET via the .events sidecar; every phase's control
         # pins, address and data under WR must match the die.
         run: make pin_scenarios
-      - name: Pin-scenario programs vs perfectz80 — iverilog RTL path
-        # Same 15 scenarios through the iverilog RTL testbench. .events
-        # is plumbed via per-pin +<pin>_lo / +<pin>_hi plusargs
-        # (compare_signal_timing.py encodes the sidecar).
-        run: make pin_scenarios_rtl
+      - name: perfectz80 live against its recorded traces (29 programs)
+        # tests/traces/pz80/: perfectz80 must print every recording byte
+        # for byte (a stale or changed one fails; make record_pz80_traces)
+        run: make verify_pz80_traces
       - name: FUSE's 1356 cases on the die (perfectz80)
         # Every case behind a preamble that loads its registers; the die's
         # registers, WZ, PC, R, T-states and memory must match
@@ -211,11 +226,12 @@ jobs:
     # half-cycle of every opcode (opcodes_reset) and 500 fresh fuzz cases.
     # Each runs through the RTL and the C model: the pins every half-cycle,
     # F, WZ and Q in T4.P of every M1. perfectz80's side comes from its
-    # recorded traces (tests/event_sweep/pz80/), and runs only for a case
-    # they don't have.
-    # Shard 0 also runs 50 recorded cases through perfectz80 live and fails
-    # on any difference from the recording (a harness change that needed
-    # HARNESS_VERSION bumped).
+    # recorded traces (tests/event_sweep/pz80/) and is never run: a case
+    # without a recording fails (event_sweep_recorded).
+    # Shard 0 also runs 50 recorded cases, drawn from every group, through
+    # perfectz80 live and fails on any difference from the recording (a
+    # harness change that needed HARNESS_VERSION bumped); pz80-recordings
+    # runs all of them on main and nightly.
     strategy:
       fail-fast: false
       matrix:
@@ -229,14 +245,18 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential python3 iverilog
       - name: Sweep RESET / INT / NMI / BUSREQ / WAIT across T-states and clock halves
-        # Fails on any difference from perfectz80 and on any half-cycle
-        # where the C model differs from the RTL (docs/event-sweep.md).
-        run: make event_sweep EVENT_SWEEP_ARGS="--shard ${{ matrix.shard }}/4 ${{ matrix.shard == 0 && '--verify-recorded 50' || '' }}"
+        # Fails on any difference from perfectz80's recordings and on any
+        # half-cycle where the C model differs from the RTL
+        # (docs/event-sweep.md).
+        run: make event_sweep_recorded EVENT_SWEEP_ARGS="--shard ${{ matrix.shard }}/4"
+      - name: 50 recordings, from every group, run again on perfectz80 live
+        if: matrix.shard == 0
+        run: make event_sweep_verify EVENT_SWEEP_VERIFY=50 EVENT_SWEEP_ARGS="--out build/event_sweep_verify"
       - name: RESET at every half-cycle of every opcode (the nightly run)
         # Group opcodes_reset: 27,768 cases, recorded like the others, about
         # 10 more minutes a shard; too long for every push.
         if: github.event_name == 'schedule'
-        run: make event_sweep EVENT_SWEEP_ARGS="--groups opcodes_reset --shard ${{ matrix.shard }}/4 --out build/event_sweep_opcodes_reset"
+        run: make event_sweep_recorded EVENT_SWEEP_ARGS="--groups opcodes_reset --shard ${{ matrix.shard }}/4 --out build/event_sweep_opcodes_reset"
       - name: Fuzz with fresh seeds (the nightly run)
         # 500 cases nobody has run before -- random code, interrupt modes and
         # pin events (docs/event-sweep.md), perfectz80 live -- in the
@@ -245,8 +265,8 @@ jobs:
         # --groups fuzz --fuzz-seed <run id> --fuzz-n 500 --match <case>.
         if: github.event_name == 'schedule' && matrix.shard == 0
         run: >-
-          python3 scripts/event_sweep.py --groups fuzz --fuzz-seed ${{ github.run_id }}
-          --fuzz-n 500 --c-model --jobs 4 --out build/event_sweep_fuzz
+          make event_sweep EVENT_SWEEP_ARGS="--groups fuzz --fuzz-seed ${{ github.run_id }}
+          --fuzz-n 500 --jobs 4 --out build/event_sweep_fuzz"
       - name: Upload report and per-case side-by-side traces
         if: always()
         uses: actions/upload-artifact@v6
@@ -261,6 +281,39 @@ jobs:
             build/event_sweep_opcodes_reset/diff/
           if-no-files-found: warn
           retention-days: 14
+
+  # =====================================================================
+  # perfectz80 live against every recording of the pin sweep: the die's
+  # side of every comparison above is a recording (tests/event_sweep/pz80/,
+  # 77,235 traces); this job runs perfectz80 alone -- no RTL, no C model --
+  # on every one of them and fails unless it prints each byte for byte.
+  # ~0.5 CPU-s a trace, ~12 CPU-hours in all: eight shards of ~30 min, on
+  # main pushes, the nightly run and dispatch. (Every push: event-sweep's
+  # 50-trace sample, verify_pz80_traces, fuse_pz80, xyflags_pz80.)
+  # =====================================================================
+
+  pz80-recordings:
+    name: perfectz80 live against every pin-sweep recording ${{ matrix.shard }}/8
+    runs-on: ubuntu-latest
+    if: >-
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'))
+      || github.event_name == 'schedule'
+      || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install C (perfectz80's harness)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential python3
+      - name: perfectz80 live against every recording of the shard (all groups, opcodes_reset too)
+        run: >-
+          make event_sweep_verify EVENT_SWEEP_ARGS="--groups all,opcodes_reset
+          --shard ${{ matrix.shard }}/8 --out build/event_sweep_verify"
 
   # =====================================================================
   # LIBRELANE GATE-LEVEL — "ultimate test". Synthesise rtl/*.v via
@@ -278,7 +331,7 @@ jobs:
   # =====================================================================
 
   librelane-netlist:
-    name: LibreLane gate-level sim vs perfectz80 (14 programs + 15 pin scenarios)
+    name: LibreLane gate-level sim vs perfectz80's recordings (14 programs + 15 pin scenarios)
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -330,10 +383,10 @@ jobs:
       - name: Build gate-level iverilog testbench (sky130 cells)
         run: make iverilog_netlist
 
-      - name: Gate-level netlist vs perfectz80 (10 hand + 4 random = 14 programs)
+      - name: Gate-level netlist vs perfectz80's recorded traces (10 hand + 4 random = 14 programs)
         run: make perfectz80_netlist
 
-      - name: Pin-scenarios vs perfectz80 — gate-level netlist
+      - name: Pin-scenarios vs perfectz80's recorded traces — gate-level netlist
         # The 15 pin-scenario programs (prog9..prog23) driven through the
         # synthesised sky130 netlist via tb_z80_netlist.v's .events
         # plusarg support; gated like the C and iverilog paths.

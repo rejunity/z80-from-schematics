@@ -16,6 +16,11 @@
 #   against the die (perfectz80): perfectz80 pin_scenarios event_sweep fuse_pz80
 #     xyflags_pz80; make xy_study: the oracles' X / Y against the die
 #     (perfectz80_rtl, pin_scenarios_rtl: the RTL as the trace source)
+#     perfectz80's side is recorded: tests/traces/pz80/, tests/event_sweep/pz80/,
+#     tests/fuse/silicon.expected, tests/xyflags/; the comparisons run without
+#     perfectz80 (event_sweep_recorded, event_sweep_rtl: never live), and
+#     verify_pz80_traces, event_sweep_verify, fuse_pz80, xyflags_pz80 check the
+#     recordings on perfectz80 live; make record_pz80 records them again
 #   make lockstep   our model and four other emulators, instruction by
 #                   instruction over ZEXDOC3
 #   make phase_identity  every pin of every phase vs PHASE_REF=<rev>
@@ -87,6 +92,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 # ---- RTL sources ----
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
+.PHONY: record_pz80 record_pz80_traces verify_pz80_traces event_sweep_recorded event_sweep_rtl event_sweep_verify
 .PHONY: xyflags xyflags_rtl xyflags_pz80 xy_study cfast cfast_bench cfast_identity cfast_single cfast_single_identity pinhash phase_identity zexrunner_tick timing_sdc timing_sdc_check equiv all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl fuse_pz80 all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist event_sweep basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test verilator_z80test z80test_rtl halt2int halt2int_probe lockstep
 
 all: cmodel ctest
@@ -257,15 +263,31 @@ halt2int: halt2int_probe
 # control pins (mreq/iorq/rd/wr/m1/rfsh/halt), the address and the data
 # under WR between our C model and the die across the trace programs (10
 # hand-written + 4 seeded-random from scripts/gen_random_trace_progs.py).
-# Any difference fails.
-perfectz80: tracegen $(BIN)/perfectz80_runner
-	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py 200
+# Any difference fails. perfectz80's side is its recorded trace of each
+# program (tests/traces/pz80/, `make record_pz80_traces`): these targets
+# never run perfectz80, and fail on a missing or stale recording;
+# `make verify_pz80_traces` runs perfectz80 live against the recordings.
+perfectz80: tracegen
+	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --recorded 200
 
 # Same gate but driving the iverilog RTL testbench (build/tb_z80.vvp) as
 # the trace source instead of the C model. The pin-scenario programs with
-# their .events go through the RTL too (pin_scenarios_rtl).
-perfectz80_rtl: iverilog $(BIN)/perfectz80_runner
-	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --rtl=iverilog 200
+# their .events go through the RTL too (pin_scenarios_rtl). No C compiler
+# needed: iverilog and Python only.
+perfectz80_rtl: iverilog
+	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --recorded --rtl=iverilog 200
+
+# perfectz80's recorded traces of every trace program and pin scenario
+# (tests/traces/pz80/<prog>.txt): written by perfectz80 live, each under a
+# header with the program's, the .events' and the harness's hashes, the
+# phase count and the command; verify_pz80_traces runs perfectz80 again and
+# fails unless it prints every recording byte for byte (CI: every push).
+PZ80_TRACE_PROGS = $(sort $(wildcard $(TESTS)/traces/*.hex)) $(PIN_SCENARIOS)
+record_pz80_traces: $(BIN)/perfectz80_runner
+	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --record 200 $(PZ80_TRACE_PROGS)
+
+verify_pz80_traces: $(BIN)/perfectz80_runner
+	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --verify-recorded 200 $(PZ80_TRACE_PROGS)
 
 # === NMOS pin timing: the chip flows' SDC =================================
 # asic/timing/z80_chip_nmos4.sdc constrains a chip's pins to the NMOS Z80's
@@ -344,8 +366,8 @@ $(BUILD)/tb_z80_netlist.vvp: $(TESTS)/iverilog/tb_z80_netlist.v $(BUILD)/synth/z
 # Gate-level netlist vs perfectz80. Default program set: 10 hand + 4
 # random = 14 programs (the script's default when called without
 # explicit paths); pin_scenarios_netlist runs the pin scenarios.
-perfectz80_netlist: iverilog_netlist $(BIN)/perfectz80_runner
-	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --rtl=netlist 200
+perfectz80_netlist: iverilog_netlist
+	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --recorded --rtl=netlist 200
 
 # Gate-level BASIC. Same sim_basic.cpp testbench (68B50 ACIA, NASCOM /INT
 # wiring, --exit-on sentinel, etc.) but Verilator builds it against the
@@ -400,6 +422,7 @@ basic_netlist_tests: verilator_basic_netlist
 # pin event sequence via the .events sidecar (INT, NMI, WAIT, BUSREQ,
 # RESET, ...) and must match perfectz80 in every phase: the control pins,
 # the address and the data under WR. A difference fails the target.
+# perfectz80's side is recorded, as for the trace programs above.
 PIN_SCENARIOS = \
 	  $(TESTS)/traces/pin_scenarios/prog9_inta_im1.hex \
 	  $(TESTS)/traces/pin_scenarios/prog10_halt_nmi.hex \
@@ -417,19 +440,19 @@ PIN_SCENARIOS = \
 	  $(TESTS)/traces/pin_scenarios/prog22_wait_cpir.hex \
 	  $(TESTS)/traces/pin_scenarios/prog23_wb_irq.hex
 
-pin_scenarios: tracegen $(BIN)/perfectz80_runner
-	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py 200 $(PIN_SCENARIOS)
+pin_scenarios: tracegen
+	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --recorded 200 $(PIN_SCENARIOS)
 
 # Same pin-scenarios but driving the iverilog RTL testbench (.events is
 # wired into tb_z80.v via per-pin plusargs -- see the tests/iverilog/tb_z80.v
 # initial block).
-pin_scenarios_rtl: iverilog $(BIN)/perfectz80_runner
-	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --rtl=iverilog 200 $(PIN_SCENARIOS)
+pin_scenarios_rtl: iverilog
+	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --recorded --rtl=iverilog 200 $(PIN_SCENARIOS)
 
 # Same pin-scenarios through the LibreLane-synthesised sky130 gate-level
 # netlist (tb_z80_netlist.v consumes the same plusargs).
-pin_scenarios_netlist: iverilog_netlist $(BIN)/perfectz80_runner
-	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --rtl=netlist 200 $(PIN_SCENARIOS)
+pin_scenarios_netlist: iverilog_netlist
+	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --recorded --rtl=netlist 200 $(PIN_SCENARIOS)
 
 # The pin sweep: the iverilog RTL and the C model against perfectz80, half-
 # cycle by half-cycle, pins and pad drivers: RESET / INT / NMI pulses at
@@ -438,9 +461,32 @@ pin_scenarios_netlist: iverilog_netlist $(BIN)/perfectz80_runner
 # classes, the data latch, combinations and random fuzz; the die's traces
 # are recorded in tests/event_sweep/pz80/. Fails on any difference from the
 # die, and on any half-cycle where the C model differs from the RTL; see
-# docs/event-sweep.md.
+# docs/event-sweep.md. event_sweep runs perfectz80 live for a case with no
+# recording (a new group, new fuzz seeds); event_sweep_recorded never runs
+# it and fails on such a case (CI); event_sweep_rtl is the RTL alone
+# against the recordings -- iverilog and Python, no C compiler; and
+# event_sweep_verify runs perfectz80 alone, live, against every recording
+# of the cases selected (EVENT_SWEEP_VERIFY=N: a random sample of N).
 event_sweep: $(BUILD)/tb_event_sweep.vvp $(BIN)/event_sweep_pz80 $(BIN)/event_sweep_c
 	@$(PYTHON) $(SCRIPTS)/event_sweep.py --c-model $(EVENT_SWEEP_ARGS)
+
+event_sweep_recorded: $(BUILD)/tb_event_sweep.vvp $(BIN)/event_sweep_c
+	@$(PYTHON) $(SCRIPTS)/event_sweep.py --recorded-only --c-model $(EVENT_SWEEP_ARGS)
+
+event_sweep_rtl: $(BUILD)/tb_event_sweep.vvp
+	@$(PYTHON) $(SCRIPTS)/event_sweep.py --recorded-only $(EVENT_SWEEP_ARGS)
+
+EVENT_SWEEP_VERIFY ?= all
+event_sweep_verify: $(BIN)/event_sweep_pz80
+	@$(PYTHON) $(SCRIPTS)/event_sweep.py --pz80-only --verify-recorded $(EVENT_SWEEP_VERIFY) $(EVENT_SWEEP_ARGS)
+
+# Every perfectz80 recording written again by perfectz80 live: the trace
+# programs and pin scenarios (record_pz80_traces, seconds) and every group
+# of the sweep, opcodes_reset included (~1 CPU-hour). FUSE's and the X / Y
+# corpus's die values are kept in tests/fuse/silicon.expected and
+# tests/xyflags/ (fuse_pz80, xyflags_pz80 check them on the die).
+record_pz80: record_pz80_traces $(BIN)/event_sweep_pz80
+	@$(PYTHON) $(SCRIPTS)/event_sweep.py --groups all,opcodes_reset --record --no-cache --pz80-only
 
 $(BIN)/event_sweep_c: $(SCRIPTS)/event_sweep_c.c $(CMODEL_LIB) $(CMODEL_HDRS)
 	@mkdir -p $(BIN)
@@ -793,7 +839,7 @@ test: ctest rtl bus_controls compare
 # z80test variants 6-15 min each: about an hour and a half in all.
 all-tests: ctest fuse fuse_rtl fuse_pz80 xyflags xyflags_rtl xyflags_pz80 prelim z80test z80test_rtl halt2int lockstep \
            silicon_cycles silicon_async rtl bus_controls verilator compare perfectz80 perfectz80_rtl \
-           pin_scenarios pin_scenarios_rtl basic_c_tests basic_rtl_tests event_sweep \
+           pin_scenarios pin_scenarios_rtl verify_pz80_traces basic_c_tests basic_rtl_tests event_sweep_recorded \
            cfast_identity cfast_single_identity zexdoc zexall zexall_subset_rtl
 	@echo "== all-tests complete =="
 
@@ -840,11 +886,11 @@ $(BUILD)/luts/%/tb.vvp: $(BUILD)/luts/%/stat.json $(TESTS)/iverilog/tb_z80_netli
 	$(IVERILOG) -g2012 -s tb_z80 -o $@ $(TESTS)/iverilog/tb_z80_netlist.v \
 	  $(BUILD)/luts/$*/z80_top_sim.v
 
-luts_netlist: $(foreach f,$(LUTS_FAMILIES),$(BUILD)/luts/$(f)/tb.vvp) $(BIN)/perfectz80_runner
+luts_netlist: $(foreach f,$(LUTS_FAMILIES),$(BUILD)/luts/$(f)/tb.vvp)
 	@for f in $(LUTS_FAMILIES); do \
-	  echo "== $$f-mapped netlist vs perfectz80 =="; \
+	  echo "== $$f-mapped netlist vs perfectz80 (recorded) =="; \
 	  TB_NETLIST_VVP=$(abspath $(BUILD))/luts/$$f/tb.vvp NETLIST_LABEL="$$f-mapped" \
-	    $(PYTHON) $(SCRIPTS)/compare_signal_timing.py --rtl=netlist 200 || exit 1; \
+	    $(PYTHON) $(SCRIPTS)/compare_signal_timing.py --recorded --rtl=netlist 200 || exit 1; \
 	done
 
 clean:
