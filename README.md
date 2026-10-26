@@ -106,7 +106,7 @@ interactive controls (Enter, Backspace, Ctrl-C / Ctrl-Space = BREAK, Ctrl-\\ = e
     make pin_scenarios_netlist  # same scenarios — LibreLane gate-level netlist path
     make event_sweep            # RESET / INT / NMI / BUSREQ / WAIT at every T-state of 31 instructions and every opcode, IM0/1/2, vs perfectz80
     make event_sweep_recorded   # the same from perfectz80's recordings alone (event_sweep_rtl: RTL only, no C compiler)
-    make event_sweep_verify     # perfectz80 live against every recording of the sweep (~12 CPU-hours)
+    make event_sweep_verify     # perfectz80 live against every recording of the sweep (~1.5 h on 8 cores)
     make record_pz80            # record every perfectz80 trace again
     make all-tests           # every gate that needs only a C compiler, iverilog and Verilator (~1.5 h)
     make clean
