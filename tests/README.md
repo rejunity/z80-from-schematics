@@ -326,7 +326,7 @@ the sweep's carry a key per case that hashes the same, with
 cases and sha256. A change to a program, its events or the harness makes
 a recording stale, and the comparison then fails rather than run
 perfectz80. `make record_pz80` records everything again (the 29 traces in
-seconds, the sweep's 77,235 cases in about 3.5 CPU-hours on GitHub's runners);
+seconds, the sweep's 77,235 cases in about 5 CPU-hours on GitHub's runners);
 `make record_pz80_traces` the traces alone, and `scripts/event_sweep.py
 --groups <g> --record --no-cache --pz80-only` one sweep group.
 
@@ -394,7 +394,7 @@ on demand:
 | `z80test-rtl` (4 jobs) | always | `make z80test_rtl` for one variant each |
 | `parity-tests` | always | `make verilator`, `compare`, `perfectz80`, `pin_scenarios`, `verify_pz80_traces`, `fuse_pz80`, `xyflags_pz80` |
 | `event-sweep` (4 shards) | always; `opcodes_reset` and fresh fuzz (perfectz80 live) nightly | `make event_sweep_recorded` (shard 0 also `event_sweep_verify` on 50 recordings from every group) |
-| `pz80-recordings` (8 shards) | main pushes, nightly, on demand | `make event_sweep_verify` on every pin-sweep recording, `opcodes_reset` included (~7 min a shard) |
+| `pz80-recordings` (8 shards) | main pushes, nightly, on demand | `make event_sweep_verify` on every pin-sweep recording, `opcodes_reset` included (7-11 min a shard) |
 | `librelane-netlist` | always | `make synth`, `iverilog_netlist`, `perfectz80_netlist`, `pin_scenarios_netlist` |
 | `librelane-basic-netlist` | always | `make synth`, `verilator_basic_netlist`, `basic_netlist_tests` |
 | `cfast-bench` | always | `make cfast_identity`, `cfast_bench` |

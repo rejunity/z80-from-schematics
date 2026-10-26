@@ -396,7 +396,7 @@ has no recording:
 ```
 make event_sweep EVENT_SWEEP_ARGS=--record      # rewrites the files of the groups run
 scripts/event_sweep.py --groups latch --record --no-cache --pz80-only   # perfectz80 alone
-make record_pz80                                 # every group again, ~3.5 CPU-hours
+make record_pz80                                 # every group again, ~5 CPU-hours
 ```
 
 Each file written starts with a `#` line naming its group, the harness, the
@@ -414,8 +414,8 @@ printed, `--verify-seed S` repeats a sample). `--verify-recorded all` with
 `--pz80-only` runs perfectz80 alone on every recorded case of the selection
 (`make event_sweep_verify`): CI's `pz80-recordings` job does it for all
 77,235 traces, `opcodes_reset` included, in eight shards on main pushes and
-nightly -- about 0.17 CPU-s a case on GitHub's runners, 3.5 CPU-hours in all,
-~7 min a shard. The data window
+nightly -- about 0.22 CPU-s a case on GitHub's runners, 5 CPU-hours in all,
+7-11 min a shard. The data window
 came in this way: 50 recorded cases from all 23 groups printed their
 recordings byte for byte with the new harness, and the recordings were
 re-keyed, not run again.

@@ -482,7 +482,7 @@ event_sweep_verify: $(BIN)/event_sweep_pz80
 
 # Every perfectz80 recording written again by perfectz80 live: the trace
 # programs and pin scenarios (record_pz80_traces, seconds) and every group
-# of the sweep, opcodes_reset included (~3.5 CPU-hours on GitHub's runners). FUSE's and the X / Y
+# of the sweep, opcodes_reset included (~5 CPU-hours on GitHub's runners). FUSE's and the X / Y
 # corpus's die values are kept in tests/fuse/silicon.expected and
 # tests/xyflags/ (fuse_pz80, xyflags_pz80 check them on the die).
 record_pz80: record_pz80_traces $(BIN)/event_sweep_pz80

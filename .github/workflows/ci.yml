@@ -2,7 +2,7 @@ name: CI
 
 # Every push, PR, nightly run and manual dispatch runs every job below,
 # except zexall-subset-rtl (Verilator, ~25-55 min) and pz80-recordings
-# (perfectz80 live against every recording of the pin sweep, 8 x ~7 min):
+# (perfectz80 live against every recording of the pin sweep, 8 x 7-11 min):
 # main pushes, the nightly run and dispatch only. No job tolerates a
 # failure: every suite must pass in full.
 on:
@@ -287,7 +287,7 @@ jobs:
   # side of every comparison above is a recording (tests/event_sweep/pz80/,
   # 77,235 traces); this job runs perfectz80 alone -- no RTL, no C model --
   # on every one of them and fails unless it prints each byte for byte.
-  # ~0.17 CPU-s a trace, ~3.5 CPU-hours in all: eight shards of ~7 min, on
+  # ~0.22 CPU-s a trace, ~5 CPU-hours in all: eight shards of 7-11 min, on
   # main pushes, the nightly run and dispatch. (Every push: event-sweep's
   # 50-trace sample, verify_pz80_traces, fuse_pz80, xyflags_pz80.)
   # =====================================================================
