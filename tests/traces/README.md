@@ -62,14 +62,45 @@ seeds 1..4. To add more:
 
     scripts/gen_random_trace_progs.py 5 48 tests/traces/prog_rnd_05.hex
 
-Then re-run `make compare`, `make perfectz80`, and `make perfectz80_rtl`
-— the new program is auto-discovered (both compare scripts glob
-`tests/traces/*.hex`).
+Then record perfectz80's trace of it (`make record_pz80_traces`) and re-run
+`make compare`, `make perfectz80`, and `make perfectz80_rtl` — the new
+program is auto-discovered (both compare scripts glob `tests/traces/*.hex`).
 
 The random programs surfaced one real loader-parity bug in
 `scripts/perfectz80_runner.c` (it didn't skip `#` / `//` comment lines —
 fixed) and otherwise pass all three gates: C↔iverilog↔Verilator parity,
 C-vs-perfectz80, and iverilog-RTL-vs-perfectz80.
+
+## perfectz80's recorded traces (`pz80/`)
+
+`pz80/<prog>.txt` is perfectz80's trace of every trace program here and
+every pin scenario in `pin_scenarios/`: `perfectz80_runner`'s output for
+the program, its `.events` and its phase count (one more than the
+comparison's: perfectz80's first phase is the moment reset releases), one
+line per half-cycle,
+
+    phase  addr  data_o  data_i  mreq  iorq  rd  wr  m1  rfsh  halt
+
+under a header of `#` lines:
+
+    # perfectz80's trace of tests/traces/prog1.hex: perfectz80_runner's output (...)
+    # generator: make record_pz80_traces (scripts/compare_signal_timing.py --record)
+    # rz80: <the commit it was recorded at>
+    # program-sha1: <sha1 of the .hex>
+    # events-sha1: <sha1 of the .events, or none>
+    # phases: <perfectz80_runner's phase count>
+    # harness: <perfectz80's netlist and simulator and the runner, hashed>
+
+`make perfectz80`, `perfectz80_rtl`, `perfectz80_netlist` and the
+`pin_scenarios` targets compare against these and never run perfectz80; a
+recording whose header doesn't match the program, its events, the phase
+count or the harness fails the comparison. `make verify_pz80_traces` runs
+perfectz80 again and requires every recording byte for byte (CI, every
+push); `make record_pz80_traces` writes them again after a change. Plain
+text, 325 KB for the 29: Python reads them, and so could a testbench's
+`$fscanf`. `scripts/compare_signal_timing.py --recorded` runs from another
+repository's copies (`PZ80_TRACES`, `TB_VVP`, `TB_NETLIST_VVP`) without
+perfectz80, a C compiler or the C model.
 
 `prog8_nmi.hex` is special: it's a sea of `00` (NOP) so the CPU just runs NOPs
 until the NMI fires at phase 30 — the interesting behaviour is the NMI-ack M1

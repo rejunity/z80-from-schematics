@@ -28,22 +28,36 @@
 # whether the byte a model takes is the one the die takes (docs/timing.md
 # "The data latch").
 #
+# perfectz80's side comes from its recorded traces in tests/event_sweep/pz80/
+# (one file per group, MANIFEST.txt naming the harness they were recorded
+# with) and runs live only for a case they don't have; --recorded-only never
+# runs it and fails on such a case, so the RTL can be checked against the
+# die with iverilog and Python alone. --pz80-only skips the RTL and the C
+# model: with --verify-recorded it checks recordings against perfectz80
+# live, with --record (and --no-cache) it records groups again.
+#
 # Usage:
 #   scripts/event_sweep.py [--groups int,nmi,...] [--match STR] [--phases N]
-#                          [--jobs N] [--c-model]
-#                          [--record] [--verify-recorded N]
+#                          [--jobs N] [--c-model] [--recorded-only]
+#                          [--record] [--verify-recorded N|all] [--pz80-only]
 # Output: build/event_sweep/report.md, one side-by-side trace per differing
 # case in build/event_sweep/diff/.
+#
+# EVENT_SWEEP_TB_VVP (the RTL testbench build) and EVENT_SWEEP_PZ80 (the
+# recordings' directory) in the environment point elsewhere, for a
+# repository that carries copies of them.
 import argparse, collections, hashlib, lzma, os, random, re, subprocess, sys
 from concurrent.futures import Future, ThreadPoolExecutor
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TB_VVP = os.path.join(ROOT, "build", "tb_event_sweep.vvp")
+TB_VVP = os.environ.get("EVENT_SWEEP_TB_VVP", os.path.join(ROOT, "build", "tb_event_sweep.vvp"))
 PZ80 = os.path.join(ROOT, "build", "bin", "event_sweep_pz80")
 CMODEL = os.path.join(ROOT, "build", "bin", "event_sweep_c")
 OUT = os.path.join(ROOT, "build", "event_sweep")
-# perfectz80's traces, recorded (--record): tests/event_sweep/pz80/<group>.txt.xz
-CACHE = os.path.join(ROOT, "tests", "event_sweep", "pz80")
+# perfectz80's traces, recorded (--record): tests/event_sweep/pz80/<group>.txt.xz,
+# and MANIFEST.txt: the harness they were recorded with, and each file's cases
+CACHE = os.environ.get("EVENT_SWEEP_PZ80", os.path.join(ROOT, "tests", "event_sweep", "pz80"))
+MANIFEST = os.path.join(CACHE, "MANIFEST.txt")
 
 NMI, INT, WAIT, BUSREQ, RESET = 0, 1, 2, 3, 4
 PIN_NAMES = {NMI: "nmi", INT: "int", WAIT: "wait", BUSREQ: "busreq", RESET: "reset"}
@@ -761,9 +775,72 @@ def pz80_key(c):
             c["busreq_walk"], c["wait_walk"], pulses) + ((("dwin", c["dwin"]),) if c["dwin"] else ())
 
 
+def pz80_here():
+    """perfectz80's harness sources are in this tree (not in a repository
+    that carries the recordings alone)"""
+    return os.path.exists(os.path.join(ROOT, "scripts", "event_sweep_pz80.c"))
+
+
+def manifest():
+    """{'harness-id': ..., 'harness-version': ..., 'files': {name: (cases, sha, commit)}}"""
+    out = {"files": {}}
+    if not os.path.exists(MANIFEST):
+        return out
+    for line in open(MANIFEST):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        m = re.match(r"([a-z-]+):\s*(\S+)$", line)
+        if m:
+            out[m.group(1)] = m.group(2)
+            continue
+        f = line.split()
+        if len(f) == 4 and f[0].endswith(".txt.xz"):
+            out["files"][f[0]] = (int(f[1]), f[2], f[3])
+    return out
+
+
+def write_manifest(hid, written, command):
+    """MANIFEST.txt after --record: the harness, and every group file's
+    cases, sha256 and the commit it was recorded at (this one's parent for
+    the files just written)"""
+    old = manifest()["files"]
+    head = git_head()
+    rows = []
+    for f in sorted(os.listdir(CACHE)):
+        if not f.endswith(".txt.xz"):
+            continue
+        data = open(os.path.join(CACHE, f), "rb").read()
+        plain = lzma.decompress(data)
+        cases = plain.count(b"\n@") + plain.startswith(b"@")
+        commit = head if f in written else old.get(f, (0, "", "unknown"))[2]
+        rows.append(f"{f} {cases} {hashlib.sha256(data).hexdigest()[:16]} {commit}")
+    with open(MANIFEST, "w") as out:
+        out.write("# perfectz80's recorded traces for scripts/event_sweep.py: one file per group,\n"
+                  "# each trace under @<key>, the key hashing the harness id below with the case\n"
+                  "# (cache_key()). Recorded by perfectz80 live: make record_pz80 (or\n"
+                  "# scripts/event_sweep.py --groups <g> --record --no-cache --pz80-only);\n"
+                  "# make event_sweep_verify runs perfectz80 again against every recording.\n"
+                  f"# Last written by: {command}\n"
+                  f"harness-id: {hid}\n"
+                  f"harness-version: {harness_version()}\n"
+                  "# file cases sha256[:16] recorded-at\n")
+        out.write("\n".join(rows) + "\n")
+
+
+def git_head():
+    try:
+        return subprocess.run(["git", "-C", ROOT, "rev-parse", "--short", "HEAD"],
+                              capture_output=True, text=True).stdout.strip() or "unknown"
+    except OSError:
+        return "unknown"
+
+
 def harness_version():
     """HARNESS_VERSION in scripts/event_sweep_pz80.c: bumped when a change
     to the harness changes what it prints for a case it ran before."""
+    if not pz80_here():
+        return manifest().get("harness-version", "?")
     src = open(os.path.join(ROOT, "scripts", "event_sweep_pz80.c")).read()
     m = re.search(r"^#define HARNESS_VERSION (\d+)", src, re.M)
     if not m:
@@ -777,7 +854,13 @@ def harness_id():
     The harness's own source is not hashed -- an option added for new cases
     leaves the old ones' output alone -- so a change that does alter it must
     bump HARNESS_VERSION, and --verify-recorded (CI) catches one that
-    didn't."""
+    didn't. Without the sources here (a repository that carries the
+    recordings alone), the id MANIFEST.txt names."""
+    if not pz80_here():
+        hid = manifest().get("harness-id")
+        if not hid:
+            sys.exit(f"no perfectz80 harness here and no harness-id in {MANIFEST}")
+        return hid
     h = hashlib.sha1(f"event_sweep_pz80 v{harness_version()}\n".encode())
     refs = os.path.join(ROOT, "scripts", "refs", "perfectz80")
     files = [os.path.join(ROOT, "scripts", f) for f in ("pz80_pads.c", "pz80_pads.h")]
@@ -803,6 +886,8 @@ def load_cache():
             continue
         key, lines = None, []
         for line in lzma.open(os.path.join(CACHE, f), "rt"):
+            if line.startswith("#"):        # the file's header
+                continue
             if line.startswith("@"):
                 if key: out[key] = "".join(lines)
                 key, lines = line[1:].strip(), []
@@ -812,10 +897,12 @@ def load_cache():
     return out
 
 
-def save_cache(group, texts):
+def save_cache(group, texts, hid, command):
     """texts: {key: perfectz80's output} of one group's cases"""
     os.makedirs(CACHE, exist_ok=True)
     with lzma.open(os.path.join(CACHE, f"{group}.txt.xz"), "wt", preset=9 | lzma.PRESET_EXTREME) as f:
+        f.write(f"# group {group}: perfectz80's traces, harness {hid} (HARNESS_VERSION "
+                f"{harness_version()}), recorded at {git_head()} by: {command}\n")
         for k in sorted(texts):
             f.write(f"@{k}\n{texts[k]}")
 
@@ -1294,9 +1381,15 @@ def main():
     ap.add_argument("--out", default=OUT, help="report and work directory (build/event_sweep)")
     ap.add_argument("--classes", action="store_true",
                     help="print the opcodes' timing classes from the recorded traces and exit")
-    ap.add_argument("--verify-recorded", type=int, default=0, metavar="N",
-                    help="also run N of the cases' recorded perfectz80 traces live and fail on any "
-                         "difference (a harness change that needed a HARNESS_VERSION bump)")
+    ap.add_argument("--verify-recorded", default="0", metavar="N|all",
+                    help="also run N (or all) of the cases' recorded perfectz80 traces live and fail "
+                         "on any difference (a harness change that needed a HARNESS_VERSION bump)")
+    ap.add_argument("--recorded-only", action="store_true",
+                    help="never run perfectz80: its side from the recordings only, and fail on a "
+                         "case they don't have (iverilog and Python alone)")
+    ap.add_argument("--pz80-only", action="store_true",
+                    help="run neither the RTL nor the C model: perfectz80 alone, for "
+                         "--verify-recorded and --record")
     ap.add_argument("--verify-seed", type=int, default=None,
                     help="the --verify-recorded sample's seed (default: a random one, printed)")
     a = ap.parse_args()
@@ -1304,7 +1397,19 @@ def main():
     if a.classes:
         timing_classes(load_cache(), harness_id())
         return 0
-    for exe in (TB_VVP, PZ80) + ((CMODEL,) if a.c_model else ()):
+    n_verify = a.verify_recorded
+    if n_verify != "all":
+        n_verify = int(n_verify)
+    if a.pz80_only and a.c_model:
+        sys.exit("--pz80-only runs no model: drop --c-model")
+    if a.pz80_only and not (n_verify or a.record):
+        sys.exit("--pz80-only needs --verify-recorded or --record")
+    if a.recorded_only and (a.record or a.no_cache):
+        sys.exit("--recorded-only never runs perfectz80: no --record / --no-cache")
+    need = (() if a.pz80_only else (TB_VVP,)) + ((CMODEL,) if a.c_model else ())
+    if not a.recorded_only or n_verify:
+        need += (PZ80,)
+    for exe in need:
         if not os.path.exists(exe):
             sys.exit(f"missing {exe}: run `make event_sweep`")
     k, n = (int(x) for x in a.shard.split("/")) if a.shard else (0, 1)
@@ -1336,21 +1441,38 @@ def main():
     hits = sum(1 for c in pz_cases.values() if cache_key(c, hid) in cache)
     print(f"{len(todo)} cases ({len(pz_cases)} distinct for perfectz80: {hits} recorded, "
           f"{len(pz_cases) - hits} to run), {a.jobs} jobs", flush=True)
+    if (a.recorded_only or n_verify == "all") and hits < len(pz_cases):
+        missing = sorted(c["name"] for c in pz_cases.values() if cache_key(c, hid) not in cache)
+        rec_hid = manifest().get("harness-id")
+        if rec_hid and rec_hid != hid:
+            print(f"::error::the recordings are of perfectz80 harness {rec_hid} ({MANIFEST}), "
+                  f"this tree's is {hid}: record them again (make record_pz80)")
+        for n in missing[:50]:
+            print(f"::error::{n}: no recorded perfectz80 trace (scripts/event_sweep.py "
+                  f"--groups <its group> --record)")
+        print(f"{len(missing)} cases have no recorded perfectz80 trace")
+        return 1
     verify = []
-    if a.verify_recorded:      # a sample of the recorded traces, run again live
+    if n_verify:               # recorded traces, run again live: a sample, or all of them
         rec = sorted((k for k, c in pz_cases.items() if cache_key(c, hid) in cache),
                      key=lambda k: pz_cases[k]["name"])
-        seed = a.verify_seed if a.verify_seed is not None else random.randrange(1 << 30)
-        verify = random.Random(seed).sample(rec, min(a.verify_recorded, len(rec)))
-        print(f"verifying {len(verify)} recorded perfectz80 traces live (--verify-seed {seed})", flush=True)
+        if n_verify == "all":
+            verify = rec
+            print(f"verifying all {len(verify)} recorded perfectz80 traces live", flush=True)
+        else:
+            seed = a.verify_seed if a.verify_seed is not None else random.randrange(1 << 30)
+            verify = random.Random(seed).sample(rec, min(n_verify, len(rec)))
+            print(f"verifying {len(verify)} recorded perfectz80 traces live (--verify-seed {seed})",
+                  flush=True)
     with ThreadPoolExecutor(a.jobs) as pool:
         pz_runs = {}
         for k, c in pz_cases.items():
             text = cache.get(cache_key(c, hid))
             pz_runs[k] = (done((parse_rows(text, f"recorded pz80 {c['name']}"), text)) if text is not None
                           else pool.submit(run_pz80, c, work))
-        rtl_runs = [(c, pool.submit(run_case, c, work, "rtl"),
-                     pool.submit(run_case, c, work, "c") if a.c_model else None) for c in todo]
+        rtl_runs = [] if a.pz80_only else [
+            (c, pool.submit(run_case, c, work, "rtl"),
+             pool.submit(run_case, c, work, "c") if a.c_model else None) for c in todo]
         v_runs = [(pz_cases[k], pool.submit(run_pz80, pz_cases[k], work)) for k in verify]
         results, c_differs, latch = [], [], {}
         for i, (c, fut, cfut) in enumerate(rtl_runs, 1):
@@ -1369,20 +1491,28 @@ def main():
                 latch[c["name"]] = (rtl, pz, c["meta"])
             if i % 250 == 0 or i == len(rtl_runs):
                 print(f"  {i}/{len(rtl_runs)}", flush=True)
-        v_bad = [c["name"] for c, fut in v_runs if fut.result()[1] != cache[cache_key(c, hid)]]
+        v_bad = []
+        for i, (c, fut) in enumerate(v_runs, 1):
+            if fut.result()[1] != cache[cache_key(c, hid)]:
+                v_bad.append(c["name"])
+            if a.pz80_only and (i % 1000 == 0 or i == len(v_runs)):
+                print(f"  verified {i}/{len(v_runs)}", flush=True)
 
     if a.record:               # perfectz80's traces of the groups run, for later runs
+        command = "scripts/event_sweep.py " + " ".join(sys.argv[1:])
         texts = collections.defaultdict(dict)
         for c in todo:
             texts[c["group"]][cache_key(c, hid)] = pz_runs[pz80_key(c)].result()[1]
         for g, t in texts.items():
-            save_cache(g, t)
+            save_cache(g, t, hid, command)
+        write_manifest(hid, {f"{g}.txt.xz" for g in texts}, command)
         print(f"recorded perfectz80's traces of {', '.join(sorted(texts))} in {os.path.relpath(CACHE, ROOT)}/")
 
-    report(results, os.path.join(OUT, "report.md"), latch)
     differ = sorted(c["name"] for c, s, *_ in results if s)
-    print(f"{len(results) - len(differ)} match, {len(differ)} differ; "
-          f"report: {os.path.relpath(os.path.join(OUT, 'report.md'), ROOT)}")
+    if not a.pz80_only:
+        report(results, os.path.join(OUT, "report.md"), latch)
+        print(f"{len(results) - len(differ)} match, {len(differ)} differ; "
+              f"report: {os.path.relpath(os.path.join(OUT, 'report.md'), ROOT)}")
     if a.c_model:
         print(f"C model: {len(results) - len(c_differs)} cases identical to the RTL, {len(c_differs)} differ")
         for n, (half, what) in sorted(c_differs)[:50]:

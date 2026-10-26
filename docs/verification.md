@@ -38,9 +38,9 @@ reference.
 | 5 | ZEXALL's 14 most error-prone tests through the RTL | `make zexall_subset_rtl` | `zexall-subset-rtl` (main, nightly) | 14 / 14 |
 | 6 | Patrik Rak z80test: z80doc, z80flags, z80memptr, z80full | `make z80test`, `make z80test_rtl` | `z80test`, `z80test-rtl` (one variant per job) | 160 / 160 each, C model and RTL |
 | 7 | C model ↔ iverilog ↔ Verilator, every phase of 14 trace programs | `make compare` | `parity-tests` | identical |
-| 8 | Trace programs against the die: control pins, address and data under WR every half-cycle | `make perfectz80`, `make perfectz80_rtl` | `parity-tests` | 14 / 14, C model and RTL |
-| 9 | Pin scenarios against the die (15 programs driving INT / NMI / WAIT / BUSREQ / RESET) | `make pin_scenarios`, `make pin_scenarios_rtl` | `parity-tests` | 15 / 15, C model and RTL |
-| 10 | The pin sweep against the die: pins and pad drivers every half-cycle, F, WZ and Q in T4.P of every M1, 51,126 cases (RESET / INT / NMI / BUSREQ / WAIT at every T-state, every opcode, 86 timing classes, the data latch, the Q / WZ groups, combinations, fuzz); C model = RTL every half-cycle | `make event_sweep` | `event-sweep` (4 shards; nightly also RESET at every half-cycle of every opcode, 27,768 cases, and fresh fuzz) | 51,126 / 51,126 |
+| 8 | Trace programs against the die's recorded traces: control pins, address and data under WR every half-cycle | `make perfectz80`, `make perfectz80_rtl` | `parity-tests`, `rtl-tests` | 14 / 14, C model and RTL |
+| 9 | Pin scenarios against the die's recorded traces (15 programs driving INT / NMI / WAIT / BUSREQ / RESET) | `make pin_scenarios`, `make pin_scenarios_rtl` | `parity-tests`, `rtl-tests` | 15 / 15, C model and RTL |
+| 10 | The pin sweep against the die's recordings: pins and pad drivers every half-cycle, F, WZ and Q in T4.P of every M1, 51,126 cases (RESET / INT / NMI / BUSREQ / WAIT at every T-state, every opcode, 86 timing classes, the data latch, the Q / WZ groups, combinations, fuzz); C model = RTL every half-cycle | `make event_sweep_recorded` | `event-sweep` (4 shards; nightly also RESET at every half-cycle of every opcode, 27,768 cases, and fresh fuzz) | 51,126 / 51,126 |
 | 11 | Synthesised netlist (LibreLane, sky130) against the die: trace programs and pin scenarios | `make perfectz80_netlist`, `make pin_scenarios_netlist` | `librelane-netlist` | 14 / 14, 15 / 15 |
 | 12 | BASIC ROMs (NASCOM 4.7c, 1K Tiny BASIC) on the C model, the RTL and the netlist | `make basic_c_tests`, `basic_rtl_tests`, `basic_netlist_tests` | `basic-c-tests`, `basic-rtl-tests`, `librelane-basic-netlist` | 4 / 4 subtests each |
 | 13 | HALT-to-INT delays, ten INT positions, equal to the die's | `make halt2int` | `c-tests` | 10 / 10 |
@@ -49,6 +49,7 @@ reference.
 | 16 | Model changes: every pin of every phase against a reference revision (3.84 G phases: ZEXDOC, prelim, z80test, trace programs, pin scenarios, random soups and buses under random pin events) | `make phase_identity` | — (run by hand) | identical |
 | 17 | cfast against the model, both frames and the single header, the same scenarios | `make cfast_identity`, `make cfast_single_identity` | `cfast-bench` (cfast_identity) | identical |
 | 18 | Bus-contract testbenches: WAIT edges, writes through Tw, INTA, decoder skew | `make bus_controls` | `rtl-tests` | PASS |
+| 19 | perfectz80 live against every recording of the die: the 29 traces, the pin sweep's 77,235 (FUSE's and the X / Y corpus's values: layers 3 and 2) | `make verify_pz80_traces`, `make event_sweep_verify` | `parity-tests`; `pz80-recordings` (main, nightly; 50 a push in `event-sweep`) | identical |
 
 Beyond `ci.yml`: `targets.yml` builds the core for every FPGA board and
 ASIC PDK and runs their simulations (main pushes, nightly); `transistor.yml`

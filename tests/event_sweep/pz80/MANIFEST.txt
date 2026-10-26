@@ -1,0 +1,40 @@
+# perfectz80's recorded traces for scripts/event_sweep.py: one file per group,
+# each trace under @<key>, the key hashing the harness id below with the case
+# (cache_key()). Recorded by perfectz80 live: make record_pz80 (or
+# scripts/event_sweep.py --groups <g> --record --no-cache --pz80-only);
+# make event_sweep_verify runs perfectz80 again against every recording.
+# Last written by: scripts/event_sweep.py --record (HARNESS_VERSION 2, c2dfbae)
+harness-id: 007b299e25f2453e
+harness-version: 2
+# file cases sha256[:16] recorded-at
+blk_events.txt.xz 2464 b55d633a1ba096e8 c2dfbae
+busreq.txt.xz 1968 adde4b7bd5d200c5 c2dfbae
+classes.txt.xz 13260 808cd3e8ead0735a c2dfbae
+classes_reset.txt.xz 2210 affdc70d16280cfe c2dfbae
+combo.txt.xz 128 cc4a162796197c57 c2dfbae
+fuzz.txt.xz 2000 a7506979a45c83df c2dfbae
+fuzz_reset.txt.xz 2000 ff476cfc36bbd909 c2dfbae
+im0.txt.xz 40 c27e0d478bf676da c2dfbae
+im0_combo.txt.xz 300 1d7c9541dbe3c156 c2dfbae
+im2.txt.xz 258 c7d6b0f7877efbe6 c2dfbae
+im2_combo.txt.xz 300 75a3ec7d563b6f32 c2dfbae
+int.txt.xz 488 f762a9bc51a4238f c2dfbae
+latch.txt.xz 263 b63c82faf0989c4e c2dfbae
+nmi.txt.xz 984 8de1289bb8d8d3ee c2dfbae
+nmi_reentry.txt.xz 43 b9cd61d00ac59823 c2dfbae
+nmi_short.txt.xz 148 d6d4f530ea090693 c2dfbae
+opcodes.txt.xz 9205 83f9ada9c8fbe6f9 8c01e20
+opcodes_reset.txt.xz 27768 fc5c455e8ce8d3d6 c2dfbae
+q_events.txt.xz 2448 90fa57572b14b1fb c2dfbae
+q_ops.txt.xz 3682 d52254fce7c2650e c2dfbae
+q_reset.txt.xz 512 85c30f079d4a0fa5 c2dfbae
+q_seq.txt.xz 462 65ead921ebc6348a c2dfbae
+reset.txt.xz 206 082593fd2ec63b68 c2dfbae
+reset_busreq.txt.xz 156 fef6dc3722d584e0 c2dfbae
+reset_m1wait.txt.xz 132 2f4a33620c630380 c2dfbae
+reset_nmi.txt.xz 60 d2dd8581221ba742 c2dfbae
+reset_release.txt.xz 8 ba7a05279cf97dfe c2dfbae
+reset_short.txt.xz 30 59e64b2f21d7a12e c2dfbae
+reset_wait.txt.xz 32 fbd0b12294a7641c c2dfbae
+wait.txt.xz 1968 75e3580ca7720f6b c2dfbae
+wz_int.txt.xz 3712 7b2ea51f2f3c9caf c2dfbae

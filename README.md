@@ -85,11 +85,12 @@ interactive controls (Enter, Backspace, Ctrl-C / Ctrl-Space = BREAK, Ctrl-\\ = e
     make silicon_async   # real CPU clock + sub-T-state pin offsets from 20 MHz capture
     make halt2int        # INT-to-INTA delay at ten points of a HALT, against the die's
     make lockstep        # our model and four other emulators, instruction by instruction (ZEXDOC3)
-    make perfectz80          # gate-level signal-trace diff vs perfectz80 Visual-Z80 netlist (C model)
-    make perfectz80_rtl      # same, but trace source is the iverilog RTL testbench
+    make perfectz80          # gate-level signal-trace diff vs perfectz80's recorded traces (C model)
+    make perfectz80_rtl      # same, but trace source is the iverilog RTL testbench (no C compiler needed)
+    make verify_pz80_traces  # perfectz80 live against its 29 recorded traces, byte for byte
     make synth               # LibreLane (yosys) synthesis → build/synth/z80_top.nl.v
     make iverilog_netlist    # build gate-level iverilog testbench with sky130 cell models
-    make perfectz80_netlist  # diff the synthesised sky130 netlist vs perfectz80
+    make perfectz80_netlist  # diff the synthesised sky130 netlist vs perfectz80's recorded traces
     make basic               # NASCOM BASIC 4.7 on the C model
     make tinybasic           # 1 KiB Tiny BASIC on the C model
     make basic_c_tests       # canned-script BASIC ROM regression via C model    (~0.5 s)
@@ -104,6 +105,9 @@ interactive controls (Enter, Backspace, Ctrl-C / Ctrl-Space = BREAK, Ctrl-\\ = e
     make pin_scenarios_rtl      # same scenarios — iverilog RTL path
     make pin_scenarios_netlist  # same scenarios — LibreLane gate-level netlist path
     make event_sweep            # RESET / INT / NMI / BUSREQ / WAIT at every T-state of 31 instructions and every opcode, IM0/1/2, vs perfectz80
+    make event_sweep_recorded   # the same from perfectz80's recordings alone (event_sweep_rtl: RTL only, no C compiler)
+    make event_sweep_verify     # perfectz80 live against every recording of the sweep (~1.5 h on 8 cores)
+    make record_pz80            # record every perfectz80 trace again
     make all-tests           # every gate that needs only a C compiler, iverilog and Verilator (~1.5 h)
     make clean
 

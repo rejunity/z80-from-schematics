@@ -13,6 +13,12 @@ against perfectz80 -- the transistor netlist of the Zilog NMOS die --
 catch timing at half-cycle resolution; real-silicon captures ground the
 whole stack.
 
+perfectz80's side of every comparison is recorded in the repository
+([Recorded comparisons with the die](#recorded-comparisons-with-the-die)):
+the comparisons themselves never run perfectz80, so the RTL can be checked
+against the die with iverilog and Python alone, and separate gates run
+perfectz80 live against every recording.
+
 
 ## Nothing is tolerated
 
@@ -24,7 +30,8 @@ job. What each harness accepts, and why:
 | z80test (`make z80test`, `z80test_rtl`) | nothing: any failed test fails (the old allowed-failure argument is gone) | 0 |
 | FUSE (`make fuse`, `fuse_rtl`, `fuse_pz80`) | nothing; six cases are checked against the die's values (`tests/fuse/silicon.expected`) instead of FUSE's, and all six are checked on the die | 0 skipped |
 | Pin sweep (`make event_sweep`) | nothing: any difference from the die fails (the baseline file of known differences is gone) | 0 |
-| perfectz80 compares (`make perfectz80`, `pin_scenarios`, `_rtl`, `_netlist`) | nothing: control pins, address and the data under WR every half-cycle, and trace lengths | 0 |
+| perfectz80 compares (`make perfectz80`, `pin_scenarios`, `_rtl`, `_netlist`) | nothing: control pins, address and the data under WR every half-cycle, and trace lengths; a missing or stale recording fails too | 0 |
+| perfectz80's recordings (`make verify_pz80_traces`, `event_sweep_verify`) | nothing: perfectz80 live must print every recording byte for byte | 0 |
 | ZEX (`make prelim`, `zexdoc`, `zexall`, the subset) | nothing: a run passes only with the completion banner and no `ERROR` | 0 |
 | Lockstep (`make lockstep`) | F's X and Y (bits 5, 3) of the three emulators that predate Banks 2018 (superzazu, floooh/chips, suzukiplan): on ZEXDOC3 they differ only after 20 LDIR repeats. Against redcode/Z80 F is compared whole | X / Y of 3 oracles |
 | HALT-to-INT probe (`make halt2int`) | nothing: each delay must equal the die's | 0 |
@@ -49,20 +56,24 @@ job. What each harness accepts, and why:
 | The same through the RTL (Verilator) | `tests/z80test/` | `make z80test_rtl` | `z80test-rtl` (one job per variant) | 6-15 min a variant | 160 / 160 each |
 | BASIC ROMs (NASCOM 4.7c, 1K Tiny BASIC) | `tests/basic/` | `make basic_c_tests`, `basic_rtl_tests` | `basic-c-tests`, `basic-rtl-tests` | ~1 s / ~1 min | 4 / 4 subtests |
 | C ↔ iverilog ↔ Verilator, every phase | `tests/traces/` | `make compare` | `parity-tests` | ~10 s | 14 / 14 programs identical |
-| Trace programs vs the die | `tests/traces/` | `make perfectz80`, `perfectz80_rtl` | `parity-tests` | ~20 s each | 14 / 14 |
-| Pin scenarios vs the die | `tests/traces/pin_scenarios/` | `make pin_scenarios`, `pin_scenarios_rtl` | `parity-tests` | ~15 s each | 15 / 15 |
-| The pin sweep vs the die, F, WZ and Q included (51,126 cases; C model = RTL) | `tests/event_sweep/`, `scripts/event_sweep.py` | `make event_sweep` | `event-sweep` (4 shards) | ~20 min on 8 cores | 51,126 / 51,126 |
+| Trace programs vs the die's recorded traces | `tests/traces/`, `tests/traces/pz80/` | `make perfectz80`, `perfectz80_rtl` | `parity-tests`, `rtl-tests` | ~5 s each | 14 / 14 |
+| Pin scenarios vs the die's recorded traces | `tests/traces/pin_scenarios/`, `tests/traces/pz80/` | `make pin_scenarios`, `pin_scenarios_rtl` | `parity-tests`, `rtl-tests` | ~5 s each | 15 / 15 |
+| perfectz80 live against those 29 recordings | `tests/traces/pz80/` | `make verify_pz80_traces` | `parity-tests` | ~5 s | 29 / 29 identical |
+| The pin sweep vs the die's recordings, F, WZ and Q included (51,126 cases; C model = RTL) | `tests/event_sweep/`, `scripts/event_sweep.py` | `make event_sweep_recorded` (`event_sweep`: perfectz80 live for a case not recorded) | `event-sweep` (4 shards) | ~20 min on 8 cores | 51,126 / 51,126 |
+| The pin sweep's RTL alone against the recordings, iverilog and Python only | `tests/event_sweep/pz80/` | `make event_sweep_rtl` | `rtl-tests` (a 1/32 slice, 1,598 cases) | ~2 min on 8 cores | 1,598 / 1,598 |
+| perfectz80 live against every pin-sweep recording | `tests/event_sweep/pz80/` | `make event_sweep_verify` | `pz80-recordings` (8 shards; main, nightly), `event-sweep` (50 a push) | ~1.5 h on 8 cores | 77,235 / 77,235 identical |
 | Bus-contract testbenches | `tests/iverilog/tb_{bus_controls,wait_edge,wait_write,int_ack}.v` | `make bus_controls` | `rtl-tests` | ~1 s | PASS |
 | HALT-to-INT delays vs the die's | `scripts/halt2int_probe.c` | `make halt2int` | `c-tests` | <1 s | 10 / 10 |
 | 5-way lockstep on ZEXDOC3 | `scripts/lockstep_quint.c` | `make lockstep` | `c-tests` | ~5 s | 7,022,691 instructions identical |
 | Real KC85 captures | `tests/sigrok/` | `make silicon_cycles`, `silicon_async` | `c-tests` | ~5 s | 50 / 50, 9 / 9 opcodes |
-| Synthesised netlist (sky130) vs the die | `asic/librelane/`, `tests/iverilog/tb_z80_netlist.v` | `make perfectz80_netlist`, `pin_scenarios_netlist` | `librelane-netlist` | ~5 min warm | 14 / 14, 15 / 15 |
+| Synthesised netlist (sky130) vs the die's recorded traces | `asic/librelane/`, `tests/iverilog/tb_z80_netlist.v` | `make perfectz80_netlist`, `pin_scenarios_netlist` | `librelane-netlist` | ~5 min warm | 14 / 14, 15 / 15 |
 | BASIC on the synthesised netlist | `tests/verilator/sim_basic.cpp` | `make basic_netlist_tests` | `librelane-basic-netlist` | ~9 min | 4 / 4 |
 | Phase identity of a model change | `scripts/phase_identity.py`, `scripts/pinhash.c` | `make phase_identity PHASE_REF=<rev>` | — (run by hand before a model change lands) | ~2 min | identical |
 | cfast vs the model (3.84 G phases) | `cfast/` | `make cfast_identity`, `cfast_single_identity` | `cfast-bench`, macOS | ~2-4 min each | identical |
 | NMOS pin-timing SDC up to date | `asic/timing/` | `make timing_sdc_check` | `rtl-tests` | ~1 s | PASS |
 
-`make all-tests` runs everything above except the LibreLane netlist gates
+`make all-tests` runs everything above except the LibreLane netlist gates,
+`event_sweep_rtl` and `event_sweep_verify`
 (about an hour and a half); `make test` is the quick subset (ctest, rtl,
 bus_controls, compare).
 
@@ -157,9 +168,15 @@ the same format.
 | Make target | What it diffs |
 |-------------|---------------|
 | `make compare` | C model ↔ iverilog ↔ Verilator (Verilator when `make verilator` built it): every column of every phase of the trace programs |
-| `make perfectz80` / `perfectz80_rtl` / `perfectz80_netlist` | the C model / the iverilog RTL / the synthesised netlist against perfectz80 on the trace programs: control pins and address every half-cycle, data wherever WR is low on both sides |
+| `make perfectz80` / `perfectz80_rtl` / `perfectz80_netlist` | the C model / the iverilog RTL / the synthesised netlist against perfectz80's recorded traces of the trace programs: control pins and address every half-cycle, data wherever WR is low on both sides |
 | `make pin_scenarios` / `pin_scenarios_rtl` / `pin_scenarios_netlist` | the same on the pin scenarios |
+| `make verify_pz80_traces` | perfectz80 live against all 29 recordings, byte for byte |
+| `make record_pz80_traces` | records them again (after a change to a program, its `.events` or perfectz80's harness) |
 
+perfectz80's side is its recorded trace of each program,
+`tests/traces/pz80/<prog>.txt` (see [Recorded comparisons with the
+die](#recorded-comparisons-with-the-die)): the targets never run
+perfectz80, and fail when a recording is missing or stale.
 `compare_signal_timing.py` (behind the perfectz80 targets) also writes
 `build/vcd/<prog>.<source>.vcd` with both sides' pins, our model at the
 top scope and perfectz80 under `perfectz80` (`EMIT_VCD=0` to skip); CI
@@ -180,8 +197,10 @@ by SCF and CCF, the instructions and prefixes between a flag writer and
 SCF / CCF, every pin at every T-state around them, RESET after flag
 writers, interrupts in the WZ loaders and in the repeating block
 instructions. perfectz80's side comes from recordings in
-`tests/event_sweep/pz80/`. The C model must equal the RTL in every
-half-cycle, F, WZ and Q included. An extra group,
+`tests/event_sweep/pz80/` (`make event_sweep_recorded` never runs it;
+`event_sweep_rtl` is the RTL alone, without a C compiler;
+`event_sweep_verify` runs perfectz80 live against every recording). The
+C model must equal the RTL in every half-cycle, F, WZ and Q included. An extra group,
 `opcodes_reset` (RESET at every half-cycle of every opcode, 27,768
 cases, recorded), runs in the nightly CI run only (`--groups
 opcodes_reset`; about 10 more minutes a shard). See
@@ -283,6 +302,43 @@ and `scripts/redcode_fuse_runner.c` are there for investigation; see
     Gowin, and each mapped netlist against perfectz80.
 
 
+## Recorded comparisons with the die
+
+Every comparison with perfectz80 reads perfectz80's side from a
+recording; none runs perfectz80, so a checkout with iverilog and Python
+and without a C compiler checks the RTL (or a netlist) against the die
+(CI's `rtl-tests` job runs that way, `CC=false`). Separate gates run
+perfectz80 live and fail unless it prints every recording byte for byte.
+
+| Recording | What perfectz80 printed | Compared by | Kept true by |
+|-----------|-------------------------|-------------|--------------|
+| `tests/traces/pz80/<prog>.txt` (29 files, 325 KB of text) | `perfectz80_runner`'s trace of each trace program and pin scenario, with its `.events` and phase count: `phase addr data_o data_i mreq iorq rd wr m1 rfsh halt` per half-cycle | `make perfectz80`, `perfectz80_rtl`, `perfectz80_netlist`, `pin_scenarios*`, `luts_netlist` | `make verify_pz80_traces` (`parity-tests`, every push) |
+| `tests/event_sweep/pz80/<group>.txt.xz` (31 files, 4.9 MB) | `event_sweep_pz80`'s trace of every case of the pin sweep: the pins, the pads driven, F, WZ and Q every half-cycle; 77,235 traces | `make event_sweep_recorded`, `event_sweep_rtl` | `make event_sweep_verify`: all of them in `pz80-recordings` (main, nightly), 50 in `event-sweep` (every push) |
+| `tests/fuse/silicon.expected`, with `tests.expected` | the die's final state of FUSE's 1356 cases: six differ from FUSE's values | `make fuse`, `fuse_rtl` | `make fuse_pz80` (`parity-tests`) |
+| `tests/xyflags/tests.expected.xz` | the die's F (and the rest of the final state) for the 4,061 X / Y cases | `make xyflags`, `xyflags_rtl` | `make xyflags_pz80` (`parity-tests`) |
+| `scripts/halt2int_probe.c` | the die's INT-to-INTA delays at ten points of the halted cycle: 6 5 4 7 6 5 4 7 6 5 | `make halt2int` | the pin sweep (INT around HALT at every half-cycle) |
+
+Each trace recording carries a header naming the program's, the
+`.events`' and the harness's hashes (perfectz80's netlist and simulator,
+the runner), the phase count, the commit and the command that wrote it;
+the sweep's carry a key per case that hashes the same, with
+`tests/event_sweep/pz80/MANIFEST.txt` naming the harness id, each file's
+cases and sha256. A change to a program, its events or the harness makes
+a recording stale, and the comparison then fails rather than run
+perfectz80. `make record_pz80` records everything again (the 29 traces in
+seconds, the sweep's 77,235 cases in about 3.5 CPU-hours on GitHub's runners);
+`make record_pz80_traces` the traces alone, and `scripts/event_sweep.py
+--groups <g> --record --no-cache --pz80-only` one sweep group.
+
+Another repository can carry copies and run the same comparisons with no
+perfectz80 and no C model: `scripts/compare_signal_timing.py --recorded
+--rtl=iverilog|netlist` (environment `PZ80_TRACES` for the recordings,
+`TB_VVP` / `TB_NETLIST_VVP` for the testbench builds) and
+`scripts/event_sweep.py --recorded-only` without `--c-model`
+(`EVENT_SWEEP_PZ80`, `EVENT_SWEEP_TB_VVP`); without perfectz80's sources
+the scripts take the harness id the recordings' headers and manifest name.
+
+
 ## Not in the regular set
 
 | What | Why not | Where it runs |
@@ -331,13 +387,14 @@ on demand:
 | Job | When | Runs |
 |-----|------|------|
 | `c-tests` | always | `make ctest`, `fuse`, `xyflags`, `prelim`, `halt2int`, `silicon_cycles`, `silicon_async`, `lockstep` |
-| `rtl-tests` | always | `make rtl`, `bus_controls`, `fuse_rtl`, `xyflags_rtl`, `timing_sdc_check` |
+| `rtl-tests` | always; no C toolchain (`CC=false`) | `make rtl`, `bus_controls`, `fuse_rtl`, `xyflags_rtl`, `perfectz80_rtl`, `pin_scenarios_rtl`, `event_sweep_rtl` (a 1/32 slice), `timing_sdc_check` |
 | `basic-c-tests` | always | `make basic_c_tests` |
 | `basic-rtl-tests` | always | `make basic_rtl_tests` |
 | `z80test` | always | `make z80test` (~3 min) |
 | `z80test-rtl` (4 jobs) | always | `make z80test_rtl` for one variant each |
-| `parity-tests` | always | `make verilator`, `compare`, `perfectz80`, `perfectz80_rtl`, `pin_scenarios`, `pin_scenarios_rtl`, `fuse_pz80`, `xyflags_pz80` |
-| `event-sweep` (4 shards) | always; `opcodes_reset` and fresh fuzz nightly | `make event_sweep` (shard 0 also re-runs 50 recorded cases on perfectz80 live) |
+| `parity-tests` | always | `make verilator`, `compare`, `perfectz80`, `pin_scenarios`, `verify_pz80_traces`, `fuse_pz80`, `xyflags_pz80` |
+| `event-sweep` (4 shards) | always; `opcodes_reset` and fresh fuzz (perfectz80 live) nightly | `make event_sweep_recorded` (shard 0 also `event_sweep_verify` on 50 recordings from every group) |
+| `pz80-recordings` (8 shards) | main pushes, nightly, on demand | `make event_sweep_verify` on every pin-sweep recording, `opcodes_reset` included (~7 min a shard) |
 | `librelane-netlist` | always | `make synth`, `iverilog_netlist`, `perfectz80_netlist`, `pin_scenarios_netlist` |
 | `librelane-basic-netlist` | always | `make synth`, `verilator_basic_netlist`, `basic_netlist_tests` |
 | `cfast-bench` | always | `make cfast_identity`, `cfast_bench` |
