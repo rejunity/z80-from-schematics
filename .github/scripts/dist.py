@@ -833,7 +833,8 @@ def transistor(src, out):
         libs = [(f'{d}/{os.path.basename(f)}', re.sub(r'^(gf180mcu_fd_io__|sg13g2_io_)', '', os.path.basename(f)[:-4]))
                 for f in sorted(glob.glob(os.path.join(base, d, '*.lib')))]
         more = links([(f'{d}/summary.txt', 'summary'), (f'{d}/delay_vs_load.svg', 'delay vs load'),
-                      (f'{d}/inputs.svg', 'inputs vs edge'), (f'{d}/waveforms.svg', 'waveforms'), (f'{d}/pads.json', 'pads.json')])
+                      (f'{d}/energy_vs_load.svg', 'energy vs load'), (f'{d}/inputs.svg', 'inputs vs edge'),
+                      (f'{d}/waveforms.svg', 'waveforms'), (f'{d}/pads.json', 'pads.json')])
         liberty = ', '.join(f'<a href="spice/{p}">{e(label)}</a>' for p, label in libs)
         pads.append(f"""<p class="figtitle"><strong>{e(name)}</strong> <span class="muted">{e(what)} · {more}
 {'· Liberty: ' + liberty if liberty else ''}</span></p>

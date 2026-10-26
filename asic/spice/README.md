@@ -54,7 +54,12 @@ and measures:
   bidirectional pad's own input sees -- and the pin's voltage where the
   core side switches, on a fast edge and on a 2 µs ramp;
 - **DC drive**: the current the output sinks at 0.4 V and sources at
-  2.4 V, against the NMOS Z80's 2.0 mA and 250 µA.
+  2.4 V, against the NMOS Z80's 2.0 mA and 250 µA;
+- **energy**: in those same runs, the energy the core and the I/O
+  supply each deliver for every edge (data, turning on and letting go,
+  inputs), and each state's leakage -- the pads' power. The PDKs' power
+  tables stop where their timing does, and at 100 pF STA extrapolates
+  GF180's to negative energies.
 
 Run it from the repository root. The simulators are pinned, and built
 with nix on first use (`pads.TOOLS`; without nix, whatever is on `PATH`):
@@ -62,14 +67,15 @@ ngspice 45, and for IHP OpenVAF's `openvaf-r`, which compiles the PDK's
 Verilog-A transistor models. The PDK is the one the `asic-<pdk>` branch
 fetches, under `~/.ciel`:
 
-    asic/spice/pads.py gf180mcu      # 732 simulations, 7 min on 7 cores
-    asic/spice/pads.py ihp-sg13g2    # 1743 simulations, 6 min
+    asic/spice/pads.py gf180mcu      # 759 simulations, 7 min on 7 cores
+    asic/spice/pads.py ihp-sg13g2    # 1839 simulations, 6 min
     asic/spice/pads.py gf180mcu --reuse   # the outputs again from pads.json
     asic/spice/pads.py gf180mcu --out /tmp/pads --check asic/spice/pads/gf180mcu/pads.json
 
 `--check` fails when a result moved from the committed one by more than
-0.1 ns or 3 % (delays, slews), 0.03 V (switching levels) or 3 % (drive
-currents) -- what CI runs.
+0.1 ns or 3 % (delays, slews), 0.03 V (switching levels), 3 % (drive
+currents), 0.5 pJ or 1 % (the supplies' energy) or 5 % (leakage) -- what
+CI runs.
 
 Into `pads/<pdk>/` go:
 
@@ -80,9 +86,11 @@ Into `pads/<pdk>/` go:
   ns, an output's load to 250 pF beyond its own, the core side's to the
   tables' last points -- so STA flags a pin driven past what was
   simulated (pads.py fails if an output's edge outruns the input edges);
+  and their internal and leakage power from the simulated energies (see
+  [Power](#power));
 - `pads.json`, every measurement, and `summary.txt`;
-- `waveforms.svg`, `delay_vs_load.svg`, `inputs.svg`: the corners side by
-  side;
+- `waveforms.svg`, `delay_vs_load.svg`, `energy_vs_load.svg`,
+  `inputs.svg`: the corners side by side;
 - a figure per kind of pin, every corner in it: `out.svg` (the outputs'
   edges into the test load), `tristate.svg` (the data bus turning on, and
   letting go), `in.svg` (the inputs: pin and core side on 15 ns edges,
@@ -141,6 +149,68 @@ NMOS Z80 does; IHP's inputs switch at half their 3.3 V supply.
 DC drive: GF180's weakest `bi_t` setting sinks 4.2 mA at 0.4 V and
 sources 9.9 mA at 2.4 V at the slow corner (the NMOS Z80: 2.0 mA,
 0.25 mA); IHP's 16 mA pad 4.1 and 4.9 mA.
+
+### Power
+
+In the same runs `pads.py` sums each supply's current over every edge --
+the trapezoid over ngspice's own time points, which under its trapezoidal
+integration is the capacitors' charge exactly (the supplies' currents ring
+in sign from one point to the next, and that cancels over whole steps) --
+and measures each state's leakage at DC. The libraries' internal power
+follows the PDKs' convention, which their own tables give away: GF180's
+vary with load as a rise's energy less the C V² that charges the load
+from the supply, and a fall's as measured (not as half of C V² off each
+edge). STA counts the pin's own capacitance in the load too, as the
+timing tables do, and adds 0.5 C V² an edge as switching power, so half
+of the pin's own C V² comes off each edge as well; letting go (the pin
+floats) is its energy as measured. STA's internal plus switching power is
+then what the supplies delivered: one `bi_t` toggling 100 pF at 2 MHz
+draws 5.185 mW at tt in SPICE (4.205 mW at ss), and OpenSTA reports 5.258
+(4.261) for that one pad -- the switching power 0.5 C V² f exactly, the
+pad's own the simulated 45 µW; the 1.4 % over is OpenSTA 2.7 counting a
+bidirectional pin's state-independent internal power once more as the
+input pin's.
+
+| Into 100 pF, data input 0.5 ns (IHP 0.64) | a cycle | the load's C V² | the pad's own, rise / fall, 20 pF (PDK library) | 100 pF (PDK, extrapolated) |
+|---|---|---|---|---|
+| GF180 `bi_t`, tt | 2593 pJ | 2501 | 44.5 / 46.6 (52.4 / 62.1) | 44.6 / 47.2 (35.9 / 63.5) |
+| GF180, ss | 2097 | 2021 | 37.3 / 38.9 (43.1 / 51.5) | 37.4 / 38.8 (11.6 / 51.0) |
+| GF180, ff | 3136 | 3026 | 52.9 / 55.8 (64.2 / 74.7) | 53.3 / 56.4 (9.1 / 74.7) |
+| IHP `IOPadTriOut16mA`, typ | 1099 | 1089 | 4.8 / 6.8 (5.7 / 7.5) | 4.9 / 4.7 (4.0 / -1.3) |
+| IHP, slow | 908 | 900 | 3.9 / 5.2 (4.7 / 5.9) | 3.9 / 3.7 (3.4 / -0.2) |
+| IHP, fast | 1308 | 1296 | 6.0 / 8.5 (7.0 / 9.6) | 6.0 / 5.7 (3.5 / -2.8) |
+
+(The pad's own here the PDKs' way: a rise less the load's C V², a fall as
+measured.)
+
+![GF180 energy against load](pads/gf180mcu/energy_vs_load.svg)
+
+A cycle into the test load is the load's C V² and 1-4 % besides. Within
+their range the libraries put the pad's own energy 13-25 % (GF180) and
+9-17 % (IHP) above SPICE at every corner -- the PDKs' netlists have the
+transistors and diodes but no wiring capacitance, which their libraries
+were presumably characterised with. Beyond their range STA extrapolated
+them to the wrong sign: GF180's rise at the slow corner comes to 11.6 pJ
+at 100 pF and below zero past 130 pF, and its output enable's 0 -> Z --
+C V² taken off for a pin that does not move -- to -2.08 nJ an edge at
+100 pF: LibreLane's report for a GF180 chip with these pads at 100 pF had
+their internal power at -1.8 W. OpenSTA 2.7 also takes a pin tied high
+(`SL`) to be low when it weighs the `when` states, and weighs an output's
+states alike, so the libraries keep only the states the chips tie the
+cells into (the tables of the other drive strengths, fast slew and the
+pulls go), each with the simulated energy.
+
+Inputs, a cycle (pin up and down): with 1 ns edges 4.9-11.8 pJ on GF180
+(its library 5.1-13.1), growing with the edge as the input's crowbar
+current lasts -- 8-47 pJ with 15 ns, 33-299 pJ with 120 ns. Leakage per
+state: 2.7-4.4 nW on GF180 (its library 4.6-5.8 nW), 0.2-31 nW on IHP.
+
+IHP's libraries also get `voltage_map`s: their pins name their supply but
+nothing gave its voltage, so STA took the core's 1.08-1.32 V for a pad
+pin's switching power instead of the I/O's 3.0-3.6 V. IHP's
+`IOPadInOut16mA` keeps its input on while it drives: its energy driving
+includes the input's, which STA counts again on `p2c` (~1 % of a cycle
+into 100 pF).
 
 ### Into the pin timing
 
