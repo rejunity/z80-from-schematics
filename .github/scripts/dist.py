@@ -826,7 +826,7 @@ def transistor(src, out):
         d = f'pads/{pdk}'
         g = grid(fig(f'{d}/out.svg', 'outputs: edges into 1–250 pF, and their drive'),
                  fig(f'{d}/tristate.svg', 'the data bus: turning on, and floating'),
-                 fig(f'{d}/in.svg', 'inputs: pin to core on edges up to 30 ns, and where they switch'),
+                 fig(f'{d}/in.svg', 'inputs: pin to core on edges up to 120 ns, and where they switch'),
                  fig(f'{d}/clk_reset.svg', 'CLK and RESET: the Schmitt-trigger input'), two=True)
         if not g:
             continue
@@ -843,7 +843,7 @@ def transistor(src, out):
         pad_part.append(f"""<h3 class="sec">The pads</h3>
 <p class="muted">Every pad cell the chips use, from the PDK's own netlist with its transistor models, at the
 corners the chips are signed off at (<a href="{code}/pads.py">pads.py</a>): the outputs into 1–250 pF, the
-data bus's tri-state pads turning on and floating, the inputs on edges up to 30 ns, and the Schmitt-trigger
+data bus's tri-state pads turning on and floating, the inputs on edges up to 120 ns, and the Schmitt-trigger
 input CLK and RESET take. Checked in every run against the committed results; their Liberty files
 replace the PDKs' own in the chips' pin-timing checks
 (<a href="{SERVER}/{REPO}/blob/main/asic/timing/pin_timing.py">pin_timing.py</a>).</p>

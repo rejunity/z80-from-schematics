@@ -49,8 +49,10 @@ and measures:
 - **float**: the time from the enable to the driver letting go (its
   current under 10 %), and to the pin moving 0.5 V (the datasheet's float
   level) against 2 kΩ to the other rail;
-- **inputs**: pin to core with edges to 30 ns, and the pin's voltage
-  where the core side switches, on a fast edge and on a 2 µs ramp;
+- **inputs**: pin to core with edges to 120 ns -- past the slowest edge
+  an output makes into 250 pF (GF180's `bi_t` at ss, 111 ns), which a
+  bidirectional pad's own input sees -- and the pin's voltage where the
+  core side switches, on a fast edge and on a 2 µs ramp;
 - **DC drive**: the current the output sinks at 0.4 V and sources at
   2.4 V, against the NMOS Z80's 2.0 mA and 250 µA.
 
@@ -60,8 +62,8 @@ ngspice 45, and for IHP OpenVAF's `openvaf-r`, which compiles the PDK's
 Verilog-A transistor models. The PDK is the one the `asic-<pdk>` branch
 fetches, under `~/.ciel`:
 
-    asic/spice/pads.py gf180mcu      # ~624 simulations, 4 min on 8 cores
-    asic/spice/pads.py ihp-sg13g2    # ~1700 simulations, 3 min
+    asic/spice/pads.py gf180mcu      # 732 simulations, 7 min on 7 cores
+    asic/spice/pads.py ihp-sg13g2    # 1743 simulations, 6 min
     asic/spice/pads.py gf180mcu --reuse   # the outputs again from pads.json
     asic/spice/pads.py gf180mcu --out /tmp/pads --check asic/spice/pads/gf180mcu/pads.json
 
@@ -73,8 +75,11 @@ Into `pads/<pdk>/` go:
 
 - the PDK's pad Liberty per corner, the used cells' arcs replaced by the
   simulated tables (other drive settings keep the PDK's; delays 50 % to
-  50 % and slews 10-90 %, as the PDK's), their `max_capacitance` and
-  `max_transition` widened to the simulated range;
+  50 % and slews 10-90 %, as the PDK's), and the simulated range as the
+  pins' `max_transition` / `max_capacitance`: the pad pin's edges to 120
+  ns, an output's load to 250 pF beyond its own, the core side's to the
+  tables' last points -- so STA flags a pin driven past what was
+  simulated (pads.py fails if an output's edge outruns the input edges);
 - `pads.json`, every measurement, and `summary.txt`;
 - `waveforms.svg`, `delay_vs_load.svg`, `inputs.svg`: the corners side by
   side;

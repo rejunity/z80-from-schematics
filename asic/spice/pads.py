@@ -14,16 +14,19 @@ ties it, and measures
            VOL), 10-90 % transition; the float delay (the driver letting
            go of the pin) and the time the pin needs to move 0.5 V (the
            datasheet's float level) against a 2 kohm pull
-  inputs   pin to core with edges up to 30 ns, and where the input
-           switches on a slow ramp (the datasheet's VIL / VIH: 0.8 / 2.0 V)
+  inputs   pin to core with edges up to 120 ns (past the slowest edge
+           an output makes into 250 pF: a bidirectional pad's input sees
+           its own output's), and where the input switches on a slow
+           ramp (the datasheet's VIL / VIH: 0.8 / 2.0 V)
   DC       the output's current at 0.4 V and 2.4 V: the NMOS part sinks
            2.0 mA at 0.4 V and sources 250 uA at 2.4 V
 
 and writes to OUT (default pads/<pdk>/ beside this script):
 
   <pad library>.lib  per corner, the PDK's pad Liberty with those cells'
-                     arcs re-measured (tables to 250 pF and 30 ns input
-                     edges; 50 % delays and 10-90 % slews, as the PDK's);
+                     arcs re-measured (tables to 250 pF and 120 ns input
+                     edges; 50 % delays and 10-90 % slews, as the PDK's),
+                     that range the pins' max_transition / max_capacitance;
                      ../timing/pin_timing.py uses them in place of the PDK's
   pads.json          every measurement
   *.svg              waveforms into 100 pF, delay against load and input
@@ -42,7 +45,10 @@ import svgplot  # noqa: E402
 # pF on the pin; from 1 pF, as a pin always carries some (with none at all
 # GF180's slow corner makes ngspice's timestep collapse)
 LOADS = [1, 10, 20, 50, 100, 150, 200, 250]
-IN_EDGES = [10, 15, 20, 30]                   # ns, added to the PDK's input-edge index
+# ns, added to the PDK's input-edge index: to past the slowest edge the
+# outputs make into LOADS[-1] (out_edges_covered), as a bidirectional pad's
+# input sees its own output's edges
+IN_EDGES = [10, 15, 20, 30, 60, 120]
 TEST_LOAD = 100.0                             # pF, PS0178's AC test load
 OUT_LEVEL = 1.5                               # V, PS0178's AC test conditions: VOH = VOL = 1.5 V
 VIL, VIH = 0.8, 2.0                           # V, input levels (PS0178)
@@ -565,6 +571,29 @@ def pin_cap(lib, cell, pin):
     return float(c) if c else 0.0         # IHP's output-only pads give none
 
 
+def set_attr(lib, b, e, key, val):
+    """the edit (begin, end, text) that makes `key : val;` the group
+    lib[b:e]'s own attribute: replacing it (not a nested group's), else a
+    line of its own after the group's opening brace"""
+    pat = re.compile(r"\b" + key + r"\s*:\s*[^;]*;")
+    o = lib.index("{", b) + 1
+    depth, k = 1, o
+    while k < e and depth:
+        c = lib[k]
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+        elif depth == 1 and c == key[0] and not (lib[k - 1].isalnum() or lib[k - 1] == "_"):
+            m = pat.match(lib, k)
+            if m:
+                return m.start(), m.end(), f"{key} : {val};"
+        k += 1
+    at = lib.index("\n", o) + 1
+    indent = re.match(r"[ \t]*", lib[at:]).group(0)
+    return at, at, f"{indent}{key} : {val};\n"
+
+
 def fmt_table(name, template, i1, i2, rows, indent):
     pad = indent + "  "
     vals = (", \\\n" + pad + "       ").join('"' + ", ".join(f"{v:.6f}" for v in r) + '"' for r in rows)
@@ -606,15 +635,25 @@ def write_liberty(src, dst, cells, data, corner, ctx):
                 templates.setdefault(tname, (i1, i2))
                 indent = re.search(r"([ \t]*)$", lib[:b]).group(1)
                 edits.append((b, e, fmt_table(name, tname, i1, i2, rows, indent)))
-        # the characterised range: loads to the last index, input edges to 30 ns
-        for pin in {cfg.get("out", (None,) * 3)[2], (cfg.get("inp") or (None,))[0]} - {None}:
-            _, cb, ce = [g for g in groups(lib, "cell") if g[0] == cell][0]
-            _, pb, pe = [g for g in groups(lib, "pin", cb, ce) if g[0] == pin][0]
-            g = lib[pb:pe]
-            for key, val in (("max_capacitance", d.get("cpin", 0) + LOADS[-1]), ("max_transition", float(max(IN_EDGES)))):
-                m = re.search(r"\b" + key + r"\s*:\s*[^;]*;", g)
-                if m and (key != "max_capacitance" or "out" in cfg):
-                    edits.append((pb + m.start(), pb + m.end(), f"{key} : {val:g};"))
+        # the characterised range as the pins' limits, so that STA flags a
+        # pin driven past what was simulated: the pin's edges to the last
+        # input edge (past every output edge, out_edges_covered), an output's
+        # load to the last load, the core side's output load and data /
+        # enable edges to their tables' last points
+        dpin, epin, pad = cfg.get("out") or (None, None, None)
+        ipad, y = cfg.get("inp") or (None, None)
+        limits = {p: {"max_transition": float(max(IN_EDGES))} for p in {pad, ipad} - {None}}
+        if pad:
+            limits[pad]["max_capacitance"] = round(d["data"]["cpin"] + LOADS[-1], 6)
+            for p in {dpin, epin} - {None}:
+                limits[p] = {"max_transition": max(d["data"]["slews"])}
+        if y:
+            limits[y] = {"max_capacitance": max(d["input"]["loads"])}
+        _, cb, ce = [g for g in groups(lib, "cell") if g[0] == cell][0]
+        for pin, pb, pe in groups(lib, "pin", cb, ce):
+            for key, val in sorted(limits.pop(pin, {}).items()):
+                edits.append(set_attr(lib, pb, pe, key, f"{val:.6f}".rstrip("0").rstrip(".")))
+        assert not limits, f"{cell}: no pin {sorted(limits)} in the Liberty file"
     for b, e, text in sorted(edits, reverse=True):
         lib = lib[:b] + text + lib[e:]
     # the templates, after the library's own
@@ -633,7 +672,10 @@ def write_liberty(src, dst, cells, data, corner, ctx):
             f"   PDK's netlist and {mc} models, {temp} C, {vdd:g} V core / {vio:g} V I/O): outputs\n"
             f"   into {LOADS[0]}-{LOADS[-1]} pF beyond the pin's own capacitance, inputs with edges to\n"
             f"   {max(IN_EDGES)} ns. Delays 50 % to 50 %, slews 10-90 %, as the PDK's; disable: the\n"
-            f"   driver's current under 10 %. Generated; do not edit. */\n")
+            f"   driver's current under 10 %. The pins' max_transition / max_capacitance:\n"
+            f"   the ranges simulated (the pin's edges to {max(IN_EDGES)} ns, past every output edge\n"
+            f"   into {LOADS[-1]} pF; an output's load to {LOADS[-1]} pF beyond its own; the core side's\n"
+            f"   to the tables' last points). Generated; do not edit. */\n")
     open(dst, "w").write(head + lib)
 
 
@@ -725,6 +767,22 @@ def characterise(ctx, corners, jobs):
                     C["input"][edge]["wave"] = done[(k, cell, "input", C["input"]["edges"].index(15), 0)][edge].get("wave")
                 C.setdefault("dc", {}).update(done[(k, cell, "dc_in")])
     return res
+
+
+def out_edges_covered(res):
+    """the slowest edge an output makes into the loads, against the input
+    edges simulated: a bidirectional pad's input sees its own output's
+    edges, and the pin's one max_transition holds both"""
+    worst = 0.0
+    for r in res.values():
+        for C in r["cells"].values():
+            tabs = [C["data"][e] for e in ("rise", "fall")] if "data" in C else []
+            tabs += [C["enable"][v] for v in ("0", "1")] if "enable" in C else []
+            worst = max([worst] + [m["slew"] for t in tabs for row in t for m in row if m.get("slew") is not None])
+    if worst > max(IN_EDGES):
+        sys.exit(f"pads: an output's edge takes {worst:.1f} ns, past the input edges simulated "
+                 f"(IN_EDGES, to {max(IN_EDGES)} ns): extend IN_EDGES")
+    return worst
 
 
 # ------------------------------------------------------------- the report
@@ -1024,6 +1082,8 @@ def main():
             res = characterise(ctx, corners, a.jobs)
         ver = subprocess.run([ngspice, "-v"], capture_output=True, text=True).stdout
         ver = (re.search(r"ngspice-\S+", ver) or re.search(r"\S+", "ngspice")).group(0)
+    worst = out_edges_covered({k: res[k] for k in corners})
+    print(f"pads: the slowest output edge, {worst:.1f} ns, is inside the input edges simulated (to {max(IN_EDGES)} ns)")
     for k in corners:
         src = os.path.join(root, P["liberty"].format(res[k]["liberty"]))
         write_liberty(src, os.path.join(out, os.path.basename(src)), P["cells"], res[k]["cells"], k, ctx)
