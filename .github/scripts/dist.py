@@ -826,14 +826,15 @@ def transistor(src, out):
         d = f'pads/{pdk}'
         g = grid(fig(f'{d}/out.svg', 'outputs: edges into 1–250 pF, and their drive'),
                  fig(f'{d}/tristate.svg', 'the data bus: turning on, and floating'),
-                 fig(f'{d}/in.svg', 'inputs: pin to core on edges up to 30 ns, and where they switch'),
+                 fig(f'{d}/in.svg', 'inputs: pin to core on edges up to 120 ns, and where they switch'),
                  fig(f'{d}/clk_reset.svg', 'CLK and RESET: the Schmitt-trigger input'), two=True)
         if not g:
             continue
         libs = [(f'{d}/{os.path.basename(f)}', re.sub(r'^(gf180mcu_fd_io__|sg13g2_io_)', '', os.path.basename(f)[:-4]))
                 for f in sorted(glob.glob(os.path.join(base, d, '*.lib')))]
         more = links([(f'{d}/summary.txt', 'summary'), (f'{d}/delay_vs_load.svg', 'delay vs load'),
-                      (f'{d}/inputs.svg', 'inputs vs edge'), (f'{d}/waveforms.svg', 'waveforms'), (f'{d}/pads.json', 'pads.json')])
+                      (f'{d}/energy_vs_load.svg', 'energy vs load'), (f'{d}/inputs.svg', 'inputs vs edge'),
+                      (f'{d}/waveforms.svg', 'waveforms'), (f'{d}/pads.json', 'pads.json')])
         liberty = ', '.join(f'<a href="spice/{p}">{e(label)}</a>' for p, label in libs)
         pads.append(f"""<p class="figtitle"><strong>{e(name)}</strong> <span class="muted">{e(what)} · {more}
 {'· Liberty: ' + liberty if liberty else ''}</span></p>
@@ -843,7 +844,7 @@ def transistor(src, out):
         pad_part.append(f"""<h3 class="sec">The pads</h3>
 <p class="muted">Every pad cell the chips use, from the PDK's own netlist with its transistor models, at the
 corners the chips are signed off at (<a href="{code}/pads.py">pads.py</a>): the outputs into 1–250 pF, the
-data bus's tri-state pads turning on and floating, the inputs on edges up to 30 ns, and the Schmitt-trigger
+data bus's tri-state pads turning on and floating, the inputs on edges up to 120 ns, and the Schmitt-trigger
 input CLK and RESET take. Checked in every run against the committed results; their Liberty files
 replace the PDKs' own in the chips' pin-timing checks
 (<a href="{SERVER}/{REPO}/blob/main/asic/timing/pin_timing.py">pin_timing.py</a>).</p>

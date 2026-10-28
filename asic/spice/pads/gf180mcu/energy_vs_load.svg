@@ -1,0 +1,88 @@
+<svg xmlns='http://www.w3.org/2000/svg' width='1120' height='358' viewBox='0 0 1120 358'>
+<rect width='1120' height='358' fill='white'/>
+<text x='560.0' y='19' font-size='14.5' font-weight='bold' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>gf180mcu: an output pad&#x27;s own energy an edge against load, SPICE against the PDK&#x27;s Liberty</text>
+<text x='58' y='47' font-size='13' font-weight='bold' font-family='Helvetica, Arial, sans-serif'>bi_t: the pad&#x27;s own energy, data rise</text>
+<line x1='58.0' y1='58' x2='58.0' y2='314' stroke='#e6e6e6'/>
+<text x='58.0' y='329' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>0</text>
+<line x1='155.2' y1='58' x2='155.2' y2='314' stroke='#e6e6e6'/>
+<text x='155.2' y='329' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>50</text>
+<line x1='252.4' y1='58' x2='252.4' y2='314' stroke='#e6e6e6'/>
+<text x='252.4' y='329' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>100</text>
+<line x1='349.6' y1='58' x2='349.6' y2='314' stroke='#e6e6e6'/>
+<text x='349.6' y='329' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>150</text>
+<line x1='446.8' y1='58' x2='446.8' y2='314' stroke='#e6e6e6'/>
+<text x='446.8' y='329' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>200</text>
+<line x1='544.0' y1='58' x2='544.0' y2='314' stroke='#e6e6e6'/>
+<text x='544.0' y='329' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>250</text>
+<line x1='58' y1='306.6' x2='544' y2='306.6' stroke='#e6e6e6'/>
+<text x='53' y='310.1' font-size='10.5' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>-100</text>
+<line x1='58' y1='235.7' x2='544' y2='235.7' stroke='#e6e6e6'/>
+<text x='53' y='239.2' font-size='10.5' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>-50</text>
+<line x1='58' y1='164.9' x2='544' y2='164.9' stroke='#e6e6e6'/>
+<text x='53' y='168.4' font-size='10.5' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>0</text>
+<line x1='58' y1='94.1' x2='544' y2='94.1' stroke='#e6e6e6'/>
+<text x='53' y='97.6' font-size='10.5' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>50</text>
+<rect x='58' y='58' width='486' height='256' fill='none' stroke='#555'/>
+<text x='301.0' y='350' font-size='11.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>pF on the pin</text>
+<text x='14' y='186.0' font-size='11.5' text-anchor='middle' transform='rotate(-90 14 186.0)' font-family='Helvetica, Arial, sans-serif'>pJ an edge, beyond the load&#x27;s C V^2</text>
+<clipPath id='c66733159'><rect x='58' y='58' width='486' height='256'/></clipPath>
+<line x1='116.3' y1='58' x2='116.3' y2='314' stroke='#777' stroke-dasharray='5 4'/>
+<text x='120.3' y='308' font-size='10' fill='#777' font-family='Helvetica, Arial, sans-serif'>the PDK library&#x27;s last point</text>
+<line x1='252.4' y1='58' x2='252.4' y2='314' stroke='#777' stroke-dasharray='5 4'/>
+<text x='256.4' y='70' font-size='10' fill='#777' font-family='Helvetica, Arial, sans-serif'>100 pF</text>
+<path d='M59.9,102.7 L77.4,102.1 L96.9,101.9 L155.2,101.7 L252.4,101.7 L349.6,101.6 L446.8,101.6 L544.0,101.6' fill='none' stroke='#1f6fb4' stroke-width='1.6' clip-path='url(#c66733159)'/>
+<path d='M58.0,85.0 L67.7,85.3 L77.4,86.5 L87.2,88.8 L96.9,90.6 L106.6,91.2 L116.3,92.7 L126.0,94.2 L135.8,95.8 L145.5,97.3 L155.2,98.8 L164.9,100.4 L174.6,101.9 L184.4,103.4 L194.1,105.0 L203.8,106.5 L213.5,108.0 L223.2,109.6 L233.0,111.1 L242.7,112.6 L252.4,114.1 L262.1,115.7 L271.8,117.2 L281.6,118.7 L291.3,120.3 L301.0,121.8 L310.7,123.3 L320.4,124.9 L330.2,126.4 L339.9,127.9 L349.6,129.4 L359.3,131.0 L369.0,132.5 L378.8,134.0 L388.5,135.6 L398.2,137.1 L407.9,138.6 L417.6,140.2 L427.4,141.7 L437.1,143.2 L446.8,144.7 L456.5,146.3 L466.2,147.8 L476.0,149.3 L485.7,150.9 L495.4,152.4 L505.1,153.9 L514.8,155.5 L524.6,157.0 L534.3,158.5 L544.0,160.0' fill='none' stroke='#1f6fb4' stroke-width='1.1' stroke-dasharray='5 4' clip-path='url(#c66733159)'/>
+<path d='M59.9,112.6 L77.4,112.1 L96.9,112.0 L155.2,112.0 L252.4,112.0 L349.6,112.0 L446.8,112.0 L544.0,112.1' fill='none' stroke='#d1352b' stroke-width='1.6' clip-path='url(#c66733159)'/>
+<path d='M58.0,98.7 L67.7,99.1 L77.4,100.6 L87.2,102.4 L96.9,103.9 L106.6,105.1 L116.3,108.0 L126.0,110.9 L135.8,113.8 L145.5,116.7 L155.2,119.6 L164.9,122.4 L174.6,125.3 L184.4,128.2 L194.1,131.1 L203.8,134.0 L213.5,136.9 L223.2,139.8 L233.0,142.7 L242.7,145.6 L252.4,148.5 L262.1,151.3 L271.8,154.2 L281.6,157.1 L291.3,160.0 L301.0,162.9 L310.7,165.8 L320.4,168.7 L330.2,171.6 L339.9,174.5 L349.6,177.3 L359.3,180.2 L369.0,183.1 L378.8,186.0 L388.5,188.9 L398.2,191.8 L407.9,194.7 L417.6,197.6 L427.4,200.5 L437.1,203.3 L446.8,206.2 L456.5,209.1 L466.2,212.0 L476.0,214.9 L485.7,217.8 L495.4,220.7 L505.1,223.6 L514.8,226.5 L524.6,229.4 L534.3,232.2 L544.0,235.1' fill='none' stroke='#d1352b' stroke-width='1.1' stroke-dasharray='5 4' clip-path='url(#c66733159)'/>
+<path d='M59.9,91.1 L77.4,90.2 L96.9,89.9 L155.2,89.8 L252.4,89.5 L349.6,89.5 L446.8,89.6 L544.0,89.6' fill='none' stroke='#2b9a3e' stroke-width='1.6' clip-path='url(#c66733159)'/>
+<path d='M58.0,69.9 L67.7,69.6 L77.4,71.1 L87.2,72.5 L96.9,74.0 L106.6,76.9 L116.3,81.9 L126.0,86.9 L135.8,91.9 L145.5,96.9 L155.2,101.9 L164.9,107.0 L174.6,112.0 L184.4,117.0 L194.1,122.0 L203.8,127.0 L213.5,132.0 L223.2,137.0 L233.0,142.0 L242.7,147.0 L252.4,152.0 L262.1,157.1 L271.8,162.1 L281.6,167.1 L291.3,172.1 L301.0,177.1 L310.7,182.1 L320.4,187.1 L330.2,192.1 L339.9,197.1 L349.6,202.2 L359.3,207.2 L369.0,212.2 L378.8,217.2 L388.5,222.2 L398.2,227.2 L407.9,232.2 L417.6,237.2 L427.4,242.2 L437.1,247.2 L446.8,252.3 L456.5,257.3 L466.2,262.3 L476.0,267.3 L485.7,272.3 L495.4,277.3 L505.1,282.3 L514.8,287.3 L524.6,292.3 L534.3,297.4 L544.0,302.4' fill='none' stroke='#2b9a3e' stroke-width='1.1' stroke-dasharray='5 4' clip-path='url(#c66733159)'/>
+<line x1='66' y1='68' x2='88' y2='68' stroke='#1f6fb4' stroke-width='2.0'/>
+<text x='93' y='72' font-size='10.5' font-family='Helvetica, Arial, sans-serif'>tt</text>
+<line x1='66' y1='82' x2='88' y2='82' stroke='#d1352b' stroke-width='2.0'/>
+<text x='93' y='86' font-size='10.5' font-family='Helvetica, Arial, sans-serif'>ss</text>
+<line x1='66' y1='96' x2='88' y2='96' stroke='#2b9a3e' stroke-width='2.0'/>
+<text x='93' y='100' font-size='10.5' font-family='Helvetica, Arial, sans-serif'>ff</text>
+<text x='66' y='114' font-size='10' fill='#555' font-family='Helvetica, Arial, sans-serif'>solid: SPICE; dashed: the PDK library as STA extrapolates it</text>
+<text x='618' y='47' font-size='13' font-weight='bold' font-family='Helvetica, Arial, sans-serif'>bi_t: the pad&#x27;s own energy, data fall</text>
+<line x1='618.0' y1='58' x2='618.0' y2='314' stroke='#e6e6e6'/>
+<text x='618.0' y='329' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>0</text>
+<line x1='715.2' y1='58' x2='715.2' y2='314' stroke='#e6e6e6'/>
+<text x='715.2' y='329' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>50</text>
+<line x1='812.4' y1='58' x2='812.4' y2='314' stroke='#e6e6e6'/>
+<text x='812.4' y='329' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>100</text>
+<line x1='909.6' y1='58' x2='909.6' y2='314' stroke='#e6e6e6'/>
+<text x='909.6' y='329' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>150</text>
+<line x1='1006.8' y1='58' x2='1006.8' y2='314' stroke='#e6e6e6'/>
+<text x='1006.8' y='329' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>200</text>
+<line x1='1104.0' y1='58' x2='1104.0' y2='314' stroke='#e6e6e6'/>
+<text x='1104.0' y='329' font-size='10.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>250</text>
+<line x1='618' y1='294.6' x2='1104' y2='294.6' stroke='#e6e6e6'/>
+<text x='613' y='298.1' font-size='10.5' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>40</text>
+<line x1='618' y1='231.2' x2='1104' y2='231.2' stroke='#e6e6e6'/>
+<text x='613' y='234.7' font-size='10.5' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>50</text>
+<line x1='618' y1='167.9' x2='1104' y2='167.9' stroke='#e6e6e6'/>
+<text x='613' y='171.4' font-size='10.5' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>60</text>
+<line x1='618' y1='104.5' x2='1104' y2='104.5' stroke='#e6e6e6'/>
+<text x='613' y='108.0' font-size='10.5' text-anchor='end' font-family='Helvetica, Arial, sans-serif'>70</text>
+<rect x='618' y='58' width='486' height='256' fill='none' stroke='#555'/>
+<text x='861.0' y='350' font-size='11.5' text-anchor='middle' font-family='Helvetica, Arial, sans-serif'>pF on the pin</text>
+<text x='574' y='186.0' font-size='11.5' text-anchor='middle' transform='rotate(-90 574 186.0)' font-family='Helvetica, Arial, sans-serif'>pJ an edge</text>
+<clipPath id='c63308877'><rect x='618' y='58' width='486' height='256'/></clipPath>
+<line x1='676.3' y1='58' x2='676.3' y2='314' stroke='#777' stroke-dasharray='5 4'/>
+<text x='680.3' y='308' font-size='10' fill='#777' font-family='Helvetica, Arial, sans-serif'>the PDK library&#x27;s last point</text>
+<line x1='812.4' y1='58' x2='812.4' y2='314' stroke='#777' stroke-dasharray='5 4'/>
+<text x='816.4' y='70' font-size='10' fill='#777' font-family='Helvetica, Arial, sans-serif'>100 pF</text>
+<path d='M619.9,247.7 L637.4,251.9 L656.9,252.5 L715.2,251.9 L812.4,249.1 L909.6,249.5 L1006.8,248.3 L1104.0,248.8' fill='none' stroke='#1f6fb4' stroke-width='1.6' clip-path='url(#c63308877)'/>
+<path d='M618.0,175.4 L627.7,158.8 L637.4,155.5 L647.2,154.9 L656.9,154.4 L666.6,154.5 L676.3,154.0 L686.0,153.4 L695.8,152.8 L705.5,152.2 L715.2,151.6 L724.9,151.0 L734.6,150.5 L744.4,149.9 L754.1,149.3 L763.8,148.7 L773.5,148.1 L783.2,147.6 L793.0,147.0 L802.7,146.4 L812.4,145.8 L822.1,145.2 L831.8,144.7 L841.6,144.1 L851.3,143.5 L861.0,142.9 L870.7,142.3 L880.4,141.7 L890.2,141.2 L899.9,140.6 L909.6,140.0 L919.3,139.4 L929.0,138.8 L938.8,138.3 L948.5,137.7 L958.2,137.1 L967.9,136.5 L977.6,135.9 L987.4,135.4 L997.1,134.8 L1006.8,134.2 L1016.5,133.6 L1026.2,133.0 L1036.0,132.4 L1045.7,131.9 L1055.4,131.3 L1065.1,130.7 L1074.8,130.1 L1084.6,129.5 L1094.3,129.0 L1104.0,128.4' fill='none' stroke='#1f6fb4' stroke-width='1.1' stroke-dasharray='5 4' clip-path='url(#c63308877)'/>
+<path d='M619.9,296.4 L637.4,300.6 L656.9,301.5 L715.2,302.1 L812.4,302.4 L909.6,301.3 L1006.8,301.1 L1104.0,302.0' fill='none' stroke='#d1352b' stroke-width='1.6' clip-path='url(#c63308877)'/>
+<path d='M618.0,242.2 L627.7,229.0 L637.4,223.9 L647.2,222.4 L656.9,221.6 L666.6,220.6 L676.3,220.9 L686.0,221.2 L695.8,221.5 L705.5,221.7 L715.2,222.0 L724.9,222.3 L734.6,222.6 L744.4,222.9 L754.1,223.2 L763.8,223.5 L773.5,223.7 L783.2,224.0 L793.0,224.3 L802.7,224.6 L812.4,224.9 L822.1,225.2 L831.8,225.5 L841.6,225.7 L851.3,226.0 L861.0,226.3 L870.7,226.6 L880.4,226.9 L890.2,227.2 L899.9,227.5 L909.6,227.7 L919.3,228.0 L929.0,228.3 L938.8,228.6 L948.5,228.9 L958.2,229.2 L967.9,229.5 L977.6,229.8 L987.4,230.0 L997.1,230.3 L1006.8,230.6 L1016.5,230.9 L1026.2,231.2 L1036.0,231.5 L1045.7,231.8 L1055.4,232.0 L1065.1,232.3 L1074.8,232.6 L1084.6,232.9 L1094.3,233.2 L1104.0,233.5' fill='none' stroke='#d1352b' stroke-width='1.1' stroke-dasharray='5 4' clip-path='url(#c63308877)'/>
+<path d='M619.9,190.9 L637.4,194.7 L656.9,194.7 L715.2,192.5 L812.4,190.6 L909.6,190.5 L1006.8,190.5 L1104.0,190.9' fill='none' stroke='#2b9a3e' stroke-width='1.6' clip-path='url(#c63308877)'/>
+<path d='M618.0,101.2 L627.7,89.0 L637.4,78.9 L647.2,74.3 L656.9,74.8 L666.6,77.4 L676.3,77.2 L686.0,77.0 L695.8,76.9 L705.5,76.7 L715.2,76.5 L724.9,76.3 L734.6,76.2 L744.4,76.0 L754.1,75.8 L763.8,75.7 L773.5,75.5 L783.2,75.3 L793.0,75.1 L802.7,75.0 L812.4,74.8 L822.1,74.6 L831.8,74.5 L841.6,74.3 L851.3,74.1 L861.0,73.9 L870.7,73.8 L880.4,73.6 L890.2,73.4 L899.9,73.2 L909.6,73.1 L919.3,72.9 L929.0,72.7 L938.8,72.6 L948.5,72.4 L958.2,72.2 L967.9,72.0 L977.6,71.9 L987.4,71.7 L997.1,71.5 L1006.8,71.4 L1016.5,71.2 L1026.2,71.0 L1036.0,70.8 L1045.7,70.7 L1055.4,70.5 L1065.1,70.3 L1074.8,70.2 L1084.6,70.0 L1094.3,69.8 L1104.0,69.6' fill='none' stroke='#2b9a3e' stroke-width='1.1' stroke-dasharray='5 4' clip-path='url(#c63308877)'/>
+<line x1='626' y1='68' x2='648' y2='68' stroke='#1f6fb4' stroke-width='2.0'/>
+<text x='653' y='72' font-size='10.5' font-family='Helvetica, Arial, sans-serif'>tt</text>
+<line x1='626' y1='82' x2='648' y2='82' stroke='#d1352b' stroke-width='2.0'/>
+<text x='653' y='86' font-size='10.5' font-family='Helvetica, Arial, sans-serif'>ss</text>
+<line x1='626' y1='96' x2='648' y2='96' stroke='#2b9a3e' stroke-width='2.0'/>
+<text x='653' y='100' font-size='10.5' font-family='Helvetica, Arial, sans-serif'>ff</text>
+<text x='626' y='114' font-size='10' fill='#555' font-family='Helvetica, Arial, sans-serif'>solid: SPICE; dashed: the PDK library as STA extrapolates it</text>
+</svg>

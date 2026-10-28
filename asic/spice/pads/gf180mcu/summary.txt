@@ -3,42 +3,66 @@ gf180mcu tt (tt_025C_5v00): 25 C, core 5 V, I/O 5 V
   bi_t       out fall 100 pF:  13.07 ns at 50 % (PDK lib  14.32),  17.59 ns at 1.5 V; slew  20.05 ns (PDK lib  19.88)
   bi_t       turn-on 100 pF: Z->1 14.86 / Z->0 12.31 ns at 50 %; float: driver off 0.91 / 1.02 ns, pin moved 0.5 V 23.10 / 23.57 ns (2 kohm)
   bi_t       DC: sinks 7.3 mA at 0.4 V (NMOS Z80: 2.0), sources 18.6 mA at 2.4 V (0.25)
+  bi_t       energy, data 0.5 ns: 2593 pJ a cycle into 100 pF (the load's C V^2 2501, the pad 91.8); the pad's, rise / fall: 20 pF 44.5 / 46.6 pJ (PDK lib 52.4 / 62.1), 100 pF 44.6 / 47.2 (PDK lib extrapolated 35.9 / 63.5)
+  bi_t       energy, the enable into 100 pF: turning on Z->1 42.7 / Z->0 39.8 pJ beyond the load's C V^2, letting go 10.9 / 5.9 pJ
   bi_t       in  rise 15 ns edge:  -2.12 ns pin 50 % -> core 50 % (PDK lib extrapolated   0.52); switches at 1.93 V
   bi_t       in  fall 15 ns edge:   5.15 ns pin 50 % -> core 50 % (PDK lib extrapolated   6.77); switches at 1.12 V
   bi_t       DC input: switches up at 1.46 V, down at 1.43 V (TTL: high from 2.0 V, low to 0.8 V)
+  bi_t       energy a cycle: 1 ns edges 6.23 pJ (PDK lib 6.64), 15 ns 14.81 (PDK lib extrapolated 3.79), 120 ns 79.78
+  bi_t       leakage: driving 0 / 1 3.56 / 3.44 nW, receiving 0 / 1 3.49 / 2.78 nW (PDK lib 4.57 nW)
   in_c       in  rise 15 ns edge:  -2.12 ns pin 50 % -> core 50 % (PDK lib extrapolated   0.51); switches at 1.93 V
   in_c       in  fall 15 ns edge:   5.15 ns pin 50 % -> core 50 % (PDK lib extrapolated   6.77); switches at 1.12 V
   in_c       DC input: switches up at 1.46 V, down at 1.43 V (TTL: high from 2.0 V, low to 0.8 V)
+  in_c       energy a cycle: 1 ns edges 6.23 pJ (PDK lib 7.16), 15 ns 14.81 (PDK lib extrapolated 13.09), 120 ns 79.78
+  in_c       leakage: receiving 0 / 1 3.40 / 2.69 nW (PDK lib 4.55 nW)
   in_s       in  rise 15 ns edge:  -0.64 ns pin 50 % -> core 50 % (PDK lib extrapolated   2.33); switches at 2.33 V
   in_s       in  fall 15 ns edge:   6.32 ns pin 50 % -> core 50 % (PDK lib extrapolated   7.98); switches at 0.81 V
   in_s       DC input: switches up at 1.74 V, down at 1.21 V (TTL: high from 2.0 V, low to 0.8 V)
+  in_s       energy a cycle: 1 ns edges 8.72 pJ (PDK lib 9.66), 15 ns 25.12 (PDK lib extrapolated 20.21), 120 ns 141.25
+  in_s       leakage: receiving 0 / 1 3.46 / 2.75 nW (PDK lib 4.73 nW)
 
 gf180mcu ss (ss_125C_4v50): 125 C, core 4.5 V, I/O 4.5 V
   bi_t       out rise 100 pF:  24.79 ns at 50 % (PDK lib  25.95),  17.49 ns at 1.5 V; slew  45.02 ns (PDK lib  44.77)
   bi_t       out fall 100 pF:  22.03 ns at 50 % (PDK lib  24.29),  28.35 ns at 1.5 V; slew  34.24 ns (PDK lib  34.37)
   bi_t       turn-on 100 pF: Z->1 24.35 / Z->0 20.95 ns at 50 %; float: driver off 1.41 / 1.61 ns, pin moved 0.5 V 26.68 / 27.54 ns (2 kohm)
   bi_t       DC: sinks 4.2 mA at 0.4 V (NMOS Z80: 2.0), sources 9.9 mA at 2.4 V (0.25)
+  bi_t       energy, data 0.5 ns: 2097 pJ a cycle into 100 pF (the load's C V^2 2021, the pad 76.1); the pad's, rise / fall: 20 pF 37.3 / 38.9 pJ (PDK lib 43.1 / 51.5), 100 pF 37.4 / 38.8 (PDK lib extrapolated 11.6 / 51.0)
+  bi_t       energy, the enable into 100 pF: turning on Z->1 35.3 / Z->0 33.7 pJ beyond the load's C V^2, letting go 8.9 / 4.8 pJ
   bi_t       in  rise 15 ns edge:  -0.86 ns pin 50 % -> core 50 % (PDK lib extrapolated   2.71); switches at 2.05 V
   bi_t       in  fall 15 ns edge:   5.60 ns pin 50 % -> core 50 % (PDK lib extrapolated   6.48); switches at 0.90 V
   bi_t       DC input: switches up at 1.38 V, down at 1.34 V (TTL: high from 2.0 V, low to 0.8 V)
+  bi_t       energy a cycle: 1 ns edges 4.87 pJ (PDK lib 5.12), 15 ns 7.97 (PDK lib extrapolated 10.02), 120 ns 32.75
+  bi_t       leakage: driving 0 / 1 3.97 / 4.26 nW, receiving 0 / 1 3.81 / 3.25 nW (PDK lib 4.65 nW)
   in_c       in  rise 15 ns edge:  -0.86 ns pin 50 % -> core 50 % (PDK lib extrapolated   2.71); switches at 2.05 V
   in_c       in  fall 15 ns edge:   5.60 ns pin 50 % -> core 50 % (PDK lib extrapolated   6.50); switches at 0.90 V
   in_c       DC input: switches up at 1.38 V, down at 1.34 V (TTL: high from 2.0 V, low to 0.8 V)
+  in_c       energy a cycle: 1 ns edges 4.87 pJ (PDK lib 5.42), 15 ns 7.97 (PDK lib extrapolated 3.92), 120 ns 32.75
+  in_c       leakage: receiving 0 / 1 3.75 / 3.19 nW (PDK lib 4.63 nW)
   in_s       in  rise 15 ns edge:   0.86 ns pin 50 % -> core 50 % (PDK lib extrapolated   4.76); switches at 2.46 V
   in_s       in  fall 15 ns edge:   7.11 ns pin 50 % -> core 50 % (PDK lib extrapolated   6.64); switches at 0.54 V
   in_s       DC input: switches up at 1.69 V, down at 1.13 V (TTL: high from 2.0 V, low to 0.8 V)
+  in_s       energy a cycle: 1 ns edges 6.70 pJ (PDK lib 7.19), 15 ns 13.81 (PDK lib extrapolated 18.45), 120 ns 62.42
+  in_s       leakage: receiving 0 / 1 3.81 / 3.21 nW (PDK lib 4.77 nW)
 
 gf180mcu ff (ff_n40C_5v50): -40 C, core 5.5 V, I/O 5.5 V
   bi_t       out rise 100 pF:  10.37 ns at 50 % (PDK lib  10.83),   6.20 ns at 1.5 V; slew  18.46 ns (PDK lib  18.52)
   bi_t       out fall 100 pF:   8.81 ns at 50 % (PDK lib   9.62),  12.31 ns at 1.5 V; slew  13.38 ns (PDK lib  13.37)
   bi_t       turn-on 100 pF: Z->1 10.18 / Z->0 8.27 ns at 50 %; float: driver off 0.65 / 0.74 ns, pin moved 0.5 V 20.57 / 20.86 ns (2 kohm)
   bi_t       DC: sinks 11.3 mA at 0.4 V (NMOS Z80: 2.0), sources 30.4 mA at 2.4 V (0.25)
+  bi_t       energy, data 0.5 ns: 3136 pJ a cycle into 100 pF (the load's C V^2 3026, the pad 109.7); the pad's, rise / fall: 20 pF 52.9 / 55.8 pJ (PDK lib 64.2 / 74.7), 100 pF 53.3 / 56.4 (PDK lib extrapolated 9.1 / 74.7)
+  bi_t       energy, the enable into 100 pF: turning on Z->1 51.5 / Z->0 46.8 pJ beyond the load's C V^2, letting go 13.6 / 7.4 pJ
   bi_t       in  rise 15 ns edge:  -2.93 ns pin 50 % -> core 50 % (PDK lib extrapolated  -0.69); switches at 1.90 V
   bi_t       in  fall 15 ns edge:   5.08 ns pin 50 % -> core 50 % (PDK lib extrapolated   6.65); switches at 1.25 V
   bi_t       DC input: switches up at 1.52 V, down at 1.50 V (TTL: high from 2.0 V, low to 0.8 V)
+  bi_t       energy a cycle: 1 ns edges 8.37 pJ (PDK lib 10.66), 15 ns 28.92 (PDK lib extrapolated 64.65), 120 ns 181.53
+  bi_t       leakage: driving 0 / 1 4.35 / 4.18 nW, receiving 0 / 1 4.26 / 3.38 nW (PDK lib 5.55 nW)
   in_c       in  rise 15 ns edge:  -2.93 ns pin 50 % -> core 50 % (PDK lib extrapolated  -0.69); switches at 1.90 V
   in_c       in  fall 15 ns edge:   5.08 ns pin 50 % -> core 50 % (PDK lib extrapolated   6.65); switches at 1.25 V
   in_c       DC input: switches up at 1.52 V, down at 1.50 V (TTL: high from 2.0 V, low to 0.8 V)
+  in_c       energy a cycle: 1 ns edges 8.37 pJ (PDK lib 11.17), 15 ns 28.92 (PDK lib extrapolated 55.26), 120 ns 181.53
+  in_c       leakage: receiving 0 / 1 4.14 / 3.26 nW (PDK lib 5.53 nW)
   in_s       in  rise 15 ns edge:  -1.66 ns pin 50 % -> core 50 % (PDK lib extrapolated   0.82); switches at 2.27 V
   in_s       in  fall 15 ns edge:   6.10 ns pin 50 % -> core 50 % (PDK lib extrapolated   8.06); switches at 0.95 V
   in_s       DC input: switches up at 1.78 V, down at 1.27 V (TTL: high from 2.0 V, low to 0.8 V)
+  in_s       energy a cycle: 1 ns edges 11.78 pJ (PDK lib 13.12), 15 ns 46.66 (PDK lib extrapolated 52.63), 120 ns 298.83
+  in_s       leakage: receiving 0 / 1 4.22 / 3.33 nW (PDK lib 5.75 nW)

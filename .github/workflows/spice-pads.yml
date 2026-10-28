@@ -1,7 +1,7 @@
 # The I/O pads at transistor level (asic/spice/pads.py): every pad cell the
 # chips use, simulated in ngspice with the PDK's own netlists and transistor
 # models at the chips' STA corners -- outputs into 1-250 pF, turn-on and
-# float, inputs with edges to 30 ns, where they switch, their DC drive.
+# float, inputs with edges to 120 ns, where they switch, their DC drive.
 # Fails when the results drift from the committed ones beyond small
 # tolerances (asic/spice/pads/<pdk>/pads.json; ../timing/pin_timing.py
 # reads the Liberty files made from them). The figures go into the
