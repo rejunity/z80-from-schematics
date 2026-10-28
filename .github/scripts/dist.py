@@ -106,6 +106,16 @@ BLOCKS = {  # block: (instance name pattern, colour), first match wins, in legen
     'pin logic': (r'_\d+_$', (226, 232, 240)),
     'P&R buffers, clock tree': (r'', (90, 110, 120)),
 }
+# the cells RZ80.DieFloorplan fixed where the die has their counterparts
+# (asic/librelane_plugin_rz80, its anchors.json): by the die block they
+# stand in, which for the register file's PC, IR, WZ, SP, IX and IY columns
+# (z80_core's own flip-flops) and the latches beside it is not the RTL block
+ANCHOR_BLOCKS = [  # (anchor role pattern, block)
+    (r'(regfile|bank) ', 'register file'),
+    (r'pla ', 'decoder PLA'),
+    (r'datapath (addr_hold|m_addr)\[', 'address'),
+    (r'datapath (tmp|wdata)\[', 'ALU'),
+]
 PAD_BLOCK = ('I/O pads', (148, 163, 184))
 # the pad ring's corners, fillers and bond pads, darker than the pads
 RING = (58, 66, 80)
@@ -280,6 +290,16 @@ def read_def(run):
     return die, placed
 
 
+def anchor_blocks(run):
+    """{instance: block} for the cells a run's RZ80.DieFloorplan step fixed"""
+    out = {}
+    for path in glob.glob(run + '*-rz80-diefloorplan/anchors.json'):
+        for a in json.load(open(path))['anchors']:
+            if block := next((b for pattern, b in ANCHOR_BLOCKS if re.match(pattern, a['role'])), None):
+                out[a['inst'].replace('\\', '')] = block
+    return out
+
+
 def render_blocks(run, png, width=1200, supersample=3, macro_runs=None):
     """The block map; returns the instance count per block, or None when
     the run's instance names carry no hierarchy (flattened before synthesis).
@@ -310,6 +330,9 @@ def render_blocks(run, png, width=1200, supersample=3, macro_runs=None):
     if cfg.get('PAD_LEFS'):
         counts = {PAD_BLOCK[0]: 0, **counts}
     fill = CELL_KINDS['fill/decap/tap']
+    anchored = anchor_blocks(run)
+    for macro_run in (macro_runs or {}).values():
+        anchored.update(anchor_blocks(macro_run))
     cells = []
     for name, master, x, y, orient in placed:
         if master not in sizes:
@@ -322,7 +345,7 @@ def render_blocks(run, png, width=1200, supersample=3, macro_runs=None):
             cells.append((None, fill[1], master, x, y, orient))
             continue
         name = re.sub(r'^u_top\.', '', name)   # the chip's z80_top instance
-        block = next(b for b, (pattern, _) in BLOCKS.items() if re.match(pattern, name) or not pattern)
+        block = anchored.get(name) or next(b for b, (pattern, _) in BLOCKS.items() if re.match(pattern, name) or not pattern)
         counts[block] += 1
         cells.append((block, BLOCKS[block][1], master, x, y, orient))
     cells.sort(key=lambda c: c[0] is not None)   # fillers first: real cells draw over them

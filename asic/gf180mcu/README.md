@@ -24,6 +24,9 @@ fossi-foundation binary cache), then from the repository root:
     make -C asic/gf180mcu sign_of_life     # the routed netlist runs asic/tb_sign_of_life.v
     make -C asic/gf180mcu sign_of_life_rtl # same program on rtl/
     make -C asic/gf180mcu synth            # synthesis and its checks only (minutes)
+    make -C asic/gf180mcu pla_check        # the decoder's AND / OR planes against rtl/z80_pla.v, all 2048 inputs
+    make -C asic/gf180mcu floorplan_check  # the die floorplan's anchors in the latest run
+    make -C asic/gf180mcu netlist_traces   # trace programs and pin scenarios on the routed netlist vs perfectz80
 
 (*) Sign-off as LibreLane counts it: DRC / LVS / antenna / XOR clean,
 no setup violations at the corners in TIMING_VIOLATION_CORNERS (typical),
@@ -71,6 +74,61 @@ Metal4. Measured with a 20 MHz target:
 Previous core (main before the restructure, same flow): Sign-off clean (DRC / LVS / antenna / XOR 0), 16,225 cells, 0.29 mm² of cells on a 0.50 mm² die, but at 20 MHz the slow corner missed by 26.7 ns (typical passed with +3.9 ns); 12,112 max-slew violations. ~1 h 50 min.
 
 TinyTapeout gf180 tiles are 347 × 161 µm (up to 4x4); at 60 % density the core needs ~0.26 mm², about a 3x2 tile area. wafer.space's smallest slot (0p5x0p5) has a 1.05 × 1.65 mm core area -- the Z80 takes under a fifth of it, pad ring included separately.
+
+## The die floorplan
+
+`z80_top` is laid out the way the Z80 die is, as Ken Shirriff's die analysis
+describes it (righto.com: the labelled die photo of "The Z-80's 16-bit
+increment/decrement circuit reverse engineered", "Down to the silicon: how
+the Z80's registers are implemented", "Why the Z-80's data pins are
+scrambled"). The pins already sit on the die's sides (`pin_order.cfg`), so
+the die's arrangement faces the right pins. A LibreLane step of RZ80's own,
+`RZ80.DieFloorplan` (`asic/librelane_plugin_rz80/`, found on `PYTHONPATH`,
+inserted by `config.yaml`'s `substituting_steps`), runs after the pins are
+placed and before global placement; it fixes the anchor cells (FIRM)
+and global placement places everything else around them. A second step,
+`RZ80.ReleaseAnchors`, frees them right after, so the timing repairs may
+size them (a fixed cell that grows in place would overlap its neighbour)
+and detailed placement shifts them the few sites that needs. The
+arrangement is a short table written by hand from those descriptions
+(`arrangement.py`); no die data is read.
+
+- The register file: the 224 flip-flops in the die's 14 columns of 16-bit
+  pairs, west to east PC IR (a gap) WZ SP IY IX DE DE' HL HL' BC BC' AF'
+  AF, each column's bits in order from the top, the low byte above the
+  high byte. `p_*0` / `p_*1` are RZ80's physical banks, which EXX, EX
+  AF,AF' and EX DE,HL swap as the die does; their flip-flops sit in a row
+  above the columns they swap. Tap cells come every 70 sites in each row,
+  half a gap apart from row to row, and a set flip-flop takes 36 sites, so
+  the columns of a pair share a gap between taps -- the first in the bit's
+  row, the second in the row above -- and stand a uniform 19.6 µm apart.
+- Beside it, bit for bit: the address latch on the west (the incrementer's
+  side, by the A0..A4 pins), the ALU's operand latches and the write-data
+  latch on the east (by the data pins).
+- The decoder as a PLA: `asic/pla/planes.py` turns `rtl/z80_pla.v`'s truth
+  table (all 2048 inputs) into an AND plane of product terms and an OR
+  plane of one line per output bit, three modules so synthesis keeps the
+  terms (`asic/pla/z80_pla_planes.v`, used here instead of
+  `rtl/z80_pla.v`; `make pla_check` proves them equal on every input). The
+  terms' gates stand in a grid, the OR lines below them, the instruction
+  register with each input line's true and complement drivers at the east
+  end, as on the die.
+- The ALU as 8 bit planes east of its operand latches, as the die stacks
+  its ALU's bit slices beside the register file: bit i's cells in the
+  three placement rows of the register file's bit row i, so the bus lines
+  line up. A cell belongs to bit i when it reaches a result bit and bit i
+  is the highest operand bit in its input cone (a carry chain counts to the
+  bit it ends in), or when it feeds only the flags and reads only bit i;
+  the logic no bit owns (zero, parity, overflow, half-carry, the flags'
+  assembly, the operation decode) fills a strip below the planes, level
+  with the high byte. RZ80's ALU is one 8-bit pass; the Z80's is a 4-bit
+  core used twice, so the planes stand for the die's 8-bit slices around it.
+- The state flip-flops in a row on top; every pin's flip-flops at its pin.
+
+`make floorplan_check` reads the step's `anchors.json` and the final DEF:
+every anchor within 10 µm of where it was put, the register columns in the
+die's order west to east and each column's bits in order, the ALU's bit
+planes in bit order.
 
 ## The chip: z80_top in a pad ring
 

@@ -58,7 +58,8 @@ MACROS:
       "*_ff_n40C_5v50": [dir::macro/lib/ff.lib]
     instances:
       u_top:
-        location: [559, 475]
+        # centred in the core area: the die-floorplan macro is ~690 x 573 um
+        location: [486, 469]
         orientation: N
 PDN_MACRO_CONNECTIONS:
   - "u_top VDD VSS VDD VSS"

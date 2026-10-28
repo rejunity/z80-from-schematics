@@ -10,10 +10,28 @@
 meta:
   version: 3
   flow: Classic
+  # z80_top laid out after the Z80 die: RZ80.DieFloorplan (asic/
+  # librelane_plugin_rz80, on PYTHONPATH from the Makefile) fixes the
+  # register file, the decoder's planes and the pins' flip-flops where the
+  # die has them, before global placement places the rest around them;
+  # RZ80.ReleaseAnchors frees them after, for the repairs to size
+  substituting_steps:
+    "-OpenROAD.GlobalPlacement": RZ80.DieFloorplan
+    "+OpenROAD.GlobalPlacement": RZ80.ReleaseAnchors
 
 DESIGN_NAME: z80_top
+# The decoder as the die's kind of PLA: asic/pla/z80_pla_planes.v, an AND
+# plane and an OR plane generated from rtl/z80_pla.v and equal to it on all
+# 2048 inputs (make pla_check), in place of rtl/z80_pla.v
 VERILOG_FILES:
-  - dir::../../rtl/*.v
+  - dir::../../rtl/z80_top.v
+  - dir::../../rtl/z80_core.v
+  - dir::../../rtl/z80_timing.v
+  - dir::../../rtl/z80_execute.v
+  - dir::../../rtl/z80_regfile.v
+  - dir::../../rtl/z80_addr.v
+  - dir::../../rtl/z80_alu.v
+  - dir::../pla/z80_pla_planes.v
 VERILOG_INCLUDE_DIRS:
   - dir::../../rtl
 
@@ -63,5 +81,15 @@ CLOCK_PERIOD: 50
 # Let the die follow the cell area; utilisation is reported so it can be
 # compared with TinyTapeout tile and wafer.space slot sizes.
 FP_SIZING: relative
-FP_CORE_UTIL: 45
-PL_TARGET_DENSITY_PCT: 55
+# room for the die's arrangement: the fixed register file and decoder
+# planes keep their wires long (the die's own bit lines and PLA lines), so
+# the core is larger and the placement looser than the automatic layout's
+# (45 %, 55 %) -- 38 %, a core wider than tall (h/w 0.8) like the die's
+# datapath band, still inside the chip's core (chip/config.yaml)
+FP_CORE_UTIL: 38
+FP_ASPECT_RATIO: 0.8
+PL_TARGET_DENSITY_PCT: 50
+# the die's long bit and PLA lines leave the global router a few hot
+# spots on Metal3 (the one horizontal layer under the chip's grid) that it
+# cannot spread; the detailed router resolves them (route DRC 0)
+GRT_ALLOW_CONGESTION: true

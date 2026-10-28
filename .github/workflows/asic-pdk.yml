@@ -88,8 +88,23 @@ jobs:
       - name: Signs of life (RTL)
         run: make -C asic/$PDK sign_of_life_rtl
 
+      # the decoder's AND / OR planes (asic/pla/) against rtl/z80_pla.v
+      - name: Decoder planes equal rtl/z80_pla.v (all 2048 inputs)
+        if: hashFiles('asic/pla/planes.py') != ''
+        run: make -C asic/$PDK pla_check
+
       - name: RTL-to-GDS
         run: make -C asic/$PDK harden LIBRELANE_ARGS=--hide-progress-bar
+
+      - name: Decoder planes as synthesized, gate by gate (all 2048 inputs)
+        if: hashFiles('asic/pla/planes.py') != ''
+        run: make -C asic/$PDK pla_check_gl
+
+      # z80_top laid out after the Z80 die (asic/librelane_plugin_rz80):
+      # every anchor where the step fixed it, in the die's order
+      - name: Die floorplan
+        if: hashFiles('asic/floorplan_check.py') != ''
+        run: make -C asic/$PDK floorplan_check
 
       - name: Sign-off summary (fails on DRC / LVS / antenna / XOR / timing)
         run: |
@@ -101,6 +116,12 @@ jobs:
 
       - name: Signs of life (routed netlist, PDK cell models)
         run: make -C asic/$PDK sign_of_life
+
+      # the trace programs and pin scenarios on the routed netlist, half-cycle
+      # by half-cycle against perfectz80 (the die floorplan's decoder planes)
+      - name: Trace programs and pin scenarios on the routed netlist vs perfectz80
+        if: hashFiles('asic/floorplan_check.py') != ''
+        run: make -C asic/$PDK netlist_traces
 
       # The chip, where the PDK branch has one (asic/<pdk>/chip/): z80_top
       # in a ring of I/O pads placed like the Z80's, LibreLane's Chip flow
