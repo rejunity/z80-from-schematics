@@ -276,29 +276,97 @@ def alu(fl, x_from, k_bit):
     """the ALU as 8 bit planes east of the register file, as the die stacks
     its ALU's bit slices: bit i's cells in the placement rows of the
     register file's bit row i, so the bus lines line up, and the logic no
-    one bit owns (zero, parity, overflow, half-carry, the flags' assembly,
-    the operation decode) in a strip below them, level with the high byte.
+    bit owns -- the flags' collectors, overflow, carry out, the decimal
+    adjust's detection, the operation decode -- in a strip north of them,
+    where the die has its flag area.
 
-    A cell belongs to bit i when its output reaches a result bit (alu_res)
-    and i is the highest operand bit (alu_a, alu_b) in its input cone -- a
-    sum bit's carry chain counts to the bit it ends in; a cell that reaches
-    only the flags (alu_fout) belongs to bit i when bit i is the one operand
-    bit it reads; everything else is shared. Within a plane the cells go
-    west to east by logic depth from the operands."""
-    planes = {b: [] for b in range(8)}
-    shared = []
-    for inst, fi, fo, d in cones(fl, "u_core.u_alu.", ("alu_res", "alu_fout"), ("alu_a", "alu_b")):
-        if fi and any(s == "alu_res" for s, _ in fo):
-            planes[max(fi)].append((inst, d))
-        elif len(fi) == 1:
-            planes[next(iter(fi))].append((inst, d))
-        else:
-            shared.append((inst, d))
+    The cells go where the die distributes the logic (its ALU rows hold the
+    shifter and rotate muxes, the carry column, the parity chain, the bit
+    select; the zero detect has pieces in every row):
+    1. a cell whose output reaches exactly one result bit (alu_res[i]) is
+       bit i's -- a shift or rotate mux reading a[i +- 1], a logic op, the
+       bit select, a decimal-adjust correction sum;
+    2. a carry or borrow cell reaching several result bits is the lowest
+       one's, where that carry is generated;
+    3. a cell reaching no single result bit (a zero-detect or parity leaf,
+       a flag-only cell) is the median bit of what it reads directly -- the
+       planes of its drivers and the operand bits -- if those span at most
+       4 adjacent bits; otherwise it is shared (a tree's collector, overflow,
+       the decode).
+    Within a plane the cells go west to east by logic depth from the
+    operands."""
+    sys.setrecursionlimit(20000)
+    cells = [i for i in fl.block.getInsts() if i.getName().replace("\\", "").startswith("u_core.u_alu.")
+             and i.getMaster().getType() == "CORE" and not i.isFixed()]
+    names = {i.getName(): i for i in cells}
+
+    def index(net, stems):
+        m = re.fullmatch(r"u_core\.(\w+)\[(\d+)\]", net.getName().replace("\\", ""))
+        return (m.group(1), int(m.group(2))) if m and m.group(1) in stems else None
+
+    direct, fanin, depth, reach = {}, {}, {}, {}
+
+    def cone_in(k):
+        if k not in fanin:
+            fanin[k], depth[k] = set(), 0
+            ds, ops = [], set()
+            for it in names[k].getITerms():
+                net = it.getNet()
+                if not it.isInputSignal() or net is None:
+                    continue
+                if x := index(net, ("alu_a", "alu_b")):
+                    ops.add(x[1])
+                    continue
+                for dv in net.getITerms():
+                    if dv.isOutputSignal() and dv.getInst().getName() in names:
+                        ds.append(dv.getInst().getName())
+            direct[k] = (ds, ops)
+            bits, d = set(ops), 0
+            for x in ds:
+                bits |= cone_in(x)
+                d = max(d, depth[x] + 1)
+            fanin[k], depth[k] = bits, d
+        return fanin[k]
+
+    def cone_out(k):
+        if k not in reach:
+            reach[k] = set()
+            out = set()
+            for it in names[k].getITerms():
+                net = it.getNet()
+                if not it.isOutputSignal() or net is None:
+                    continue
+                if x := index(net, ("alu_res",)):
+                    out.add(x[1])
+                for ld in net.getITerms():
+                    if ld.isInputSignal() and ld.getInst().getName() in names:
+                        out |= cone_out(ld.getInst().getName())
+            reach[k] = out
+        return reach[k]
+
+    for k in names:
+        cone_in(k)
+        cone_out(k)
+    bit = {}
+    order = sorted(names, key=lambda k: (depth[k], k))
+    for k in order:
+        if len(reach[k]) == 1:
+            bit[k] = next(iter(reach[k]))                       # 1. one result bit
+        elif len(reach[k]) > 1 and fanin[k]:
+            bit[k] = min(reach[k])                              # 2. a carry, where it starts
+    for k in order:                                             # 3. by what it reads
+        if k in bit:
+            continue
+        ds, ops = direct[k]
+        bits = sorted([bit[x] for x in ds if bit.get(x) is not None] + list(ops))
+        bit[k] = bits[(len(bits) - 1) // 2] if bits and bits[-1] - bits[0] <= 3 else None
+    planes = {b: [(names[k], depth[k]) for k in order if bit[k] == b] for b in range(8)}
+    shared = [(names[k], depth[k]) for k in order if bit[k] is None]
     x0 = x_from + A.ALU_GAP_SITES * fl.sw
     for b in range(8):
         pack(fl, planes[b], [k_bit(b) + j for j in range(A.BIT_ROWS)], x0, f"alu bit {b}", spread=A.ALU_SPREAD)
-    pack(fl, shared, [k_bit(b) + j for b in range(8, 16) for j in range(A.BIT_ROWS)], x0, "alu shared",
-         spread=A.ALU_SPREAD)
+    top = k_bit(0) + A.BIT_ROWS + 1                             # the flag area, north of the planes
+    pack(fl, shared, [top + j for j in range(A.ALU_FLAG_ROWS)], x0, "alu shared", spread=A.ALU_SPREAD)
     return {b: len(planes[b]) for b in range(8)}, len(shared)
 
 

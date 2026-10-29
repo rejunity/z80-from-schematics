@@ -18,7 +18,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "librelane_plugin_rz80"))
 import arrangement as A  # noqa: E402
 
-MAX_SHIFT_UM = 10.0       # how far detailed placement may shift a released flip-flop anchor
+MAX_SHIFT_UM = 16.0       # how far detailed placement may shift a released flip-flop anchor: one bit row (4 rows)
 # the logic planes' cells (the ALU's and the address unit's bit planes,
 # z80_timing, the PLA): the repairs resize and buffer them and detailed
 # placement makes room, so each may move further; what is checked of them
@@ -49,11 +49,15 @@ def main():
     bad = []
     moved = []
     logic = []
+    gone = []
     final = {}
     for a in anchors["anchors"]:
         c = comps.get(a["inst"].replace("\\", ""))
         if c is None:
-            bad.append(f"{a['inst']} ({a['role']}): not in the final layout")
+            if a["role"].split()[0] in LOGIC:
+                gone.append(a["inst"])      # the repairs may remove a buffer or restructure a gate
+            else:
+                bad.append(f"{a['inst']} ({a['role']}): not in the final layout")
             continue
         final[a["inst"]] = (c[1], c[2])
         dx, dy = abs(c[1] - a["x"]) / dbu, abs(c[2] - a["y"]) / dbu
@@ -108,7 +112,7 @@ def main():
     logic.sort()
     print(f"floorplan_check: {len(anchors['anchors'])} anchors; the flip-flops within {MAX_SHIFT_UM:.0f} um of their "
           f"spots; the logic planes' {len(logic)} cells moved {logic[len(logic) // 2] if logic else 0:.1f} um "
-          f"(median), {logic[9 * len(logic) // 10] if logic else 0:.1f} um (90 %) ("
+          f"(median), {logic[9 * len(logic) // 10] if logic else 0:.1f} um (90 %), {len(gone)} replaced by the repairs ("
           + ", ".join(f"{k} {v}" for k, v in sorted(roles.items())) + ")")
     print(f"floorplan_check: register file {len(order)} columns x 16 bits in the die's order; "
           f"{len(terms)} AND-plane terms in a grid; {planes['alu']} ALU and {planes['addr']} address bit planes in bit order")

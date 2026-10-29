@@ -57,18 +57,21 @@ BANK_FLOPS = [("u_core.u_regs.xbank", "PC"), ("u_core.u_regs.xdh[0]", "DE"), ("u
 # west of PC (the incrementer/decrementer's side): the address latch
 WEST_COLUMNS = [("addr_hold", bits("u_core.addr_hold", 0, 16)),
                 ("m_addr", bits("u_core.m_addr", 0, 16))]
-# east of AF (the ALU's side): its operand latches, then the write-data latch
+# east of AF (the ALU's side): its operand latch
 # (the write-data latch m_wdata is at the data pins, with their latches)
 EAST_COLUMNS = [("tmp", bits("u_core.tmp8", 0, 8) + bits("u_core.tmph", 0, 8))]
 
 # ---- the ALU: 8 bit planes east of the operand latches ---------------------
 # bit i level with the register file's bit row i (its four placement rows),
-# the shared logic (flags, zero, parity, decode) below them level with the
-# high byte. The cells are spread by this factor: packed tighter, the
-# ALU's many short wires do not route (the router's shorts pile up there).
+# the shared logic (the flags' collectors, overflow, carry out, DAA's
+# detection, the decode) north of them, in the die's flag area. The cells
+# are spread by this factor: packed tighter, the ALU's many short wires do
+# not route (the router's shorts pile up there).
 ALU_GAP_SITES = 6
 ALU_SPREAD = 2.0
 PLANE_SPREAD = 1.5         # the address unit's planes and z80_timing
+ALU_FLAG_ROWS = 8          # the ALU's shared logic: rows of the flag area north of its planes
+
 # ---- the address unit: 16 bit planes west of the address latch ------------
 # (the die's incrementer/decrementer strip by the A pins), in this many
 # sites; its inputs with a bit index (the 16-bit ones, as their nets are
