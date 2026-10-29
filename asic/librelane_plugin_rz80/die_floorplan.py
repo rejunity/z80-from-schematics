@@ -172,7 +172,7 @@ def datapath(fl):
     apart"""
     k_bit = lambda b: A.DATAPATH_SOUTH_ROWS + (15 - b) * A.BIT_ROWS     # bit 0 on top, bit 15 at the bottom
     flop = 36                  # sites of the widest register flip-flop (dffsnq_1)
-    x_from = fl.x_at(A.DATAPATH_WEST)
+    x_from = fl.x_at(A.DATAPATH_WEST) + A.ADDR_PLANE_SITES * fl.sw     # the address unit's planes go west of it
     even = fl.slots(k_bit(0), x_from, flop, 40)          # one window per gap between taps
     odd = fl.slots(k_bit(0) + 1, x_from, flop, 40)
     columns = list(A.WEST_COLUMNS) + list(A.REGISTER_COLUMNS) + list(A.EAST_COLUMNS)
@@ -184,10 +184,13 @@ def datapath(fl):
             g += 1
             i += 1
             continue
-        left, right = columns[i], columns[i + 1]
+        left = columns[i]
+        right = columns[i + 1] if i + 1 < len(columns) else None
         xl = even[g]
         xr = next(x for x in odd if x > xl)
         for entry, x, dk in ((left, xl, 0), (right, xr, 1)):
+            if entry is None:
+                continue
             label, nets = entry
             at[label] = x
             for bit, q in enumerate(nets):
@@ -198,24 +201,15 @@ def datapath(fl):
     top = k_bit(0) + A.BIT_ROWS
     for q, over in A.BANK_FLOPS:
         fl.anchor(q, at[over], fl.row_y(top), f"bank {q}")
-    return max(at.values()) + flop * fl.sw, k_bit
+    return x_from, max(at.values()) + flop * fl.sw, k_bit
 
 
-def alu(fl, x_from, k_bit):
-    """the ALU as 8 bit planes east of the register file, as the die stacks
-    its ALU's bit slices: bit i's cells in the placement rows of the
-    register file's bit row i, so the bus lines line up, and the logic no
-    one bit owns (zero, parity, overflow, half-carry, the flags' assembly,
-    the operation decode) in a strip below them, level with the high byte.
-
-    A cell belongs to bit i when its output reaches a result bit (alu_res)
-    and i is the highest operand bit (alu_a, alu_b) in its input cone -- a
-    sum bit's carry chain counts to the bit it ends in; a cell that reaches
-    only the flags (alu_fout) belongs to bit i when bit i is the one operand
-    bit it reads; everything else is shared. Within a plane the cells go
-    west to east by logic depth from the operands."""
+def cones(fl, prefix, out_stems, in_stems):
+    """the cells under prefix, with each one's input cone (the indices of
+    the in_stems nets it reads, through its block), its output reach
+    (the out_stems nets, as (stem, index)) and its logic depth"""
     sys.setrecursionlimit(20000)
-    cells = [i for i in fl.block.getInsts() if i.getName().replace("\\", "").startswith("u_core.u_alu.")
+    cells = [i for i in fl.block.getInsts() if i.getName().replace("\\", "").startswith(prefix)
              and i.getMaster().getType() == "CORE" and not i.isFixed()]
     names = {i.getName() for i in cells}
 
@@ -234,7 +228,7 @@ def alu(fl, x_from, k_bit):
                 net = it.getNet()
                 if not it.isInputSignal() or net is None:
                     continue
-                x = index(net, ("alu_a", "alu_b"))
+                x = index(net, in_stems)
                 if x:
                     bits.add(x[1])
                     continue
@@ -254,7 +248,7 @@ def alu(fl, x_from, k_bit):
                 net = it.getNet()
                 if not it.isOutputSignal() or net is None:
                     continue
-                if x := index(net, ("alu_res", "alu_fout")):
+                if x := index(net, out_stems):
                     out.add(x)
                 for ld in net.getITerms():
                     if ld.isInputSignal() and ld.getInst().getName() in names:
@@ -262,30 +256,86 @@ def alu(fl, x_from, k_bit):
             reach[k] = out
         return reach[k]
 
+    return [(inst, cone_in(inst), cone_out(inst), depth[inst.getName()]) for inst in cells]
+
+
+def pack(fl, insts, rows, x0, role, west=False, spread=A.PLANE_SPREAD):
+    """cells (inst, depth) across the given rows in turn, by depth from x0
+    eastwards (or westwards), spread out by `spread`"""
+    insts = sorted(insts, key=lambda t: (t[1], t[0].getName()))
+    xs = {k: x0 for k in rows}
+    for inst, _ in insts:
+        k = min(rows, key=lambda r: (abs(xs[r] - x0), r))
+        w = inst.getMaster().getWidth()
+        if fl.place(inst, xs[k] - w if west else xs[k], fl.row_y(k), role):
+            x = fl.anchors[-1]["x"]
+            xs[k] = min(xs[k], x) - int(w * (spread - 1)) if west else max(xs[k], x) + int(w * spread)
+
+
+def alu(fl, x_from, k_bit):
+    """the ALU as 8 bit planes east of the register file, as the die stacks
+    its ALU's bit slices: bit i's cells in the placement rows of the
+    register file's bit row i, so the bus lines line up, and the logic no
+    one bit owns (zero, parity, overflow, half-carry, the flags' assembly,
+    the operation decode) in a strip below them, level with the high byte.
+
+    A cell belongs to bit i when its output reaches a result bit (alu_res)
+    and i is the highest operand bit (alu_a, alu_b) in its input cone -- a
+    sum bit's carry chain counts to the bit it ends in; a cell that reaches
+    only the flags (alu_fout) belongs to bit i when bit i is the one operand
+    bit it reads; everything else is shared. Within a plane the cells go
+    west to east by logic depth from the operands."""
     planes = {b: [] for b in range(8)}
     shared = []
-    for inst in cells:
-        fi, fo = cone_in(inst), cone_out(inst)
+    for inst, fi, fo, d in cones(fl, "u_core.u_alu.", ("alu_res", "alu_fout"), ("alu_a", "alu_b")):
         if fi and any(s == "alu_res" for s, _ in fo):
-            planes[max(fi)].append(inst)
+            planes[max(fi)].append((inst, d))
         elif len(fi) == 1:
-            planes[next(iter(fi))].append(inst)
+            planes[next(iter(fi))].append((inst, d))
         else:
-            shared.append(inst)
+            shared.append((inst, d))
     x0 = x_from + A.ALU_GAP_SITES * fl.sw
-
-    def pack(insts, rows, role):
-        """west to east by depth, across the given rows in turn, spread out"""
-        insts = sorted(insts, key=lambda i: (depth[i.getName()], i.getName()))
-        xs = {k: x0 for k in rows}
-        for n, inst in enumerate(insts):
-            k = min(rows, key=lambda r: (xs[r], r))
-            if fl.place(inst, xs[k], fl.row_y(k), role):
-                xs[k] = max(xs[k], fl.anchors[-1]["x"]) + int(inst.getMaster().getWidth() * A.ALU_SPREAD)
     for b in range(8):
-        pack(planes[b], [k_bit(b) + j for j in range(A.BIT_ROWS)], f"alu bit {b}")
-    pack(shared, [k_bit(b) + j for b in range(8, 16) for j in range(A.BIT_ROWS)], "alu shared")
+        pack(fl, planes[b], [k_bit(b) + j for j in range(A.BIT_ROWS)], x0, f"alu bit {b}", spread=A.ALU_SPREAD)
+    pack(fl, shared, [k_bit(b) + j for b in range(8, 16) for j in range(A.BIT_ROWS)], x0, "alu shared",
+         spread=A.ALU_SPREAD)
     return {b: len(planes[b]) for b in range(8)}, len(shared)
+
+
+def addr(fl, x_east, k_bit):
+    """the address unit (the incrementer/decrementer and the address
+    muxes) as 16 bit planes west of the address latch, along the A pins as
+    on the die: bit i in the rows of the register file's bit i. A cell
+    belongs to bit i when the address outputs it reaches (abus, idu, ea,
+    al_in) are all bit i, or else when bit i is the highest bit of the
+    16-bit inputs in its cone (the incrementer's carry counts to the bit it
+    ends in); the rest (the control decode) goes in a strip above."""
+    out = ("abus", "idu", "ea", "al_in")
+    planes = {b: [] for b in range(16)}
+    shared = []
+    for inst, fi, fo, d in cones(fl, "u_core.u_addr.", out, A.ADDR_INPUTS):
+        bits = {i for _, i in fo}
+        if len(bits) == 1:
+            planes[next(iter(bits))].append((inst, d))
+        elif fi and fo:
+            planes[max(fi)].append((inst, d))
+        else:
+            shared.append((inst, d))
+    x0 = x_east - A.ALU_GAP_SITES * fl.sw // 2
+    for b in range(16):
+        pack(fl, planes[b], [k_bit(b) + j for j in range(A.BIT_ROWS)], x0, f"addr bit {b}", west=True)
+    top = k_bit(0) + A.BIT_ROWS + 1
+    pack(fl, shared, [top + j for j in range(4)], x0, "addr shared", west=True)
+    return {b: len(planes[b]) for b in range(16)}, len(shared)
+
+
+def timing(fl):
+    """z80_timing (the pin images of the T-states) in a band above the
+    PLA, under the control pins, as the die keeps its state logic"""
+    top = len(fl.rows) - 1 - A.TIMING_NORTH_ROWS
+    cells = [(inst, d) for inst, _, _, d in cones(fl, "u_core.u_timing", (), ())]
+    pack(fl, cells, [top - j for j in range(A.TIMING_ROWS)], fl.x_at(A.TIMING_WEST), "timing")
+    return len(cells)
 
 
 def pla(fl):
@@ -399,8 +449,10 @@ def state(fl):
 @click_odb
 def main(reader, anchors_path):
     fl = Floor(reader.block)
-    east, k_bit = datapath(fl)  # the regular blocks first, then what fits around them
+    west, east, k_bit = datapath(fl)  # the regular blocks first, then what fits around them
     alu_bits, alu_shared = alu(fl, east, k_bit)
+    addr_bits, addr_shared = addr(fl, west, k_bit)
+    ntiming = timing(fl)
     nterms, ncol, nrow, nlines = pla(fl)
     state(fl)
     pins(fl)
@@ -412,6 +464,8 @@ def main(reader, anchors_path):
     print(f"[INFO RZ80] anchored {len(fl.anchors)} cells: " + ", ".join(f"{k} {v}" for k, v in sorted(roles.items())))
     print("[INFO RZ80] ALU bit planes 0..7: " + " ".join(str(alu_bits[b]) for b in range(8))
           + f" cells, {alu_shared} shared")
+    print("[INFO RZ80] address unit bit planes 0..15: " + " ".join(str(addr_bits[b]) for b in range(16))
+          + f" cells, {addr_shared} shared; z80_timing {ntiming} cells above the PLA")
     print(f"[INFO RZ80] decoder: {nterms} AND-plane terms in {nrow} rows of {ncol}, {nlines} OR-plane lines")
     for q, role in fl.missing:
         print(f"[WARNING RZ80] no cell drives {q} ({role})")

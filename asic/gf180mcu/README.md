@@ -102,9 +102,13 @@ arrangement is a short table written by hand from those descriptions
   half a gap apart from row to row, and a set flip-flop takes 36 sites, so
   the columns of a pair share a gap between taps -- the first in the bit's
   row, the second in the row above -- and stand a uniform 19.6 µm apart.
-- Beside it, bit for bit: the address latch on the west (the incrementer's
-  side, by the A0..A4 pins), the ALU's operand latches and the write-data
-  latch on the east (by the data pins).
+- Beside it, bit for bit: the address latch on the west, and west of it
+  the address unit (the incrementer/decrementer and the address muxes) as
+  16 bit planes along the A pins, as the die's incrementer strip -- a cell
+  belongs to bit i when the address outputs it reaches are all bit i, or
+  else when bit i is the highest input bit in its cone; the ALU's operand
+  latch on the east. The write-data latch sits at the data pins, each bit
+  with its pin's latches, as the die's data latches line its east edge.
 - The decoder as a PLA: `asic/pla/planes.py` turns `rtl/z80_pla.v`'s truth
   table (all 2048 inputs) into an AND plane of product terms and an OR
   plane of one line per output bit, three modules so synthesis keeps the
@@ -115,7 +119,7 @@ arrangement is a short table written by hand from those descriptions
   end, as on the die.
 - The ALU as 8 bit planes east of its operand latches, as the die stacks
   its ALU's bit slices beside the register file: bit i's cells in the
-  three placement rows of the register file's bit row i, so the bus lines
+  four placement rows of the register file's bit row i, so the bus lines
   line up. A cell belongs to bit i when it reaches a result bit and bit i
   is the highest operand bit in its input cone (a carry chain counts to the
   bit it ends in), or when it feeds only the flags and reads only bit i;
@@ -123,12 +127,26 @@ arrangement is a short table written by hand from those descriptions
   assembly, the operation decode) fills a strip below the planes, level
   with the high byte. RZ80's ALU is one 8-bit pass; the Z80's is a 4-bit
   core used twice, so the planes stand for the die's 8-bit slices around it.
-- The state flip-flops in a row on top; every pin's flip-flops at its pin.
+- The state flip-flops in a row on top, and `z80_timing` (the pin images
+  of the T-states) in a band below them, above the PLA and under the
+  control pins, where the die keeps its state logic; every pin's
+  flip-flops at its pin.
 
 `make floorplan_check` reads the step's `anchors.json` and the final DEF:
 every anchor within 10 µm of where it was put, the register columns in the
-die's order west to east and each column's bits in order, the ALU's bit
-planes in bit order.
+die's order west to east and each column's bits in order, the ALU's and
+the address unit's bit planes in bit order.
+
+Measured (RUN_2026-10-29_01-02-51, against the automatic layout above):
+the core is 718 x 630 µm (0.45 mm², 42 % utilised; automatic 0.32 mm²,
+56 %), sign-off clean, +5.6 ns setup slack at the typical corner (+8.1)
+and -17.0 ns at the slow one (~15 MHz; -9.4, ~17 MHz) -- the die's long
+bit and PLA lines cost the slow corner. The flow takes about 1 h 15 min on
+8 cores, most of it the resizer after global routing (automatic: ~40 min
+of CPU). The chip die grows 50 µm each way (1712 x 1562 µm); its pins
+still meet the NMOS Z80's 4 MHz datasheet timing (`make pin_timing`).
+Four placement rows a bit are what routes: with three, Metal3 -- the one
+horizontal layer under the chip's grid -- overflows.
 
 ## The chip: z80_top in a pad ring
 

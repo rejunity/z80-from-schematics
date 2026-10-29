@@ -30,7 +30,9 @@ jobs:
   harden:
     name: ${{ inputs.pdk }} RTL-to-GDS + signs of life
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    # the die floorplan's long wires keep the post-route repairs busy: its
+    # core alone takes ~2 h on 8 cores (the automatic layout's ~1 h)
+    timeout-minutes: 360
     defaults:
       run:
         shell: bash

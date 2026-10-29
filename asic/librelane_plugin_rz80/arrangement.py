@@ -58,26 +58,39 @@ BANK_FLOPS = [("u_core.u_regs.xbank", "PC"), ("u_core.u_regs.xdh[0]", "DE"), ("u
 WEST_COLUMNS = [("addr_hold", bits("u_core.addr_hold", 0, 16)),
                 ("m_addr", bits("u_core.m_addr", 0, 16))]
 # east of AF (the ALU's side): its operand latches, then the write-data latch
-EAST_COLUMNS = [("tmp", bits("u_core.tmp8", 0, 8) + bits("u_core.tmph", 0, 8)),
-                ("wdata", bits("u_core.m_wdata", 0, 8))]
+# (the write-data latch m_wdata is at the data pins, with their latches)
+EAST_COLUMNS = [("tmp", bits("u_core.tmp8", 0, 8) + bits("u_core.tmph", 0, 8))]
 
 # ---- the ALU: 8 bit planes east of the operand latches ---------------------
-# bit i level with the register file's bit row i (its two placement rows),
+# bit i level with the register file's bit row i (its four placement rows),
 # the shared logic (flags, zero, parity, decode) below them level with the
-# high byte. The cells are spread by this factor for the repairs' buffers.
+# high byte. The cells are spread by this factor: packed tighter, the
+# ALU's many short wires do not route (the router's shorts pile up there).
 ALU_GAP_SITES = 6
-ALU_SPREAD = 1.3
+ALU_SPREAD = 2.0
+PLANE_SPREAD = 1.5         # the address unit's planes and z80_timing
+# ---- the address unit: 16 bit planes west of the address latch ------------
+# (the die's incrementer/decrementer strip by the A pins), in this many
+# sites; its inputs with a bit index (the 16-bit ones, as their nets are
+# named in the flattened netlist)
+ADDR_PLANE_SITES = 110
+ADDR_INPUTS = ("r_pc", "r_sp", "r_wz", "r_hl", "r_de", "r_bc", "rf_hlp", "rf_rp", "a16")
+
+# ---- z80_timing: a band above the PLA, under the control pins ----------------
+TIMING_NORTH_ROWS = 6      # its top row, counted down from the core's north edge
+TIMING_ROWS = 6
+TIMING_WEST = 0.08
 
 # ---- grid ------------------------------------------------------------------
 COLUMN_SITES = 38          # a register column: the 34-site flip-flop and room for its neighbours
 PAIR_GAP_SITES = 6
-BIT_ROWS = 3               # each bit row: the flip-flop row, the pair's second row, a free row for its write logic; the ALU planes use all three
+BIT_ROWS = 4               # each bit row: the flip-flop row, the pair's second row, two free rows for its write logic (and horizontal wires); the ALU and address planes use all four
 DATAPATH_WEST = 0.06       # the datapath band starts this far east...
 DATAPATH_SOUTH_ROWS = 6    # ... and this many rows above the core's south edge (the pin flip-flops below)
 
 # ---- the decoder: AND plane, OR plane, input lines, instruction register --
 PLA_EAST = 0.90            # the instruction register's column (its east edge)
-PLA_NORTH_ROWS = 9         # the PLA's top row, counted down from the core's north edge
+PLA_NORTH_ROWS = 13        # the PLA's top row, counted down from the core's north edge
 TERM_SITES = 13          # an AND-plane slot (a product term's gate): five to a gap between tap cells
 OR_SITES = 17            # an OR-plane slot (an output line's last gate)
 TERM_ROWS = 2              # the AND plane's row pitch: a term row and a free row
@@ -86,7 +99,7 @@ PLA_INPUTS = bits("u_core.ir", 0, 8) + bits("u_core.prefix", 0, 3)   # literal i
 # ---- the state logic on top, the pins' flip-flops at their pins -------------
 STATE_FLOPS = (bits("u_core.m_len", 0, 4) + bits("u_core.bus_op", 0, 3) + bits("u_core.irq_seq", 0, 2)
                + ["u_core.suppress_decode", "u_core.halted", "u_core.iff1", "u_core.iff2"])
-STATE_ROWS = 6             # the state row, counted down from the core's north edge
+STATE_ROWS = 5             # the state row, counted down from the core's north edge
 STATE_X = (0.30, 0.60)
 
 # each pin's flip-flops (Q nets), placed at the pin, inward from its edge:
@@ -98,7 +111,7 @@ def _pin_former(bit):
 
 
 PIN_FLOPS = {f"addr[{k}]": _pin_former(17 + k) for k in range(16)}
-PIN_FLOPS.update({f"data_out[{k}]": _pin_former(9 + k) for k in range(8)})
+PIN_FLOPS.update({f"data_out[{k}]": _pin_former(9 + k) + [f"u_core.m_wdata[{k}]"] for k in range(8)})
 PIN_FLOPS.update({f"data_in[{k}]": [f"data_in_neg[{k}]"] for k in range(8)})
 PIN_FLOPS.update({
     "addr_drive": _pin_former(34), "ctl_drive": _pin_former(33), "data_drive": _pin_former(8),

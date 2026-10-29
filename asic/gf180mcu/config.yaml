@@ -84,10 +84,13 @@ FP_SIZING: relative
 # room for the die's arrangement: the fixed register file and decoder
 # planes keep their wires long (the die's own bit lines and PLA lines), so
 # the core is larger and the placement looser than the automatic layout's
-# (45 %, 55 %) -- 38 %, a core wider than tall (h/w 0.8) like the die's
-# datapath band, still inside the chip's core (chip/config.yaml)
-FP_CORE_UTIL: 38
-FP_ASPECT_RATIO: 0.8
+# (45 %, 55 %) -- 33 %, a core a little wider than tall (h/w 0.85): the
+# datapath band (address unit, register file, ALU side by side) takes four
+# placement rows a bit, which gives the bit lines enough horizontal
+# tracks on Metal3, the one horizontal layer under the chip's grid;
+# inside the chip's core (chip/config.yaml)
+FP_CORE_UTIL: 33
+FP_ASPECT_RATIO: 0.85
 PL_TARGET_DENSITY_PCT: 50
 # the die's long bit and PLA lines leave the global router a few hot
 # spots on Metal3 (the one horizontal layer under the chip's grid) that it

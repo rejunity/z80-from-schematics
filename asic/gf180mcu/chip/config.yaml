@@ -31,13 +31,15 @@ SIGNOFF_SDC_FILE: dir::../../timing/z80_chip_nmos4.sdc
 VDD_NETS: [VDD]
 GND_NETS: [VSS]
 
-# Pad-limited die, as small as the pads allow: the 12 pads along the
-# bottom and the 10 up the left side abut (75 um pitch, between 355 um
-# corners and 26 um from the die edge); LibreLane spreads the other sides'
-# pads evenly. The core sits inside the pad ring and its supply ring.
+# Pad-limited die: at 1662 x 1512 um the 12 pads along the bottom and the
+# 10 up the left side abut (75 um pitch, between 355 um corners and 26 um
+# from the die edge); LibreLane spreads the other sides' pads evenly. 50 um
+# more each way gives the die floorplan's larger core room (the die's
+# datapath band: address unit, register file, ALU side by side). The core
+# sits inside the pad ring and its supply ring.
 FP_SIZING: absolute
-DIE_AREA: [0, 0, 1662, 1512]
-CORE_AREA: [442, 442, 1220, 1070]
+DIE_AREA: [0, 0, 1712, 1562]
+CORE_AREA: [442, 442, 1270, 1120]
 GRT_ALLOW_CONGESTION: true
 
 # ---- the core: z80_top as a hard macro ----
@@ -58,8 +60,8 @@ MACROS:
       "*_ff_n40C_5v50": [dir::macro/lib/ff.lib]
     instances:
       u_top:
-        # centred in the core area: the die-floorplan macro is ~690 x 573 um
-        location: [486, 469]
+        # centred in the core area: the die-floorplan macro is ~718 x 630 um
+        location: [497, 466]
         orientation: N
 PDN_MACRO_CONNECTIONS:
   - "u_top VDD VSS VDD VSS"

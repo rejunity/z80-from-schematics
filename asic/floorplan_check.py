@@ -18,7 +18,12 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "librelane_plugin_rz80"))
 import arrangement as A  # noqa: E402
 
-MAX_SHIFT_UM = 10.0       # how far detailed placement may shift a released anchor
+MAX_SHIFT_UM = 10.0       # how far detailed placement may shift a released flip-flop anchor
+# the logic planes' cells (the ALU's and the address unit's bit planes,
+# z80_timing, the PLA): the repairs resize and buffer them and detailed
+# placement makes room, so each may move further; what is checked of them
+# is the planes' order (below) and their median shift, reported
+LOGIC = ("alu", "addr", "timing", "pla")
 
 
 def components(def_path):
@@ -43,6 +48,7 @@ def main():
     comps = components(os.path.join(run, "final", "def", "z80_top.def"))
     bad = []
     moved = []
+    logic = []
     final = {}
     for a in anchors["anchors"]:
         c = comps.get(a["inst"].replace("\\", ""))
@@ -53,7 +59,9 @@ def main():
         dx, dy = abs(c[1] - a["x"]) / dbu, abs(c[2] - a["y"]) / dbu
         if dx or dy:
             moved.append(max(dx, dy))
-        if dx > MAX_SHIFT_UM or dy > MAX_SHIFT_UM:
+        if a["role"].split()[0] in LOGIC:
+            logic.append(max(dx, dy))
+        elif dx > MAX_SHIFT_UM or dy > MAX_SHIFT_UM:
             bad.append(f"{a['inst']} ({a['role']}): moved {dx:.1f} / {dy:.1f} um from where the step put it")
     # the register file: columns west to east in the die's order, bits top to bottom
     reg = {}
@@ -74,14 +82,18 @@ def main():
         xs.append(sum(final.get(col[b]["inst"], (col[b]["x"], 0))[0] for b in range(16)) / 16)
     if xs != sorted(xs):
         bad.append("register file: columns not in the die's order west to east")
-    # the ALU's bit planes: bit 0 on top, in order down, as the register rows
-    plane_y = []
-    for b in range(8):
-        ys = [final[a["inst"]][1] for a in anchors["anchors"] if a["role"] == f"alu bit {b}" and a["inst"] in final]
-        if ys:
-            plane_y.append(sum(ys) / len(ys))
-    if plane_y and plane_y != sorted(plane_y, reverse=True):
-        bad.append("ALU: bit planes not in bit order top to bottom")
+    # the ALU's and the address unit's bit planes: bit 0 on top, in order
+    # down, as the register rows
+    planes = {}
+    for unit, n in (("alu", 8), ("addr", 16)):
+        ys = []
+        for b in range(n):
+            y = [final[a["inst"]][1] for a in anchors["anchors"] if a["role"] == f"{unit} bit {b}" and a["inst"] in final]
+            if y:
+                ys.append(sum(y) / len(y))
+        if ys != sorted(ys, reverse=True):
+            bad.append(f"{unit}: bit planes not in bit order top to bottom")
+        planes[unit] = len(ys)
     terms = [a for a in anchors["anchors"] if a["role"].startswith("pla term")]
     if anchors["missing"]:
         for q, role in anchors["missing"]:
@@ -93,11 +105,13 @@ def main():
     roles = {}
     for a in anchors["anchors"]:
         roles[a["role"].split()[0]] = roles.get(a["role"].split()[0], 0) + 1
-    print(f"floorplan_check: {len(anchors['anchors'])} anchors, {len(moved)} moved by detailed placement "
-          f"(at most {max(moved, default=0):.1f} um) ("
+    logic.sort()
+    print(f"floorplan_check: {len(anchors['anchors'])} anchors; the flip-flops within {MAX_SHIFT_UM:.0f} um of their "
+          f"spots; the logic planes' {len(logic)} cells moved {logic[len(logic) // 2] if logic else 0:.1f} um "
+          f"(median), {logic[9 * len(logic) // 10] if logic else 0:.1f} um (90 %) ("
           + ", ".join(f"{k} {v}" for k, v in sorted(roles.items())) + ")")
     print(f"floorplan_check: register file {len(order)} columns x 16 bits in the die's order; "
-          f"{len(terms)} AND-plane terms in a grid; {len(plane_y)} ALU bit planes in bit order")
+          f"{len(terms)} AND-plane terms in a grid; {planes['alu']} ALU and {planes['addr']} address bit planes in bit order")
 
 
 if __name__ == "__main__":
