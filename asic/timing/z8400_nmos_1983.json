@@ -1,0 +1,1163 @@
+{
+  "schema_version": 1,
+  "family": "Z8400 NMOS only: the Z80 CPU (2.5 MHz) column",
+  "source": {
+    "url": "https://bitsavers.org/components/zilog/z80/Z80_Family_Product_Specifications_Handbook_Feb84.pdf",
+    "document": "Zilog Z80 Family Product Specifications Handbook, February 1984 (00-2345-01): Z8400 Z80 CPU Product Specification, September 1983",
+    "sha256": "8d53a4ad591a933594e3d0d65ece36ea2d8a2cca3cf0f1d2a6c95632dac3e5a9",
+    "tables_printed_pages": [
+      23,
+      24
+    ],
+    "pdf_pages": [
+      28,
+      29
+    ],
+    "retrieved": "2026-10-29",
+    "transcription": "by hand from the scan; the starred minimums checked against the footnote expressions at TcC = 400, TwCh = TwCl = 180, TrC = TfC = 20 ns (the table's assumption)"
+  },
+  "ac_test_conditions": {
+    "VIH_V": 2.0,
+    "VIL_V": 0.8,
+    "VOH_V": 2.0,
+    "VOL_V": 0.8,
+    "load_pF": 100,
+    "note": "'All ac parameters assume a load capacitance of 100 pF' (Standard Test Conditions); no pulse-width derating for the load is given, unlike PS0178's parameters 10 and 11. Outputs are timed where they cross VOH = 2.0 V rising and VOL = 0.8 V falling, PS0178's at 1.5 V."
+  },
+  "units": "ns",
+  "grades_mhz": [
+    2.5
+  ],
+  "requirements": [
+    {
+      "id": 1,
+      "symbol": "TcC",
+      "kind": "clock",
+      "reference": "CLK.rise",
+      "event": "CLK.next_rise",
+      "bound": "min",
+      "modes": [
+        "qualified_sampling"
+      ],
+      "owner": "environment",
+      "verification": [
+        "measurement"
+      ],
+      "table_ns": {
+        "2.5": 400
+      },
+      "source_printed_page": 23
+    },
+    {
+      "id": 2,
+      "symbol": "TwCh",
+      "kind": "clock",
+      "reference": "CLK.high_start",
+      "event": "CLK.high_end",
+      "bound": "min",
+      "modes": [
+        "qualified_sampling"
+      ],
+      "owner": "environment",
+      "verification": [
+        "measurement"
+      ],
+      "table_ns": {
+        "2.5": 180
+      },
+      "maximum_ns": 200000,
+      "source_printed_page": 23,
+      "note": "No maximum printed; footnote: 'Although static by design, TwCh of greater than 200 us is not guaranteed' (the Z80, Z80A and Z80B columns alike)."
+    },
+    {
+      "id": 3,
+      "symbol": "TwCl",
+      "kind": "clock",
+      "reference": "CLK.low_start",
+      "event": "CLK.low_end",
+      "bound": "min",
+      "modes": [
+        "qualified_sampling"
+      ],
+      "owner": "environment",
+      "verification": [
+        "measurement"
+      ],
+      "table_ns": {
+        "2.5": 180
+      },
+      "maximum_ns": 2000,
+      "source_printed_page": 23,
+      "note": "Maximum 2000 ns printed for TwCl in every column."
+    },
+    {
+      "id": 4,
+      "symbol": "TfC",
+      "kind": "slew",
+      "reference": "CLK.fall_start",
+      "event": "CLK.fall_end",
+      "bound": "max",
+      "modes": [
+        "qualified_sampling"
+      ],
+      "owner": "environment",
+      "verification": [
+        "measurement"
+      ],
+      "table_ns": {
+        "2.5": 30
+      },
+      "source_printed_page": 23
+    },
+    {
+      "id": 5,
+      "symbol": "TrC",
+      "kind": "slew",
+      "reference": "CLK.rise_start",
+      "event": "CLK.rise_end",
+      "bound": "max",
+      "modes": [
+        "qualified_sampling"
+      ],
+      "owner": "environment",
+      "verification": [
+        "measurement"
+      ],
+      "table_ns": {
+        "2.5": 30
+      },
+      "source_printed_page": 23
+    },
+    {
+      "id": 6,
+      "symbol": "TdCr(A)",
+      "kind": "output_delay",
+      "reference": "CLK.rise",
+      "event": "A.valid",
+      "bound": "max",
+      "modes": [
+        "all_bus"
+      ],
+      "owner": "replica",
+      "verification": [
+        "measurement",
+        "sdc_budget"
+      ],
+      "table_ns": {
+        "2.5": 145
+      },
+      "source_printed_page": 23
+    },
+    {
+      "id": 7,
+      "symbol": "TdA(MREQf)",
+      "kind": "separation",
+      "reference": "A.valid",
+      "event": "MREQ_n.fall",
+      "bound": "min",
+      "modes": [
+        "memory",
+        "fetch",
+        "refresh"
+      ],
+      "owner": "replica",
+      "verification": [
+        "measurement",
+        "qualified_interpin"
+      ],
+      "table_ns": {
+        "2.5": 125
+      },
+      "formula": {
+        "base": "high_ns + fall_ns",
+        "offset_ns": {
+          "2.5": -75
+        }
+      },
+      "source_printed_page": 23
+    },
+    {
+      "id": 8,
+      "symbol": "TdCf(MREQf)",
+      "kind": "output_delay",
+      "reference": "CLK.fall",
+      "event": "MREQ_n.fall",
+      "bound": "max",
+      "modes": [
+        "memory",
+        "fetch",
+        "refresh"
+      ],
+      "owner": "replica",
+      "verification": [
+        "measurement",
+        "sdc_budget"
+      ],
+      "table_ns": {
+        "2.5": 100
+      },
+      "source_printed_page": 23
+    },
+    {
+      "id": 9,
+      "symbol": "TdCr(MREQr)",
+      "kind": "output_delay",
+      "reference": "CLK.rise",
+      "event": "MREQ_n.rise",
+      "bound": "max",
+      "modes": [
+        "fetch"
+      ],
+      "owner": "replica",
+      "verification": [
+        "measurement",
+        "sdc_budget"
+      ],
+      "table_ns": {
+        "2.5": 100
+      },
+      "source_printed_page": 23
+    },
+    {
+      "id": 10,
+      "symbol": "TwMREQh",
+      "kind": "pulse",
+      "reference": "MREQ_n.rise",
+      "event": "MREQ_n.fall",
+      "bound": "min",
+      "modes": [
+        "fetch_refresh"
+      ],
+      "owner": "replica",
+      "verification": [
+        "measurement"
+      ],
+      "table_ns": {
+        "2.5": 170
+      },
+      "formula": {
+        "base": "high_ns + fall_ns",
+        "offset_ns": {
+          "2.5": -30
+        }
+      },
+      "source_printed_page": 23
+    },
+    {
+      "id": 11,
+      "symbol": "TwMREQl",
+      "kind": "pulse",
+      "reference": "MREQ_n.fall",
+      "event": "MREQ_n.rise",
+      "bound": "min",
+      "modes": [
+        "memory",
+        "refresh"
+      ],
+      "owner": "replica",
+      "verification": [
+        "measurement"
+      ],
+      "table_ns": {
+        "2.5": 360
+      },
+      "formula": {
+        "base": "period_ns",
+        "offset_ns": {
+          "2.5": -40
+        }
+      },
+      "source_printed_page": 23
+    },
+    {
+      "id": 12,
+      "symbol": "TdCf(MREQr)",
+      "kind": "output_delay",
+      "reference": "CLK.fall",
+      "event": "MREQ_n.rise",
+      "bound": "max",
+      "modes": [
+        "memory",
+        "refresh"
+      ],
+      "owner": "replica",
+      "verification": [
+        "measurement",
+        "sdc_budget"
+      ],
+      "table_ns": {
+        "2.5": 100
+      },
+      "source_printed_page": 23
+    },
+    {
+      "id": 13,
+      "symbol": "TdCf(RDf)",
+      "kind": "output_delay",
+      "reference": "CLK.fall",
+      "event": "RD_n.fall",
+      "bound": "max",
+      "modes": [
+        "memory",
+        "fetch"
+      ],
+      "owner": "replica",
+      "verification": [
+        "measurement",
+        "sdc_budget"
+      ],
+      "table_ns": {
+        "2.5": 130
+      },
+      "source_printed_page": 23
+    },
+    {
+      "id": 14,
+      "symbol": "TdCr(RDr)",
+      "kind": "output_delay",
+      "reference": "CLK.rise",
+      "event": "RD_n.rise",
+      "bound": "max",
+      "modes": [
+        "fetch"
+      ],
+      "owner": "replica",
+      "verification": [
+        "measurement",
+        "sdc_budget"
+      ],
+      "table_ns": {
+        "2.5": 100
+      },
+      "source_printed_page": 23
+    },
+    {
+      "id": 15,
+      "symbol": "TsD(Cr)",
+      "kind": "input_setup",
+      "reference": "D.valid",
+      "event": "CLK.rise",
+      "bound": "min",
+      "modes": [
+        "fetch",
+        "intack"
+      ],
+      "owner": "environment",
+      "verification": [
+        "measurement",
+        "sdc_budget"
+      ],
+      "table_ns": {
+        "2.5": 50
+      },
+      "source_printed_page": 23
+    },
+    {
+      "id": 16,
+      "symbol": "ThD(RDr)",
+      "kind": "input_hold",
+      "reference": "RD_n.rise",
+      "event": "D.next_change",
+      "bound": "min",
+      "modes": [
+        "read",
+        "intack"
+      ],
+      "owner": "environment",
+      "verification": [
+        "measurement"
+      ],
+      "table_ns": {
+        "2.5": 0
+      },
+      "source_printed_page": 23
+    },
+    {
+      "id": 17,
+      "symbol": "TsWAIT(Cf)",
+      "kind": "input_setup",
+      "reference": "WAIT_n.last_change",
+      "event": "CLK.fall",
+      "bound": "min",
+      "modes": [
+        "qualified_sampling"
+      ],
+      "owner": "environment",
+      "verification": [
+        "measurement",
+        "sdc_budget"
+      ],
+      "table_ns": {
+        "2.5": 70
+      },
+      "source_printed_page": 23
+    },
+    {
+      "id": 18,
+      "symbol": "ThWAIT(Cf)",
+      "kind": "input_hold",
+      "reference": "CLK.fall",
+      "event": "WAIT_n.next_change",
+      "bound": "min",
+      "modes": [
+        "qualified_sampling"
+      ],
+      "owner": "environment",
+      "verification": [
+        "measurement",
+        "sdc_budget"
+      ],
+      "table_ns": {
+        "2.5": 0
+      },
+      "source_printed_page": 23
+    },
+    {
+      "id": 19,
+      "symbol": "TdCr(M1f)",
+      "kind": "output_delay",
+      "reference": "CLK.rise",
+      "event": "M1_n.fall",
+      "bound": "max",
+      "modes": [
+        "fetch",
+        "intack",
+        "nmi"
+      ],
+      "owner": "replica",
+      "verification": [
+        "measurement",
+        "sdc_budget"
+      ],
+      "table_ns": {
+        "2.5": 130
+      },
+      "source_printed_page": 23
+    },
+    {
+      "id": 20,
+      "symbol": "TdCr(M1r)",
+      "kind": "output_delay",
+      "reference": "CLK.rise",
+      "event": "M1_n.rise",
+      "bound": "max",
+      "modes": [
+        "fetch",
+        "intack",
+        "nmi"
+      ],
+      "owner": "replica",
+      "verification": [
+        "measurement",
+        "sdc_budget"
+      ],
+      "table_ns": {
+        "2.5": 130
+      },
+      "source_printed_page": 23
+    },
+    {
+      "id": 21,
+      "symbol": "TdCr(RFSHf)",
+      "kind": "output_delay",
+      "reference": "CLK.rise",
+      "event": "RFSH_n.fall",
+      "bound": "max",
+      "modes": [
+        "refresh"
+      ],
+      "owner": "replica",
+      "verification": [
+        "measurement",
+        "sdc_budget"
+      ],
+      "table_ns": {
+        "2.5": 180
+      },
+      "source_printed_page": 23
+    },
+    {
+      "id": 22,
+      "symbol": "TdCr(RFSHr)",
+      "kind": "output_delay",
+      "reference": "CLK.rise",
+      "event": "RFSH_n.rise",
+      "bound": "max",
+      "modes": [
+        "refresh"
+      ],
+      "owner": "replica",
+      "verification": [
+        "measurement",
+        "sdc_budget"
+      ],
+      "table_ns": {
+        "2.5": 150
+      },
+      "source_printed_page": 23
+    },
+    {
+      "id": 23,
+      "symbol": "TdCf(RDr)",
+      "kind": "output_delay",
+      "reference": "CLK.fall",
+      "event": "RD_n.rise",
+      "bound": "max",
+      "modes": [
+        "memory_read",
+        "io_read"
+      ],
+      "owner": "replica",
+      "verification": [
+        "measurement",
+        "sdc_budget"
+      ],
+      "table_ns": {
+        "2.5": 110
+      },
+      "source_printed_page": 23
+    },
+    {
+      "id": 24,
+      "symbol": "TdCr(RDf)",
+      "kind": "output_delay",
+      "reference": "CLK.rise",
+      "event": "RD_n.fall",
+      "bound": "max",
+      "modes": [
+        "io_read"
+      ],
+      "owner": "replica",
+      "verification": [
+        "measurement",
+        "sdc_budget"
+      ],
+      "table_ns": {
+        "2.5": 100
+      },
+      "source_printed_page": 23
+    },
+    {
+      "id": 25,
+      "symbol": "TsD(Cf)",
+      "kind": "input_setup",
+      "reference": "D.valid",
+      "event": "CLK.fall",
+      "bound": "min",
+      "modes": [
+        "memory_read",
+        "io_read"
+      ],
+      "owner": "environment",
+      "verification": [
+        "measurement",
+        "sdc_budget"
+      ],
+      "table_ns": {
+        "2.5": 60
+      },
+      "source_printed_page": 23
+    },
+    {
+      "id": 26,
+      "symbol": "TdA(IORQf)",
+      "kind": "separation",
+      "reference": "A.valid",
+      "event": "IORQ_n.fall",
+      "bound": "min",
+      "modes": [
+        "io"
+      ],
+      "owner": "replica",
+      "verification": [
+        "measurement",
+        "qualified_interpin"
+      ],
+      "table_ns": {
+        "2.5": 320
+      },
+      "formula": {
+        "base": "period_ns",
+        "offset_ns": {
+          "2.5": -80
+        }
+      },
+      "source_printed_page": 23
+    },
+    {
+      "id": 27,
+      "symbol": "TdCr(IORQf)",
+      "kind": "output_delay",
+      "reference": "CLK.rise",
+      "event": "IORQ_n.fall",
+      "bound": "max",
+      "modes": [
+        "io"
+      ],
+      "owner": "replica",
+      "verification": [
+        "measurement",
+        "sdc_budget"
+      ],
+      "table_ns": {
+        "2.5": 90
+      },
+      "source_printed_page": 23
+    },
+    {
+      "id": 28,
+      "symbol": "TdCf(IORQr)",
+      "kind": "output_delay",
+      "reference": "CLK.fall",
+      "event": "IORQ_n.rise",
+      "bound": "max",
+      "modes": [
+        "io"
+      ],
+      "owner": "replica",
+      "verification": [
+        "measurement",
+        "sdc_budget"
+      ],
+      "table_ns": {
+        "2.5": 110
+      },
+      "source_printed_page": 23
+    },
+    {
+      "id": 29,
+      "symbol": "TdD(WRf)_memory",
+      "kind": "separation",
+      "reference": "D.valid",
+      "event": "WR_n.fall",
+      "bound": "min",
+      "modes": [
+        "memory_write"
+      ],
+      "owner": "replica",
+      "verification": [
+        "measurement",
+        "qualified_interpin"
+      ],
+      "table_ns": {
+        "2.5": 190
+      },
+      "formula": {
+        "base": "period_ns",
+        "offset_ns": {
+          "2.5": -210
+        }
+      },
+      "source_printed_page": 23
+    },
+    {
+      "id": 30,
+      "symbol": "TdCf(WRf)",
+      "kind": "output_delay",
+      "reference": "CLK.fall",
+      "event": "WR_n.fall",
+      "bound": "max",
+      "modes": [
+        "memory_write"
+      ],
+      "owner": "replica",
+      "verification": [
+        "measurement",
+        "sdc_budget"
+      ],
+      "table_ns": {
+        "2.5": 90
+      },
+      "source_printed_page": 23
+    },
+    {
+      "id": 31,
+      "symbol": "TwWR",
+      "kind": "pulse",
+      "reference": "WR_n.fall",
+      "event": "WR_n.rise",
+      "bound": "min",
+      "modes": [
+        "write"
+      ],
+      "owner": "replica",
+      "verification": [
+        "measurement"
+      ],
+      "table_ns": {
+        "2.5": 360
+      },
+      "formula": {
+        "base": "period_ns",
+        "offset_ns": {
+          "2.5": -40
+        }
+      },
+      "source_printed_page": 23
+    },
+    {
+      "id": 32,
+      "symbol": "TdCf(WRr)",
+      "kind": "output_delay",
+      "reference": "CLK.fall",
+      "event": "WR_n.rise",
+      "bound": "max",
+      "modes": [
+        "write"
+      ],
+      "owner": "replica",
+      "verification": [
+        "measurement",
+        "sdc_budget"
+      ],
+      "table_ns": {
+        "2.5": 100
+      },
+      "source_printed_page": 23
+    },
+    {
+      "id": 33,
+      "symbol": "TdD(WRf)_io",
+      "kind": "separation",
+      "reference": "D.valid",
+      "event": "WR_n.fall",
+      "bound": "min",
+      "modes": [
+        "io_write"
+      ],
+      "owner": "replica",
+      "verification": [
+        "measurement",
+        "qualified_interpin"
+      ],
+      "table_ns": {
+        "2.5": 20
+      },
+      "formula": {
+        "base": "low_ns + rise_ns",
+        "offset_ns": {
+          "2.5": -180
+        }
+      },
+      "source_printed_page": 23
+    },
+    {
+      "id": 34,
+      "symbol": "TdCr(WRf)",
+      "kind": "output_delay",
+      "reference": "CLK.rise",
+      "event": "WR_n.fall",
+      "bound": "max",
+      "modes": [
+        "io_write"
+      ],
+      "owner": "replica",
+      "verification": [
+        "measurement",
+        "sdc_budget"
+      ],
+      "table_ns": {
+        "2.5": 80
+      },
+      "source_printed_page": 23
+    },
+    {
+      "id": 35,
+      "symbol": "TdWRr(D)",
+      "kind": "output_hold",
+      "reference": "WR_n.rise",
+      "event": "D.next_change",
+      "bound": "min",
+      "modes": [
+        "write"
+      ],
+      "owner": "replica",
+      "verification": [
+        "measurement",
+        "qualified_interpin"
+      ],
+      "table_ns": {
+        "2.5": 120
+      },
+      "formula": {
+        "base": "low_ns + rise_ns",
+        "offset_ns": {
+          "2.5": -80
+        }
+      },
+      "source_printed_page": 23
+    },
+    {
+      "id": 36,
+      "symbol": "TdCf(HALT)",
+      "kind": "output_delay",
+      "reference": "CLK.fall",
+      "event": "HALT_n.change",
+      "bound": "max",
+      "modes": [
+        "halt"
+      ],
+      "owner": "replica",
+      "verification": [
+        "measurement",
+        "sdc_budget"
+      ],
+      "table_ns": {
+        "2.5": 300
+      },
+      "source_printed_page": 23
+    },
+    {
+      "id": 37,
+      "symbol": "TwNMI",
+      "kind": "pulse",
+      "reference": "NMI_n.fall",
+      "event": "NMI_n.rise",
+      "bound": "min",
+      "modes": [
+        "nmi"
+      ],
+      "owner": "environment",
+      "verification": [
+        "measurement"
+      ],
+      "table_ns": {
+        "2.5": 80
+      },
+      "source_printed_page": 23
+    },
+    {
+      "id": 38,
+      "symbol": "TsBUSREQ(Cr)",
+      "kind": "input_setup",
+      "reference": "BUSREQ_n.last_change",
+      "event": "CLK.rise",
+      "bound": "min",
+      "modes": [
+        "qualified_sampling"
+      ],
+      "owner": "environment",
+      "verification": [
+        "measurement",
+        "sdc_budget"
+      ],
+      "table_ns": {
+        "2.5": 80
+      },
+      "source_printed_page": 23
+    },
+    {
+      "id": 39,
+      "symbol": "ThBUSREQ(Cr)",
+      "kind": "input_hold",
+      "reference": "CLK.rise",
+      "event": "BUSREQ_n.next_change",
+      "bound": "min",
+      "modes": [
+        "qualified_sampling"
+      ],
+      "owner": "environment",
+      "verification": [
+        "measurement",
+        "sdc_budget"
+      ],
+      "table_ns": {
+        "2.5": 0
+      },
+      "source_printed_page": 24
+    },
+    {
+      "id": 40,
+      "symbol": "TdCr(BUSACKf)",
+      "kind": "output_delay",
+      "reference": "CLK.rise",
+      "event": "BUSACK_n.fall",
+      "bound": "max",
+      "modes": [
+        "bus_grant"
+      ],
+      "owner": "replica",
+      "verification": [
+        "measurement",
+        "sdc_budget"
+      ],
+      "table_ns": {
+        "2.5": 120
+      },
+      "source_printed_page": 24
+    },
+    {
+      "id": 41,
+      "symbol": "TdCf(BUSACKr)",
+      "kind": "output_delay",
+      "reference": "CLK.fall",
+      "event": "BUSACK_n.rise",
+      "bound": "max",
+      "modes": [
+        "bus_release"
+      ],
+      "owner": "replica",
+      "verification": [
+        "measurement",
+        "sdc_budget"
+      ],
+      "table_ns": {
+        "2.5": 110
+      },
+      "source_printed_page": 24
+    },
+    {
+      "id": 42,
+      "symbol": "TdCr(Dz)",
+      "kind": "tristate",
+      "reference": "CLK.rise",
+      "event": "D.high_z",
+      "bound": "max",
+      "modes": [
+        "read_start",
+        "bus_grant"
+      ],
+      "owner": "replica",
+      "verification": [
+        "measurement"
+      ],
+      "table_ns": {
+        "2.5": 90
+      },
+      "source_printed_page": 24
+    },
+    {
+      "id": 43,
+      "symbol": "TdCr(CTz)",
+      "kind": "tristate",
+      "reference": "CLK.rise",
+      "event": "MREQ_n,IORQ_n,RD_n,WR_n.high_z",
+      "bound": "max",
+      "modes": [
+        "bus_grant"
+      ],
+      "owner": "replica",
+      "verification": [
+        "measurement"
+      ],
+      "table_ns": {
+        "2.5": 110
+      },
+      "source_printed_page": 24
+    },
+    {
+      "id": 44,
+      "symbol": "TdCr(Az)",
+      "kind": "tristate",
+      "reference": "CLK.rise",
+      "event": "A.high_z",
+      "bound": "max",
+      "modes": [
+        "bus_grant"
+      ],
+      "owner": "replica",
+      "verification": [
+        "measurement"
+      ],
+      "table_ns": {
+        "2.5": 110
+      },
+      "source_printed_page": 24
+    },
+    {
+      "id": 45,
+      "symbol": "TdCTr(A)",
+      "kind": "output_hold",
+      "reference": "MREQ_n,IORQ_n,RD_n,WR_n.rise",
+      "event": "A.next_change",
+      "bound": "min",
+      "modes": [
+        "bus_end"
+      ],
+      "owner": "replica",
+      "verification": [
+        "measurement",
+        "qualified_interpin"
+      ],
+      "table_ns": {
+        "2.5": 160
+      },
+      "formula": {
+        "base": "low_ns + rise_ns",
+        "offset_ns": {
+          "2.5": -40
+        }
+      },
+      "source_printed_page": 24
+    },
+    {
+      "id": 46,
+      "symbol": "TsRESET(Cr)",
+      "kind": "input_setup",
+      "reference": "RESET_n.last_change",
+      "event": "CLK.rise",
+      "bound": "min",
+      "modes": [
+        "qualified_sampling"
+      ],
+      "owner": "environment",
+      "verification": [
+        "measurement",
+        "sdc_budget"
+      ],
+      "table_ns": {
+        "2.5": 90
+      },
+      "source_printed_page": 24
+    },
+    {
+      "id": 47,
+      "symbol": "ThRESET(Cr)",
+      "kind": "input_hold",
+      "reference": "CLK.rise",
+      "event": "RESET_n.next_change",
+      "bound": "min",
+      "modes": [
+        "qualified_sampling"
+      ],
+      "owner": "environment",
+      "verification": [
+        "measurement",
+        "sdc_budget"
+      ],
+      "table_ns": {
+        "2.5": 0
+      },
+      "source_printed_page": 24
+    },
+    {
+      "id": 48,
+      "symbol": "TsINT(Cr)",
+      "kind": "input_setup",
+      "reference": "INT_n.fall",
+      "event": "CLK.rise",
+      "bound": "min",
+      "modes": [
+        "qualified_sampling"
+      ],
+      "owner": "environment",
+      "verification": [
+        "measurement",
+        "sdc_budget"
+      ],
+      "table_ns": {
+        "2.5": 80
+      },
+      "source_printed_page": 24,
+      "note": "Printed symbol TsINTf(Cr)."
+    },
+    {
+      "id": 49,
+      "symbol": "ThINT(Cr)",
+      "kind": "input_hold",
+      "reference": "CLK.rise",
+      "event": "INT_n.rise",
+      "bound": "min",
+      "modes": [
+        "qualified_sampling"
+      ],
+      "owner": "environment",
+      "verification": [
+        "measurement",
+        "sdc_budget"
+      ],
+      "table_ns": {
+        "2.5": 0
+      },
+      "source_printed_page": 24,
+      "note": "Printed symbol ThINTr(Cr)."
+    },
+    {
+      "id": 50,
+      "symbol": "TdM1f(IORQf)",
+      "kind": "separation",
+      "reference": "M1_n.fall",
+      "event": "IORQ_n.fall",
+      "bound": "min",
+      "modes": [
+        "intack"
+      ],
+      "owner": "replica",
+      "verification": [
+        "measurement",
+        "qualified_interpin"
+      ],
+      "table_ns": {
+        "2.5": 920
+      },
+      "formula": {
+        "base": "2 * period_ns + high_ns + fall_ns",
+        "offset_ns": {
+          "2.5": -80
+        }
+      },
+      "source_printed_page": 24
+    },
+    {
+      "id": 51,
+      "symbol": "TdCf(IORQf)",
+      "kind": "output_delay",
+      "reference": "CLK.fall",
+      "event": "IORQ_n.fall",
+      "bound": "max",
+      "modes": [
+        "intack"
+      ],
+      "owner": "replica",
+      "verification": [
+        "measurement",
+        "sdc_budget"
+      ],
+      "table_ns": {
+        "2.5": 110
+      },
+      "source_printed_page": 24
+    },
+    {
+      "id": 52,
+      "symbol": "TdCr(IORQr)",
+      "kind": "output_delay",
+      "reference": "CLK.rise",
+      "event": "IORQ_n.rise",
+      "bound": "max",
+      "modes": [
+        "intack"
+      ],
+      "owner": "replica",
+      "verification": [
+        "measurement",
+        "sdc_budget"
+      ],
+      "table_ns": {
+        "2.5": 100
+      },
+      "source_printed_page": 24,
+      "note": "Printed symbol TdCf(IORQr), but the parameter reads 'Clock rising to IORQ rising Delay', as PS0178's TdCr(IORQr) (parameter 52): taken as the rising-edge delay."
+    },
+    {
+      "id": 53,
+      "symbol": "TdCf(D)",
+      "kind": "output_delay",
+      "reference": "CLK.fall",
+      "event": "D.valid",
+      "bound": "max",
+      "modes": [
+        "write"
+      ],
+      "owner": "replica",
+      "verification": [
+        "measurement",
+        "sdc_budget"
+      ],
+      "table_ns": {
+        "2.5": 230
+      },
+      "source_printed_page": 24
+    }
+  ]
+}

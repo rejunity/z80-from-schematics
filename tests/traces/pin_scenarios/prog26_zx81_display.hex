@@ -1,0 +1,41 @@
+# ZX80 / ZX81 display (prog26_zx81_display.machine, NMI generator off as
+# on a ZX80 or a ZX81 in FAST mode): the CPU runs a line of the display
+# file from C040h, where the machine hands it 00 (NOP) for every byte with
+# bit 6 clear -- the character codes -- and the HALT that ends the line
+# (76h, bit 6 set) through; INT is wired to A6, so the interrupt comes
+# when R, counting up in the refresh address I:R, clears bit 6 (here
+# after ten fetches from 76h). The handler records R, sets it again and
+# returns into the line, three times; the code after EI sits where A6 is
+# high, so INT is taken only out of the refresh.
+@0000
+F3                 # DI
+31 00 40           # LD SP,4000h
+C3 60 00           # JP 0060h
+@0038
+C3 70 00           # JP 0070h         IM 1 handler
+@0060
+3E 1E              # LD A,1Eh
+ED 47              # LD I,A           I = 1Eh (the ZX81's character set page)
+ED 56              # IM 1
+0E 03              # LD C,3           lines
+3E 76              # LD A,76h
+ED 4F              # LD R,A
+FB                 # EI
+C3 40 C0           # JP C040h         the display line
+@0070
+F5                 # PUSH AF
+ED 5F              # LD A,R
+32 00 41           # LD (4100h),A
+F1                 # POP AF
+0D                 # DEC C
+28 06              # JR Z,0080h
+3E 76              # LD A,76h
+ED 4F              # LD R,A
+FB                 # EI
+C9                 # RET              back into the line
+@0080
+76                 # HALT             interrupts off
+@C040
+26 2B 31 31 34 00 3C 34 37 31 29 00 1D 1E 1F 20
+80 A6 AB B1 B1 B4 00 0F 0F 3F 3E 3D 3C 3B 3A 39
+76                 # HALT ends the line

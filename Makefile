@@ -418,10 +418,13 @@ basic_netlist_tests: verilator_basic_netlist
 # =============================================================================
 
 
-# Pin-scenario programs (prog9..prog23). Each drives a specific external-
+# Pin-scenario programs (prog9..prog27). Each drives a specific external-
 # pin event sequence via the .events sidecar (INT, NMI, WAIT, BUSREQ,
-# RESET, ...) and must match perfectz80 in every phase: the control pins,
-# the address and the data under WR. A difference fails the target.
+# RESET, ...) -- or the machine around the CPU, via the .machine sidecar:
+# the ZX Spectrum's ULA holding the clock (prog24, prog25), the ZX80 /
+# ZX81's display tricks and NMI / WAIT generators (prog26, prog27) -- and
+# must match perfectz80 in every phase: the control pins, the address and
+# the data under WR. A difference fails the target.
 # perfectz80's side is recorded, as for the trace programs above.
 PIN_SCENARIOS = \
 	  $(TESTS)/traces/pin_scenarios/prog9_inta_im1.hex \
@@ -438,7 +441,11 @@ PIN_SCENARIOS = \
 	  $(TESTS)/traces/pin_scenarios/prog20_block_int.hex \
 	  $(TESTS)/traces/pin_scenarios/prog21_wait_ldir.hex \
 	  $(TESTS)/traces/pin_scenarios/prog22_wait_cpir.hex \
-	  $(TESTS)/traces/pin_scenarios/prog23_wb_irq.hex
+	  $(TESTS)/traces/pin_scenarios/prog23_wb_irq.hex \
+	  $(TESTS)/traces/pin_scenarios/prog24_spectrum_contend.hex \
+	  $(TESTS)/traces/pin_scenarios/prog25_spectrum_ports.hex \
+	  $(TESTS)/traces/pin_scenarios/prog26_zx81_display.hex \
+	  $(TESTS)/traces/pin_scenarios/prog27_zx81_slow.hex
 
 pin_scenarios: tracegen
 	@$(PYTHON) $(SCRIPTS)/compare_signal_timing.py --recorded 200 $(PIN_SCENARIOS)

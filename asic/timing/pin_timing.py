@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """pin_timing.py - check a z80_chip layout against the NMOS Z80's AC
 characteristics: Zilog PS0178, Z8400 (NMOS) table, transcribed with its
-formulas in z8400_nmos.json.
+formulas in z8400_nmos.json; the original Z80 CPU's 2.5 MHz column from
+Zilog's Z8400 product specification of September 1983 in
+z8400_nmos_1983.json.
 
 OpenSTA reads a LibreLane chip run -- netlist, parasitics, and the cell,
 pad and z80_top macro libraries of each process corner -- and measures at
@@ -16,7 +18,15 @@ the package pins, into the datasheet's 100 pF test load:
 It then checks every datasheet parameter that the replica must meet --
 output and float delays, the input setup / hold windows the replica must
 accept, pulse widths and pin-to-pin separations -- for one speed grade,
-at every process corner. The datasheet's waveforms put each pin event on
+or several, at every process corner. Besides the grades (2.5, 4, 6, 8
+MHz) it checks the clocks of machines built around the Z80 against the
+grade of the parts they used, the period-dependent limits (the starred
+minimums) at the machine's own period: trs80 (TRS-80 Model I, 1.774 MHz,
+2.5 MHz table), zx81 (ZX80 / ZX81, 3.25 MHz), spectrum (ZX Spectrum
+16K / 48K, 3.5 MHz) and spectrum128 (3.5469 MHz), the last three on the
+4 MHz table. The measurements depend on the clock's and the inputs' edge
+only, not on the period: OpenSTA measures once for every edge the
+points share and each point is checked from that. The datasheet's waveforms put each pin event on
 a clock edge (address at T1 rise, MREQ at T1 fall, ...); this measures the
 analog timing of those edges. That the replica's events fall on those
 edges is the cycle-level tests' job (perfectz80 pin comparisons).
@@ -30,18 +40,33 @@ own offset from the libraries' 50 % at this load, from the same
 simulations), inputs where they cross 2.0 V rising and 0.8 V falling
 (VIH / VIL) on the given edge. The CLK pin stays referenced at its 50 %.
 
-usage: pin_timing.py RUN [--grade 4|6|8] [--load PF] [--edge NS]
-                         [--corners tt,ss,...] [--sta PATH] [--keep DIR]
-                         [--pads auto|none|DIR]
-         (default: every process corner of the run, nominal parasitics)
-       pin_timing.py --write-sdc FILE [--grade ...] [--load ...]
+usage: pin_timing.py RUN [--grade POINT[,POINT...] | --all] [--load PF]
+                         [--edge NS] [--corners tt,ss,...] [--sta PATH]
+                         [--keep DIR] [--pads auto|none|DIR] [--jobs N]
+         POINT: 2.5 4 6 8 (grades, MHz) trs80 zx81 spectrum spectrum128
+         (default: 4; every process corner of the run, nominal parasitics)
+       pin_timing.py --write-sdc FILE [--grade 2.5|4|6|8] [--load ...]
          (the same contract as the chip flows' SDC)
 exit: 0 every check passes at every corner, 1 a check fails, 2 no run.
 """
 import argparse, bisect, fnmatch, glob, json, os, re, shlex, subprocess, sys, tempfile
+from concurrent.futures import ThreadPoolExecutor
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SPEC = os.path.join(HERE, "z8400_nmos.json")
+# the tables by grade: PS0178's 4 / 6 / 8 MHz, the September 1983
+# specification's 2.5 MHz (the Z80 CPU; PS0178 starts at the Z80A)
+SPECS = {"2.5": os.path.join(HERE, "z8400_nmos_1983.json")}
+# the points checked: a grade at its minimum period, or a machine's clock on
+# the grade of the Z80 it used (MHz: its crystal divided down)
+POINTS = {  # name: (grade, MHz or None for the grade's own, label)
+    "2.5": ("2.5", None, None), "4": ("4", None, None), "6": ("6", None, None), "8": ("8", None, None),
+    "trs80": ("2.5", 10.6445 / 6, "TRS-80 Model I"),
+    "zx81": ("4", 6.5 / 2, "ZX80 / ZX81"),
+    "spectrum": ("4", 14.0 / 4, "ZX Spectrum 16K / 48K"),
+    "spectrum128": ("4", 17.7345 / 5, "ZX Spectrum 128K"),
+}
+ALL_POINTS = ["2.5", "4", "6", "8", "trs80", "zx81", "spectrum", "spectrum128"]
 SPICE_PADS = os.path.join(HERE, "..", "spice", "pads")
 
 ADDR = [f"A[{i}]" for i in range(16)]
@@ -200,19 +225,46 @@ class Levels:
     """The datasheet's measuring levels against STA's 50 %, at one corner:
     outputs at 1.5 V, from the pads' simulated waveforms at this load;
     inputs at 2.0 V rising / 0.8 V falling, on a linear edge of `edge` ns
-    (10-90 %) at the pads' supply."""
+    (10-90 %) at the pads' supply. `out_v` (VOH, VOL) moves the outputs'
+    level: the September 1983 specification times them at 2.0 V rising
+    and 0.8 V falling; the move from 1.5 V is read off the pad's simulated
+    data waveform at the test load (both the data and the enable arcs)."""
 
-    def __init__(self, pads, run, cfg, corner, load, edge):
+    def __init__(self, pads, run, cfg, corner, load, edge, out_v=None):
         doc = json.load(open(os.path.join(pads, "pads.json")))
         self.c, cond = doc["corners"][corner], doc["conditions"]
         self.vil, self.vih, self.load, self.loads = cond["vil_V"], cond["vih_V"], load, cond["loads_pF"]
         self.slope = 0.8 * self.c["vio"] / edge
+        self.out_v, self.out_level = out_v, cond["out_level_V"]
         nl = open(os.path.join(run, "final", "nl", cfg["DESIGN_NAME"] + ".nl.v")).read()
         self.cell = {inst: cell for cell, inst in re.findall(r"^\s*(\w+)\s+(pad_\w+)\s*\(", nl, re.M)}
 
+    def pad_cell(self, port):
+        """the pad cell of a port (its instance named as in z80_chip.v)"""
+        return self.cell.get("pad_" + port.replace("[", "").replace("]", ""))
+
+    def shift(self, port, trans):
+        """ns from the pin's 1.5 V crossing to its out_v crossing (0 without
+        out_v), from the data waveform: rising to VOH, falling to VOL"""
+        if not self.out_v:
+            return 0.0
+        cell = self.pad_cell(port)
+        W = self.c["cells"].get(cell, {}).get("data", {}).get("wave")
+        if not W:
+            return 0.0
+        rising = trans == "rise"
+        w = W[0 if rising else 1]
+
+        def cross(v):
+            for (t0, v0), (t1, v1) in zip(w, w[1:]):
+                if (v0 < v <= v1) if rising else (v0 > v >= v1):
+                    return t0 + (v - v0) * (t1 - t0) / (v1 - v0)
+            raise SystemExit(f"pin_timing: {cell}'s simulated edge never crosses {v} V")
+        return cross(self.out_v[0] if rising else self.out_v[1]) - cross(self.out_level)
+
     def out(self, port, arc, trans):
         """ns from the pin's 50 % to its 1.5 V crossing (data / enable arc)"""
-        cell = self.cell.get("pad_" + port.replace("[", "").replace("]", ""))
+        cell = self.pad_cell(port)
         D = self.c["cells"].get(cell, {}).get(arc)
         if D is None:
             return 0.0
@@ -237,9 +289,9 @@ class Levels:
         out = {}
         for key, v in res.items():
             if key[0] == "out":
-                v += self.out(key[1], "data", key[3])
+                v += self.out(key[1], "data", key[3]) + self.shift(key[1], key[3])
             elif key[0] == "on":
-                v += self.out(key[1], "enable", key[3])
+                v += self.out(key[1], "enable", key[3]) + self.shift(key[1], key[3])
             elif key[0] == "in":
                 v += self.need(key[3], key[4])
             out[key] = v
@@ -248,16 +300,39 @@ class Levels:
 
 # ------------------------------------------------------------ the checks
 class Contract:
-    def __init__(self, grade, load):
-        spec = json.load(open(SPEC))
-        self.g, self.load = str(grade), load
-        self.req = {r["id"]: r for r in spec["requirements"]}
+    def __init__(self, grade, load, mhz=None):
+        """grade's table; the clock its minimum period leaves, or `mhz` with
+        the grade's edges and the rest split evenly between high and low"""
+        self.spec = json.load(open(SPECS.get(str(grade), SPEC)))
+        self.g, self.load, self.mhz = str(grade), load, mhz
+        self.req = {r["id"]: r for r in self.spec["requirements"]}
         T = float(self.req[1]["table_ns"][self.g])        # TcC min
         tr = (T - 2 * float(self.req[2]["table_ns"][self.g])) / 2   # edges that leave TwCh = TwCl = min
         tr = min(tr, float(self.req[5]["table_ns"][self.g]))
+        if mhz:
+            T = 1000.0 / mhz
         twch = (T - 2 * tr) / 2
         self.clk = {"period": T, "tr": tr, "tf": tr, "twch": twch, "twcl": T - 2 * tr - twch,
                     "th": twch + tr, "tl": T - twch - tr}
+        cond = self.spec.get("ac_test_conditions", {})
+        self.out_v = (cond["VOH_V"], cond["VOL_V"]) if "VOH_V" in cond else None
+        # PS0178: "for loading >= 50 pF, decrease width by 10 ns per 50 pF"
+        # (parameters 10 and 11); the 1983 specification has no such rule
+        self.derate_widths = "ac_test_conditions" not in self.spec
+
+    def clock_limits(self, stretch_t=0):
+        """the clock against the grade's own limits -- the system's, which
+        RZ80, static, has no lower bound for: [(what, ok)]; stretch_t: the
+        longest high phase, in extra T-states (CLK held high)"""
+        c, r = self.clk, self.req
+        hi = c["twch"] + stretch_t * c["period"]
+        lim = [("TcC %.1f >= %g" % (c["period"], r[1]["table_ns"][self.g]), c["period"] >= r[1]["table_ns"][self.g]),
+               ("TwCh %.1f >= %g" % (c["twch"], r[2]["table_ns"][self.g]), c["twch"] >= r[2]["table_ns"][self.g]),
+               ("TwCl %.1f >= %g" % (c["twcl"], r[3]["table_ns"][self.g]), c["twcl"] >= r[3]["table_ns"][self.g]),
+               ("TwCl %.1f <= %g" % (c["twcl"], r[3]["maximum_ns"]), c["twcl"] <= r[3]["maximum_ns"])]
+        if "maximum_ns" in r[2]:
+            lim.append(("TwCh %.1f <= %g" % (hi, r[2]["maximum_ns"]), hi <= r[2]["maximum_ns"]))
+        return lim
 
     def limit(self, pid):
         """Datasheet limit; for the starred minimums the greater of the
@@ -270,7 +345,7 @@ class Contract:
             env = {"period_ns": c["period"], "high_ns": c["twch"], "low_ns": c["twcl"],
                    "rise_ns": c["tr"], "fall_ns": c["tf"]}
             v = max(v, eval(f["base"], {"__builtins__": {}}, env) + float(f["offset_ns"][self.g]))
-        if pid in (10, 11):        # "for loading >= 50 pF, decrease width by 10 ns per 50 pF"
+        if pid in (10, 11) and self.derate_widths:   # "for loading >= 50 pF, decrease width by 10 ns per 50 pF"
             v -= 10.0 * max(0.0, (self.load - 50.0) / 50.0)
         return v
 
@@ -470,29 +545,60 @@ def write_sdc(con, path, load, edge):
     open(path, "w").write("\n".join(L) + "\n")
 
 
-def run_corner(sta, cfg, run, corner, contract, edge, keep, pads=None, levels=False):
+def measure(sta, cfg, run, corner, clk, load, edge, keep, pads=None, tag=""):
+    """OpenSTA's measurements at one corner for one clock and input edge:
+    parse()'s, from the CLK pin's edges -- independent of the period"""
     libs, spef = corner_files(run, cfg, corner, pads)
-    script = sta_script(cfg, run, libs, spef, contract.clk, contract.load, edge)
+    script = sta_script(cfg, run, libs, spef, clk, load, edge)
     with tempfile.TemporaryDirectory() as tmp:
         d = keep or tmp
         os.makedirs(d, exist_ok=True)
-        path = os.path.join(d, f"pin_timing_{corner}.tcl")
+        path = os.path.join(d, f"pin_timing_{corner}{tag}.tcl")
         open(path, "w").write(script)
         p = subprocess.run(shlex.split(sta) + ["-no_init", "-exit", path], capture_output=True, text=True)
         if keep:
-            open(os.path.join(d, f"pin_timing_{corner}.log"), "w").write(p.stdout + p.stderr)
+            open(os.path.join(d, f"pin_timing_{corner}{tag}.log"), "w").write(p.stdout + p.stderr)
     if p.returncode != 0 or "## " not in p.stdout:
         sys.exit(f"pin_timing: OpenSTA failed for {corner}:\n" + (p.stderr or p.stdout)[-2000:])
-    res = parse(p.stdout, contract.clk)
+    return parse(p.stdout, clk)
+
+
+def run_corner(sta, cfg, run, corner, contract, edge, keep, pads=None, levels=False):
+    res = measure(sta, cfg, run, corner, contract.clk, contract.load, edge, keep, pads)
     if levels:
-        res = Levels(pads, run, cfg, corner.split("_")[1], contract.load, edge).apply(res)
+        res = Levels(pads, run, cfg, corner.split("_")[1], contract.load, edge, contract.out_v).apply(res)
     return res
+
+
+# the ZX Spectrum's ULA holds CLK high through contended accesses, up to six
+# extra T-states (its 6, 5, 4, 3, 2, 1, 0, 0 pattern)
+STRETCH_T = {"spectrum": 6, "spectrum128": 6}
+
+
+def title(point, con, cfg, run, load):
+    """the header line of a point's table"""
+    g, mhz, label = POINTS[point]
+    c = con.clk
+    clock = (f"clock {c['period']:g} ns, {c['twch']:g}/{c['twcl']:g} ns high/low, "
+             f"{c['tr']:g} ns edges; {load:g} pF loads")
+    head = f"{cfg['DESIGN_NAME']} ({os.path.basename(os.path.normpath(run))}) vs Zilog Z8400 NMOS, "
+    if g == "2.5" and not mhz:
+        return head + f"2.5 MHz (Z80 CPU, September 1983 specification): " + clock
+    if mhz:
+        c = {k: round(v, 1) for k, v in c.items()}
+        clock = (f"clock {c['period']:g} ns, {c['twch']:g}/{c['twcl']:g} ns high/low, "
+                 f"{c['tr']:g} ns edges; {load:g} pF loads")
+        return head + f"{g} MHz table at the {label}'s {mhz:.5g} MHz: " + clock
+    return head + f"{g} MHz: " + clock
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("run", nargs="?")
-    ap.add_argument("--grade", default="4", choices=["4", "6", "8"], help="NMOS speed grade, MHz (default 4: Z80A)")
+    ap.add_argument("--grade", default="4", help="the points to check, comma-separated: NMOS speed grades "
+                    "2.5 4 6 8 (MHz) and machines " + " ".join(p for p in ALL_POINTS if POINTS[p][1])
+                    + " (default 4: Z80A)")
+    ap.add_argument("--all", action="store_true", help="every point: " + ",".join(ALL_POINTS))
     ap.add_argument("--load", type=float, default=100.0, help="output load, pF (datasheet test load: 100)")
     ap.add_argument("--edge", type=float, default=None, help="clock and input edge, ns (default: what the grade's minimum period leaves)")
     ap.add_argument("--corners", default="", help="process corners to check, e.g. tt,ss (default: all of the run's)")
@@ -500,17 +606,24 @@ def main():
     ap.add_argument("--keep", help="keep the OpenSTA scripts and logs in this directory")
     ap.add_argument("--pads", default="auto", help="SPICE-characterised pad libraries: auto (../spice/pads/<pdk>/ "
                     "if there), none (the PDK's), or a directory")
+    ap.add_argument("--jobs", type=int, default=os.cpu_count() or 1, help="OpenSTA runs at once (default: the CPUs)")
     ap.add_argument("--write-sdc", metavar="FILE", help="write the flow's SDC for this grade instead (RUN is ignored)")
     a = ap.parse_args()
+    points = ALL_POINTS if a.all else [g for g in a.grade.split(",") if g]
+    bad = [g for g in points if g not in POINTS]
+    if bad or not points:
+        ap.error(f"--grade: unknown point(s) {', '.join(bad) or '(none)'}; one of {', '.join(ALL_POINTS)}")
     if a.write_sdc:
-        con = Contract(a.grade, a.load)
+        if len(points) != 1 or POINTS[points[0]][1]:
+            ap.error("--write-sdc takes one grade: 2.5, 4, 6 or 8")
+        con = Contract(points[0], a.load)
         write_sdc(con, a.write_sdc, a.load, a.edge if a.edge is not None else con.clk["tr"])
         return 0
     if not a.run or not os.path.isfile(os.path.join(a.run, "resolved.json")):
         print(f"pin_timing: {a.run} is not a LibreLane run"); return 2
     cfg = json.load(open(os.path.join(a.run, "resolved.json")))
-    con = Contract(a.grade, a.load)
-    edge = a.edge if a.edge is not None else con.clk["tr"]
+    cons = {pt: Contract(POINTS[pt][0], a.load, POINTS[pt][1]) for pt in points}
+    edges = {pt: a.edge if a.edge is not None else cons[pt].clk["tr"] for pt in points}
     want = [k for k in a.corners.split(",") if k]
     corners = [c for c in cfg["STA_CORNERS"] if c.startswith("nom_") and (not want or c.split("_")[1] in want)]
     corners.sort(key=lambda c: CORNER_ORDER.index(c.split("_")[1]) if c.split("_")[1] in CORNER_ORDER else len(CORNER_ORDER))
@@ -522,14 +635,47 @@ def main():
         missing = [k for k in corners if k.split("_")[1] not in have]
         if missing:
             print(f"pin_timing: {pads} has no corner {', '.join(missing)}"); return 2
-    c = con.clk
-    print(f"{cfg['DESIGN_NAME']} ({os.path.basename(os.path.normpath(a.run))}) vs Zilog Z8400 NMOS, "
-          f"{a.grade} MHz: clock {c['period']:g} ns, {c['twch']:g}/{c['twcl']:g} ns high/low, "
-          f"{c['tr']:g} ns edges; {a.load:g} pF loads")
-    print("pads: " + (f"simulated at transistor level ({os.path.relpath(pads, os.path.join(HERE, '..', '..'))}); outputs at 1.5 V, "
+    # one OpenSTA run per corner and edge, with the clock of a grade that
+    # has that edge (the measurements do not depend on the period)
+    ref = {}
+    for pt in sorted(points, key=lambda pt: POINTS[pt][1] is not None):
+        ref.setdefault(edges[pt], pt)
+    tag = (lambda e: "") if len(ref) == 1 else (lambda e: f"_edge{e:g}")
+    with ThreadPoolExecutor(max_workers=max(1, a.jobs)) as ex:
+        futs = {(k, e): ex.submit(measure, a.sta, cfg, a.run, k, cons[pt].clk, a.load, e, a.keep, pads, tag(e))
+                for k in corners for e, pt in ref.items()}
+        raw = {key: f.result() for key, f in futs.items()}
+    ok_points = {}
+    for n, pt in enumerate(points):
+        con = cons[pt]
+        results = {}
+        for k in corners:
+            m = raw[(k, edges[pt])]
+            if pads:
+                m = Levels(pads, a.run, cfg, k.split("_")[1], a.load, edges[pt], con.out_v).apply(m)
+            results[k] = m
+        if n:
+            print()
+        ok_points[pt] = report(pt, con, cfg, a, corners, results, pads)
+    if len(points) > 1:
+        print("\n  " + ", ".join(f"{pt}: {'PASS' if ok else 'FAIL'}" for pt, ok in ok_points.items()))
+    return 0 if all(ok_points.values()) else 1
+
+
+def report(pt, con, cfg, a, corners, results, pads):
+    """print one point's table; True when every check passes"""
+    g, mhz, label = POINTS[pt]
+    print(title(pt, con, cfg, a.run, a.load))
+    lv = "2.0 / 0.8 V" if con.out_v else "1.5 V"
+    print("pads: " + (f"simulated at transistor level ({os.path.relpath(pads, os.path.join(HERE, '..', '..'))}); outputs at {lv}, "
                       f"inputs at 2.0 / 0.8 V, CLK at 50 %" if pads else
                       "the PDK's Liberty (extrapolated beyond its range); every pin at 50 %"))
-    results = {k: run_corner(a.sta, cfg, a.run, k, con, edge, a.keep, pads, bool(pads)) for k in corners}
+    if mhz or g == "2.5":
+        lim = con.clock_limits(STRETCH_T.get(pt, 0))
+        print("clock: " + ", ".join(w for w, _ in lim)
+              + (f" (CLK held high {STRETCH_T[pt]} T-states more by the ULA)" if pt in STRETCH_T else "")
+              + ": " + ("within the NMOS Z80's limits" if all(ok for _, ok in lim) else "OUTSIDE the NMOS Z80's limits")
+              + "; RZ80 is static: no upper bound on a clock phase")
     rows = {k: con.checks(m) for k, m in results.items()}
     ok_all = True
     first = rows[corners[0]]
@@ -545,8 +691,9 @@ def main():
         lim_s = f"{'<=' if bound == 'max' or pid in (15, 16, 17, 18, 25, 38, 39, 46, 47, 48, 49) else '>='}{lim:6.1f}"
         print(f"  {pid:2d} {sym:16} {lim_s:>9}   {cells}   {'n/a' if worst is None else f'{worst:+.1f}'}{flag}"
               + (f"   ({note})" if note and not ok else ""))
-    print(f"\n  pin timing vs NMOS {a.grade} MHz: {'PASS' if ok_all else 'FAIL'}")
-    return 0 if ok_all else 1
+    name = f"{g} MHz" if not mhz else f"{g} MHz at the {label}'s {mhz:.5g} MHz"
+    print(f"\n  pin timing vs NMOS {name}: {'PASS' if ok_all else 'FAIL'}")
+    return ok_all
 
 
 if __name__ == "__main__":

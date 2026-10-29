@@ -7,7 +7,7 @@
 #
 #   pin_scenarios_diff.py <prog.hex> [phases=200] [context=2]
 #
-# Reads <prog.hex>.events sidecar if present (passes through to both
+# Reads <prog.hex>.events and .machine sidecars if present (passes through to both
 # runners via the existing tracegen / perfectz80_runner CLI).
 #
 # Designed for investigating residual pin_scenarios divergences vs
@@ -63,6 +63,9 @@ def main():
     # Honest events file path: <prog>.events sits next to <prog.hex>.
     events_path = prog.rsplit(".hex", 1)[0] + ".events"
     extra = [events_path] if os.path.exists(events_path) else []
+    machine_path = prog.rsplit(".hex", 1)[0] + ".machine"   # the machine around the CPU
+    if os.path.exists(machine_path):
+        extra = (extra or ["-"]) + [machine_path]
 
     # PZ_OFFSET=1: perfectz80 emits one pre-M1 idle phase before its
     # first M1, our tracegen starts at T1.P of the first M1 directly.

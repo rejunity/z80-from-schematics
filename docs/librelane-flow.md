@@ -186,7 +186,7 @@ against perfectz80 like the C and RTL paths:
 - `make perfectz80_netlist`: every trace program in `tests/traces/` -- 14:
   `prog1` .. `prog10_exchange` and the four seeded-random `prog_rnd_*` --
   200 phases each;
-- `make pin_scenarios_netlist`: the 15 pin scenarios with their `.events`;
+- `make pin_scenarios_netlist`: the 19 pin scenarios with their `.events` and `.machine`;
 - `make basic_netlist_tests`: the BASIC ROMs' canned scripts on the same
   netlist built with Verilator (`sim_basic.cpp`; Verilator 5.030-5.048, see
   README.md).

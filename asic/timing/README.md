@@ -9,17 +9,71 @@ the same contract as constraints.
 | | |
 |---|---|
 | `z8400_nmos.json` | All 53 numbered AC parameters of Zilog PS0178 (PS017801-0602, Z8400 NMOS table, printed pages 38-39): the 4 / 6 / 8 MHz columns, the footnote formulas, which clock edge or pin event each is measured from, provenance. |
+| `z8400_nmos_1983.json` | The same 53 for the original Z80 CPU, 2.5 MHz, which PS0178 no longer lists: the Z80 column of Zilog's Z8400 product specification of September 1983 (Z80 Family Product Specifications Handbook, February 1984, printed pages 23-24), its footnote formulas and its AC test conditions. |
 | `pin_timing.py` | Measures a LibreLane chip run with OpenSTA and checks every parameter the replica must meet, per process corner; `--write-sdc` writes the same contract as the flow's SDC. |
 | `z80_chip_nmos4.sdc` | That SDC for 4 MHz (generated). |
 
     make -C asic/gf180mcu pin_timing            # the chip's latest run, 4 MHz
     make -C asic/gf180mcu pin_timing GRADE=6    # the 6 MHz grade
+    make -C asic/gf180mcu pin_timing GRADE=2.5,trs80,spectrum   # several points
+    asic/timing/pin_timing.py RUN --all         # every grade and machine clock
     asic/timing/pin_timing.py --write-sdc asic/timing/z80_chip_nmos4.sdc
 
 The chip directories (`asic/gf180mcu/`, `asic/gf180mcu-9t/`,
 `asic/ihp-sg13g2/`) are on the `asic-<pdk>` branches, which the Targets
-workflow merges into main before it builds them; each chip's job runs the
-4 MHz check after the layout and fails on any parameter. On main, `make
+workflow merges into main before it builds them; each chip's job checks
+the 4 MHz grade, the 2.5 MHz one and the machines' clocks below after the
+layout and fails on any parameter (6 and 8 MHz: by hand, `GRADE=6,8`).
+
+## Grades and old machines' clocks
+
+`--grade` takes one point or several, comma-separated; `--all` takes
+every one:
+
+| Point | Clock | Table | |
+|---|---|---|---|
+| `2.5` | 2.5 MHz, 400 ns, 20 ns edges | Z80 CPU, 1983 | the original Z80 |
+| `4` | 4 MHz, 250 ns, 15 ns edges | Z80A, PS0178 | the replica's target |
+| `6`, `8` | 6 / 8 MHz | Z80B / Z80H, PS0178 | |
+| `trs80` | 1.774 MHz (10.6445 MHz / 6) | Z80 CPU, 1983 | TRS-80 Model I |
+| `zx81` | 3.25 MHz (6.5 MHz / 2) | Z80A, PS0178 | ZX80, ZX81 |
+| `spectrum` | 3.5 MHz (14 MHz / 4) | Z80A, PS0178 | ZX Spectrum 16K / 48K |
+| `spectrum128` | 3.5469 MHz (17.7345 MHz / 5) | Z80A, PS0178 | ZX Spectrum 128K |
+
+A grade runs at its minimum period with the edges that leave the minimum
+high and low times; a machine's clock has its grade's edges and the
+rest of its period split evenly between high and low. The datasheets'
+starred minimums (pulse widths, separations) follow the footnote
+expressions at the point's own period, the rest of the table stays as
+printed. For the slower points the line under the header checks the clock
+against the grade's own limits (TcC, TwCh, TwCl and their maximums) --
+the system's, not the replica's: RZ80 is static and takes a clock phase
+of any length. The Spectrums' ULA holds CLK high through contended
+accesses for up to six more T-states (1.8 us, within PS0178's 2 us for
+TwCh). The Spectrum's clock stretching and the ZX80 / ZX81's display
+tricks themselves are cycle-level matters: perfectz80 pin scenarios
+(`tests/traces/pin_scenarios/`).
+
+What OpenSTA measures depends on the clock's and the inputs' edge only:
+the delays from the CLK pin's edges and the setup and hold the inputs
+need do not change with the period. So it measures once per corner for
+every edge the points share (four: 7.5, 15, 16 and 20 ns, from the 8, 4,
+6 and 2.5 MHz grades' periods) and checks each point from that; the
+corners and edges run in parallel (`--jobs`, default the CPUs).
+
+The 1983 table differs from PS0178 in how it is measured, not only in
+its numbers: its AC test conditions time the outputs where they cross
+VOH = 2.0 V rising and VOL = 0.8 V falling (PS0178: 1.5 V both), which
+the check takes from the pads' simulated data waveform at the test load
+(2.6 / 4.3 ns later at tt, 4.8 / 7.7 at ss, 1.6 / 2.7 at ff on GF180's
+`bi_t`), and it gives no derating of the MREQ pulse widths for the load
+(PS0178's parameters 10 and 11: 10 ns less per 50 pF over 50). Its
+starred values are the footnote expressions at TcC = 400, TwCh = TwCl =
+180, TrC = TfC = 20 ns, every one. Two oddities, kept as noted in the
+file: parameter 52 is printed TdCf(IORQr) but reads "Clock rising to
+IORQ rising" (PS0178's TdCr(IORQr), taken as that), and TwCh has no
+printed maximum, a footnote saying that "although static by design,
+TwCh of greater than 200 us is not guaranteed" (TwCl: 2000 ns). On main, `make
 timing_sdc_check` keeps the committed SDC in step with the JSON.
 
 ## What is measured
@@ -97,7 +151,17 @@ with the PDK's pad libraries at 50 %:
 | Output delays (limits 65-150 ns) | 7-47 ns (13-43) | 7-46 ns (12-43) | 9-25 ns (10-25) |
 | Opcode setup TsD(Cr) at the slow corner (limit 35 ns) | 22.8 ns, +12.2 (+8.9) | 23.6 ns, +11.4 (+7.1) | 5.0 ns, +30.0 (+25.2) |
 | Tightest input hold, fast corner | +6.4 ns (+0.6) | +6.4 ns (+0.6) | +1.8 ns (+0.5) |
-| 6 / 8 MHz (Z80B / Z80H), checked by hand | PASS / PASS | PASS / PASS | PASS / PASS |
+| 6 / 8 MHz (Z80B / Z80H), checked by hand | PASS / PASS | PASS / PASS (its layout of 2026-10-29: 8 MHz FAIL, parameter 33 -1.0 ns at the slow corner) | PASS / PASS |
+
+The 2.5 MHz grade and the old machines' clocks, GF180 7-track (the chip
+of `asic-gf180mcu`'s run of 2026-10-26, `pin_timing.py --all`): PASS at
+every corner, the tightest margins the inputs' holds at the fast corner
+-- ThWAIT +6.4 ns at 2.5 MHz and the TRS-80's 1.774 MHz (the 20 ns edges),
+ThBUSREQ +6.4 ns on the 4 MHz table at the ZX80 / ZX81's and the
+Spectrums' clocks, as at 4 MHz itself -- and every output 36 ns or more
+inside the 1983 table's limits, measured at its 2.0 / 0.8 V. The 8 MHz
+grade's tightest is parameter 33, TdD(WRf) for I/O, +1.6 ns: the printed
++55 ns its formula does not give (Sources).
 
 The separations keep 20 ns or more (24 at 50 %): measured at 1.5 V, a
 5 V output's low pulse is shorter, its falling edge crossing late and its

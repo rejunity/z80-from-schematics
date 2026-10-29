@@ -1,0 +1,28 @@
+# ZX81 SLOW mode (prog27_zx81_slow.machine, the NMI generator on): an
+# NMI every 207 T-states (64 us at 3.25 MHz), low for 16, with the
+# horizontal sync; WAIT is low while NMI is low and HALT high. The main
+# loop HALTs to wait for each NMI -- whose acknowledge the WAIT then
+# holds until NMI rises, putting the CPU in step with the line -- and,
+# after three, keeps running instead (INC (HL) in a loop), so the next
+# NMIs arrive mid-instruction and WAIT stretches whatever bus cycle is
+# under way. INT (A6) is ignored: DI, and RETN keeps IFF1 off.
+@0000
+F3                 # DI
+31 00 40           # LD SP,4000h
+C3 50 00           # JP 0050h
+@0050
+3A 01 41           # LD A,(4101h)     NMIs so far
+FE 03              # CP 3
+30 03              # JR NC,005Ah
+76                 # HALT
+18 F6              # JR 0050h
+21 00 42           # LD HL,4200h
+34                 # INC (HL)
+18 FD              # JR 005Dh
+@0066
+F5                 # PUSH AF          NMI handler
+3A 01 41           # LD A,(4101h)
+3C                 # INC A
+32 01 41           # LD (4101h),A
+F1                 # POP AF
+ED 45              # RETN

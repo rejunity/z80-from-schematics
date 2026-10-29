@@ -123,12 +123,16 @@ jobs:
         if: hashFiles(format('asic/{0}/chip/config.yaml', inputs.pdk)) != ''
         run: make -C asic/$PDK chip_sign_of_life
 
-      # The chip's pins against the NMOS Z80's datasheet at 4 MHz (Zilog
-      # PS0178, Z8400): OpenSTA on the routed chip, 100 pF loads, every AC
-      # parameter the replica has to meet, at each process corner
-      # (asic/timing/pin_timing.py; fails on any). Branches whose chip has
-      # no `pin_timing` target skip it.
-      - name: Chip pin timing vs the NMOS Z80 datasheet (4 MHz)
+      # The chip's pins against the NMOS Z80's datasheet (Zilog PS0178,
+      # Z8400; the 2.5 MHz Z80 from its 1983 specification): OpenSTA on the
+      # routed chip, 100 pF loads, every AC parameter the replica has to
+      # meet, at each process corner, at 4 MHz (the replica's grade) and at
+      # the slower clocks of the old machines -- the original Z80's 2.5 MHz,
+      # the TRS-80 Model I's 1.774 MHz on that table, the ZX80 / ZX81's 3.25
+      # and the ZX Spectrum 48K's and 128K's 3.5 / 3.5469 MHz on the 4 MHz
+      # one -- one OpenSTA pass per clock edge (asic/timing/pin_timing.py;
+      # fails on any). Branches whose chip has no `pin_timing` target skip it.
+      - name: Chip pin timing vs the NMOS Z80 datasheet (4 MHz, 2.5 MHz, old machines' clocks)
         if: hashFiles(format('asic/{0}/chip/config.yaml', inputs.pdk)) != ''
         run: |
           if ! grep -q '^pin_timing:' asic/$PDK/Makefile; then
@@ -136,9 +140,9 @@ jobs:
             exit 0
           fi
           rc=0
-          make -s -C asic/$PDK pin_timing > pin_timing.txt || rc=$?
+          make -s -C asic/$PDK pin_timing GRADE=4,2.5,trs80,zx81,spectrum,spectrum128 > pin_timing.txt || rc=$?
           cat pin_timing.txt
-          { echo "### asic/$PDK chip: pin timing vs the NMOS Z80 (4 MHz)"; echo '```'; cat pin_timing.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          { echo "### asic/$PDK chip: pin timing vs the NMOS Z80 (4 MHz, 2.5 MHz, old machines' clocks)"; echo '```'; cat pin_timing.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           exit $rc
 
       # The NMI pulse catcher at transistor level (asic/spice/nmi.py): cut

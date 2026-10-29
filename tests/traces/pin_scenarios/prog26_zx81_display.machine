@@ -1,0 +1,2 @@
+# ZX80 / ZX81: NOPs for the display file, INT on A6; the NMI generator off
+zx81 0 0

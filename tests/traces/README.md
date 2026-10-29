@@ -88,6 +88,7 @@ under a header of `#` lines:
     # rz80: <the commit it was recorded at>
     # program-sha1: <sha1 of the .hex>
     # events-sha1: <sha1 of the .events, or none>
+    # machine-sha1: <sha1 of the .machine; only where there is one>
     # phases: <perfectz80_runner's phase count>
     # harness: <perfectz80's netlist and simulator and the runner, hashed>
 
@@ -97,7 +98,7 @@ recording whose header doesn't match the program, its events, the phase
 count or the harness fails the comparison. `make verify_pz80_traces` runs
 perfectz80 again and requires every recording byte for byte (CI, every
 push); `make record_pz80_traces` writes them again after a change. Plain
-text, 325 KB for the 29: Python reads them, and so could a testbench's
+text, 616 KB for the 33: Python reads them, and so could a testbench's
 `$fscanf`. `scripts/compare_signal_timing.py --recorded` runs from another
 repository's copies (`PZ80_TRACES`, `TB_VVP`, `TB_NETLIST_VVP`) without
 perfectz80, a C compiler or the C model.
@@ -126,6 +127,25 @@ Sidecar format — one event per line, `#` for comments:
 the pin, `<pin>` is one of `nmi`, `int`, `wait`, `busreq`, `reset`, and
 `<value>` is the level to drive (`0` = asserted/low, `1` = released/high).
 
+A `.machine` sidecar instead puts the CPU inside a machine whose logic
+reacts to its pins every half-cycle -- one line, `spectrum48 <t>` or
+`zx81 <nmi> <t>` (`<t>` the machine's T-state count at line 0, `<nmi>`
+1 for the ZX81's NMI generator). The C tracegen and perfectz80_runner
+read it (the model and its sources: `scripts/perfectz80_runner.c`,
+MACHINE), the iverilog testbenches take `+machine` / `+mt0` / `+mnmi`:
+
+- `spectrum48`: the 48K ULA holds CLK high, 6 5 4 3 2 1 0 0 T-states by
+  its count in the first 128 T-states of each 224-T line, at the start of
+  a T-state with a contended address (4000-7FFF) on the bus and MREQ
+  high, or in T2 of an I/O cycle to its even port -- the documented
+  patterns (pc:4, hl:3, hl:1; N:1 C:3, C:1 C:3, C:1 C:1 C:1 C:1). Such
+  lines have no clock edge (the testbench's free clock is ORed high);
+  the data bus carries the ULA's display bytes, a decoy no model may take.
+- `zx81`: an opcode fetch from 8000-FFFF with HALT high whose byte has
+  bit 6 clear gets 00; INT follows A6; with the NMI generator, NMI is low
+  at counts 16-31 of each 207-T line and WAIT low while NMI is low and
+  HALT high.
+
 | File                          | What it exercises                                                                  |
 |-------------------------------|------------------------------------------------------------------------------------|
 | `prog9_inta_im1.hex`          | IM 1 INT acceptance — `EI` + NOP loop, INT pulsed at phase 50; expects an INTA M-cycle (`M1` + `IORQ` together, 7 T-states), then RST 38h to the IM1 vector, then `HALT`. |
@@ -143,6 +163,10 @@ the pin, `<pin>` is one of `nmi`, `int`, `wait`, `busreq`, `reset`, and
 | `prog21_wait_ldir.hex`        | WAIT on the T2 sample of `LDIR`'s write M-cycle (two Tw) — the T-state on whose edge the RTL's incrementer does BC-1; BC / DE / HL pushed at the end. |
 | `prog22_wait_cpir.hex`        | WAIT on the T2 sample of `CPIR`'s read M-cycle (two Tw), the RTL's BC-1 edge; stops on a match, pushes BC / HL / AF. |
 | `prog23_wb_irq.hex`           | Register write-back across an interrupt response — prefixed instructions whose writes the die makes in the next M1 (`INC IXL`, `NEG`, `RLC B`, `LD IYL,A`, `LD A,I`, `RLC (IX+5)`, `LD A,(IX+5)`, `LD IXH,n`), each followed by an INTA (INT held low, `EI` before each) and the last (`DEC IXL`) by an NMI response; the handlers load through IX, IY, BC, DE, HL and AF so the registers show on the address bus. Runs 3600 phases. |
+| `prog24_spectrum_contend.hex` | ZX Spectrum 48K (`.machine`: `spectrum48 0`): the ULA holds CLK high at the start of each T-state it contends, 0-6 T-states by its count -- OUTs to its even ports with a contended and an uncontended high byte and to odd ports, memory reads, writes, read-modify-writes, LDIR and pushes in 4000-7FFF, code running from 5000h -- with its display bytes on the data bus while the clock stands. Runs 1900 phases. |
+| `prog25_spectrum_ports.hex`   | The same program with the ULA's count started at 97, so the even-port OUTs meet the pattern in T2, where the ULA holds its own I/O (N:1 C:3, C:1 C:3). Runs 1900 phases. |
+| `prog26_zx81_display.hex`     | ZX80 / ZX81 display (`zx81 0 0`): the CPU runs a display-file line from C040h, the machine handing it 00 (NOP) for every byte with bit 6 clear and the HALT that ends the line through; INT is wired to A6, so IM 1 interrupts come when R clears bit 6 in the refresh address -- three lines, R recorded by the handler. Runs 1400 phases. |
+| `prog27_zx81_slow.hex`        | ZX81 SLOW mode (`zx81 1 147`): an NMI every 207 T-states, low for 16; WAIT low while NMI is low and HALT high -- the NMI acknowledge after each HALT held until NMI rises, then, the main loop running on, NMIs and WAIT arriving mid-instruction. Runs 2800 phases. |
 
 `scripts/compare_signal_timing.py` compares, in every phase, the 7
 control pins and the address -- transfers, refreshes (I:R), and the
