@@ -239,12 +239,16 @@ class Levels:
         nl = open(os.path.join(run, "final", "nl", cfg["DESIGN_NAME"] + ".nl.v")).read()
         self.cell = {inst: cell for cell, inst in re.findall(r"^\s*(\w+)\s+(pad_\w+)\s*\(", nl, re.M)}
 
+    def pad_cell(self, port):
+        """the pad cell of a port (its instance named as in z80_chip.v)"""
+        return self.cell.get("pad_" + port.replace("[", "").replace("]", ""))
+
     def shift(self, port, trans):
         """ns from the pin's 1.5 V crossing to its out_v crossing (0 without
         out_v), from the data waveform: rising to VOH, falling to VOL"""
         if not self.out_v:
             return 0.0
-        cell = self.cell.get("pad_" + port.replace("[", "").replace("]", ""))
+        cell = self.pad_cell(port)
         W = self.c["cells"].get(cell, {}).get("data", {}).get("wave")
         if not W:
             return 0.0
@@ -260,7 +264,7 @@ class Levels:
 
     def out(self, port, arc, trans):
         """ns from the pin's 50 % to its 1.5 V crossing (data / enable arc)"""
-        cell = self.cell.get("pad_" + port.replace("[", "").replace("]", ""))
+        cell = self.pad_cell(port)
         D = self.c["cells"].get(cell, {}).get(arc)
         if D is None:
             return 0.0
