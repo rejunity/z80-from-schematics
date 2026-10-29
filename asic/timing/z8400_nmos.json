@@ -819,7 +819,10 @@
           "8": -120
         }
       },
-      "note": "8 MHz table prints +55; formula gives a negative result for usual minimum-period waveforms. Do not silently repair the source."
+      "misprint": {
+        "8": "Zilog's NMOS tables print +55* for 33 TdD(WRf) at 8 MHz (PS0178 p. 38; also the Feb 1984 Product Specifications Handbook p. 23, the 1985 Data Book p. 167, the 1989 and 1992 books), copied from the 1983 preliminary Z80H column, which had no formula. PS0178's own footnote (p. 39), TwCl + TrC - 120, gives -55 at the 8 MHz column's TwCl 55 and TrC 10 -- the edges its other starred 8 MHz values (7, 35, 45, 50) are computed with -- and the formula reproduces every other printed value of 33 (4 MHz -10, 6 MHz -55, the 1983 specification's 2.5 MHz +20). Printed -55*: Sharp LH0080E (NMOS Z80, 8 MHz), 1990 Microcomputers Data Book pp. 288-289; Zilog Z84C0008, 1989 Z80 Family Data Book p. 21; Toshiba TMPZ84C00AP-8, 1990 TLCS-Z80 book MPUZ80-49. A dropped minus sign: the limit at 8 MHz is the formula alone."
+      },
+      "note": "8 MHz table prints +55 (a dropped minus sign, see misprint); the source stays as printed and pin_timing.py takes the footnote formula for the grades listed in 'misprint'."
     },
     {
       "id": 34,

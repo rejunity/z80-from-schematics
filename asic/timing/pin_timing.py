@@ -336,7 +336,8 @@ class Contract:
 
     def limit(self, pid):
         """Datasheet limit; for the starred minimums the greater of the
-        printed value and the footnote formula at this clock."""
+        printed value and the footnote formula at this clock -- the formula
+        alone where the JSON lists the printed value as a misprint"""
         r = self.req[pid]
         v = float(r["table_ns"][self.g])
         f = r.get("formula")
@@ -344,7 +345,8 @@ class Contract:
             c = self.clk
             env = {"period_ns": c["period"], "high_ns": c["twch"], "low_ns": c["twcl"],
                    "rise_ns": c["tr"], "fall_ns": c["tf"]}
-            v = max(v, eval(f["base"], {"__builtins__": {}}, env) + float(f["offset_ns"][self.g]))
+            fv = eval(f["base"], {"__builtins__": {}}, env) + float(f["offset_ns"][self.g])
+            v = fv if self.g in r.get("misprint", {}) else max(v, fv)
         if pid in (10, 11) and self.derate_widths:   # "for loading >= 50 pF, decrease width by 10 ns per 50 pF"
             v -= 10.0 * max(0.0, (self.load - 50.0) / 50.0)
         return v
