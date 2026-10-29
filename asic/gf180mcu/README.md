@@ -141,9 +141,10 @@ Measured (RUN_2026-10-29_01-02-51, against the automatic layout above):
 the core is 718 x 630 µm (0.45 mm², 42 % utilised; automatic 0.32 mm²,
 56 %), sign-off clean, +5.6 ns setup slack at the typical corner (+8.1)
 and -17.0 ns at the slow one (~15 MHz; -9.4, ~17 MHz) -- the die's long
-bit and PLA lines cost the slow corner. The flow takes about 1 h 15 min on
-8 cores, most of it the resizer after global routing (automatic: ~40 min
-of CPU). The chip die grows 50 µm each way (1712 x 1562 µm); its pins
+bit and PLA lines cost the slow corner. On an idle 8-core machine the flow
+takes 73 min (93 min of CPU) against the automatic layout's 18 min (27),
+most of the difference the resizer's repairs after global routing on the
+longer wires; the floorplan step itself takes ~1.5 s. The chip die grows 50 µm each way (1712 x 1562 µm); its pins
 still meet the NMOS Z80's 4 MHz datasheet timing (`make pin_timing`).
 Four placement rows a bit are what routes: with three, Metal3 -- the one
 horizontal layer under the chip's grid -- overflows.
