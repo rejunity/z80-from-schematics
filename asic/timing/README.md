@@ -22,8 +22,8 @@ the same contract as constraints.
 The chip directories (`asic/gf180mcu/`, `asic/gf180mcu-9t/`,
 `asic/ihp-sg13g2/`) are on the `asic-<pdk>` branches, which the Targets
 workflow merges into main before it builds them; each chip's job checks
-every grade and machine clock below after the layout and fails on any
-parameter.
+the 4 MHz grade, the 2.5 MHz one and the machines' clocks below after the
+layout and fails on any parameter (6 and 8 MHz: by hand, `GRADE=6,8`).
 
 ## Grades and old machines' clocks
 
@@ -151,7 +151,7 @@ with the PDK's pad libraries at 50 %:
 | Output delays (limits 65-150 ns) | 7-47 ns (13-43) | 7-46 ns (12-43) | 9-25 ns (10-25) |
 | Opcode setup TsD(Cr) at the slow corner (limit 35 ns) | 22.8 ns, +12.2 (+8.9) | 23.6 ns, +11.4 (+7.1) | 5.0 ns, +30.0 (+25.2) |
 | Tightest input hold, fast corner | +6.4 ns (+0.6) | +6.4 ns (+0.6) | +1.8 ns (+0.5) |
-| 6 / 8 MHz (Z80B / Z80H), checked by hand | PASS / PASS | PASS / PASS | PASS / PASS |
+| 6 / 8 MHz (Z80B / Z80H), checked by hand | PASS / PASS | PASS / PASS (its layout of 2026-10-29: 8 MHz FAIL, parameter 33 -1.0 ns at the slow corner) | PASS / PASS |
 
 The 2.5 MHz grade and the old machines' clocks, GF180 7-track (the chip
 of `asic-gf180mcu`'s run of 2026-10-26, `pin_timing.py --all`): PASS at
