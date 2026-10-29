@@ -151,7 +151,7 @@ with the PDK's pad libraries at 50 %:
 | Output delays (limits 65-150 ns) | 7-47 ns (13-43) | 7-46 ns (12-43) | 9-25 ns (10-25) |
 | Opcode setup TsD(Cr) at the slow corner (limit 35 ns) | 22.8 ns, +12.2 (+8.9) | 23.6 ns, +11.4 (+7.1) | 5.0 ns, +30.0 (+25.2) |
 | Tightest input hold, fast corner | +6.4 ns (+0.6) | +6.4 ns (+0.6) | +1.8 ns (+0.5) |
-| 6 / 8 MHz (Z80B / Z80H), checked by hand | PASS / PASS | PASS / PASS (its layout of 2026-10-29: 8 MHz FAIL, parameter 33 -1.0 ns at the slow corner) | PASS / PASS |
+| 6 / 8 MHz (Z80B / Z80H), gated in CI since 2026-10-29 | PASS / PASS | PASS / PASS | PASS / PASS |
 
 The 2.5 MHz grade and the old machines' clocks, GF180 7-track (the chip
 of `asic-gf180mcu`'s run of 2026-10-26, `pin_timing.py --all`): PASS at
@@ -159,9 +159,11 @@ every corner, the tightest margins the inputs' holds at the fast corner
 -- ThWAIT +6.4 ns at 2.5 MHz and the TRS-80's 1.774 MHz (the 20 ns edges),
 ThBUSREQ +6.4 ns on the 4 MHz table at the ZX80 / ZX81's and the
 Spectrums' clocks, as at 4 MHz itself -- and every output 36 ns or more
-inside the 1983 table's limits, measured at its 2.0 / 0.8 V. The 8 MHz
-grade's tightest is parameter 33, TdD(WRf) for I/O, +1.6 ns: the printed
-+55 ns its formula does not give (Sources).
+inside the 1983 table's limits, measured at its 2.0 / 0.8 V. Parameter
+33, TdD(WRf) for I/O, at 8 MHz is checked against its footnote formula,
+-57.5 ns at the 8 MHz clock, not the printed +55 ns, a dropped minus sign
+(Sources); against +55 the 9-track chip of 2026-10-29 missed it by 1.0 ns
+at the slow corner (54.0 ns; Targets run 40920998492).
 
 The separations keep 20 ns or more (24 at 50 %): measured at 1.5 V, a
 5 V output's low pulse is shorter, its falling edge crossing late and its
@@ -183,6 +185,17 @@ took ~70 ns into 100 pF at the slow corner and missed TdCr(WRf) by
 datasheet tables, whose SHA-256 it records. The package's notes on the
 datasheet's inconsistencies hold here too: the printed starred values do
 not all agree with their formulas, and parameter 33's 8 MHz entry is
-printed positive. Its per-bus-cycle SDCs and waveform tools are not used:
+printed positive. That entry is a dropped minus sign: every Zilog NMOS
+table from the February 1984 Product Specifications Handbook (p. 23) to
+PS0178 (p. 38) prints +55*, copied from the 1983 preliminary Z80H column
+that had no formula, while PS0178's footnote (p. 39), TwCl + TrC - 120,
+gives -55 at the 8 MHz column's TwCl 55 and TrC 10 -- the edges its other
+starred 8 MHz values (7, 35, 45, 50) are computed with -- and reproduces
+parameter 33's 4 and 6 MHz values (-10, -55) and the 1983 specification's
+2.5 MHz +20. Sharp's LH0080E (NMOS Z80, 8 MHz; 1990 Microcomputers Data
+Book, pp. 288-289), Zilog's Z84C0008 (1989 Z80 Family Data Book, p. 21)
+and Toshiba's TMPZ84C00AP-8 (1990 TLCS-Z80 book, MPUZ80-49) print -55*.
+`z8400_nmos.json` keeps the printed value and lists it under `misprint`;
+for the grades listed there `pin_timing.py` takes the formula alone. Its per-bus-cycle SDCs and waveform tools are not used:
 they check each output against every reference edge, which on this
 dual-edge pin former pairs launch and capture edges that cannot occur.
