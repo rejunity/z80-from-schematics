@@ -115,7 +115,17 @@ ANCHOR_BLOCKS = [  # (anchor role pattern, block)
     (r'pla ', 'decoder PLA'),
     (r'datapath (addr_hold|m_addr)\[', 'address'),
     (r'datapath (tmp|wdata)\[', 'ALU'),
+    (r'alu ', 'ALU'),
+    (r'addr ', 'address'),
 ]
+# the anchors that stand for one bit of the datapath (the register file's
+# rows, the ALU's and the address unit's bit planes, the latches beside
+# them) take their block's colour on even bits and a darker shade of it on
+# odd bits, so each bit reads as its own band; shared strips keep the
+# plain colour. Runs without anchors render as before.
+BIT_ROLE = r'(?:regfile \S+ bit |alu bit |addr bit |datapath \w+\[)(\d+)'
+BIT_SHADED = ('register file', 'ALU', 'address')
+ODD_BITS = {f'{block} (odd bits)': (None, tuple(int(v * .58) for v in BLOCKS[block][1])) for block in BIT_SHADED}
 PAD_BLOCK = ('I/O pads', (148, 163, 184))
 # the pad ring's corners, fillers and bond pads, darker than the pads
 RING = (58, 66, 80)
@@ -296,8 +306,21 @@ def anchor_blocks(run):
     for path in glob.glob(run + '*-rz80-diefloorplan/anchors.json'):
         for a in json.load(open(path))['anchors']:
             if block := next((b for pattern, b in ANCHOR_BLOCKS if re.match(pattern, a['role'])), None):
+                bit = re.match(BIT_ROLE, a['role'])
+                if block in BIT_SHADED and bit and int(bit.group(1)) % 2:
+                    block = f'{block} (odd bits)'
                 out[a['inst'].replace('\\', '')] = block
     return out
+
+
+def block_legend():
+    """the block map's legend: each block, its odd-bit shade after it"""
+    table = {}
+    for block, entry in BLOCKS.items():
+        table[block] = entry
+        if f'{block} (odd bits)' in ODD_BITS:
+            table[f'{block} (odd bits)'] = ODD_BITS[f'{block} (odd bits)']
+    return table
 
 
 def render_blocks(run, png, width=1200, supersample=3, macro_runs=None):
@@ -346,8 +369,8 @@ def render_blocks(run, png, width=1200, supersample=3, macro_runs=None):
             continue
         name = re.sub(r'^u_top\.', '', name)   # the chip's z80_top instance
         block = anchored.get(name) or next(b for b, (pattern, _) in BLOCKS.items() if re.match(pattern, name) or not pattern)
-        counts[block] += 1
-        cells.append((block, BLOCKS[block][1], master, x, y, orient))
+        counts[block] = counts.get(block, 0) + 1
+        cells.append((block, (BLOCKS.get(block) or ODD_BITS[block])[1], master, x, y, orient))
     cells.sort(key=lambda c: c[0] is not None)   # fillers first: real cells draw over them
     for block, rgb, master, x, y, orient in cells:
         cw, ch = sizes[master]
@@ -1190,7 +1213,7 @@ def site(src, out):
 <div><h3>{e(p['name'])}</h3><p class="muted">{e(p.get('pdk_variant') or '')} · {e(p.get('library') or '')}</p>
 <dl>{facts}</dl><p class="links">{' · '.join(links)}</p></div>
 {second_legend}
-{legend('Cells by Z80 block', {PAD_BLOCK[0]: (None, PAD_BLOCK[1]), **BLOCKS}, p.get('blocks'))}
+{legend('Cells by Z80 block', {PAD_BLOCK[0]: (None, PAD_BLOCK[1]), **block_legend()}, p.get('blocks'))}
 </div>
 </article>""")
 
