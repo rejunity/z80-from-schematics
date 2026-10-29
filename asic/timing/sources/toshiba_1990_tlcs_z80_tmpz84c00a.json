@@ -1,0 +1,537 @@
+{
+ "schema_version": 1,
+ "part": "TMPZ84C00AP-6 / -8 (Toshiba CMOS Z80)",
+ "technology": "CMOS",
+ "role": "reference only (CMOS)",
+ "nomenclature": "zilog_numbered",
+ "source": {
+  "title": "1990 Toshiba 8-Bit Microprocessor TLCS-Z80/85 data book",
+  "publisher": "Toshiba",
+  "date": "1990",
+  "url": "http://bitsavers.trailing-edge.com/components/toshiba/_dataBook/1990_Toshiba_8-Bit_Microprocessor_TLCS-Z80_85.pdf",
+  "sha256": "ff44a62f7027e8ce3e96e0e4298135e532be1a763b4e24a975baa26d589addec",
+  "pdf_pages": [
+   61,
+   62,
+   63
+  ],
+  "printed_pages": [
+   "MPUZ80-48",
+   "MPUZ80-49",
+   "MPUZ80-50"
+  ],
+  "retrieved": "2026-10-29",
+  "transcription": "by hand from the page images"
+ },
+ "ac_test_conditions": {
+  "VIH_V": 2.4,
+  "VIL_V": 0.4,
+  "VOH_V": 2.2,
+  "VOL_V": 0.8,
+  "load_pF": 100,
+  "note": "Topr = -40 to 85 C, VCC = 5 V +-10 %"
+ },
+ "formula_assumption": null,
+ "grades": [
+  {
+   "key": "6",
+   "label": "AP-6 / AM-6 / AT-6"
+  },
+  {
+   "key": "8",
+   "label": "AP-8 / AM-8 / AT-8"
+  }
+ ],
+ "notes": [
+  "No starred values and no footnote formulas: every value is given at the minimum clock only."
+ ],
+ "parameters": [
+  {
+   "id": 1,
+   "symbol": "TcC",
+   "bound": "min",
+   "values": {
+    "6": 165,
+    "8": 125
+   },
+   "max_note": "DC"
+  },
+  {
+   "id": 2,
+   "symbol": "TwCh",
+   "bound": "min",
+   "values": {
+    "6": 65,
+    "8": 55
+   },
+   "max_note": "DC"
+  },
+  {
+   "id": 3,
+   "symbol": "TwCl",
+   "bound": "min",
+   "values": {
+    "6": 65,
+    "8": 55
+   },
+   "max_note": "DC"
+  },
+  {
+   "id": 4,
+   "symbol": "TfC",
+   "bound": "max",
+   "values": {
+    "6": 20,
+    "8": 10
+   }
+  },
+  {
+   "id": 5,
+   "symbol": "TrC",
+   "bound": "max",
+   "values": {
+    "6": 20,
+    "8": 10
+   }
+  },
+  {
+   "id": 6,
+   "symbol": "TdCr(A)",
+   "bound": "max",
+   "values": {
+    "6": 90,
+    "8": 80
+   }
+  },
+  {
+   "id": 7,
+   "symbol": "TdA(MREQf)",
+   "bound": "min",
+   "values": {
+    "6": 35,
+    "8": 20
+   }
+  },
+  {
+   "id": 8,
+   "symbol": "TdCf(MREQf)",
+   "bound": "max",
+   "values": {
+    "6": 70,
+    "8": 60
+   }
+  },
+  {
+   "id": 9,
+   "symbol": "TdCr(MREQr)",
+   "bound": "max",
+   "values": {
+    "6": 70,
+    "8": 60
+   }
+  },
+  {
+   "id": 10,
+   "symbol": "TwMREQh",
+   "bound": "min",
+   "values": {
+    "6": 65,
+    "8": 45
+   }
+  },
+  {
+   "id": 11,
+   "symbol": "TwMREQl",
+   "bound": "min",
+   "values": {
+    "6": 135,
+    "8": 100
+   }
+  },
+  {
+   "id": 12,
+   "symbol": "TdCf(MREQr)",
+   "bound": "max",
+   "values": {
+    "6": 70,
+    "8": 60
+   }
+  },
+  {
+   "id": 13,
+   "symbol": "TdCf(RDf)",
+   "bound": "max",
+   "values": {
+    "6": 80,
+    "8": 70
+   }
+  },
+  {
+   "id": 14,
+   "symbol": "TdCr(RDr)",
+   "bound": "max",
+   "values": {
+    "6": 70,
+    "8": 60
+   }
+  },
+  {
+   "id": 15,
+   "symbol": "TsD(Cr)",
+   "bound": "min",
+   "values": {
+    "6": 30,
+    "8": 30
+   }
+  },
+  {
+   "id": 16,
+   "symbol": "ThD(RDr)",
+   "bound": "min",
+   "values": {
+    "6": 0,
+    "8": 0
+   }
+  },
+  {
+   "id": 17,
+   "symbol": "TsWAIT(Cf)",
+   "bound": "min",
+   "values": {
+    "6": 60,
+    "8": 50
+   }
+  },
+  {
+   "id": 18,
+   "symbol": "ThWAIT(Cf)",
+   "bound": "min",
+   "values": {
+    "6": 10,
+    "8": 10
+   },
+   "note": "marked '*': 'Items with an asterisk (*) are non-compatible with NMOS Z80.'"
+  },
+  {
+   "id": 19,
+   "symbol": "TdCr(M1f)",
+   "bound": "max",
+   "values": {
+    "6": 80,
+    "8": 70
+   }
+  },
+  {
+   "id": 20,
+   "symbol": "TdCr(M1r)",
+   "bound": "max",
+   "values": {
+    "6": 80,
+    "8": 70
+   }
+  },
+  {
+   "id": 21,
+   "symbol": "TdCr(RFSHf)",
+   "bound": "max",
+   "values": {
+    "6": 110,
+    "8": 95
+   }
+  },
+  {
+   "id": 22,
+   "symbol": "TdCr(RFSHr)",
+   "bound": "max",
+   "values": {
+    "6": 100,
+    "8": 85
+   }
+  },
+  {
+   "id": 23,
+   "symbol": "TdCf(RDr)",
+   "bound": "max",
+   "values": {
+    "6": 70,
+    "8": 60
+   }
+  },
+  {
+   "id": 24,
+   "symbol": "TdCr(RDf)",
+   "bound": "max",
+   "values": {
+    "6": 70,
+    "8": 60
+   }
+  },
+  {
+   "id": 25,
+   "symbol": "TsD(Cf)",
+   "bound": "min",
+   "values": {
+    "6": 40,
+    "8": 30
+   }
+  },
+  {
+   "id": 26,
+   "symbol": "TdA(IORQf)",
+   "bound": "min",
+   "values": {
+    "6": 110,
+    "8": 75
+   }
+  },
+  {
+   "id": 27,
+   "symbol": "TdCr(IORQf)",
+   "bound": "max",
+   "values": {
+    "6": 65,
+    "8": 55
+   }
+  },
+  {
+   "id": 28,
+   "symbol": "TdCf(IORQr)",
+   "bound": "max",
+   "values": {
+    "6": 70,
+    "8": 60
+   }
+  },
+  {
+   "id": 29,
+   "symbol": "TdD(WRf)",
+   "bound": "min",
+   "values": {
+    "6": 25,
+    "8": 5
+   }
+  },
+  {
+   "id": 30,
+   "symbol": "TdCf(WRf)",
+   "bound": "max",
+   "values": {
+    "6": 70,
+    "8": 60
+   }
+  },
+  {
+   "id": 31,
+   "symbol": "TwWR",
+   "bound": "min",
+   "values": {
+    "6": 135,
+    "8": 100
+   }
+  },
+  {
+   "id": 32,
+   "symbol": "TdCf(WRr)",
+   "bound": "max",
+   "values": {
+    "6": 70,
+    "8": 60
+   }
+  },
+  {
+   "id": 33,
+   "symbol": "TdD(WRf)",
+   "bound": "min",
+   "values": {
+    "6": -55,
+    "8": -55
+   }
+  },
+  {
+   "id": 34,
+   "symbol": "TdCr(WRf)",
+   "bound": "max",
+   "values": {
+    "6": 60,
+    "8": 55
+   }
+  },
+  {
+   "id": 35,
+   "symbol": "TdWRr(D)",
+   "bound": "min",
+   "values": {
+    "6": 30,
+    "8": 15
+   }
+  },
+  {
+   "id": 36,
+   "symbol": "TdCf(HALT)",
+   "bound": "max",
+   "values": {
+    "6": 260,
+    "8": 225
+   }
+  },
+  {
+   "id": 37,
+   "symbol": "TwNMI",
+   "bound": "min",
+   "values": {
+    "6": 70,
+    "8": 60
+   }
+  },
+  {
+   "id": 38,
+   "symbol": "TsBUSREQ(Cr)",
+   "bound": "min",
+   "values": {
+    "6": 50,
+    "8": 40
+   }
+  },
+  {
+   "id": 39,
+   "symbol": "ThBUSREQ(Cr)",
+   "bound": "min",
+   "values": {
+    "6": 10,
+    "8": 10
+   },
+   "note": "marked '*': 'Items with an asterisk (*) are non-compatible with NMOS Z80.'"
+  },
+  {
+   "id": 40,
+   "symbol": "TdCr(BUSACKf)",
+   "bound": "max",
+   "values": {
+    "6": 90,
+    "8": 80
+   }
+  },
+  {
+   "id": 41,
+   "symbol": "TdCf(BUSACKr)",
+   "bound": "max",
+   "values": {
+    "6": 90,
+    "8": 80
+   }
+  },
+  {
+   "id": 42,
+   "symbol": "TdCr(Dz)",
+   "bound": "max",
+   "values": {
+    "6": 80,
+    "8": 70
+   }
+  },
+  {
+   "id": 43,
+   "symbol": "TdCr(CTz)",
+   "bound": "max",
+   "values": {
+    "6": 70,
+    "8": 60
+   }
+  },
+  {
+   "id": 44,
+   "symbol": "TdCr(Az)",
+   "bound": "max",
+   "values": {
+    "6": 80,
+    "8": 70
+   }
+  },
+  {
+   "id": 45,
+   "symbol": "TdCTr(A)",
+   "bound": "min",
+   "values": {
+    "6": 35,
+    "8": 20
+   },
+   "source_symbol": "TdCr(A)"
+  },
+  {
+   "id": 46,
+   "symbol": "TsRESET(Cr)",
+   "bound": "min",
+   "values": {
+    "6": 60,
+    "8": 45
+   }
+  },
+  {
+   "id": 47,
+   "symbol": "ThRESET(Cr)",
+   "bound": "min",
+   "values": {
+    "6": 10,
+    "8": 10
+   },
+   "note": "marked '*': 'Items with an asterisk (*) are non-compatible with NMOS Z80.'"
+  },
+  {
+   "id": 48,
+   "symbol": "TsINTf(Cr)",
+   "bound": "min",
+   "values": {
+    "6": 70,
+    "8": 55
+   }
+  },
+  {
+   "id": 49,
+   "symbol": "ThINTr(Cr)",
+   "bound": "min",
+   "values": {
+    "6": 10,
+    "8": 10
+   },
+   "note": "marked '*': 'Items with an asterisk (*) are non-compatible with NMOS Z80.'",
+   "source_symbol": "TsINTr(Cr)"
+  },
+  {
+   "id": 50,
+   "symbol": "TdM1f(IORQf)",
+   "bound": "min",
+   "values": {
+    "6": 365,
+    "8": 270
+   },
+   "note": "marked '*': 'Items with an asterisk (*) are non-compatible with NMOS Z80.'"
+  },
+  {
+   "id": 51,
+   "symbol": "TdCf(IORQf)",
+   "bound": "max",
+   "values": {
+    "6": 70,
+    "8": 60
+   }
+  },
+  {
+   "id": 52,
+   "symbol": "TdCr(IORQr)",
+   "bound": "max",
+   "values": {
+    "6": 70,
+    "8": 60
+   }
+  },
+  {
+   "id": 53,
+   "symbol": "TdCf(D)",
+   "bound": "max",
+   "values": {
+    "6": 130,
+    "8": 115
+   }
+  }
+ ]
+}

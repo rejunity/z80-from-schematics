@@ -1,0 +1,740 @@
+{
+ "schema_version": 1,
+ "part": "Z80 CPU / Z80A CPU / Z80B CPU (Z8400, NMOS)",
+ "technology": "NMOS",
+ "role": "primary",
+ "nomenclature": "zilog_numbered",
+ "source": {
+  "title": "1981 Zilog Microcomputer Components Data Book",
+  "publisher": "Zilog",
+  "date": "1981",
+  "url": "http://bitsavers.trailing-edge.com/components/zilog/_dataBooks/1981_Zilog_Microcomputer_Components_Data_Book.pdf",
+  "sha256": "96a89c479bf7298d21b4e43bb25001f93df5c7d0b4cc6cec947fe0aa1bddc19c",
+  "pdf_pages": [
+   31,
+   32
+  ],
+  "printed_pages": [
+   23,
+   24
+  ],
+  "retrieved": "2026-10-29",
+  "transcription": "by hand from the page images"
+ },
+ "ac_test_conditions": {
+  "VIH_V": 2.0,
+  "VIL_V": 0.8,
+  "VOH_V": 2.0,
+  "VOL_V": 0.8
+ },
+ "formula_assumption": {
+  "TrC_ns": 20,
+  "TfC_ns": 20,
+  "text": "Calculated values above assumed TrC = TfC = 20 ns."
+ },
+ "grades": [
+  {
+   "key": "2.5",
+   "label": "Z80 CPU"
+  },
+  {
+   "key": "4",
+   "label": "Z80A CPU"
+  },
+  {
+   "key": "6",
+   "label": "Z80B CPU"
+  }
+ ],
+ "parameters": [
+  {
+   "id": 1,
+   "symbol": "TcC",
+   "bound": "min",
+   "values": {
+    "2.5": 400,
+    "4": 250,
+    "6": 165
+   },
+   "starred": [
+    "2.5",
+    "4",
+    "6"
+   ],
+   "formula": {
+    "expr": "TwCh + TwCl + TrC + TfC",
+    "offset_ns": {
+     "2.5": 0,
+     "4": 0,
+     "6": 0
+    }
+   }
+  },
+  {
+   "id": 2,
+   "symbol": "TwCh",
+   "bound": "min",
+   "values": {
+    "2.5": 180,
+    "4": 110,
+    "6": 65
+   },
+   "starred": [
+    "2.5",
+    "4",
+    "6"
+   ],
+   "max_note": "Although static by design, TwCh of greater than 200 us is not guaranteed (footnote 2).",
+   "max_values": {
+    "2.5": 200000,
+    "4": 200000,
+    "6": 200000
+   }
+  },
+  {
+   "id": 3,
+   "symbol": "TwCl",
+   "bound": "min",
+   "values": {
+    "2.5": 180,
+    "4": 110,
+    "6": 65
+   },
+   "max_values": {
+    "2.5": 2000,
+    "4": 2000,
+    "6": 2000
+   }
+  },
+  {
+   "id": 4,
+   "symbol": "TfC",
+   "bound": "max",
+   "values": {
+    "2.5": 30,
+    "4": 30,
+    "6": 20
+   }
+  },
+  {
+   "id": 5,
+   "symbol": "TrC",
+   "bound": "max",
+   "values": {
+    "2.5": 30,
+    "4": 30,
+    "6": 20
+   }
+  },
+  {
+   "id": 6,
+   "symbol": "TdCr(A)",
+   "bound": "max",
+   "values": {
+    "2.5": 145,
+    "4": 110,
+    "6": 90
+   }
+  },
+  {
+   "id": 7,
+   "symbol": "TdA(MREQf)",
+   "bound": "min",
+   "values": {
+    "2.5": 125,
+    "4": 65,
+    "6": 35
+   },
+   "starred": [
+    "2.5",
+    "4",
+    "6"
+   ],
+   "formula": {
+    "expr": "TwCh + TfC",
+    "offset_ns": {
+     "2.5": -75,
+     "4": -65,
+     "6": -50
+    }
+   }
+  },
+  {
+   "id": 8,
+   "symbol": "TdCf(MREQf)",
+   "bound": "max",
+   "values": {
+    "2.5": 100,
+    "4": 85,
+    "6": 70
+   }
+  },
+  {
+   "id": 9,
+   "symbol": "TdCr(MREQr)",
+   "bound": "max",
+   "values": {
+    "2.5": 100,
+    "4": 85,
+    "6": 70
+   }
+  },
+  {
+   "id": 10,
+   "symbol": "TwMREQh",
+   "bound": "min",
+   "values": {
+    "2.5": 170,
+    "4": 110,
+    "6": 65
+   },
+   "starred": [
+    "2.5",
+    "4",
+    "6"
+   ],
+   "formula": {
+    "expr": "TwCh + TfC",
+    "offset_ns": {
+     "2.5": -30,
+     "4": -20,
+     "6": -20
+    }
+   }
+  },
+  {
+   "id": 11,
+   "symbol": "TwMREQl",
+   "bound": "min",
+   "values": {
+    "2.5": 360,
+    "4": 220,
+    "6": 135
+   },
+   "starred": [
+    "2.5",
+    "4",
+    "6"
+   ],
+   "formula": {
+    "expr": "TcC",
+    "offset_ns": {
+     "2.5": -40,
+     "4": -30,
+     "6": -30
+    }
+   }
+  },
+  {
+   "id": 12,
+   "symbol": "TdCf(MREQr)",
+   "bound": "max",
+   "values": {
+    "2.5": 100,
+    "4": 85,
+    "6": 70
+   }
+  },
+  {
+   "id": 13,
+   "symbol": "TdCf(RDf)",
+   "bound": "max",
+   "values": {
+    "2.5": 130,
+    "4": 95,
+    "6": 80
+   }
+  },
+  {
+   "id": 14,
+   "symbol": "TdCr(RDr)",
+   "bound": "max",
+   "values": {
+    "2.5": 100,
+    "4": 85,
+    "6": 70
+   }
+  },
+  {
+   "id": 15,
+   "symbol": "TsD(Cr)",
+   "bound": "min",
+   "values": {
+    "2.5": 50,
+    "4": 35,
+    "6": 30
+   }
+  },
+  {
+   "id": 16,
+   "symbol": "ThD(RDr)",
+   "bound": "min",
+   "values": {
+    "2.5": 0,
+    "4": 0,
+    "6": 0
+   }
+  },
+  {
+   "id": 17,
+   "symbol": "TsWAIT(Cf)",
+   "bound": "min",
+   "values": {
+    "2.5": 70,
+    "4": 70,
+    "6": 60
+   }
+  },
+  {
+   "id": 18,
+   "symbol": "ThWAIT(Cf)",
+   "bound": "min",
+   "values": {
+    "2.5": 0,
+    "4": 0,
+    "6": 0
+   }
+  },
+  {
+   "id": 19,
+   "symbol": "TdCr(M1f)",
+   "bound": "max",
+   "values": {
+    "2.5": 130,
+    "4": 100,
+    "6": 80
+   }
+  },
+  {
+   "id": 20,
+   "symbol": "TdCr(M1r)",
+   "bound": "max",
+   "values": {
+    "2.5": 130,
+    "4": 100,
+    "6": 80
+   }
+  },
+  {
+   "id": 21,
+   "symbol": "TdCr(RFSHf)",
+   "bound": "max",
+   "values": {
+    "2.5": 180,
+    "4": 130,
+    "6": 110
+   }
+  },
+  {
+   "id": 22,
+   "symbol": "TdCr(RFSHr)",
+   "bound": "max",
+   "values": {
+    "2.5": 150,
+    "4": 120,
+    "6": 100
+   }
+  },
+  {
+   "id": 23,
+   "symbol": "TdCf(RDr)",
+   "bound": "max",
+   "values": {
+    "2.5": 110,
+    "4": 85,
+    "6": 70
+   }
+  },
+  {
+   "id": 24,
+   "symbol": "TdCr(RDf)",
+   "bound": "max",
+   "values": {
+    "2.5": 100,
+    "4": 85,
+    "6": 70
+   }
+  },
+  {
+   "id": 25,
+   "symbol": "TsD(Cf)",
+   "bound": "min",
+   "values": {
+    "2.5": 60,
+    "4": 50,
+    "6": 40
+   }
+  },
+  {
+   "id": 26,
+   "symbol": "TdA(IORQf)",
+   "bound": "min",
+   "values": {
+    "2.5": 320,
+    "4": 180,
+    "6": 110
+   },
+   "starred": [
+    "2.5",
+    "4",
+    "6"
+   ],
+   "formula": {
+    "expr": "TcC",
+    "offset_ns": {
+     "2.5": -80,
+     "4": -70,
+     "6": -55
+    }
+   }
+  },
+  {
+   "id": 27,
+   "symbol": "TdCr(IORQf)",
+   "bound": "max",
+   "values": {
+    "2.5": 90,
+    "4": 75,
+    "6": 65
+   }
+  },
+  {
+   "id": 28,
+   "symbol": "TdCf(IORQr)",
+   "bound": "max",
+   "values": {
+    "2.5": 110,
+    "4": 85,
+    "6": 70
+   }
+  },
+  {
+   "id": 29,
+   "symbol": "TdD(WRf)",
+   "bound": "min",
+   "values": {
+    "2.5": 190,
+    "4": 80,
+    "6": 25
+   },
+   "starred": [
+    "2.5",
+    "4",
+    "6"
+   ],
+   "formula": {
+    "expr": "TcC",
+    "offset_ns": {
+     "2.5": -210,
+     "4": -170,
+     "6": -140
+    }
+   }
+  },
+  {
+   "id": 30,
+   "symbol": "TdCf(WRf)",
+   "bound": "max",
+   "values": {
+    "2.5": 90,
+    "4": 80,
+    "6": 70
+   }
+  },
+  {
+   "id": 31,
+   "symbol": "TwWR",
+   "bound": "min",
+   "values": {
+    "2.5": 360,
+    "4": 220,
+    "6": 135
+   },
+   "starred": [
+    "2.5",
+    "4",
+    "6"
+   ],
+   "formula": {
+    "expr": "TcC",
+    "offset_ns": {
+     "2.5": -40,
+     "4": -30,
+     "6": -30
+    }
+   }
+  },
+  {
+   "id": 32,
+   "symbol": "TdCf(WRr)",
+   "bound": "max",
+   "values": {
+    "2.5": 100,
+    "4": 80,
+    "6": 70
+   }
+  },
+  {
+   "id": 33,
+   "symbol": "TdD(WRf)",
+   "bound": "min",
+   "values": {
+    "2.5": 20,
+    "4": -10,
+    "6": -55
+   },
+   "starred": [
+    "2.5",
+    "4",
+    "6"
+   ],
+   "formula": {
+    "expr": "TwCl + TrC",
+    "offset_ns": {
+     "2.5": -180,
+     "4": -140,
+     "6": -140
+    }
+   }
+  },
+  {
+   "id": 34,
+   "symbol": "TdCr(WRf)",
+   "bound": "max",
+   "values": {
+    "2.5": 80,
+    "4": 65,
+    "6": 60
+   }
+  },
+  {
+   "id": 35,
+   "symbol": "TdWRr(D)",
+   "bound": "min",
+   "values": {
+    "2.5": 120,
+    "4": 60,
+    "6": 30
+   },
+   "starred": [
+    "2.5",
+    "4",
+    "6"
+   ],
+   "formula": {
+    "expr": "TwCl + TrC",
+    "offset_ns": {
+     "2.5": -80,
+     "4": -70,
+     "6": -55
+    }
+   }
+  },
+  {
+   "id": 36,
+   "symbol": "TdCf(HALT)",
+   "bound": "max",
+   "values": {
+    "2.5": 300,
+    "4": 300,
+    "6": 260
+   }
+  },
+  {
+   "id": 37,
+   "symbol": "TwNMI",
+   "bound": "min",
+   "values": {
+    "2.5": 80,
+    "4": 80,
+    "6": 70
+   }
+  },
+  {
+   "id": 38,
+   "symbol": "TsBUSREQ(Cr)",
+   "bound": "min",
+   "values": {
+    "2.5": 80,
+    "4": 50,
+    "6": 50
+   }
+  },
+  {
+   "id": 39,
+   "symbol": "ThBUSREQ(Cr)",
+   "bound": "min",
+   "values": {
+    "2.5": 0,
+    "4": 0,
+    "6": 0
+   }
+  },
+  {
+   "id": 40,
+   "symbol": "TdCr(BUSACKf)",
+   "bound": "max",
+   "values": {
+    "2.5": 120,
+    "4": 100,
+    "6": 90
+   }
+  },
+  {
+   "id": 41,
+   "symbol": "TdCf(BUSACKr)",
+   "bound": "max",
+   "values": {
+    "2.5": 110,
+    "4": 100,
+    "6": 90
+   }
+  },
+  {
+   "id": 42,
+   "symbol": "TdCr(Dz)",
+   "bound": "max",
+   "values": {
+    "2.5": 90,
+    "4": 90,
+    "6": 80
+   }
+  },
+  {
+   "id": 43,
+   "symbol": "TdCr(CTz)",
+   "bound": "max",
+   "values": {
+    "2.5": 110,
+    "4": 80,
+    "6": 70
+   }
+  },
+  {
+   "id": 44,
+   "symbol": "TdCr(Az)",
+   "bound": "max",
+   "values": {
+    "2.5": 110,
+    "4": 90,
+    "6": 80
+   }
+  },
+  {
+   "id": 45,
+   "symbol": "TdCTr(A)",
+   "bound": "min",
+   "values": {
+    "2.5": 160,
+    "4": 80,
+    "6": 35
+   },
+   "starred": [
+    "2.5",
+    "4",
+    "6"
+   ],
+   "formula": {
+    "expr": "TwCl + TrC",
+    "offset_ns": {
+     "2.5": -40,
+     "4": -50,
+     "6": -50
+    }
+   }
+  },
+  {
+   "id": 46,
+   "symbol": "TsRESET(Cr)",
+   "bound": "min",
+   "values": {
+    "2.5": 90,
+    "4": 60,
+    "6": 60
+   }
+  },
+  {
+   "id": 47,
+   "symbol": "ThRESET(Cr)",
+   "bound": "min",
+   "values": {
+    "2.5": 0,
+    "4": 0,
+    "6": 0
+   }
+  },
+  {
+   "id": 48,
+   "symbol": "TsINTf(Cr)",
+   "bound": "min",
+   "values": {
+    "2.5": 80,
+    "4": 80,
+    "6": 70
+   }
+  },
+  {
+   "id": 49,
+   "symbol": "ThINTr(Cr)",
+   "bound": "min",
+   "values": {
+    "2.5": 0,
+    "4": 0,
+    "6": 0
+   }
+  },
+  {
+   "id": 50,
+   "symbol": "TdM1f(IORQf)",
+   "bound": "min",
+   "values": {
+    "2.5": 920,
+    "4": 565,
+    "6": 365
+   },
+   "starred": [
+    "2.5",
+    "4",
+    "6"
+   ],
+   "formula": {
+    "expr": "2*TcC + TwCh + TfC",
+    "offset_ns": {
+     "2.5": -80,
+     "4": -65,
+     "6": -50
+    }
+   }
+  },
+  {
+   "id": 51,
+   "symbol": "TdCf(IORQf)",
+   "bound": "max",
+   "values": {
+    "2.5": 110,
+    "4": 85,
+    "6": 70
+   }
+  },
+  {
+   "id": 52,
+   "symbol": "TdCr(IORQr)",
+   "bound": "max",
+   "values": {
+    "2.5": 100,
+    "4": 85,
+    "6": 70
+   }
+  },
+  {
+   "id": 53,
+   "symbol": "TdCf(D)",
+   "bound": "max",
+   "values": {
+    "2.5": 230,
+    "4": 150,
+    "6": 130
+   }
+  }
+ ]
+}
