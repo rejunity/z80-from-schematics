@@ -1,10 +1,10 @@
 # perfectz80's trace of tests/traces/prog_rnd_02.hex: perfectz80_runner's output (phase addr data_o data_i mreq iorq rd wr m1 rfsh halt)
 # generator: make record_pz80_traces (scripts/compare_signal_timing.py --record)
-# rz80: f88c75e
+# rz80: 8830848
 # program-sha1: 2e6a71075aa0067a8bbc4f615917cb5445d0a545
 # events-sha1: none
 # phases: 201
-# harness: dcc3db1ca1398508
+# harness: 18e042e72e7f14b7
 0 0000 00 00 1 1 1 1 1 1 1
 1 0000 00 00 1 1 1 1 0 1 1
 2 0000 00 ed 0 1 0 1 0 1 1

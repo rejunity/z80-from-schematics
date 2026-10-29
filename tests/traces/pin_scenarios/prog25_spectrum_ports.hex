@@ -1,0 +1,53 @@
+# ZX Spectrum 48K, the ULA's own ports: prog24_spectrum_contend.hex with
+# the ULA's count started elsewhere (prog25_spectrum_ports.machine), so
+# that the OUTs to its even ports meet its contention pattern in their
+# second T-state, the one it holds for its own I/O (N:1 C:3, C:1 C:3).
+@0000
+31 00 80           # LD SP,8000h      the stack in contended RAM
+3E 5B              # LD A,5Bh
+01 FF 7F           # LD BC,7FFFh
+ED 79              # OUT (C),A        port 7FFF: contended high byte, odd
+3E 10              # LD A,10h
+D3 FE              # OUT (FEh),A      port 10FE: even, uncontended high byte
+3E 5B              # LD A,5Bh
+D3 FE              # OUT (FEh),A      port 5BFE: contended high byte, even
+01 FF 00           # LD BC,00FFh
+ED 79              # OUT (C),A        port 00FF: odd, uncontended
+01 FE 7F           # LD BC,7FFEh
+ED 79              # OUT (C),A        port 7FFE: contended high byte, even
+00                 # NOP              (the next ones meet the ULA's count
+ED 79              # OUT (C),A         at other points of its pattern)
+3E 10              # LD A,10h
+D3 FE 00           # OUT (FEh),A; NOP port 10FE again, four times
+D3 FE 00           # OUT (FEh),A; NOP
+D3 FE 00           # OUT (FEh),A; NOP
+D3 FE              # OUT (FEh),A
+21 00 40           # LD HL,4000h
+3E 5A              # LD A,5Ah
+77                 # LD (HL),A        contended write
+7E                 # LD A,(HL)        contended read
+34                 # INC (HL)         read, internal T with HL on the bus, write
+23                 # INC HL
+3A 00 40           # LD A,(4000h)     A = 5Bh
+32 01 40           # LD (4001h),A
+11 10 40           # LD DE,4010h
+21 00 40           # LD HL,4000h
+01 08 00           # LD BC,0008h
+ED B0              # LDIR             contended reads and writes
+E5                 # PUSH HL
+D5                 # PUSH DE
+C5                 # PUSH BC
+C3 00 50           # JP 5000h         run from contended memory
+@0080
+F5                 # PUSH AF
+76                 # HALT
+@5000
+3C                 # INC A
+3C                 # INC A
+00                 # NOP
+21 00 60           # LD HL,6000h
+35                 # DEC (HL)
+7E                 # LD A,(HL)
+32 02 40           # LD (4002h),A
+E5                 # PUSH HL
+C3 80 00           # JP 0080h

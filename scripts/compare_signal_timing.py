@@ -12,7 +12,12 @@
 # If a `<prog>.events` sidecar exists alongside the .hex, every harness
 # applies its per-phase pin events: the C tracegen and perfectz80_runner
 # read the file, the RTL testbenches (iverilog, Verilator, the netlist)
-# take it as per-pin +<pin>_lo=N +<pin>_hi=M plusargs.
+# take it as per-pin +<pin>_lo=N +<pin>_hi=M plusargs. A `<prog>.machine`
+# sidecar puts the logic of a machine around the CPU -- the ZX Spectrum
+# 48K's ULA holding CLK high through contended accesses, the ZX80 /
+# ZX81's display tricks and NMI / WAIT generators -- into every harness
+# but Verilator's (scripts/perfectz80_runner.c describes the model; the
+# iverilog testbenches take it as +machine / +mt0 / +mnmi).
 #
 # perfectz80's side is recorded: tests/traces/pz80/<prog>.txt holds
 # perfectz80_runner's output for the program, its .events and the phase
@@ -201,6 +206,33 @@ def parse_events_to_plusargs(events_path):
             args.append(f"+{pin}_hi={hi[pin]}")
     return args
 
+MACHINES = {"spectrum48": 1, "zx81": 2}
+
+def machine_of(prog):
+    m = os.path.splitext(prog)[0] + ".machine"
+    return m if os.path.exists(m) else ""
+
+def parse_machine_to_plusargs(machine):
+    """<prog>.machine -> the iverilog testbenches' plusargs"""
+    if not machine:
+        return []
+    for line in open(machine):
+        f = line.split()
+        if not f or f[0].startswith("#"):
+            continue
+        if f[0] == "spectrum48" and len(f) >= 2:
+            return ["+machine=1", f"+mt0={int(f[1])}"]
+        if f[0] == "zx81" and len(f) >= 3:
+            return ["+machine=2", f"+mnmi={int(f[1])}", f"+mt0={int(f[2])}"]
+        break
+    raise SystemExit(f"{machine}: not a machine line (spectrum48 <t> | zx81 <nmi> <t>)")
+
+def side_args(events, machine):
+    """the C harnesses' optional arguments: [events|-] [machine]"""
+    if machine:
+        return [events or "-", machine]
+    return [events] if events else []
+
 def hex_for_readmemh(prog):
     """$readmemh (iverilog) accepts only // and /* */ comments, but the
     trace programs use '#' / ';' comment lines (which tracegen.c,
@@ -250,6 +282,8 @@ def recording_wants(prog, events, pz_phases, hid):
     """the header a recording of this run must carry"""
     want = {"program-sha1": sha1_of(prog), "events-sha1": sha1_of(events),
             "phases": str(pz_phases)}
+    if machine_of(prog):
+        want["machine-sha1"] = sha1_of(machine_of(prog))
     if hid is not None:
         want["harness"] = hid
     return want
@@ -286,6 +320,7 @@ def write_recording(prog, events, pz_phases, hid, text, command):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     head = [f"# perfectz80's trace of {os.path.relpath(prog, ROOT)}"
             + (f" with {os.path.relpath(events, ROOT)}" if events else "")
+            + (f" in {os.path.relpath(machine_of(prog), ROOT)}" if machine_of(prog) else "")
             + ": perfectz80_runner's output (phase addr data_o data_i mreq iorq rd wr m1 rfsh halt)",
             f"# generator: {command}",
             f"# rz80: {git_head()}"]
@@ -299,13 +334,14 @@ def events_of(prog):
     return events if os.path.exists(events) else ""
 
 def pz80_live(prog, phases, events):
-    return run([PZ80, prog, str(phases + PZ_OFFSET)] + ([events] if events else []))
+    return run([PZ80, prog, str(phases + PZ_OFFSET)] + side_args(events, machine_of(prog)))
 
 def compare(prog, phases, source="c", mode="", hid=None):
     events = events_of(prog)
-    event_plusargs = parse_events_to_plusargs(events)
+    machine = machine_of(prog)
+    event_plusargs = parse_events_to_plusargs(events) + parse_machine_to_plusargs(machine)
     if source == "c":
-        tg_argv = [TRACEGEN, prog, str(phases)] + ([events] if events else [])
+        tg_argv = [TRACEGEN, prog, str(phases)] + side_args(events, machine)
         emit_label = "C"
     elif source == "iverilog":
         # iverilog testbench accepts +<pin>_lo=N +<pin>_hi=M plusargs
@@ -317,7 +353,10 @@ def compare(prog, phases, source="c", mode="", hid=None):
         emit_label = "iverilog RTL"
     elif source == "verilator":
         # sim_main.cpp accepts the same +<pin>_lo / +<pin>_hi argv form
-        # as the iverilog testbenches.
+        # as the iverilog testbenches; it has no machine models.
+        if machine:
+            print(f"  {os.path.basename(prog)}: FAIL: the Verilator harness has no machine ({os.path.basename(machine)})")
+            return False
         tg_argv = [VERILATOR_SIM, prog, str(phases)] + event_plusargs
         emit_label = "Verilator RTL"
     elif source == "netlist":
@@ -341,7 +380,7 @@ def compare(prog, phases, source="c", mode="", hid=None):
     g = parse_pz80(text)
     g = g[PZ_OFFSET:]                 # drop pz80's pre-M1 idle phase(s)
     n = min(len(c), len(g))
-    suffix = " + events" if events else ""
+    suffix = (" + events" if events else "") + (" + machine" if machine else "")
     if n == 0 or len(c) != len(g):
         print(f"  {name}: FAIL ({len(c)} phases from {source}, {len(g)} from perfectz80)"); return False
 

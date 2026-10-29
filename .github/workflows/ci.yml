@@ -185,11 +185,13 @@ jobs:
         # included; the iverilog RTL runs them in rtl-tests.
         run: make perfectz80
       - name: Pin-scenario programs vs perfectz80's recorded traces — C path
-        # 15 trace programs (prog9..prog23) that drive INT / NMI / WAIT /
-        # BUSREQ / RESET via the .events sidecar; every phase's control
-        # pins, address and data under WR must match the die.
+        # 19 trace programs (prog9..prog27) that drive INT / NMI / WAIT /
+        # BUSREQ / RESET via the .events sidecar, or run inside a machine
+        # via the .machine one (the ZX Spectrum's ULA holding the clock,
+        # the ZX80 / ZX81's display tricks, NMI and WAIT); every phase's
+        # control pins, address and data under WR must match the die.
         run: make pin_scenarios
-      - name: perfectz80 live against its recorded traces (29 programs)
+      - name: perfectz80 live against its recorded traces (33 programs)
         # tests/traces/pz80/: perfectz80 must print every recording byte
         # for byte (a stale or changed one fails; make record_pz80_traces)
         run: make verify_pz80_traces
@@ -331,7 +333,7 @@ jobs:
   # =====================================================================
 
   librelane-netlist:
-    name: LibreLane gate-level sim vs perfectz80's recordings (14 programs + 15 pin scenarios)
+    name: LibreLane gate-level sim vs perfectz80's recordings (14 programs + 19 pin scenarios)
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -387,9 +389,9 @@ jobs:
         run: make perfectz80_netlist
 
       - name: Pin-scenarios vs perfectz80's recorded traces — gate-level netlist
-        # The 15 pin-scenario programs (prog9..prog23) driven through the
-        # synthesised sky130 netlist via tb_z80_netlist.v's .events
-        # plusarg support; gated like the C and iverilog paths.
+        # The 19 pin-scenario programs (prog9..prog27) driven through the
+        # synthesised sky130 netlist via tb_z80_netlist.v's .events and
+        # .machine plusargs; gated like the C and iverilog paths.
         run: make pin_scenarios_netlist
 
       - name: Upload synthesised netlist artifact

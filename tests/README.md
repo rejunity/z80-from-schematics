@@ -57,8 +57,8 @@ job. What each harness accepts, and why:
 | BASIC ROMs (NASCOM 4.7c, 1K Tiny BASIC) | `tests/basic/` | `make basic_c_tests`, `basic_rtl_tests` | `basic-c-tests`, `basic-rtl-tests` | ~1 s / ~1 min | 4 / 4 subtests |
 | C ↔ iverilog ↔ Verilator, every phase | `tests/traces/` | `make compare` | `parity-tests` | ~10 s | 14 / 14 programs identical |
 | Trace programs vs the die's recorded traces | `tests/traces/`, `tests/traces/pz80/` | `make perfectz80`, `perfectz80_rtl` | `parity-tests`, `rtl-tests` | ~5 s each | 14 / 14 |
-| Pin scenarios vs the die's recorded traces | `tests/traces/pin_scenarios/`, `tests/traces/pz80/` | `make pin_scenarios`, `pin_scenarios_rtl` | `parity-tests`, `rtl-tests` | ~5 s each | 15 / 15 |
-| perfectz80 live against those 29 recordings | `tests/traces/pz80/` | `make verify_pz80_traces` | `parity-tests` | ~5 s | 29 / 29 identical |
+| Pin scenarios vs the die's recorded traces | `tests/traces/pin_scenarios/`, `tests/traces/pz80/` | `make pin_scenarios`, `pin_scenarios_rtl` | `parity-tests`, `rtl-tests` | ~5 s each | 19 / 19 |
+| perfectz80 live against those 33 recordings | `tests/traces/pz80/` | `make verify_pz80_traces` | `parity-tests` | ~10 s | 33 / 33 identical |
 | The pin sweep vs the die's recordings, F, WZ and Q included (51,126 cases; C model = RTL) | `tests/event_sweep/`, `scripts/event_sweep.py` | `make event_sweep_recorded` (`event_sweep`: perfectz80 live for a case not recorded) | `event-sweep` (4 shards) | ~20 min on 8 cores | 51,126 / 51,126 |
 | The pin sweep's RTL alone against the recordings, iverilog and Python only | `tests/event_sweep/pz80/` | `make event_sweep_rtl` | `rtl-tests` (a 1/32 slice, 1,598 cases) | ~2 min on 8 cores | 1,598 / 1,598 |
 | perfectz80 live against every pin-sweep recording | `tests/event_sweep/pz80/` | `make event_sweep_verify` | `pz80-recordings` (8 shards; main, nightly), `event-sweep` (50 a push) | ~1.5 h on 8 cores | 77,235 / 77,235 identical |
@@ -159,18 +159,22 @@ the same format.
     `scripts/gen_random_trace_progs.py`). 400 phases each unless a
     `<prog>.phases` file asks for more (`prog9_q_banks` 1200,
     `prog10_exchange` 800).
-  - **15 pin scenarios** (`pin_scenarios/prog9_inta_im1` ...
-    `prog23_wb_irq`): each drives INT / NMI / WAIT / BUSREQ / RESET from a
+  - **19 pin scenarios** (`pin_scenarios/prog9_inta_im1` ...
+    `prog27_zx81_slow`): each drives INT / NMI / WAIT / BUSREQ / RESET from a
     `.events` sidecar (`<phase> <pin> <0|1>`), which every harness
     applies -- the RTL testbenches through per-pin `+<pin>_lo=N
-    +<pin>_hi=M` plusargs.
+    +<pin>_hi=M` plusargs -- or puts the CPU in a machine, a `.machine`
+    sidecar: the ZX Spectrum 48K's ULA holding the clock high through
+    contended accesses (`prog24`, `prog25`), the ZX80 / ZX81 handing the
+    CPU NOPs for the display file with INT on A6 (`prog26`) and the ZX81's
+    NMI and WAIT generators in SLOW mode (`prog27`).
 
 | Make target | What it diffs |
 |-------------|---------------|
 | `make compare` | C model ↔ iverilog ↔ Verilator (Verilator when `make verilator` built it): every column of every phase of the trace programs |
 | `make perfectz80` / `perfectz80_rtl` / `perfectz80_netlist` | the C model / the iverilog RTL / the synthesised netlist against perfectz80's recorded traces of the trace programs: control pins and address every half-cycle, data wherever WR is low on both sides |
 | `make pin_scenarios` / `pin_scenarios_rtl` / `pin_scenarios_netlist` | the same on the pin scenarios |
-| `make verify_pz80_traces` | perfectz80 live against all 29 recordings, byte for byte |
+| `make verify_pz80_traces` | perfectz80 live against all 33 recordings, byte for byte |
 | `make record_pz80_traces` | records them again (after a change to a program, its `.events` or perfectz80's harness) |
 
 perfectz80's side is its recorded trace of each program,
@@ -312,7 +316,7 @@ perfectz80 live and fail unless it prints every recording byte for byte.
 
 | Recording | What perfectz80 printed | Compared by | Kept true by |
 |-----------|-------------------------|-------------|--------------|
-| `tests/traces/pz80/<prog>.txt` (29 files, 325 KB of text) | `perfectz80_runner`'s trace of each trace program and pin scenario, with its `.events` and phase count: `phase addr data_o data_i mreq iorq rd wr m1 rfsh halt` per half-cycle | `make perfectz80`, `perfectz80_rtl`, `perfectz80_netlist`, `pin_scenarios*`, `luts_netlist` | `make verify_pz80_traces` (`parity-tests`, every push) |
+| `tests/traces/pz80/<prog>.txt` (33 files, 616 KB of text) | `perfectz80_runner`'s trace of each trace program and pin scenario, with its `.events`, `.machine` and phase count: `phase addr data_o data_i mreq iorq rd wr m1 rfsh halt` per half-cycle | `make perfectz80`, `perfectz80_rtl`, `perfectz80_netlist`, `pin_scenarios*`, `luts_netlist` | `make verify_pz80_traces` (`parity-tests`, every push) |
 | `tests/event_sweep/pz80/<group>.txt.xz` (31 files, 4.9 MB) | `event_sweep_pz80`'s trace of every case of the pin sweep: the pins, the pads driven, F, WZ and Q every half-cycle; 77,235 traces | `make event_sweep_recorded`, `event_sweep_rtl` | `make event_sweep_verify`: all of them in `pz80-recordings` (main, nightly), 50 in `event-sweep` (every push) |
 | `tests/fuse/silicon.expected`, with `tests.expected` | the die's final state of FUSE's 1356 cases: six differ from FUSE's values | `make fuse`, `fuse_rtl` | `make fuse_pz80` (`parity-tests`) |
 | `tests/xyflags/tests.expected.xz` | the die's F (and the rest of the final state) for the 4,061 X / Y cases | `make xyflags`, `xyflags_rtl` | `make xyflags_pz80` (`parity-tests`) |
@@ -325,7 +329,7 @@ the sweep's carry a key per case that hashes the same, with
 `tests/event_sweep/pz80/MANIFEST.txt` naming the harness id, each file's
 cases and sha256. A change to a program, its events or the harness makes
 a recording stale, and the comparison then fails rather than run
-perfectz80. `make record_pz80` records everything again (the 29 traces in
+perfectz80. `make record_pz80` records everything again (the 33 traces in
 seconds, the sweep's 77,235 cases in about 5 CPU-hours on GitHub's runners);
 `make record_pz80_traces` the traces alone, and `scripts/event_sweep.py
 --groups <g> --record --no-cache --pz80-only` one sweep group.

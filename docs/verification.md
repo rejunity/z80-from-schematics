@@ -49,7 +49,7 @@ reference.
 | 16 | Model changes: every pin of every phase against a reference revision (3.84 G phases: ZEXDOC, prelim, z80test, trace programs, pin scenarios, random soups and buses under random pin events) | `make phase_identity` | — (run by hand) | identical |
 | 17 | cfast against the model, both frames and the single header, the same scenarios | `make cfast_identity`, `make cfast_single_identity` | `cfast-bench` (cfast_identity) | identical |
 | 18 | Bus-contract testbenches: WAIT edges, writes through Tw, INTA, decoder skew | `make bus_controls` | `rtl-tests` | PASS |
-| 19 | perfectz80 live against every recording of the die: the 29 traces, the pin sweep's 77,235 (FUSE's and the X / Y corpus's values: layers 3 and 2) | `make verify_pz80_traces`, `make event_sweep_verify` | `parity-tests`; `pz80-recordings` (main, nightly; 50 a push in `event-sweep`) | identical |
+| 19 | perfectz80 live against every recording of the die: the 33 traces, the pin sweep's 77,235 (FUSE's and the X / Y corpus's values: layers 3 and 2) | `make verify_pz80_traces`, `make event_sweep_verify` | `parity-tests`; `pz80-recordings` (main, nightly; 50 a push in `event-sweep`) | identical |
 
 Beyond `ci.yml`: `targets.yml` builds the core for every FPGA board and
 ASIC PDK and runs their simulations (main pushes, nightly); `transistor.yml`

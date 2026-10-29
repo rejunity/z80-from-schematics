@@ -1,0 +1,3 @@
+# ZX81 SLOW mode: NOPs for the display file, INT on A6, the NMI
+# generator on (its count 147 at trace line 0: the first NMI at T-state 76)
+zx81 1 147
