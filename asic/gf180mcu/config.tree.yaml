@@ -1,0 +1,17 @@
+# PDN_STYLE=tree (make PDN_STYLE=tree): the "old-school" power network --
+# two interdigitated combs, a VDD trunk down the east edge and a VSS trunk
+# down the west edge with Metal5 fingers off each and short Metal4 twigs to
+# the cells' rails -- instead of pdngen's grid. An overlay on config.yaml:
+# LibreLane reads both, this one last. The default (grid) does not read it.
+meta:
+  version: 3
+  flow: Classic
+  # LibreLane takes the flow and its substitutions from the last file that
+  # names them: config.yaml's, and the power tree after pdngen
+  substituting_steps:
+    "-OpenROAD.GlobalPlacement": RZ80.DieFloorplan
+    "+OpenROAD.GlobalPlacement": RZ80.ReleaseAnchors
+    "+OpenROAD.GeneratePDN": RZ80.PowerTree
+
+# pdngen draws only the rails; RZ80.PowerTree the rest
+PDN_CFG: dir::pdn_tree.tcl

@@ -18,7 +18,12 @@ export PYTHONPATH := $(abspath ..)$(if $(PYTHONPATH),:$(PYTHONPATH))
 
 PDK          := gf180mcuD
 SCL          := gf180mcu_fd_sc_mcu7t5v0
-CONFIG       := config.yaml
+# PDN_STYLE=tree: the "old-school" power network, two interdigitated combs
+# fed from the east (VDD) and west (VSS) edges (config.tree.yaml,
+# chip/config.tree.yaml) instead of pdngen's grid (the default)
+PDN_STYLE    ?= grid
+CONFIG       := config.yaml$(if $(filter tree,$(PDN_STYLE)), config.tree.yaml)
+CHIP_CONFIG  := chip/config.yaml$(if $(filter tree,$(PDN_STYLE)), chip/config.tree.yaml)
 LIBRELANE    ?= librelane
 LIBRELANE_ARGS ?=
 
@@ -76,7 +81,7 @@ chip:
 	rm -rf chip/macro && mkdir -p chip/macro/lib
 	cp $(addprefix $(LATEST)final/,gds/z80_top.gds lef/z80_top.lef vh/z80_top.vh nl/z80_top.nl.v pnl/z80_top.pnl.v) chip/macro/
 	for c in $(MACRO_CORNERS); do cp $(LATEST)final/lib/nom_$${c}_*/z80_top__nom_$${c}_*.lib chip/macro/lib/$$c.lib; done
-	$(LIBRELANE) --pdk $(PDK) --scl $(SCL) $(LIBRELANE_ARGS) chip/config.yaml
+	$(LIBRELANE) --pdk $(PDK) --scl $(SCL) $(LIBRELANE_ARGS) $(CHIP_CONFIG)
 
 chip_summary:
 	@../summary.py $(CHIP_LATEST)

@@ -1,0 +1,14 @@
+# PDN_STYLE=tree (make chip PDN_STYLE=tree): the chip around a z80_top
+# hardened with the power tree (config.tree.yaml). The chip's own grid
+# (pdn.tcl) stays off the macro, whose Metal5 carries the tree's fingers;
+# Metal5 straps from the core ring's east side feed the macro's VDD trunk,
+# from its west side the VSS trunk. An overlay on chip/config.yaml.
+meta:
+  version: 3
+  flow: Chip
+  substituting_steps:
+    "-OpenROAD.GeneratePDN": RZ80.PowerTreeChipObstruct
+    "+OpenROAD.GeneratePDN": RZ80.PowerTreeChip
+
+# pdn.tcl without its macro grid (no chip grid over the macro to connect)
+PDN_CFG: dir::pdn_tree.tcl

@@ -149,6 +149,50 @@ still meet the NMOS Z80's 4 MHz datasheet timing (`make pin_timing`).
 Four placement rows a bit are what routes: with three, Metal3 -- the one
 horizontal layer under the chip's grid -- overflows.
 
+## Power: grid or tree (`PDN_STYLE`)
+
+By default pdngen draws the usual power grid: Metal1 rails under the
+cells, Metal4 stripes across the core (the block's power pins), and in
+the chip Metal5 stripes over the macro. `PDN_STYLE=tree` draws the NMOS
+die's kind instead, two interdigitated combs fed from the edges where the
+Z80 has its supply pads -- +5 V east, GND west:
+
+    make -C asic/gf180mcu PDN_STYLE=tree          # the core with the tree
+    make -C asic/gf180mcu chip PDN_STYLE=tree     # its chip
+
+- core (`config.tree.yaml` on top of `config.yaml`, `pdn_tree.tcl`):
+  pdngen draws only the rails; `RZ80.PowerTree` then draws a VSS trunk
+  down the west edge and a VDD trunk down the east edge (Metal4, 10 µm,
+  the block's power pins), 5 µm Metal5 fingers off each trunk in turn
+  every 8 rows, each stopping 5 µm short of the other trunk, and short
+  Metal4 twigs every 60 µm along each finger, tying it to the rails of
+  its net nearest to it -- every rail on one finger, so fingers meet
+  only at their trunk -- and every rail's end on its own trunk;
+- chip (`chip/config.tree.yaml`, `chip/pdn_tree.tcl`): the chip's grid
+  (`pdn.tcl`, without its macro grid) stays off the macro, whose Metal5
+  carries the fingers (`RZ80.PowerTreeChipObstruct`); then Metal5 straps
+  over each trunk's ends, where the macro has no Metal5, feed the VDD
+  trunk from the core ring's east side and the VSS trunk from its west
+  side (`RZ80.PowerTreeChip`). The core ring and the pad ring stay rings.
+
+Both steps re-run PSM's connectivity check once the tree is drawn (pdngen's
+own check runs before the trunks, the power pins, exist).
+
+Measured against the grid (core RUN_2026-10-29_08-19-51 vs
+RUN_2026-10-29_01-02-51, both on an idle machine): sign-off clean, the
+chip's pins still meet the 4 MHz datasheet; worst static IR drop 7-9 mV on
+VDD and VSS at tt / ss / ff against the grid's 1.5-2 mV (OpenROAD PSM, the
+block's pins as the sources: the grid's are all its stripes, the tree's
+its two trunks); peak current 0.9 mA in a Metal1 rail (grid 0.26 mA),
+2.4 mA in a Metal5 finger. The tree's via stacks take Metal2 and Metal3
+tracks the grid leaves free: global-routing overflow 427 against 174,
+1.07x the wire length, -22.2 ns setup slack at the slow corner (grid
+-17.0) and +4.5 ns at the typical one (+5.6), and the flow takes 99 min
+against 73.
+
+Without `PDN_STYLE` (or with `grid`) the flows read only `config.yaml` /
+`chip/config.yaml`, exactly as before.
+
 ## The chip: z80_top in a pad ring
 
 `chip/` builds `z80_chip`: the hardened `z80_top` as a hard macro in a ring
