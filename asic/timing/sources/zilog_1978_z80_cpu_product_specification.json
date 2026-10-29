@@ -1,0 +1,569 @@
+{
+ "schema_version": 1,
+ "part": "Z80-CPU (NMOS)",
+ "technology": "NMOS",
+ "role": "primary (early nomenclature)",
+ "nomenclature": "early_zilog_symbols",
+ "source": {
+  "title": "Z80-CPU Product Specification",
+  "publisher": "Zilog",
+  "document": "03-0027-02",
+  "date": "1978-03",
+  "url": "http://bitsavers.trailing-edge.com/components/zilog/z80/03-0027-02_Z80_CPU_Product_Specification_Mar78.pdf",
+  "sha256": "98ef3a633edf3b1c9350c2b123e12608133b83c0ffb40233e0a2771f5293aee9",
+  "pdf_pages": [
+   6
+  ],
+  "printed_pages": [
+   6
+  ],
+  "retrieved": "2026-10-29",
+  "transcription": "by hand from the page image (Z80 page only; the Z80A page was not transcribed)"
+ },
+ "ac_test_conditions": {
+  "VIH_V": 2.0,
+  "VIL_V": 0.8,
+  "VOH_V": 2.0,
+  "VOL_V": 0.8,
+  "load_pF": 50,
+  "load_derating": "Add 10 ns delay for each 50 pF increase in load up to a maximum of 200 pF for the data bus and 100 pF for address and control lines."
+ },
+ "formula_assumption": null,
+ "grades": [
+  {
+   "key": "2.5",
+   "label": "Z80-CPU"
+  }
+ ],
+ "parameters": [
+  {
+   "id": 1,
+   "source_symbol": "tc",
+   "bound": "min",
+   "symbol": "TcC",
+   "values": {
+    "2.5": 400
+   },
+   "formula": {
+    "expr": "TwCh + TwCl + TrC + TfC",
+    "offset_ns": {
+     "2.5": 0
+    }
+   }
+  },
+  {
+   "id": 2,
+   "source_symbol": "tw(PhiH)",
+   "bound": "min",
+   "symbol": "TwCh",
+   "values": {
+    "2.5": 180
+   },
+   "max_note": "testing guarantees tw(PhiH) of 200 us maximum",
+   "max_values": {
+    "2.5": 200000
+   }
+  },
+  {
+   "id": 3,
+   "source_symbol": "tw(PhiL)",
+   "bound": "min",
+   "symbol": "TwCl",
+   "values": {
+    "2.5": 180
+   },
+   "max_values": {
+    "2.5": 2000
+   }
+  },
+  {
+   "id": 4,
+   "source_symbol": "tr,f",
+   "bound": "max",
+   "symbol": "TfC",
+   "values": {
+    "2.5": 30
+   }
+  },
+  {
+   "id": 5,
+   "source_symbol": "tr,f",
+   "bound": "max",
+   "symbol": "TrC",
+   "values": {
+    "2.5": 30
+   }
+  },
+  {
+   "id": 6,
+   "source_symbol": "tD(AD)",
+   "bound": "max",
+   "symbol": "TdCr(A)",
+   "values": {
+    "2.5": 145
+   }
+  },
+  {
+   "id": 44,
+   "source_symbol": "tF(AD)",
+   "bound": "max",
+   "symbol": "TdCr(Az)",
+   "values": {
+    "2.5": 110
+   }
+  },
+  {
+   "id": 7,
+   "source_symbol": "tacm",
+   "bound": "min",
+   "symbol": "TdA(MREQf)",
+   "values": {
+    "2.5": null
+   },
+   "formula": {
+    "expr": "TwCh + TfC",
+    "offset_ns": {
+     "2.5": -75
+    }
+   }
+  },
+  {
+   "id": 26,
+   "source_symbol": "taci",
+   "bound": "min",
+   "symbol": "TdA(IORQf)",
+   "values": {
+    "2.5": null
+   },
+   "formula": {
+    "expr": "TcC",
+    "offset_ns": {
+     "2.5": -80
+    }
+   }
+  },
+  {
+   "id": 45,
+   "source_symbol": "tca",
+   "bound": "min",
+   "symbol": "TdCTr(A)",
+   "values": {
+    "2.5": null
+   },
+   "formula": {
+    "expr": "TwCl + TrC",
+    "offset_ns": {
+     "2.5": -40
+    }
+   }
+  },
+  {
+   "id": null,
+   "source_symbol": "tcaf",
+   "bound": "min",
+   "note": "Address Stable From RD or WR During Float (no numbered successor)",
+   "values": {
+    "2.5": null
+   },
+   "formula": {
+    "expr": "TwCl + TrC",
+    "offset_ns": {
+     "2.5": -60
+    }
+   }
+  },
+  {
+   "id": 53,
+   "source_symbol": "tD(D)",
+   "bound": "max",
+   "symbol": "TdCf(D)",
+   "values": {
+    "2.5": 230
+   }
+  },
+  {
+   "id": 42,
+   "source_symbol": "tF(D)",
+   "bound": "max",
+   "symbol": "TdCr(Dz)",
+   "values": {
+    "2.5": 90
+   }
+  },
+  {
+   "id": 15,
+   "source_symbol": "tSPhi(D)",
+   "bound": "min",
+   "symbol": "TsD(Cr)",
+   "values": {
+    "2.5": 50
+   }
+  },
+  {
+   "id": 25,
+   "source_symbol": "tSPhibar(D)",
+   "bound": "min",
+   "symbol": "TsD(Cf)",
+   "values": {
+    "2.5": 60
+   }
+  },
+  {
+   "id": 29,
+   "source_symbol": "tdcm",
+   "bound": "min",
+   "symbol": "TdD(WRf)",
+   "values": {
+    "2.5": null
+   },
+   "formula": {
+    "expr": "TcC",
+    "offset_ns": {
+     "2.5": -210
+    }
+   }
+  },
+  {
+   "id": 33,
+   "source_symbol": "tdci",
+   "bound": "min",
+   "symbol": "TdD(WRf)",
+   "values": {
+    "2.5": null
+   },
+   "formula": {
+    "expr": "TwCl + TrC",
+    "offset_ns": {
+     "2.5": -210
+    }
+   }
+  },
+  {
+   "id": 35,
+   "source_symbol": "tcdf",
+   "bound": "min",
+   "symbol": "TdWRr(D)",
+   "values": {
+    "2.5": null
+   },
+   "formula": {
+    "expr": "TwCl + TrC",
+    "offset_ns": {
+     "2.5": -80
+    }
+   }
+  },
+  {
+   "id": null,
+   "source_symbol": "tH",
+   "bound": "min",
+   "note": "Any Hold Time for Setup Time (one hold for every sampled input; the numbered tables split it into 16, 18, 39, 47, 49)",
+   "values": {
+    "2.5": 0
+   }
+  },
+  {
+   "id": 8,
+   "source_symbol": "tDLPhibar(MR)",
+   "bound": "max",
+   "symbol": "TdCf(MREQf)",
+   "values": {
+    "2.5": 100
+   }
+  },
+  {
+   "id": 9,
+   "source_symbol": "tDHPhi(MR)",
+   "bound": "max",
+   "symbol": "TdCr(MREQr)",
+   "values": {
+    "2.5": 100
+   }
+  },
+  {
+   "id": 12,
+   "source_symbol": "tDHPhibar(MR)",
+   "bound": "max",
+   "symbol": "TdCf(MREQr)",
+   "values": {
+    "2.5": 100
+   }
+  },
+  {
+   "id": 11,
+   "source_symbol": "tw(MRL)",
+   "bound": "min",
+   "symbol": "TwMREQl",
+   "values": {
+    "2.5": null
+   },
+   "formula": {
+    "expr": "TcC",
+    "offset_ns": {
+     "2.5": -40
+    }
+   }
+  },
+  {
+   "id": 10,
+   "source_symbol": "tw(MRH)",
+   "bound": "min",
+   "symbol": "TwMREQh",
+   "values": {
+    "2.5": null
+   },
+   "formula": {
+    "expr": "TwCh + TfC",
+    "offset_ns": {
+     "2.5": -30
+    }
+   }
+  },
+  {
+   "id": 27,
+   "source_symbol": "tDLPhi(IR)",
+   "bound": "max",
+   "symbol": "TdCr(IORQf)",
+   "values": {
+    "2.5": 90
+   }
+  },
+  {
+   "id": 51,
+   "source_symbol": "tDLPhibar(IR)",
+   "bound": "max",
+   "symbol": "TdCf(IORQf)",
+   "values": {
+    "2.5": 110
+   }
+  },
+  {
+   "id": 52,
+   "source_symbol": "tDHPhi(IR)",
+   "bound": "max",
+   "symbol": "TdCr(IORQr)",
+   "values": {
+    "2.5": 100
+   }
+  },
+  {
+   "id": 28,
+   "source_symbol": "tDHPhibar(IR)",
+   "bound": "max",
+   "symbol": "TdCf(IORQr)",
+   "values": {
+    "2.5": 110
+   }
+  },
+  {
+   "id": 24,
+   "source_symbol": "tDLPhi(RD)",
+   "bound": "max",
+   "symbol": "TdCr(RDf)",
+   "values": {
+    "2.5": 100
+   }
+  },
+  {
+   "id": 13,
+   "source_symbol": "tDLPhibar(RD)",
+   "bound": "max",
+   "symbol": "TdCf(RDf)",
+   "values": {
+    "2.5": 130
+   }
+  },
+  {
+   "id": 14,
+   "source_symbol": "tDHPhi(RD)",
+   "bound": "max",
+   "symbol": "TdCr(RDr)",
+   "values": {
+    "2.5": 100
+   }
+  },
+  {
+   "id": 23,
+   "source_symbol": "tDHPhibar(RD)",
+   "bound": "max",
+   "symbol": "TdCf(RDr)",
+   "values": {
+    "2.5": 110
+   }
+  },
+  {
+   "id": 34,
+   "source_symbol": "tDLPhi(WR)",
+   "bound": "max",
+   "symbol": "TdCr(WRf)",
+   "values": {
+    "2.5": 80
+   }
+  },
+  {
+   "id": 30,
+   "source_symbol": "tDLPhibar(WR)",
+   "bound": "max",
+   "symbol": "TdCf(WRf)",
+   "values": {
+    "2.5": 90
+   }
+  },
+  {
+   "id": 32,
+   "source_symbol": "tDHPhibar(WR)",
+   "bound": "max",
+   "symbol": "TdCf(WRr)",
+   "values": {
+    "2.5": 100
+   }
+  },
+  {
+   "id": 31,
+   "source_symbol": "tw(WRL)",
+   "bound": "min",
+   "symbol": "TwWR",
+   "values": {
+    "2.5": null
+   },
+   "formula": {
+    "expr": "TcC",
+    "offset_ns": {
+     "2.5": -40
+    }
+   }
+  },
+  {
+   "id": 19,
+   "source_symbol": "tDL(M1)",
+   "bound": "max",
+   "symbol": "TdCr(M1f)",
+   "values": {
+    "2.5": 130
+   }
+  },
+  {
+   "id": 20,
+   "source_symbol": "tDH(M1)",
+   "bound": "max",
+   "symbol": "TdCr(M1r)",
+   "values": {
+    "2.5": 130
+   }
+  },
+  {
+   "id": 21,
+   "source_symbol": "tDL(RF)",
+   "bound": "max",
+   "symbol": "TdCr(RFSHf)",
+   "values": {
+    "2.5": 180
+   }
+  },
+  {
+   "id": 22,
+   "source_symbol": "tDH(RF)",
+   "bound": "max",
+   "symbol": "TdCr(RFSHr)",
+   "values": {
+    "2.5": 150
+   }
+  },
+  {
+   "id": 17,
+   "source_symbol": "ts(WT)",
+   "bound": "min",
+   "symbol": "TsWAIT(Cf)",
+   "values": {
+    "2.5": 70
+   }
+  },
+  {
+   "id": 36,
+   "source_symbol": "tD(HT)",
+   "bound": "max",
+   "symbol": "TdCf(HALT)",
+   "values": {
+    "2.5": 300
+   }
+  },
+  {
+   "id": 48,
+   "source_symbol": "ts(IT)",
+   "bound": "min",
+   "symbol": "TsINTf(Cr)",
+   "values": {
+    "2.5": 80
+   }
+  },
+  {
+   "id": 37,
+   "source_symbol": "tw(NML)",
+   "bound": "min",
+   "symbol": "TwNMI",
+   "values": {
+    "2.5": 80
+   }
+  },
+  {
+   "id": 38,
+   "source_symbol": "ts(BQ)",
+   "bound": "min",
+   "symbol": "TsBUSREQ(Cr)",
+   "values": {
+    "2.5": 80
+   }
+  },
+  {
+   "id": 40,
+   "source_symbol": "tDL(BA)",
+   "bound": "max",
+   "symbol": "TdCr(BUSACKf)",
+   "values": {
+    "2.5": 120
+   }
+  },
+  {
+   "id": 41,
+   "source_symbol": "tDH(BA)",
+   "bound": "max",
+   "symbol": "TdCf(BUSACKr)",
+   "values": {
+    "2.5": 110
+   }
+  },
+  {
+   "id": 46,
+   "source_symbol": "ts(RS)",
+   "bound": "min",
+   "symbol": "TsRESET(Cr)",
+   "values": {
+    "2.5": 90
+   }
+  },
+  {
+   "id": 43,
+   "source_symbol": "tF(C)",
+   "bound": "max",
+   "symbol": "TdCr(CTz)",
+   "values": {
+    "2.5": 100
+   }
+  },
+  {
+   "id": 50,
+   "source_symbol": "tmr",
+   "bound": "min",
+   "symbol": "TdM1f(IORQf)",
+   "values": {
+    "2.5": null
+   },
+   "formula": {
+    "expr": "2*TcC + TwCh + TfC",
+    "offset_ns": {
+     "2.5": -80
+    }
+   }
+  }
+ ]
+}

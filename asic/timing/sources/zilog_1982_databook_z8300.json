@@ -1,0 +1,743 @@
+{
+ "schema_version": 1,
+ "part": "Z8300-1 / -2 / -3 (Z80L low-power NMOS Z80 CPU, 1.0 / 1.5 / 2.5 MHz)",
+ "technology": "NMOS",
+ "role": "reference only (a different part, the low-power Z80L)",
+ "nomenclature": "zilog_numbered",
+ "source": {
+  "title": "1982 Zilog Data Book",
+  "publisher": "Zilog",
+  "date": "1982",
+  "url": "http://bitsavers.trailing-edge.com/components/zilog/_dataBooks/1982_Zilog_Data_Book.pdf",
+  "sha256": "f95c54fc8ff0e5524434132340e644b94ae7dc9ad861b0976114b6ba8a37bf84",
+  "pdf_pages": [
+   56,
+   57
+  ],
+  "printed_pages": [
+   45,
+   46
+  ],
+  "retrieved": "2026-10-29",
+  "transcription": "by hand from the page images"
+ },
+ "ac_test_conditions": {
+  "VIH_V": 2.0,
+  "VIL_V": 0.8,
+  "VOH_V": 2.0,
+  "VOL_V": 0.8,
+  "load_pF": 50,
+  "note": "All timings assume equal loading on pins with 50 pF. Timings are preliminary and subject to change."
+ },
+ "formula_assumption": {
+  "TrC_ns": 20,
+  "TfC_ns": 20,
+  "text": "Calculated values above assumed TrC = TfC = 20 ns."
+ },
+ "grades": [
+  {
+   "key": "1.0",
+   "label": "Z8300-1"
+  },
+  {
+   "key": "1.5",
+   "label": "Z8300-2"
+  },
+  {
+   "key": "2.5",
+   "label": "Z8300-3"
+  }
+ ],
+ "parameters": [
+  {
+   "id": 1,
+   "symbol": "TcC",
+   "bound": "min",
+   "values": {
+    "1.0": 1000,
+    "1.5": 650,
+    "2.5": 400
+   },
+   "starred": [
+    "1.0",
+    "1.5",
+    "2.5"
+   ],
+   "formula": {
+    "expr": "TwCh + TwCl + TrC + TfC",
+    "offset_ns": {
+     "1.0": 0,
+     "1.5": 0,
+     "2.5": 0
+    }
+   }
+  },
+  {
+   "id": 2,
+   "symbol": "TwCh",
+   "bound": "min",
+   "values": {
+    "1.0": 470,
+    "1.5": 300,
+    "2.5": 180
+   },
+   "starred": [
+    "1.0",
+    "1.5",
+    "2.5"
+   ],
+   "max_note": "Although static by design, TwCh of greater than 200 us is not guaranteed.",
+   "max_values": {
+    "1.0": 200000,
+    "1.5": 200000,
+    "2.5": 200000
+   }
+  },
+  {
+   "id": 3,
+   "symbol": "TwCl",
+   "bound": "min",
+   "values": {
+    "1.0": 470,
+    "1.5": 300,
+    "2.5": 180
+   },
+   "max_values": {
+    "1.0": 2000,
+    "1.5": 2000,
+    "2.5": 2000
+   }
+  },
+  {
+   "id": 4,
+   "symbol": "TfC",
+   "bound": "max",
+   "values": {
+    "1.0": 30,
+    "1.5": 30,
+    "2.5": 30
+   }
+  },
+  {
+   "id": 5,
+   "symbol": "TrC",
+   "bound": "max",
+   "values": {
+    "1.0": 30,
+    "1.5": 30,
+    "2.5": 30
+   }
+  },
+  {
+   "id": 6,
+   "symbol": "TdCr(A)",
+   "bound": "max",
+   "values": {
+    "1.0": 380,
+    "1.5": 250,
+    "2.5": 145
+   }
+  },
+  {
+   "id": 7,
+   "symbol": "TdA(MREQf)",
+   "bound": "min",
+   "values": {
+    "1.0": 370,
+    "1.5": 200,
+    "2.5": 125
+   },
+   "starred": [
+    "1.0",
+    "1.5",
+    "2.5"
+   ],
+   "formula": {
+    "expr": "TwCh + TfC",
+    "offset_ns": {
+     "1.0": -200,
+     "1.5": -130,
+     "2.5": -75
+    }
+   }
+  },
+  {
+   "id": 8,
+   "symbol": "TdCf(MREQf)",
+   "bound": "max",
+   "values": {
+    "1.0": 260,
+    "1.5": 170,
+    "2.5": 100
+   }
+  },
+  {
+   "id": 9,
+   "symbol": "TdCr(MREQr)",
+   "bound": "max",
+   "values": {
+    "1.0": 260,
+    "1.5": 170,
+    "2.5": 100
+   }
+  },
+  {
+   "id": 10,
+   "symbol": "TwMREQh",
+   "bound": "min",
+   "values": {
+    "1.0": 410,
+    "1.5": 270,
+    "2.5": 170
+   },
+   "starred": [
+    "1.0",
+    "1.5",
+    "2.5"
+   ],
+   "formula": {
+    "expr": "TwCh + TfC",
+    "offset_ns": {
+     "1.0": -90,
+     "1.5": -60,
+     "2.5": -30
+    }
+   }
+  },
+  {
+   "id": 11,
+   "symbol": "TwMREQl",
+   "bound": "min",
+   "values": {
+    "1.0": 890,
+    "1.5": 580,
+    "2.5": 360
+   },
+   "starred": [
+    "1.0",
+    "1.5",
+    "2.5"
+   ],
+   "formula": {
+    "expr": "TcC",
+    "offset_ns": {
+     "1.0": -110,
+     "1.5": -70,
+     "2.5": -40
+    }
+   }
+  },
+  {
+   "id": 12,
+   "symbol": "TdCf(MREQr)",
+   "bound": "max",
+   "values": {
+    "1.0": 260,
+    "1.5": 170,
+    "2.5": 100
+   }
+  },
+  {
+   "id": 13,
+   "symbol": "TdCf(RDf)",
+   "bound": "max",
+   "values": {
+    "1.0": 340,
+    "1.5": 230,
+    "2.5": 130
+   }
+  },
+  {
+   "id": 14,
+   "symbol": "TdCr(RDr)",
+   "bound": "max",
+   "values": {
+    "1.0": 260,
+    "1.5": 170,
+    "2.5": 100
+   }
+  },
+  {
+   "id": 15,
+   "symbol": "TsD(Cr)",
+   "bound": "min",
+   "values": {
+    "1.0": 140,
+    "1.5": 90,
+    "2.5": 50
+   }
+  },
+  {
+   "id": 16,
+   "symbol": "ThD(RDr)",
+   "bound": "min",
+   "values": {
+    "1.0": 0,
+    "1.5": 0,
+    "2.5": 0
+   }
+  },
+  {
+   "id": 17,
+   "symbol": "TsWAIT(Cf)",
+   "bound": "min",
+   "values": {
+    "1.0": 190,
+    "1.5": 120,
+    "2.5": 70
+   }
+  },
+  {
+   "id": 18,
+   "symbol": "ThWAIT(Cf)",
+   "bound": "min",
+   "values": {
+    "1.0": 0,
+    "1.5": 0,
+    "2.5": 0
+   }
+  },
+  {
+   "id": 19,
+   "symbol": "TdCr(M1f)",
+   "bound": "max",
+   "values": {
+    "1.0": 340,
+    "1.5": 230,
+    "2.5": 130
+   }
+  },
+  {
+   "id": 20,
+   "symbol": "TdCr(M1r)",
+   "bound": "max",
+   "values": {
+    "1.0": 340,
+    "1.5": 230,
+    "2.5": 130
+   }
+  },
+  {
+   "id": 21,
+   "symbol": "TdCr(RFSHf)",
+   "bound": "max",
+   "values": {
+    "1.0": 460,
+    "1.5": 310,
+    "2.5": 180
+   }
+  },
+  {
+   "id": 22,
+   "symbol": "TdCr(RFSHr)",
+   "bound": "max",
+   "values": {
+    "1.0": 390,
+    "1.5": 260,
+    "2.5": 150
+   }
+  },
+  {
+   "id": 23,
+   "symbol": "TdCf(RDr)",
+   "bound": "max",
+   "values": {
+    "1.0": 290,
+    "1.5": 180,
+    "2.5": 110
+   }
+  },
+  {
+   "id": 24,
+   "symbol": "TdCr(RDf)",
+   "bound": "max",
+   "values": {
+    "1.0": 260,
+    "1.5": 170,
+    "2.5": 100
+   }
+  },
+  {
+   "id": 25,
+   "symbol": "TsD(Cf)",
+   "bound": "min",
+   "values": {
+    "1.0": 160,
+    "1.5": 110,
+    "2.5": 60
+   }
+  },
+  {
+   "id": 26,
+   "symbol": "TdA(IORQf)",
+   "bound": "min",
+   "values": {
+    "1.0": 790,
+    "1.5": 510,
+    "2.5": 320
+   },
+   "starred": [
+    "1.0",
+    "1.5",
+    "2.5"
+   ],
+   "formula": {
+    "expr": "TcC",
+    "offset_ns": {
+     "1.0": -210,
+     "1.5": -140,
+     "2.5": -80
+    }
+   }
+  },
+  {
+   "id": 27,
+   "symbol": "TdCr(IORQf)",
+   "bound": "max",
+   "values": {
+    "1.0": 240,
+    "1.5": 160,
+    "2.5": 90
+   }
+  },
+  {
+   "id": 28,
+   "symbol": "TdCf(IORQr)",
+   "bound": "max",
+   "values": {
+    "1.0": 290,
+    "1.5": 190,
+    "2.5": 110
+   }
+  },
+  {
+   "id": 29,
+   "symbol": "TdD(WRf)",
+   "bound": "min",
+   "values": {
+    "1.0": 470,
+    "1.5": 280,
+    "2.5": 190
+   },
+   "starred": [
+    "1.0",
+    "1.5",
+    "2.5"
+   ],
+   "formula": {
+    "expr": "TcC",
+    "offset_ns": {
+     "1.0": -540,
+     "1.5": -360,
+     "2.5": -210
+    }
+   }
+  },
+  {
+   "id": 30,
+   "symbol": "TdCf(WRf)",
+   "bound": "max",
+   "values": {
+    "1.0": 240,
+    "1.5": 160,
+    "2.5": 90
+   }
+  },
+  {
+   "id": 31,
+   "symbol": "TwWR",
+   "bound": "min",
+   "values": {
+    "1.0": 890,
+    "1.5": 580,
+    "2.5": 360
+   },
+   "starred": [
+    "1.0",
+    "1.5",
+    "2.5"
+   ],
+   "formula": {
+    "expr": "TcC",
+    "offset_ns": {
+     "1.0": -110,
+     "1.5": -70,
+     "2.5": -40
+    }
+   }
+  },
+  {
+   "id": 32,
+   "symbol": "TdCf(WRr)",
+   "bound": "max",
+   "values": {
+    "1.0": 260,
+    "1.5": 170,
+    "2.5": 100
+   }
+  },
+  {
+   "id": 33,
+   "symbol": "TdD(WRf)",
+   "bound": "min",
+   "values": {
+    "1.0": -30,
+    "1.5": 30,
+    "2.5": 30
+   },
+   "starred": [
+    "1.0",
+    "1.5",
+    "2.5"
+   ],
+   "formula": {
+    "expr": "TwCl + TrC",
+    "offset_ns": {
+     "1.0": -470,
+     "1.5": -300,
+     "2.5": -180
+    }
+   },
+   "note": "1.5 MHz printed '+30*'"
+  },
+  {
+   "id": 34,
+   "symbol": "TdCr(WRf)",
+   "bound": "max",
+   "values": {
+    "1.0": 210,
+    "1.5": 140,
+    "2.5": 80
+   }
+  },
+  {
+   "id": 35,
+   "symbol": "TdWRr(D)",
+   "bound": "min",
+   "values": {
+    "1.0": 290,
+    "1.5": 190,
+    "2.5": 130
+   },
+   "starred": [
+    "1.0",
+    "1.5",
+    "2.5"
+   ],
+   "formula": {
+    "expr": "TwCl + TrC",
+    "offset_ns": {
+     "1.0": -210,
+     "1.5": -140,
+     "2.5": -80
+    }
+   }
+  },
+  {
+   "id": 36,
+   "symbol": "TdCf(HALT)",
+   "bound": "max",
+   "values": {
+    "1.0": 760,
+    "1.5": 510,
+    "2.5": 300
+   }
+  },
+  {
+   "id": 37,
+   "symbol": "TwNMI",
+   "bound": "min",
+   "values": {
+    "1.0": 210,
+    "1.5": 140,
+    "2.5": 80
+   }
+  },
+  {
+   "id": 38,
+   "symbol": "TsBUSREQ(Cr)",
+   "bound": "min",
+   "values": {
+    "1.0": 210,
+    "1.5": 140,
+    "2.5": 80
+   }
+  },
+  {
+   "id": 39,
+   "symbol": "ThBUSREQ(Cr)",
+   "bound": "min",
+   "values": {
+    "1.0": 0,
+    "1.5": 0,
+    "2.5": 0
+   }
+  },
+  {
+   "id": 40,
+   "symbol": "TdCr(BUSACKf)",
+   "bound": "max",
+   "values": {
+    "1.0": 310,
+    "1.5": 210,
+    "2.5": 120
+   }
+  },
+  {
+   "id": 41,
+   "symbol": "TdCf(BUSACKr)",
+   "bound": "max",
+   "values": {
+    "1.0": 290,
+    "1.5": 190,
+    "2.5": 110
+   }
+  },
+  {
+   "id": 42,
+   "symbol": "TdCr(Dz)",
+   "bound": "max",
+   "values": {
+    "1.0": 240,
+    "1.5": 160,
+    "2.5": 90
+   }
+  },
+  {
+   "id": 43,
+   "symbol": "TdCr(CTz)",
+   "bound": "max",
+   "values": {
+    "1.0": 290,
+    "1.5": 190,
+    "2.5": 110
+   }
+  },
+  {
+   "id": 44,
+   "symbol": "TdCr(Az)",
+   "bound": "max",
+   "values": {
+    "1.0": 290,
+    "1.5": 190,
+    "2.5": 110
+   }
+  },
+  {
+   "id": 45,
+   "symbol": "TdCTr(A)",
+   "bound": "min",
+   "values": {
+    "1.0": 400,
+    "1.5": 260,
+    "2.5": 160
+   },
+   "starred": [
+    "1.0",
+    "1.5",
+    "2.5"
+   ],
+   "formula": {
+    "expr": "TwCl + TrC",
+    "offset_ns": {
+     "1.0": -110,
+     "1.5": -70,
+     "2.5": -40
+    }
+   }
+  },
+  {
+   "id": 46,
+   "symbol": "TsRESET(Cr)",
+   "bound": "min",
+   "values": {
+    "1.0": 240,
+    "1.5": 160,
+    "2.5": 90
+   }
+  },
+  {
+   "id": 47,
+   "symbol": "ThRESET(Cr)",
+   "bound": "min",
+   "values": {
+    "1.0": 0,
+    "1.5": 0,
+    "2.5": 0
+   }
+  },
+  {
+   "id": 48,
+   "symbol": "TsINTf(Cr)",
+   "bound": "min",
+   "values": {
+    "1.0": 210,
+    "1.5": 140,
+    "2.5": 80
+   }
+  },
+  {
+   "id": 49,
+   "symbol": "ThINTr(Cr)",
+   "bound": "min",
+   "values": {
+    "1.0": 0,
+    "1.5": 0,
+    "2.5": 0
+   }
+  },
+  {
+   "id": 50,
+   "symbol": "TdM1f(IORQf)",
+   "bound": "min",
+   "values": {
+    "1.0": 2300,
+    "1.5": 1500,
+    "2.5": 920
+   },
+   "starred": [
+    "1.0",
+    "1.5",
+    "2.5"
+   ],
+   "formula": {
+    "expr": "2*TcC + TwCh + TfC",
+    "offset_ns": {
+     "1.0": -210,
+     "1.5": -140,
+     "2.5": -80
+    }
+   }
+  },
+  {
+   "id": 51,
+   "symbol": "TdCf(IORQf)",
+   "bound": "max",
+   "values": {
+    "1.0": 290,
+    "1.5": 190,
+    "2.5": 110
+   }
+  },
+  {
+   "id": 52,
+   "symbol": "TdCr(IORQr)",
+   "bound": "max",
+   "values": {
+    "1.0": 260,
+    "1.5": 170,
+    "2.5": 100
+   }
+  },
+  {
+   "id": 53,
+   "symbol": "TdCf(D)",
+   "bound": "max",
+   "values": {
+    "1.0": 290,
+    "1.5": 400,
+    "2.5": 230
+   }
+  }
+ ]
+}
