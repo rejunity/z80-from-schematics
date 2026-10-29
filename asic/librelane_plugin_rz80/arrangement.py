@@ -62,7 +62,8 @@ WEST_COLUMNS = [("addr_hold", bits("u_core.addr_hold", 0, 16)),
 EAST_COLUMNS = [("tmp", bits("u_core.tmp8", 0, 8) + bits("u_core.tmph", 0, 8))]
 
 # ---- the ALU: 8 bit planes east of the operand latches ---------------------
-# bit i level with the register file's bit row i (its four placement rows),
+# bit i level with the register file's bit row i + ALU_ROW_SHIFT (its four
+# placement rows): the ALU at the bottom of the datapath, as on the die,
 # the shared logic (the flags' collectors, overflow, carry out, DAA's
 # detection, the decode) north of them, in the die's flag area. The cells
 # are spread by this factor: packed tighter, the ALU's many short wires do
@@ -71,6 +72,7 @@ ALU_GAP_SITES = 6
 ALU_SPREAD = 2.0
 PLANE_SPREAD = 1.5         # the address unit's planes and z80_timing
 ALU_FLAG_ROWS = 8          # the ALU's shared logic: rows of the flag area north of its planes
+ALU_ROW_SHIFT = 8          # ALU bit i in the rows of register bit i + 8: the ALU's bottom edge on the register file's
 
 # ---- the address unit: 16 bit planes west of the address latch ------------
 # (the die's incrementer/decrementer strip by the A pins), in this many

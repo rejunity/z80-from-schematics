@@ -119,15 +119,18 @@ arrangement is a short table written by hand from those descriptions
   end, as on the die.
 - The ALU as 8 bit planes east of its operand latch, as the die stacks
   its ALU's bit slices beside the register file: bit i's cells in the
-  four placement rows of the register file's bit row i, so the bus lines
-  line up. The logic goes where the die distributes it: a cell reaching
+  four placement rows of the register file's bit row i + 8, so the ALU
+  sits at the bottom of the datapath, its bottom edge on the register
+  file's, as the die's ALU rows do (each die row holds bits n and n + 4, so
+  there too they do not line up with the register rows bit for bit), bit
+  0 on top. The logic goes where the die distributes it: a cell reaching
   one result bit is that bit's (the shift and rotate muxes, the logic ops,
   the bit select, the decimal adjust's correction); a carry reaching
   several is the lowest one's, where it is generated; a zero-detect or
   parity leaf is the median bit of the few adjacent bits it reads; the
   rest -- the flags' collectors, overflow, carry out, the decimal adjust's
-  detection, the decode -- fills a strip north of the planes, where the
-  die has its flag area. RZ80's ALU is one 8-bit pass; the Z80's is a
+  detection, the decode -- fills a strip directly north of the planes,
+  where the die has its flag area. RZ80's ALU is one 8-bit pass; the Z80's is a
   4-bit core used twice, so the planes stand for the die's 8-bit slices
   around it.
 - The state flip-flops in a row on top, and `z80_timing` (the pin images
@@ -140,22 +143,23 @@ every flip-flop anchor within 16 µm (one bit row) of where it was put, the regi
 die's order west to east and each column's bits in order, the ALU's and
 the address unit's bit planes in bit order.
 
-Measured (RUN_2026-10-29_10-35-12, against the automatic layout above):
+Measured (RUN_2026-10-29_12-31-44, against the automatic layout above):
 the core is 718 x 630 µm (0.45 mm², 42 % utilised; automatic 0.32 mm²,
-56 %), sign-off clean, +3.7 ns setup slack at the typical corner (+8.1)
-and -20.2 ns at the slow one (~14 MHz; -9.4, ~17 MHz) -- the die's long
-bit and PLA lines cost the slow corner. The flow takes 75 min on 8
-cores (104 min of CPU) against the automatic layout's 18 min (27), most
-of the difference the resizer's repairs on the longer wires; the floorplan
-step itself takes ~1.5 s. The chip die grows 50 µm each way (1712 x 1562
-µm); its pins still meet the NMOS Z80's 4 MHz datasheet timing (`make
+56 %), sign-off clean, +4.8 ns setup slack at the typical corner (+8.1)
+and -18.8 ns at the slow one (~14.5 MHz; -9.4, ~17 MHz) -- the die's long
+bit and PLA lines cost the slow corner. The flow takes 68 min on 8 cores
+(104 min of CPU) against the automatic layout's 18 min (27), most of the
+difference the resizer's repairs on the longer wires; the floorplan step
+itself takes ~1.5 s. The chip die grows 50 µm each way (1712 x 1562 µm);
+its pins still meet the NMOS Z80's 4 MHz datasheet timing (`make
 pin_timing`). Four placement rows a bit are what routes: with three,
 Metal3 -- the one horizontal layer under the chip's grid -- overflows.
 Placing the ALU's logic as the die distributes it (rather than each cell
 at the highest operand bit it reads, which piled the carry logic and the
 flags into bit 7) evened its planes out (45-69 cells against 22-86) and
-cut global-routing overflow from 174 to 70, at 1.9 ns of typical-corner
-slack and 3 ns at the slow corner.
+cut global-routing overflow from 174 to about 70; moving the ALU down to
+the bottom of the datapath then won back the wire length and timing
+(812k µm against 870k, +4.8 / -18.8 ns against +3.7 / -20.2).
 
 ## Power: grid or tree (`PDN_STYLE`)
 

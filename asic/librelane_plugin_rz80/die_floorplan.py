@@ -275,7 +275,10 @@ def pack(fl, insts, rows, x0, role, west=False, spread=A.PLANE_SPREAD):
 def alu(fl, x_from, k_bit):
     """the ALU as 8 bit planes east of the register file, as the die stacks
     its ALU's bit slices: bit i's cells in the placement rows of the
-    register file's bit row i, so the bus lines line up, and the logic no
+    register file's bit row i + ALU_ROW_SHIFT -- with the shift of 8, level
+    with the lower half of the register file, at the bottom of the
+    datapath as the die's ALU rows are (each die row holds bits n and n+4,
+    so they do not line up bit for bit there either) -- and the logic no
     bit owns -- the flags' collectors, overflow, carry out, the decimal
     adjust's detection, the operation decode -- in a strip north of them,
     where the die has its flag area.
@@ -363,9 +366,10 @@ def alu(fl, x_from, k_bit):
     planes = {b: [(names[k], depth[k]) for k in order if bit[k] == b] for b in range(8)}
     shared = [(names[k], depth[k]) for k in order if bit[k] is None]
     x0 = x_from + A.ALU_GAP_SITES * fl.sw
+    row = lambda b: k_bit(b + A.ALU_ROW_SHIFT)                  # at the bottom of the datapath, as the die's ALU rows
     for b in range(8):
-        pack(fl, planes[b], [k_bit(b) + j for j in range(A.BIT_ROWS)], x0, f"alu bit {b}", spread=A.ALU_SPREAD)
-    top = k_bit(0) + A.BIT_ROWS + 1                             # the flag area, north of the planes
+        pack(fl, planes[b], [row(b) + j for j in range(A.BIT_ROWS)], x0, f"alu bit {b}", spread=A.ALU_SPREAD)
+    top = row(0) + A.BIT_ROWS + 1                               # the flag area, north of the planes
     pack(fl, shared, [top + j for j in range(A.ALU_FLAG_ROWS)], x0, "alu shared", spread=A.ALU_SPREAD)
     return {b: len(planes[b]) for b in range(8)}, len(shared)
 
