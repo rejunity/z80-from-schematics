@@ -399,6 +399,13 @@ pad's threshold to 7 ns after (`clock_breaks()`), keeps those steps at
 0.2 ns or less; with it no probed flip-flop changes state without an
 active edge of its clock, at any corner.
 
+The supply's ramp gets them too (`supply_breaks()`, every 0.25 ns over
+its 20 ns). From its 1 ps first step ngspice doubles its steps to 1.3 ns
+by 2.6 ns, where the pads' ESD diodes begin to conduct; on ws3's chip of
+90bfb9d no step from there converged at tt and ff ("Timestep too small",
+at a `diode_pd2nw_06v0` in a pad's CDM clamp), where the chip before it
+had got through.
+
 KLU's sparse factorisation dominates: ngspice simulates about 40 ns a
 minute, some six hours for the program at tt alone; with the clock's
 breakpoints and the three corners side by side on four cores, about 13
@@ -412,6 +419,10 @@ hours each.
 - `asic-pdk.yml`, GF180 7-track: after the chip's pin timing, `nmi.py`
   at three corners (~2 min), failing when a case's pulse is not caught,
   held for the core and cleared.
+- `ci.yml`, the iverilog job: `make chip_sim_check` (`test_chip.py`)
+  runs `chip.py`'s simulate with a stand-in for ngspice: a window ngspice
+  aborted, or whose data stops before its end, has to fail, and the
+  supply's ramp has to have its breakpoints.
 - `pages.yml` puts the pads, the NMI catcher and the committed whole-chip
   runs under "At transistor level" on the project's site, and the latest
   `transistor.yml` run on its own page, `transistor/`, linked from there.
@@ -431,7 +442,10 @@ standard cell that way, so the first run on GitHub restarted each window
 with the latches inside every flip-flop at 0 V: its pins left the RTL's at
 the first clock edge after the first cut. `chip.py` renames them
 (`a_<x>_<y>_h`); a flip-flop restarted while its clock is high keeps its
-state. A run whose pins differ from the RTL's or that fails an AC
-parameter fails, and `pages.yml` publishes no such run. ngspice's own
+state. A window fails when ngspice aborted it or its data stops before
+the window's end: an aborted transient still writes the points it
+reached and `wrnodev`'s state, and ws3's run 40864340281 started a window
+from the state 2.6 ns into the power-up that way. A run whose pins differ
+from the RTL's or that fails an AC parameter fails, and `pages.yml` publishes no such run. ngspice's own
 snapshots (`snsave` / `snload`) would keep the integrator's history too,
 but `snload` crashes on a KLU circuit.
