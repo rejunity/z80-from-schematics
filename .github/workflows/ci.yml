@@ -95,6 +95,10 @@ jobs:
       # datasheet table (asic/timing/); the committed one must match
       - name: NMOS pin-timing SDC up to date
         run: make timing_sdc_check $NO_C
+      # chip.py's windows at transistor level: an aborted or short ngspice
+      # run fails its window (a stand-in for ngspice; no PDK)
+      - name: Transistor-level harness (chip.py simulate)
+        run: make chip_sim_check $NO_C
 
   basic-c-tests:
     name: BASIC ROM via C model (NASCOM 4.7c + Tiny BASIC)
