@@ -216,6 +216,17 @@ def clock_breaks(corner, edges, vdd):
     return out
 
 
+def supply_breaks():
+    """[times]: corners over the supply's ramp (0 -> VDD in 20 ns, every
+    node starting at 0 V), every 0.25 ns as over the clock's edges. From
+    its 1 ps first step ngspice doubles its steps to 1.3 ns by 2.6 ns, where
+    the pads' ESD diodes begin to conduct; on ws3's chip of 90bfb9d no step
+    from there converged at tt and ff ("Timestep too small; time =
+    2.62724e-09 ... trouble with diode_pd2nw_06v0 ... green_esd_cdm", steps
+    down to 1e-20 s), where the chip before it had got through."""
+    return [0.25 * k for k in range(1, 81)]
+
+
 def windows(edges, n):
     """[(from, to)] ns: the run cut into n windows of about equal length,
     each cut 15 ns before a clock edge's 50 % (5.6 ns before its ramp),
@@ -283,7 +294,8 @@ def deck(work, corner, edges, threads, tstop, t_from=0.0):
     L.append(f"V_rst {node('RESET_n')} 0 {pwl([(0, 0)] + ramp(trst, 0, vdd))}")
     for p in ("WAIT_n", "INT_n", "NMI_n", "BUSRQ_n"):
         L.append(f"V_{p.lower()} {node(p)} 0 {pwl([(0, 0), (20, vdd)])}")
-    brk = [a for a, _ in seen([(0, 0)] + [(b, 0) for b in clock_breaks(corner, edges, vdd)])][1:]
+    brk = sorted({round(b, 3) for b in supply_breaks() + clock_breaks(corner, edges, vdd)})
+    brk = [a for a, _ in seen([(0, 0)] + [(b, 0) for b in brk])][1:]
     L.append("V_brk brk 0 PWL(0 0")
     for k in range(0, len(brk), 16):
         L.append("+ " + " ".join(f"{b:.3f}n 0" for b in brk[k:k + 16]))
@@ -321,7 +333,7 @@ def deck(work, corner, edges, threads, tstop, t_from=0.0):
           "rusage all", "quit", ".endc", ".end"]
     open(sp, "w").write("\n".join(L) + "\n")
     print(f"chip: {sp}: {dropped} fill cells dropped, {n_caps} lumped capacitors, {len(win)} read windows, "
-          f"{len(brk)} breakpoints over the clock's edges", flush=True)
+          f"{len(brk)} breakpoints over the supply's ramp and the clock's edges", flush=True)
     return sp
 
 
@@ -342,6 +354,18 @@ def simulate(work, corner, edges, threads, segment=None):
     dat = os.path.join(d, "chip.dat") if not segment else segment_file(work, corner, t_from)
     if not os.path.exists(dat):
         sys.exit(f"chip: ngspice failed ({log})")
+    # an aborted transient ("Timestep too small") still writes the points it
+    # reached and, with wrnodev, its state there: the window fails, and no
+    # window after it can start from that state
+    rows = [r for r in open(dat).read().splitlines()[1:] if r.strip()]
+    reached = t_from + (float(rows[-1].split()[0]) * 1e9 if rows else 0.0)
+    out = p.stdout + p.stderr
+    if "simulation(s) aborted" in out or reached < tstop - 0.01:
+        if segment and os.path.exists(state_file(work, corner, tstop)):
+            os.remove(state_file(work, corner, tstop))
+        why = [l.strip() for l in out.splitlines() if "Timestep too small" in l or "aborted" in l]
+        sys.exit(f"chip: ngspice stopped at {reached:.3f} ns of {tstop:.3f} ({log})"
+                 + (": " + " / ".join(why) if why else ""))
     if t_from > 0:  # back to the run's time
         lines = open(dat).read().splitlines()
         out = [lines[0]] + [" ".join([f"{float(r.split()[0]) + t_from * 1e-9:.9e}"] + r.split()[1:])
