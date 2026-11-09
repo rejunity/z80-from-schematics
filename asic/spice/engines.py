@@ -288,8 +288,9 @@ def xyce_deck(sp, out_dir, options=()):
         elif kw == ".options":
             # klu: Xyce's serial default; rshunt (1 Tohm on every node) -> 1 Tohm
             # on the nodes without a DC path to ground (the rest have one)
-            body += [".options linsol type=klu",
-                     ".preprocess addresistors nodcpath 1e12", ".preprocess addresistors oneterminal 1e12"]
+            body += ([] if any(o.lower().startswith(".options linsol") for o in options)
+                     else [".options linsol type=klu"]) + [
+                ".preprocess addresistors nodcpath 1e12", ".preprocess addresistors oneterminal 1e12"]
         elif kw == ".model" and len(t) > 2 and t[2].lower() == "sw":
             p = dict(x.split("=") for x in t[3:])
             vt, vh = float(p.get("vt", 0)), float(p.get("vh", 0))
