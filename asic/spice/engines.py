@@ -253,7 +253,7 @@ def xyce_ic(src, dst):
     return len(out)
 
 
-def xyce_deck(sp, out_dir):
+def xyce_deck(sp, out_dir, options=()):
     """chip.py's ngspice deck -> (Xyce deck, the .prn it writes, ngspice's
     .dat name for it, notes)"""
     os.makedirs(out_dir, exist_ok=True)
@@ -304,7 +304,7 @@ def xyce_deck(sp, out_dir):
     prn = os.path.join(out_dir, os.path.basename(dat).replace(".dat", ".prn"))
     libf = os.path.join(out_dir, "models.xyce.lib")
     open(libf, "w").write("\n".join(xyce_lib(lib, notes)) + "\n")
-    deck = [open(sp).readline().rstrip(), f".include {libf}"] + body + [
+    deck = [open(sp).readline().rstrip(), f".include {libf}"] + body + list(options) + [
         f".tran {tran[1]} {tran[2]} {tran[3]} {tran[4]} UIC",
         f".print tran format=noindex file={prn} " + " ".join(cols),
         ".end"]
@@ -324,17 +324,29 @@ def prn_to_dat(prn, dat, t_from=0.0):
     return len(rows)
 
 
-def run_xyce(sp, out_dir, xyce=None):
-    xsp, prn, dat, notes = xyce_deck(sp, out_dir)
+def nix_bin(attr, name):
+    p = subprocess.run([os.path.expanduser("~/.nix-profile/bin/nix"), "build", f"{NIXPKGS}#{attr}",
+                        "--print-out-paths", "--no-link"], capture_output=True, text=True)
+    return os.path.join(p.stdout.strip().splitlines()[-1], "bin", name)
+
+
+def run_xyce(sp, out_dir, xyce=None, ranks=1, options=()):
+    """Xyce on chip.py's deck: serial, or with MPI over `ranks` processes
+    (xyce-parallel: the devices' loads spread over the ranks, KLU on one)"""
+    xsp, prn, dat, notes = xyce_deck(sp, out_dir, options)
     if not xyce:
-        p = subprocess.run([os.path.expanduser("~/.nix-profile/bin/nix"), "build", f"{NIXPKGS}#xyce",
-                            "--print-out-paths", "--no-link"], capture_output=True, text=True)
-        xyce = os.path.join(p.stdout.strip().splitlines()[-1], "bin", "Xyce")
+        xyce = nix_bin("xyce-parallel" if ranks > 1 else "xyce", "Xyce")
+    cmd = [xyce]
+    if ranks > 1:
+        mpi = subprocess.run(["ldd", xyce], capture_output=True, text=True).stdout
+        m = re.search(r"(/nix/store/[^/]*openmpi[^/]*)/lib", mpi)
+        cmd = [os.path.join(m.group(1), "bin", "mpirun"), "--allow-run-as-root", "-np", str(ranks), xyce]
     log = xsp.replace(".sp", ".log")
     t0 = time.time()
-    p = subprocess.run([xyce, "-l", log, xsp], cwd=out_dir, capture_output=True, text=True)
+    p = subprocess.run(cmd + ["-l", log, xsp], cwd=out_dir, capture_output=True, text=True)
     wall = time.time() - t0
-    res = {"engine": "Xyce", "deck": xsp, "wall_s": round(wall, 1), "rc": p.returncode, "notes": notes}
+    res = {"engine": "Xyce" + (f" MPI x{ranks}" if ranks > 1 else ""), "deck": xsp, "options": list(options),
+           "wall_s": round(wall, 1), "rc": p.returncode, "notes": notes}
     if os.path.exists(prn):
         res["points"] = prn_to_dat(prn, os.path.join(out_dir, os.path.basename(dat)))
         res["dat"] = os.path.join(out_dir, os.path.basename(dat))
@@ -342,10 +354,77 @@ def run_xyce(sp, out_dir, xyce=None):
     for k, pat in (("accepted", r"Number Successful Steps Taken:\s*(\d+)"),
                    ("rejected", r"Number Failed Steps Attempted:\s*(\d+)"),
                    ("newton", r"Number Nonlinear Iterations:\s*(\d+)"),
-                   ("unknowns", r"Total Devices\s*(\d+)")):
-        m = re.search(pat, txt)
+                   ("devices", r"Total Devices\s*(\d+)"), ("unknowns", r"Number of Unknowns = (\d+)")):
+        m = re.findall(pat, txt)       # the last: the transient's, after the DC point's
         if m:
-            res[k] = int(m.group(1))
+            res[k] = int(m[-1])
+    print(json.dumps(res, indent=1))
+    return res
+
+
+# ------------------------------------------------------------------ VAJAX
+VAJAX_DECK = """GF180 5 V inverter sm141064 {corner} bin 0 engines.py vajax
+load "{va}"
+model nfet bsim4va ( type=1 {nparams} )
+model pfet bsim4va ( type=-1 {pparams} )
+vdd (vdd 0) vsource dc=5
+vin (in 0) vsource type="pwl" wave=[0, 0, 1e-9, 0, 2e-9, 5, 12e-9, 5, 13e-9, 0]
+mn (out in 0 0) nfet w=1u l=1u
+mp (out in vdd vdd) pfet w=2u l=1u
+"""
+
+
+def vajax_inverter(pdk_ngspice, va, out_dir, python, corner="typical"):
+    """VAJAX on one inverter of the PDK's own 6 V cards (bin 0, as
+    nfet_05v0 / pfet_05v0 use them), every expression in the cards
+    evaluated here: whether VAJAX's BSIM4 inverts. VAJAX itself has no
+    BSIM4 (its engine's models: PSP103, BSIM-BULK/CMG/IMG, EKV, HiSIM2, ...);
+    `va` is a BSIM4 Verilog-A file, module bsim4va, compiled by its
+    openvaf_jax -- not part of this repository (the Berkeley-derived
+    VA-BSIM48 that OpenVAF's tests carry is CC BY-NC-SA 4.0)."""
+    lines = resolve(os.path.join(pdk_ngspice, "design.ngspice"))
+    lines += resolve(os.path.join(pdk_ngspice, "sm141064.ngspice"), corner)
+    env, insub = {}, False
+    for l in lines:
+        t = l.split()
+        if t and t[0].lower() == ".subckt":
+            insub = True
+        elif t and t[0].lower() == ".ends":
+            insub = False
+        elif t and t[0].lower() == ".param" and not insub:
+            for k, v in param_tokens(quoted(l.split(None, 1)[1])):
+                env[k.lower()] = v
+    def num(v):
+        v = v.strip("{}")
+        try:
+            return float(v)
+        except ValueError:
+            pass
+        expr = re.sub(r"[A-Za-z_]\w*", lambda m: f"({num(env[m.group(0).lower()])})"
+                      if m.group(0).lower() in env else m.group(0), v)
+        return float(eval(expr, {"__builtins__": {}}, {}))
+    cards = {}
+    for l in lines:
+        m = re.match(r"\.model (nfet_06v0|pfet_06v0)\.0 \w+ (.*)", l, re.I)
+        if m:
+            pairs = [(k.lower(), num(v)) for k, v in param_tokens(quoted(m.group(2))) if k
+                     and k.lower() not in ("level", "version")]
+            cards[m.group(1).lower()] = " ".join(f"{k}={v:.10g}" for k, v in pairs)
+    os.makedirs(out_dir, exist_ok=True)
+    shutil.copy(va, os.path.join(out_dir, "bsim4va.va"))
+    sim = os.path.join(out_dir, "inverter.sim")
+    open(sim, "w").write(VAJAX_DECK.format(corner=corner, va="bsim4va.va", nparams=cards["nfet_06v0"],
+                                           pparams=cards["pfet_06v0"]))
+    script = (f"from vajax import CircuitEngine\nimport numpy as np, json\ne = CircuitEngine({sim!r}); e.parse()\n"
+              "e.prepare(t_stop=30e-9, dt=10e-12); r = e.run_transient()\n"
+              "t = np.asarray(r.times); o = np.asarray(r.voltages['out'])\n"
+              "at = lambda x: float(np.interp(x, t, o))\n"
+              "print(json.dumps({'out_at_0.5ns': at(0.5e-9), 'out_at_8ns': at(8e-9), 'out_at_25ns': at(25e-9)}))\n")
+    p = subprocess.run([python, "-I", "-c", script], cwd=out_dir, capture_output=True, text=True,
+                       env=dict(os.environ, JAX_PLATFORMS=os.environ.get("JAX_PLATFORMS", "cpu")))
+    res = json.loads(p.stdout.strip().splitlines()[-1]) if p.returncode == 0 else {"error": p.stderr[-2000:]}
+    res["inverts"] = bool(res.get("out_at_0.5ns", 0) > 4.5 and res.get("out_at_8ns", 5) < 0.5
+                          and res.get("out_at_25ns", 0) > 4.5)
     print(json.dumps(res, indent=1))
     return res
 
@@ -405,6 +484,13 @@ def main():
     a.add_argument("--out")
     a.add_argument("--xyce")
     a.add_argument("--translate-only", action="store_true")
+    a.add_argument("--ranks", type=int, default=1, help="MPI processes (xyce-parallel)")
+    a.add_argument("--option", action="append", default=[], help="an extra deck line, e.g. '.options timeint erroption=1'")
+    v = sub.add_parser("vajax", help="VAJAX on one inverter of the PDK's BSIM4 cards")
+    v.add_argument("--pdk-ngspice", required=True, help="the PDK's libs.tech/ngspice")
+    v.add_argument("--va", required=True, help="a BSIM4 Verilog-A file (module bsim4va)")
+    v.add_argument("--python", required=True, help="the Python that has vajax installed")
+    v.add_argument("--out", default="vajax-inverter")
     c = sub.add_parser("compare")
     c.add_argument("ref")
     c.add_argument("other")
@@ -414,9 +500,11 @@ def main():
     if a.cmd == "xyce":
         out = a.out or os.path.join(os.path.dirname(os.path.abspath(a.deck)), "xyce")
         if a.translate_only:
-            print(xyce_deck(a.deck, out))
+            print(xyce_deck(a.deck, out, a.option))
             return 0
-        return 0 if run_xyce(a.deck, out, a.xyce)["rc"] == 0 else 1
+        return 0 if run_xyce(a.deck, out, a.xyce, a.ranks, a.option)["rc"] == 0 else 1
+    if a.cmd == "vajax":
+        return 0 if vajax_inverter(a.pdk_ngspice, a.va, a.out, a.python)["inverts"] else 1
     compare(a.ref, a.other, a.ref_txt, a.t_from)
     return 0
 
