@@ -474,10 +474,9 @@ are about 3x GitHub's; wall seconds (accepted + rejected steps):
 
 Also on slice B: ngspice with one thread, 1,073 s (its four threads only
 load the devices; here they cost more than they save); ngspice's Sparse
-1.3 instead of KLU (`.options sparse`), 14,512 s; Xyce's threaded Basker
-LU (`.options linsol type=basker`, 4 OpenMP threads) reached 0.146 ns of
-the 40 in 7 hours on one core and was stopped. Xyce over MPI gives the
-same steps and the same pins as serial Xyce (1e-14 V).
+1.3 instead of KLU (`.options sparse`), 14,512 s; Xyce's Basker, below.
+Xyce over MPI gives the same steps and the same pins as serial Xyce
+(1e-14 V).
 
 Both spend their time in the sparse LU: ngspice's window 1, 12,153 s of
 13,221 s factoring (4,950 Newton iterations, 2.45 s each; GitHub's run
@@ -604,6 +603,20 @@ still cannot read the PDK (no `M` lines, no binning, `.control` blocks).
 `engines.py cells` writes the `.sim` itself and starts circuits past 150
 transistors from 0 V in all three engines.
 
+
+### So
+
+Xyce runs ws3's chip as ngspice does -- the same pins, 0 mismatches with
+the RTL, edges within 10 ps (82 ps where the test bench's switch differs)
+-- and on this machine serial Xyce takes 0.6-0.85 of ngspice's time, over
+four MPI ranks 0.4-0.6. Both are bound by one sparse LU; Xyce's is smaller
+(fewer unknowns) and does fewer of them (fewer rejected steps). Its costs:
+one more tool (nixpkgs has both builds), the translation above (the
+diodes' temperature coefficients at ss and ff, BSIM4 4.6.1 for the PDK's
+4.5 / 4.6). VAJAX matches both on chip_top's cells, but only with a fixed
+BSIM4 Verilog-A that may not be shipped here and five local patches to
+VAJAX itself, and it does not yet reach the chip (no DC homotopy in its
+transient, its converter, 127,285 BSIM4 instances on an 8 GB GPU).
 
 ## CI
 
