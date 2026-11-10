@@ -307,8 +307,11 @@ timing_sdc_check: dirs
 # The transistor-level run's harness (asic/spice/chip.py simulate), with a
 # stand-in for ngspice: a window ngspice aborted, or whose data stops short,
 # fails; the supply's ramp has breakpoints. iverilog only (no ngspice, PDK).
+# engines.py reads the PDK library as ngspice does: a "+" line after a comment
+# or blank line continues the line before them.
 chip_sim_check:
 	$(PYTHON) asic/spice/test_chip.py
+	$(PYTHON) asic/spice/test_engines.py
 
 # === Formal equivalence of z80_core against a git revision ===============
 # For pure restructurings (same registers, moved or renamed): proves the
