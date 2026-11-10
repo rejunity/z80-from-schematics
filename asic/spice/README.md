@@ -555,6 +555,47 @@ linear solves would take about 50 s instead of 595 s, the slice about
 part). Xyce has no METIS ordering for KLU; its Amesos wrapper reaches
 UMFPACK if Trilinos is built with it (below).
 
+#### A Trilinos with threads
+
+`nix/xyce-threaded.nix` builds the same Xyce 7.10 (serial) against
+nixpkgs' Trilinos with Kokkos' OpenMP, ShyLU-node Basker (METIS for its
+nested dissection) and Amesos' UMFPACK, and three small patches: omp.h
+included first (with `-fopenmp`, SuiteSparse_config.h pulls it in where
+Trilinos includes amd.h inside `extern "C"`); Xyce's `type=umfpack`
+mapped to `Amesos_Umfpack`; and `AMESOS_UMFPACK_ORDERING=metis` to make
+Amesos order with METIS instead of UMFPACK's default. Its headers have
+`KOKKOS_ENABLE_OPENMP`, `HAVE_AMESOS2_SHYLU_NODEBASKER`,
+`HAVE_SHYLU_NODEBASKER_METIS`, `HAVE_AMESOS_UMFPACK`.
+
+Slice B, 40 ns, each run alone on the machine, all with that build:
+
+| `.options linsol` | Threads | Wall | Linear solves | Each |
+|---|---|---|---|---|
+| `type=klu` (as before) | 1 | 808 s | 601 s | 1.32 s |
+| `type=shylu_basker` | 1 | 502 s | 301 s | 0.66 s |
+| `type=shylu_basker` | 2 | 631 s | 428 s | 0.94 s |
+| `type=shylu_basker` | 4 | 604 s | 399 s | 0.88 s |
+| `type=umfpack` (AMD) | 1 | 308 s | 100 s | 0.22 s |
+| `type=umfpack`, METIS | 1 | 272 s | 65 s | 0.144 s |
+| `type=umfpack`, METIS | 4 (BLAS) | 271 s | 64 s | 0.142 s |
+
+(`OMP_NUM_THREADS`, `OMP_PROC_BIND=true` for Basker; `OPENBLAS_NUM_THREADS`
+for UMFPACK.) Every run takes the same 120 + 3 steps and 454 solves, and
+prints the same outputs as KLU's to every printed digit. On the bus-cycle
+slice C (125 ns, 285 + 7 steps, 993 solves), UMFPACK with METIS takes
+543 s (143 s of solves) and Basker on one thread 1,038 s (659 s), against
+KLU's 1,677 s (1,299 s; the earlier run, not alone on the machine): the
+same steps, 7 of 7 output edges with no shift, 1e-14 V, 0 mismatches with
+the RTL.
+
+Basker's threads make it slower, not faster -- likely because one block
+holds 94 % of the matrix and its top separator is factored by one thread
+while the others wait (not measured). On one thread it is twice KLU's
+speed, about what METIS's ordering gives KLU itself (0.45 s above). UMFPACK with METIS gives the
+slice 3.0x (B) and 3.1x (C) on one core, the linear solves 9x; what is
+left is mostly loading the devices (150 s of B's 272 s), the part MPI
+spreads.
+
 A smaller deck of chip_top's own cells (a Schmitt input pad, inverters, a
 dffrnq, a bi_t output pad with 100 pF) shows where the two differ: with
 20 ps steps both put every edge within 4-11 ps of each other; at their
@@ -697,7 +738,9 @@ Xyce runs ws3's chip as ngspice does -- the same pins, 0 mismatches with
 the RTL, edges within 10 ps (82 ps where the test bench's switch differs)
 -- and on this machine serial Xyce takes 0.6-0.85 of ngspice's time, over
 four MPI ranks 0.4-0.6. Both are bound by one sparse LU; Xyce's is smaller
-(fewer unknowns) and does fewer of them (fewer rejected steps). Its costs:
+(fewer unknowns) and does fewer of them (fewer rejected steps). Built
+with UMFPACK and given METIS (`nix/xyce-threaded.nix`), Xyce's LU is 9x
+faster and the slices 3x, the same outputs. Its costs:
 one more tool (nixpkgs has both builds), the translation above (the
 diodes' temperature coefficients at ss and ff, BSIM4 4.6.1 for the PDK's
 4.5 / 4.6). VAJAX matches both on chip_top's cells, but only with a fixed
