@@ -482,6 +482,12 @@ this machine's are bit-identical):
 | output edges at 1.5 V | 8 of 8, within 9.2 ps |
 | pins against the RTL | 0 mismatches (ngspice 0) |
 
+Xyce's Basker (its threaded sparse LU, `.options linsol type=basker`, 4
+threads asked for) on slice B was stopped by hand after 7 h 04 min: it had
+reached 0.146 ns of the 40 ns (0.4 %), on one core at 99.9 % -- its
+threads were not used. KLU2 takes 953 s for the same slice. Basker on the
+bus-cycle slice was not run.
+
 A smaller deck of chip_top's own cells (a Schmitt input pad, inverters, a
 dffrnq, a bi_t output pad with 100 pF) shows where the two differ: with
 20 ps steps both put every edge within 4-11 ps of each other; at their
