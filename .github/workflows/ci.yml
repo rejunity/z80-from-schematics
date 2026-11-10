@@ -99,6 +99,8 @@ jobs:
       # run fails its window (a stand-in for ngspice; no PDK)
       - name: Transistor-level harness (chip.py simulate)
         run: make chip_sim_check $NO_C
+      - name: Nix download retries (scripts/nix_retry.sh)
+        run: make nix_retry_check $NO_C
 
   basic-c-tests:
     name: BASIC ROM via C model (NASCOM 4.7c + Tiny BASIC)
