@@ -411,6 +411,109 @@ minute, some six hours for the program at tt alone; with the clock's
 breakpoints and the three corners side by side on four cores, about 13
 hours each.
 
+## Other simulators
+
+`engines.py` takes the deck `chip.py` writes for a window and runs it in
+another simulator, then sets the two runs side by side (`compare`: every
+output's largest difference where the reference has settled, every output
+edge's 1.5 V crossing, the pins against the RTL at every clock edge). The
+chip is ws3's chip_top (RZ80 in the wafer.space quarter slot, GDS of ws3
+941cfbc, Transistor run 42394274800): 127,285 BSIM4 transistors once
+flattened (the pads' fill and clamp devices included), 2,744 diodes,
+67,817 capacitors.
+
+    asic/spice/engines.py xyce <chip.py's deck> [--ranks 4] [--option '.options ...']
+    asic/spice/engines.py compare <ngspice .dat> <other .dat> --ref-txt ref.txt [--from NS]
+    asic/spice/engines.py vajax --pdk-ngspice <PDK libs.tech/ngspice> --va <bsim4.va> --python <venv python>
+
+### Xyce
+
+Xyce 7.10.0 (Sandia), from the nixpkgs pin pads.py uses for ngspice: the
+serial build (KLU2 through Amesos2, its default) and `xyce-parallel`
+(OpenMPI). The translation changes no physics at the PDK's nominal
+settings, except where noted:
+
+- the PDK's library sections resolved into one file; `'expr'` -> `{expr}`,
+  bare names in parameter values in `{}`, `PARAMS:` on `.subckt` lines,
+  `temper` -> `TEMP`;
+- `agauss(mean, ...)` -> its mean, and BSIM4's `mulu0` dropped: with the
+  PDK's mismatch and global variation off (`sw_stat_mismatch = 0`,
+  `sw_stat_global = 0`) they are exactly 0 and 1;
+- every node and instance name made one Xyce name (`:` is Xyce's
+  hierarchy separator; Magic's names have `/`, `[]`, `<>`);
+- ngspice's `sw` (vt 2.5, vh 0.2) as a `vswitch` (von 2.7, voff 2.3, no
+  hysteresis); `rshunt` (1 Tohm on every node) as 1 Tohm on the nodes
+  without a DC path;
+- the diodes, ngspice level 3, as Xyce's level 2: the same junction (IS,
+  JSW, CJO, CJP, MJ -> M, PB -> VJ, MJSW, PHP, N, RS, BV, IBV, IK -> IKF)
+  without ngspice's temperature coefficients of capacitance and potential
+  (CTA, CTP, TPB, TPHP, TLEV, TLEVC) and its tunnelling current (JTUN,
+  JTUNSW, NTUN, XTITUN); IKR is dropped, which ngspice disables for these
+  models anyway ("IKR too small - model effect disabled"). At 25 C (tt;
+  TREF 25) the coefficients do nothing; at ss and ff the pads' ESD diodes
+  and the n+ resistors' junctions keep their 25 C capacitance.
+- BSIM4: the PDK's NFET cards say version 4.5, the PFETs' 4.6; ngspice
+  runs each in its own code (bsim4v5, bsim4v6), Xyce in its oldest, 4.6.1
+  ("older than the oldest version supported in Xyce ... Using oldest").
+
+Window 1 of ws3's 24 at tt (0-610 ns: power-up, RESET), and 40 / 40 ns
+slices of it and of window 2 (B: 610-650 ns, from ngspice's state at
+610 ns, RESET still low), on one machine (i7-7700, 4 cores, 8 MB L3; three
+simulations at a time, so absolute times are about 3x GitHub's):
+
+| Run | ngspice-45, KLU, 4 threads | Xyce 7.10, KLU2, serial |
+|---|---|---|
+| window 1, wall | 13,275 s (1,238 + 151 rejected steps) | 10,030 s (1,359 + 14) |
+| slice A, 0-40 ns | 7,323 s (651 + 55) | 6,184 s (916 + 14) |
+| slice B, 610-650 ns | 1,537 s (140 + 13) | 953 s (120 + 3) |
+| memory | 2.8 GB | 2.4 GB |
+| unknowns | 71,208 | 53,271 |
+
+Both spend their time in the sparse LU: ngspice's window 1, 12,153 s of
+13,221 s factoring (4,950 Newton iterations, 2.45 s each; GitHub's run
+0.70 s each), 813 s loading the devices on 4 threads (it uses 1.1 cores);
+Xyce's, 8,244 s in 4,445 linear solves (1.85 s each), 1,670 s loading the
+devices on one core. Against ngspice (the same deck; GitHub's run and
+this machine's are bit-identical):
+
+| Window 1 at tt | Xyce |
+|---|---|
+| largest settled difference, outputs | 4.6 mV |
+| output edges at 1.5 V | 8 of 8, within 9.2 ps |
+| pins against the RTL | 0 mismatches (ngspice 0) |
+
+A smaller deck of chip_top's own cells (a Schmitt input pad, inverters, a
+dffrnq, a bi_t output pad with 100 pF) shows where the two differ: with
+20 ps steps both put every edge within 4-11 ps of each other; at their
+default tolerances Xyce stays within about 70 ps of that, ngspice moves an
+inverter's edge by up to 320 ps (the coarse steps `clock_breaks()` keeps
+off the chip's clock edges).
+
+
+### VAJAX
+
+VAJAX (ChipFlow; JAX, Verilog-A through OpenVAF; pip `vajax` 0.1.5 and
+its git head 2dfc407) cannot run the chip yet:
+
+- its engine has no BSIM4 (its models: PSP103, BSIM-BULK, BSIM-CMG,
+  BSIM-IMG, EKV, HiSIM2, ASM-HEMT, MVSG, R, C, L, diodes); the converter
+  maps level 54 to `spice/bsim4.osdi`, a module the engine does not have,
+  and the device is dropped without a word: a GF180 inverter's output
+  stays at 0 V, bit for bit the same with level 1 models;
+- with a BSIM4 Verilog-A given to it (`load`, git head only), OpenVAF's
+  BSIM4.8 (cogenda VA-BSIM48, CC BY-NC-SA 4.0, not for this repository)
+  compiles in 87 s and carries no current: `engines.py vajax` (the PDK's
+  own cards, every expression evaluated) reads 0.0 V at the output; PSP103
+  in the same deck inverts, so the harness is sound;
+- its SPICE converter takes no `M` lines (only ngspice's OSDI `N`), has
+  no model binning (the PDK's MOSFETs are binned), stops on a `.control`
+  block (KeyError 'origline') and on the PDK's `'sm141064.spice'`;
+- the chip is 127,285 BSIM4 instances; VAJAX's own 266k-transistor
+  benchmark needs 24 GB of GPU memory, this machine's GTX 1080 has 8 GB and
+  runs float64 at 1/32 of float32 (JAX 0.9.2's CUDA 12 plugin does run on
+  it, sm_61).
+
+
 ## CI
 
 - `targets.yml`'s `spice` job (`.github/workflows/spice-pads.yml`, ~10 min a
