@@ -93,7 +93,7 @@ CTEST_BINS := $(patsubst $(TESTS)/common/%.c,$(BIN)/%,$(CTEST_SRCS))
 RTL_SRCS  := $(wildcard $(RTL)/*.v)
 
 .PHONY: record_pz80 record_pz80_traces verify_pz80_traces event_sweep_recorded event_sweep_rtl event_sweep_verify
-.PHONY: xyflags xyflags_rtl xyflags_pz80 xy_study cfast cfast_bench cfast_identity cfast_single cfast_single_identity pinhash phase_identity zexrunner_tick timing_sdc timing_sdc_check chip_sim_check equiv all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl fuse_pz80 all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist event_sweep basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test verilator_z80test z80test_rtl halt2int halt2int_probe lockstep
+.PHONY: xyflags xyflags_rtl xyflags_pz80 xy_study cfast cfast_bench cfast_identity cfast_single cfast_single_identity pinhash phase_identity zexrunner_tick timing_sdc timing_sdc_check chip_sim_check nix_retry_check equiv all cmodel ctest rtl iverilog verilator verilator_zex zexall_rtl zexall_subset_c zexall_subset_rtl verilator_basic verilator_basic_netlist compare test zexdoc zexall clean dirs tracegen zexrunner prelim fuse fuse_runner fuse_rtl fuse_pz80 all-tests silicon_cycles silicon_async perfectz80 perfectz80_rtl perfectz80_netlist synth iverilog_netlist pin_scenarios pin_scenarios_rtl pin_scenarios_netlist event_sweep basicrunner basic tinybasic basic_tests basic_c_tests basic_rtl_tests basic_netlist_tests z80test_runner z80test verilator_z80test z80test_rtl halt2int halt2int_probe lockstep
 
 all: cmodel ctest
 
@@ -309,6 +309,11 @@ timing_sdc_check: dirs
 # fails; the supply's ramp has breakpoints. iverilog only (no ngspice, PDK).
 chip_sim_check:
 	$(PYTHON) asic/spice/test_chip.py
+
+# scripts/nix_retry.sh: a download from Nix's cache that breaks off is tried
+# again, then built; any other failure at once (a stand-in for nix)
+nix_retry_check:
+	$(PYTHON) scripts/test_nix_retry.py
 
 # === Formal equivalence of z80_core against a git revision ===============
 # For pure restructurings (same registers, moved or renamed): proves the

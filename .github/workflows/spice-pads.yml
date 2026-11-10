@@ -63,8 +63,11 @@ jobs:
       - name: Fetch the PDK (LibreLane's ciel)
         run: |
           [ -d ~/.ciel/ciel/${{ steps.pdk.outputs.root }} ] ||
-            nix run github:librelane/librelane/$LIBRELANE_VERSION#python3.pkgs.ciel -- fetch --pdk-root ~/.ciel \
+            scripts/nix_retry.sh nix run github:librelane/librelane/$LIBRELANE_VERSION#python3.pkgs.ciel -- fetch --pdk-root ~/.ciel \
               --pdk-family ${{ steps.pdk.outputs.family }} ${{ steps.pdk.outputs.version }}
+
+      - name: The simulators, pinned (nix; a broken download again, then built)
+        run: scripts/nix_retry.sh nix build --no-link $(python3 -c 'import sys; sys.path.insert(0, "asic/spice"); import pads; print(*(pads.TOOLS[t] for t in sys.argv[1:]))' ngspice ${{ inputs.pdk == 'ihp-sg13g2' && 'openvaf-r' || '' }})
 
       - name: Simulate the pads, against the committed results
         run: |
