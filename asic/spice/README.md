@@ -424,7 +424,7 @@ flattened (the pads' fill and clamp devices included), 2,744 diodes,
 
     asic/spice/engines.py xyce <chip.py's deck> [--ranks 4] [--option '.options ...']
     asic/spice/engines.py compare <ngspice .dat> <other .dat> --ref-txt ref.txt [--from NS]
-    asic/spice/engines.py vajax --pdk-ngspice <PDK libs.tech/ngspice> --va <bsim4.va> --python <venv python>
+    asic/spice/engines.py cells inv|nand|dff N --net <chip.py's chip.net> --va <bsim4.va> --python <venv python>
 
 ### Xyce
 
@@ -492,26 +492,91 @@ off the chip's clock edges).
 
 ### VAJAX
 
-VAJAX (ChipFlow; JAX, Verilog-A through OpenVAF; pip `vajax` 0.1.5 and
-its git head 2dfc407) cannot run the chip yet:
+VAJAX (ChipFlow; JAX, Verilog-A through OpenVAF; git head 2dfc407, its
+`openvaf-py` 0.1.5, JAX 0.9.2) has no BSIM4 of its own (its models:
+PSP103, BSIM-BULK, BSIM-CMG, BSIM-IMG, EKV, HiSIM2, ASM-HEMT, MVSG, R, C,
+L, diodes; its SPICE converter maps level 54 to a `bsim4.osdi` it does not
+have and drops the device without a word). `engines.py cells` gives it a
+BSIM4 as Verilog-A and writes its `.sim` itself:
 
-- its engine has no BSIM4 (its models: PSP103, BSIM-BULK, BSIM-CMG,
-  BSIM-IMG, EKV, HiSIM2, ASM-HEMT, MVSG, R, C, L, diodes); the converter
-  maps level 54 to `spice/bsim4.osdi`, a module the engine does not have,
-  and the device is dropped without a word: a GF180 inverter's output
-  stays at 0 V, bit for bit the same with level 1 models;
-- with a BSIM4 Verilog-A given to it (`load`, git head only), OpenVAF's
-  BSIM4.8 (cogenda VA-BSIM48, CC BY-NC-SA 4.0, not for this repository)
-  compiles in 87 s and carries no current: `engines.py vajax` (the PDK's
-  own cards, every expression evaluated) reads 0.0 V at the output; PSP103
-  in the same deck inverts, so the harness is sound;
-- its SPICE converter takes no `M` lines (only ngspice's OSDI `N`), has
-  no model binning (the PDK's MOSFETs are binned), stops on a `.control`
-  block (KeyError 'origline') and on the PDK's `'sm141064.spice'`;
-- the chip is 127,285 BSIM4 instances; VAJAX's own 266k-transistor
-  benchmark needs 24 GB of GPU memory, this machine's GTX 1080 has 8 GB and
-  runs float64 at 1/32 of float32 (JAX 0.9.2's CUDA 12 plugin does run on
-  it, sm_61).
+- the Verilog-A: VA-BSIM48 (cogenda, BSIM4.8 from Berkeley's C; the copy
+  OpenVAF's tests carry). It is CC BY-NC-SA 4.0 and not in this
+  repository: `--va` points at it;
+- the cards: the PDK's `nfet_06v0.N` / `pfet_06v0.N` (what `nfet_05v0`
+  and `pfet_05v0` instantiate) with every expression evaluated at the
+  corner, one VAJAX model per bin, the bin per transistor as ngspice picks
+  it (lmin <= L < lmax, wmin <= W < wmax), each transistor's W, L, AD, AS,
+  PD, PS as Magic extracted them; the cells flattened, their lumped
+  capacitors as `sp_capacitor`;
+- `BSIM4_VA_FIXES`: VA-BSIM48 never defaults `wk2` when the card has none
+  (it does `lk2`, `pk2`): k2 = k2 + wk2 / Weff with wk2 at its NOT_GIVEN
+  mark, -12345789, so k2ox is about -1e7 and Abulk clamps at 0.05; with
+  `wk2 = 0` the VA, compiled to OSDI by OpenVAF 24.0.1 and loaded into
+  ngspice, gives ngspice's own BSIM4 4.8 drain current to 5 digits, and
+  its 4.5 to 1e-4 (NFET bin 0, W/L 1/1, 1/10, 10/1 um).
+
+That alone does not make the transistors carry current in VAJAX: its
+engine has five faults with this model, each patched locally (in the
+venv, not here; `vajax-bsim4-local.patch`, 5 files, about 150 lines):
+
+1. node collapse decisions out of step with the collapsible pairs: init
+   returns one flag per (pair, condition), and BSIM4's rgateMod `case`
+   reaches two pairs from two branches, so pair k read flag k of a longer
+   list (the gate's and body's internal nodes left floating, the
+   collapsed branches' currents kept as 0 = 0 rows). Fixed: a pair
+   collapses when any of its conditions holds; a branch current (to
+   ground, `u32::MAX`) with its branch's nodes;
+2. internal node `node4` taken as PSP103's NOI node on every device and
+   clamped to 0 V: in BSIM4 `node4` is `di`, collapsed onto the drain, so
+   every drain was held at 0 V (the "0.0 V at the output" before). The
+   same lists also kept collapsed nodes -- the drain -- out of the
+   residual check. Fixed: NOI only where the model's first internal node
+   is NOI, and only nodes the device got for itself count as internal;
+3. init inputs mapped to eval columns by lowercase name, where a hidden
+   state shares a parameter's name (parameter `tnom`, variable `Tnom`;
+   `mjs`, ...): init read 0 for them (Tnom 273.15 K, the drain junction's
+   grading 0). Fixed: a parameter's own column first;
+4. a device whose card has not a parameter another card of the same
+   module has (the NFET and PFET cards) got 0 for it, which the VA reads
+   as given. Fixed: the module's default;
+5. the Jacobian: the translated OpenVAF derivatives of this model are
+   wrong at every bias -- dId/dVd 1e22 S at Vgs = 0, 1e57 S at Vgs = 2 V,
+   NaN in triode -- while the residuals match finite differences (and
+   ngspice). Not fixed in the translator: the patch replaces the node
+   voltage columns of the device's Jacobian (resistive and reactive) by
+   JAX forward-mode autodiff of its own residuals over its 20 branch
+   voltages (`VAJAX_AD_JAC=bsim4va`); the branch-current columns keep the
+   MIR's +-1.
+
+With these, at DC: a 0.82/0.6 NFET, a 0.82/1 NFET and a 1.22/0.5 PFET on
+10 k loads come out within 0.6 mV of ngspice (ngspice's own BSIM4).
+
+On chip_top's own cells (`engines.py cells`: chip.py's extracted
+`inv_1`, `nand2_1`, `dffrnq_1` with their lumped capacitors; tt, 25 C;
+ngspice and Xyce at their default tolerances, VAJAX at its own, all three
+with ngspice's 0.1 ns step cap; edges at 2.5 V, settled: where the
+reference moves less than 1 mV within 0.5 ns):
+
+| Circuit | transistors | VAJAX vs ngspice | Xyce vs ngspice | VAJAX vs Xyce |
+|---|---|---|---|---|
+| 1 inv_1 | 2 | 3.6 ps, 0.18 mV | 12 ps, 0.18 mV | 0.5 ps, 0.01 mV |
+| 1 nand2_1 | 4 | 8.1 ps, 0.34 mV | 8.8 ps, 0.34 mV | 8.8 ps, 0.01 mV |
+| 10 inv_1 | 20 | 21 ps, 0.20 mV | 25 ps, 0.20 mV | 6.8 ps, 0.00 mV |
+| 4-bit dffrnq_1 register, 100 MHz | 112 | 6.1 ps, 0.26 mV | 5.9 ps, 0.26 mV | 3.0 ps, 0.05 mV |
+| 100 inv_1, from 0 V | 200 | 516 ps, 0.77 mV | 585 ps, 11 mV | 89 ps, 0.01 mV |
+
+(edges: the largest difference of all; every edge found in every run.)
+On the 100-stage chain ngspice is the odd one out (404 steps, 79
+rejected, against Xyce's 1,687 and VAJAX's 779): its default steps move
+the edge, as on the chip ("Xyce" above).
+
+Two more limits of VAJAX here: its transient takes the DC point by plain
+Newton from mid-rail -- the homotopy (gdev, gshunt, source stepping) its
+`op` analysis has is not used -- and on 100 inverters that diverges
+(1e20 V) and the transient never recovers; and its own SPICE converter
+still cannot read the PDK (no `M` lines, no binning, `.control` blocks).
+`engines.py cells` writes the `.sim` itself and starts circuits past 150
+transistors from 0 V in all three engines.
 
 
 ## CI
