@@ -526,6 +526,14 @@ def cells_decks(kind, n, net, pdk_ngspice, va, out_dir, corner="typical", temp=2
     os.makedirs(out_dir, exist_ok=True)
     cells = net_subckts(net)
     inst, src, probe, tstop = cell_circuit(kind, n)
+    # VAJAX's transient finds its DC point by plain Newton from mid-rail
+    # (its op analysis's homotopy is not used there): on a long chain it
+    # diverges, so circuits past 150 transistors start from 0 V (UIC) in
+    # every engine, their stimuli 5 ns later
+    uic = sum(1 for _, c, _ in inst for l in cells[c][1] if l[0] in "Xx") > 150
+    if uic:
+        src = {s: [(0, pts[0][1])] + [(a + 5, b) for a, b in pts[1:]] for s, pts in src.items()}
+        tstop += 5
     used = sorted({c for _, c, _ in inst})
     tag = f"{kind}{n}"
     # ngspice: the cells' own subcircuits from chip.net (named *chip.net so
@@ -546,7 +554,8 @@ def cells_decks(kind, n, net, pdk_ngspice, va, out_dir, corner="typical", temp=2
     for name, c, conn in inst:
         sp.append(f"X{name} " + " ".join(conn[port] for port in cells[c][0]) + f" {c}")
     sp += [".control", "set wr_singlescale", "set wr_vecnames", "option numdgt=7",
-           f"tran 0.01n {tstop:g}n 0 0.1n", f"wrdata {dat} " + " ".join(f"v({x})" for x in probe),
+           f"tran 0.01n {tstop:g}n 0 0.1n" + (" uic" if uic else ""),
+           f"wrdata {dat} " + " ".join(f"v({x})" for x in probe),
            "rusage all", "quit", ".endc", ".end"]
     spf = os.path.join(out_dir, f"{tag}.sp")
     open(spf, "w").write("\n".join(sp) + "\n")
@@ -584,7 +593,7 @@ def cells_decks(kind, n, net, pdk_ngspice, va, out_dir, corner="typical", temp=2
     sim += body
     simf = os.path.join(out_dir, f"{tag}.sim")
     open(simf, "w").write("\n".join(sim) + "\n")
-    return {"sp": spf, "sim": simf, "dat": dat, "probe": probe, "tstop_ns": tstop, "transistors": nmos,
+    return {"sp": spf, "sim": simf, "dat": dat, "probe": probe, "tstop_ns": tstop, "transistors": nmos, "uic": uic,
             "caps": ncap, "bins": sorted(f"{m}.{b}" for m, b in used_bins), "card_params_dropped": dropped}
 
 
@@ -593,10 +602,14 @@ import json, sys, time, numpy as np
 from vajax import CircuitEngine
 from vajax.analysis.transient.adaptive import AdaptiveConfig
 sim, tstop, dat, probe, repeat = sys.argv[1], float(sys.argv[2]), sys.argv[3], sys.argv[4].split(","), int(sys.argv[5])
-max_dt = float(sys.argv[6])
+max_dt, sparse, uic = float(sys.argv[6]), sys.argv[7] == "1", sys.argv[8] == "1"
 t0 = time.time(); e = CircuitEngine(sim); e.parse(); t_parse = time.time() - t0
+if uic:
+    e.options.icmode = "uic"
+    e.analysis_params["icmode"] = "uic"      # what the transient reads
 t0 = time.time()
-e.prepare(t_stop=tstop, dt=1e-11, temperature=298.15, adaptive_config=AdaptiveConfig(max_dt=max_dt))
+e.prepare(t_stop=tstop, dt=1e-11, temperature=298.15, adaptive_config=AdaptiveConfig(max_dt=max_dt),
+          use_sparse=sparse, backend="cpu")
 t_prep = time.time() - t0
 runs = []
 for k in range(repeat):          # the first run JIT-compiles the transient loop
@@ -615,7 +628,7 @@ print(json.dumps({"parse_s": round(t_parse, 2), "prepare_s": round(t_prep, 2), "
 """
 
 
-def run_vajax(d, python, repeat=2, threads=None, max_dt=1e-10):
+def run_vajax(d, python, repeat=2, threads=None, max_dt=1e-10, sparse=None):
     """VAJAX on a cells_decks() .sim: parse + model compile, prepare, then
     the transient `repeat` times (the first JIT-compiles it)"""
     env = dict(os.environ, **VAJAX_ENV)
@@ -623,15 +636,19 @@ def run_vajax(d, python, repeat=2, threads=None, max_dt=1e-10):
         env["XLA_FLAGS"] = f"--xla_cpu_multi_thread_eigen={'true' if threads > 1 else 'false'} " \
                            f"intra_op_parallelism_threads={threads}"
         env["OMP_NUM_THREADS"] = str(threads)
+    sparse = d.get("transistors", 0) > 400 if sparse is None else sparse      # VAJAX: sparse past ~1000 nodes
     dat = d["dat"].replace("_ng.dat", "_vajax.dat")
     t0 = time.time()
     p = subprocess.run([python, "-I", "-c", VAJAX_RUN, d["sim"], str(d["tstop_ns"] * 1e-9), dat,
-                        ",".join(d["probe"]), str(repeat), str(max_dt)], cwd=os.path.dirname(d["sim"]),
+                        ",".join(d["probe"]), str(repeat), str(max_dt), "1" if sparse else "0",
+                        "1" if d.get("uic") else "0"],
+                       cwd=os.path.dirname(d["sim"]),
                        capture_output=True, text=True, env=env)
     if p.returncode:
         return {"engine": "VAJAX", "error": (p.stdout + p.stderr)[-3000:]}
     res = json.loads(p.stdout.strip().splitlines()[-1])
-    res.update(engine="VAJAX", wall_s=round(time.time() - t0, 1), dat=dat, threads=threads, max_dt=max_dt)
+    res.update(engine="VAJAX", wall_s=round(time.time() - t0, 1), dat=dat, threads=threads, max_dt=max_dt,
+               sparse=sparse)
     return res
 
 
@@ -696,12 +713,15 @@ def cells(kind, n, net, pdk_ngspice, va, python, out_dir, engines_=("ngspice", "
     """one circuit in every engine: wall times, steps, Newton iterations,
     and each against ngspice"""
     d = cells_decks(kind, n, net, pdk_ngspice, va, out_dir)
-    out = {"circuit": f"{kind}{n}", "transistors": d["transistors"], "caps": d["caps"], "bins": d["bins"],
+    out = {"circuit": f"{kind}{n}", "transistors": d["transistors"], "caps": d["caps"], "bins": d["bins"], "uic": d["uic"],
            "card_params_dropped": d["card_params_dropped"], "runs": []}
     if "ngspice" in engines_:
         out["runs"].append(run_ngspice_cells(d, threads))
     if "xyce" in engines_:
-        r = run_xyce(d["sp"], os.path.join(out_dir, "xyce"), uic=False)   # its DC point, as ngspice and VAJAX
+        r = run_xyce(d["sp"], os.path.join(out_dir, "xyce"), uic=d["uic"])   # as ngspice and VAJAX
+        log = r["deck"].replace(".sp", ".log")
+        m = re.findall(r"Total Simulation Solvers Run Time:\s*([\d.]+)", open(log).read()) if os.path.exists(log) else []
+        r["solvers_s"] = float(m[-1]) if m else None
         out["runs"].append(r)
     if "vajax" in engines_:
         out["runs"].append(run_vajax(d, python, repeat, threads))
