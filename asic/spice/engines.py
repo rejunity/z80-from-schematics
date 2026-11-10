@@ -768,9 +768,13 @@ def compare(ref_dat, dat, ref_txt, t_from=0.0):
             a, b = wr[p][k - 1], wr[p][k]
             if (a - chip.OUT_LEVEL) * (b - chip.OUT_LEVEL) < 0 and tr[k] <= to[-1]:
                 tx = tr[k - 1] + (chip.OUT_LEVEL - a) * (tr[k] - tr[k - 1]) / (b - a)
-                c = chip.crossing(to, wo[p], chip.OUT_LEVEL, b > a, tx - 30, within=60)
+                near = [to[j - 1] + (chip.OUT_LEVEL - wo[p][j - 1]) * (to[j] - to[j - 1]) / (wo[p][j] - wo[p][j - 1])
+                        for j in range(1, len(to)) if abs(to[j] - tx) < 30
+                        and (wo[p][j - 1] - chip.OUT_LEVEL) * (wo[p][j] - chip.OUT_LEVEL) < 0
+                        and (wo[p][j] > wo[p][j - 1]) == (b > a)]
+                c = min(near, key=lambda x: abs(x - tx)) if near else None
                 shifts.append((p, tx, None if c is None else c - tx))
-    common = [e for e in edges if e[0] + 110 <= min(tr[-1], to[-1])]
+    common = [e for e in edges if max(tr[0], to[0]) <= e[0] and e[0] + 110 <= min(tr[-1], to[-1])]
     bad_r = chip.check_functional(tr, wr, common)
     bad_o = chip.check_functional(to, wo, common)
     found = [s for s in shifts if s[2] is not None]

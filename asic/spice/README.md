@@ -456,18 +456,28 @@ settings, except where noted:
   runs each in its own code (bsim4v5, bsim4v6), Xyce in its oldest, 4.6.1
   ("older than the oldest version supported in Xyce ... Using oldest").
 
-Window 1 of ws3's 24 at tt (0-610 ns: power-up, RESET), and 40 / 40 ns
-slices of it and of window 2 (B: 610-650 ns, from ngspice's state at
-610 ns, RESET still low), on one machine (i7-7700, 4 cores, 8 MB L3; three
-simulations at a time, so absolute times are about 3x GitHub's):
+Window 1 of ws3's 24 at tt (0-610 ns: power-up, RESET), and three
+slices: A, 0-40 ns of it; B, 610-650 ns (window 2, RESET still low); C,
+1735-1860 ns (window 4: MREQ and RD fall, the memory drives D, a clock
+edge) -- B and C from ngspice's state in GitHub's run. One machine (i7-7700,
+4 cores, 8 MB L3), two or three simulations at a time, so absolute times
+are about 3x GitHub's; wall seconds (accepted + rejected steps):
 
-| Run | ngspice-45, KLU, 4 threads | Xyce 7.10, KLU2, serial |
-|---|---|---|
-| window 1, wall | 13,275 s (1,238 + 151 rejected steps) | 10,030 s (1,359 + 14) |
-| slice A, 0-40 ns | 7,323 s (651 + 55) | 6,184 s (916 + 14) |
-| slice B, 610-650 ns | 1,537 s (140 + 13) | 953 s (120 + 3) |
-| memory | 2.8 GB | 2.4 GB |
-| unknowns | 71,208 | 53,271 |
+| Run | ngspice-45, KLU, 4 threads | Xyce 7.10, KLU2, serial | Xyce, KLU2, MPI x4 |
+|---|---|---|---|
+| window 1 | 13,275 (1,238 + 151) | 10,030 (1,359 + 14) | |
+| slice A, power-up | 7,323 (651 + 55) | 6,184 (916 + 14) | 3,879 (928 + 14) |
+| slice B, quiet | 1,537 (140 + 13) | 953 (120 + 3) | 638 (120 + 3) |
+| slice C, bus cycle | 2,229 (278 + 64) | 1,677 (285 + 7) | 1,364 (285 + 7) |
+| memory | 2.8 GB | 2.4 GB | |
+| unknowns | 71,208 | 53,271 | |
+
+Also on slice B: ngspice with one thread, 1,073 s (its four threads only
+load the devices; here they cost more than they save); ngspice's Sparse
+1.3 instead of KLU (`.options sparse`), 14,512 s; Xyce's threaded Basker
+LU (`.options linsol type=basker`, 4 OpenMP threads) reached 0.146 ns of
+the 40 in 7 hours on one core and was stopped. Xyce over MPI gives the
+same steps and the same pins as serial Xyce (1e-14 V).
 
 Both spend their time in the sparse LU: ngspice's window 1, 12,153 s of
 13,221 s factoring (4,950 Newton iterations, 2.45 s each; GitHub's run
@@ -476,11 +486,18 @@ Xyce's, 8,244 s in 4,445 linear solves (1.85 s each), 1,670 s loading the
 devices on one core. Against ngspice (the same deck; GitHub's run and
 this machine's are bit-identical):
 
-| Window 1 at tt | Xyce |
-|---|---|
-| largest settled difference, outputs | 4.6 mV |
-| output edges at 1.5 V | 8 of 8, within 9.2 ps |
-| pins against the RTL | 0 mismatches (ngspice 0) |
+| Xyce against ngspice, tt | window 1 | slice A | slice B | slice C |
+|---|---|---|---|---|
+| largest settled difference, outputs | 4.6 mV | 2.2 mV | 7.7 mV | 0.15 V (D[5], see below) |
+| output edges at 1.5 V | 8 of 8, within 9.2 ps | 8 of 8, within 9.2 ps | none | 7 of 7, within 82 ps |
+| pins against the RTL | 0 mismatches (ngspice 0) | 0 (0) | 0 (0) | 0 (0) |
+
+Slice C's 0.15 V is D[5] while the test bench's memory switch turns on
+(ngspice's `sw` with hysteresis, Xyce's smooth `vswitch`): settled, 0.03 V.
+Starting from ngspice's state, Xyce ignores ngspice's `c_moscap_int1`
+nodes (8,968 of 61,397): ngspice makes the PDK's voltage-dependent moscap
+capacitors (`c={... v(1,2) ...}`) with an internal node, Xyce has none;
+their state is their terminals', which Xyce takes.
 
 Xyce's Basker (its threaded sparse LU, `.options linsol type=basker`, 4
 threads asked for) on slice B was stopped by hand after 7 h 04 min: it had
@@ -495,6 +512,9 @@ default tolerances Xyce stays within about 70 ps of that, ngspice moves an
 inverter's edge by up to 320 ps (the coarse steps `clock_breaks()` keeps
 off the chip's clock edges).
 
+
+Not run: ss and ff, and windows after the first in Xyce's own chain (each
+slice above starts from ngspice's state).
 
 ### VAJAX
 
