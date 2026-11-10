@@ -39,7 +39,7 @@ NIXPKGS = "github:NixOS/nixpkgs/494ce7fd23ff6a5dff39e1fb11e9b6f2ac74bf25"   # pa
 
 
 # --------------------------------------------------------------- libraries
-def resolve(path, section=None, seen=None, drop_comments=False):
+def resolve(path, section=None, seen=None):
     """the lines of an ngspice library: a whole file (.include) or one
     section of it (.lib file section), every .include / .lib inside
     resolved in turn. The PDK's sections name their own file
@@ -47,8 +47,9 @@ def resolve(path, section=None, seen=None, drop_comments=False):
     beside the including one is the including file itself."""
     seen = seen if seen is not None else []
     text = open(path).read().replace("\r", "")
-    if drop_comments:     # as ngspice: a '+' line after comment lines continues the line before them
-        text = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("*"))
+    # as ngspice: comment and blank lines go first, so a '+' line after
+    # them continues the line before them (test_engines.py)
+    text = "\n".join(l for l in text.splitlines() if l.strip() and not l.lstrip().startswith("*"))
     lines = []
     for l in re.sub(r"\n\+", " ", text).splitlines():
         lines.append(l)
@@ -79,7 +80,7 @@ def resolve(path, section=None, seen=None, drop_comments=False):
             f = f if os.path.isabs(f) else os.path.join(os.path.dirname(path), f)
             if not os.path.exists(f):
                 f = path
-            res += resolve(f, t[2] if kw == ".lib" else None, seen, drop_comments)
+            res += resolve(f, t[2] if kw == ".lib" else None, seen)
         elif kw in (".lib", ".endl"):
             continue                      # a whole file's section marks
         else:
@@ -410,9 +411,9 @@ def bsim4_bins(pdk_ngspice, va, corner="typical"):
     card's expressions evaluated with the PDK's .params at `corner`
     (mismatch and global variation off, as design.ngspice sets them), and
     the card parameters the VA has not"""
-    lines = resolve(os.path.join(pdk_ngspice, "design.ngspice"), drop_comments=True)
-    lines += resolve(os.path.join(pdk_ngspice, "sm141064.ngspice"), corner, drop_comments=True)
-    lines += resolve(os.path.join(pdk_ngspice, "sm141064.ngspice"), "noise_corner", drop_comments=True)
+    lines = resolve(os.path.join(pdk_ngspice, "design.ngspice"))
+    lines += resolve(os.path.join(pdk_ngspice, "sm141064.ngspice"), corner)
+    lines += resolve(os.path.join(pdk_ngspice, "sm141064.ngspice"), "noise_corner")
     env, insub, last = {}, False, None
     for l in lines:
         t = l.split()
