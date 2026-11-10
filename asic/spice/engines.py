@@ -440,12 +440,15 @@ def compare(ref_dat, dat, ref_txt, t_from=0.0):
     tr = [x + t_from for x in tr] if tr[0] < t_from - 1 else tr
     to = [x + t_from for x in to] if to[0] < t_from - 1 else to
     vdd = max(wr["M1_n"])
-    # settled: the reference moves less than 1 mV/ns there
+    # settled: the reference moves less than 1 mV/ns there; outputs only (the
+    # inputs are the same sources, sampled at other points)
     worst = {}
     for p in wr:
+        if p in chip.INPUTS:
+            continue
         best = (0.0, None)
         for k in range(1, len(tr) - 1, max(1, len(tr) // 4000)):
-            if tr[k] < 25:
+            if tr[k] < tr[0] + 25 or tr[k] > to[-1]:
                 continue
             if abs(wr[p][k + 1] - wr[p][k - 1]) / max(tr[k + 1] - tr[k - 1], 1e-6) > 1e-3:
                 continue
@@ -460,12 +463,13 @@ def compare(ref_dat, dat, ref_txt, t_from=0.0):
             continue
         for k in range(1, len(tr)):
             a, b = wr[p][k - 1], wr[p][k]
-            if (a - chip.OUT_LEVEL) * (b - chip.OUT_LEVEL) < 0 and tr[k] > 25:
+            if (a - chip.OUT_LEVEL) * (b - chip.OUT_LEVEL) < 0 and tr[k] <= to[-1]:
                 tx = tr[k - 1] + (chip.OUT_LEVEL - a) * (tr[k] - tr[k - 1]) / (b - a)
                 c = chip.crossing(to, wo[p], chip.OUT_LEVEL, b > a, tx - 30, within=60)
                 shifts.append((p, tx, None if c is None else c - tx))
-    bad_r = chip.check_functional(tr, wr, edges)
-    bad_o = chip.check_functional(to, wo, edges)
+    common = [e for e in edges if e[0] + 110 <= min(tr[-1], to[-1])]
+    bad_r = chip.check_functional(tr, wr, common)
+    bad_o = chip.check_functional(to, wo, common)
     found = [s for s in shifts if s[2] is not None]
     res = {"window_ns": [round(t_from, 1), round(t_end, 1)],
            "max_settled_dV": max((v[0] for v in worst.values()), default=0.0),
