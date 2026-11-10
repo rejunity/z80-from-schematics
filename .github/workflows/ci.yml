@@ -369,7 +369,7 @@ jobs:
         uses: DeterminateSystems/magic-nix-cache-action@main
 
       - name: Install LibreLane via nix profile
-        run: nix profile install github:librelane/librelane
+        run: scripts/nix_retry.sh nix profile install github:librelane/librelane
 
       - name: Cache synthesised netlist on (rtl + librelane config) hash
         id: synth-cache
@@ -460,7 +460,7 @@ jobs:
         uses: DeterminateSystems/magic-nix-cache-action@main
 
       - name: Install LibreLane via nix profile
-        run: nix profile install github:librelane/librelane
+        run: scripts/nix_retry.sh nix profile install github:librelane/librelane
 
       - name: Cache synthesised netlist on (rtl + librelane config) hash
         id: synth-cache
@@ -496,7 +496,7 @@ jobs:
         # and 5.048 reproduce the C-model trace exactly. Needs >= 5.030 for
         # UDP table parsing (apt's 5.020 lacks it — see the previous step).
         # Bump deliberately, after re-running `make basic_netlist_tests`.
-        run: nix profile install github:NixOS/nixpkgs/nixos-26.05#verilator
+        run: scripts/nix_retry.sh nix profile install github:NixOS/nixpkgs/nixos-26.05#verilator
 
       - name: Verify Verilator version (must be UDP-table capable)
         run: |
