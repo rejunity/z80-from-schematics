@@ -463,7 +463,7 @@ edge) -- B and C from ngspice's state in GitHub's run. One machine (i7-7700,
 4 cores, 8 MB L3), two or three simulations at a time, so absolute times
 are about 3x GitHub's; wall seconds (accepted + rejected steps):
 
-| Run | ngspice-45, KLU, 4 threads | Xyce 7.10, KLU2, serial | Xyce, KLU2, MPI x4 |
+| Run | ngspice-45, KLU, 4 threads | Xyce 7.10, KLU, serial | Xyce, KLU, MPI x4 |
 |---|---|---|---|
 | window 1 | 13,275 (1,238 + 151) | 10,030 (1,359 + 14) | |
 | slice A, power-up | 7,323 (651 + 55) | 6,184 (916 + 14) | 3,879 (928 + 14) |
@@ -498,11 +498,62 @@ nodes (8,968 of 61,397): ngspice makes the PDK's voltage-dependent moscap
 capacitors (`c={... v(1,2) ...}`) with an internal node, Xyce has none;
 their state is their terminals', which Xyce takes.
 
-Xyce's Basker (its threaded sparse LU, `.options linsol type=basker`, 4
-threads asked for) on slice B was stopped by hand after 7 h 04 min: it had
-reached 0.146 ns of the 40 ns (0.4 %), on one core at 99.9 % -- its
-threads were not used. KLU2 takes 953 s for the same slice. Basker on the
-bus-cycle slice was not run.
+Xyce's Basker (`.options linsol type=basker`, 4 threads asked for) on
+slice B was stopped by hand after 7 h 04 min: 11 steps, 0.146 ns of the
+40 ns (0.4 %), steps of the usual size (32 ps) taking about 40 min each,
+on one core. `type=basker` is Amesos2's old templated, serial Basker
+(Xyce's N_LAS_Amesos2Solver.C); the threaded one is `type=shylu_basker`,
+which needs a Trilinos with ShyLU-node Basker -- nixpkgs' has neither
+that nor Kokkos threads (`KOKKOS_ENABLE_SERIAL` only). KLU takes 953 s
+for the same slice.
+
+#### Where the linear solves go
+
+Xyce's `type=klu` is Amesos' KLU (`Amesos_Klu`), a full factorisation at
+every Newton iteration (`KLU_REPIVOT`, default 1). Slice B's 454 solves
+take 595 s, 1.31 s each. Its matrices (`.options linsol output_ls=1`, a
+0.06 ns run), factored outside Xyce with SuiteSparse 7.10's KLU
+(`klu/kluprof.c`, `klu/kluorder.c`), take the same:
+
+- 53,271 unknowns, 445,670 nonzeros (8.4 a row); BTF finds 462 blocks,
+  433 of them 1x1 and one of 50,328 -- the core is one strongly connected
+  block;
+- KLU (AMD, BTF): L+U 4.24 M nonzeros (9.5x the matrix), 3.07 GFlop;
+  factor 1.31 s, refactor (same pivots) 1.26 s, solve 5 ms. Xyce's time
+  is the factorisation, and KLU is doing it at its usual 2.4 GFlop/s:
+  the matrix is expensive, not the solver slow. Repivoting costs 5 %.
+
+What the fill is not (each a diagnostic, not a circuit):
+
+| Removed | L+U | GFlop | KLU factor |
+|---|---|---|---|
+| nothing | 4.24 M | 3.07 | 1.31 s |
+| p_vdd, p_vss and their sources (42,474 and 39,584 entries) | 4.24 M | 3.07 | 1.30 s |
+| also the largest signal net (buf_2_144's Z, 1,916 entries) | 4.20 M | 3.14 | 1.36 s |
+
+AMD already orders the two supply rows last. The coupling capacitors are
+not in the deck (chip.py lumps all 41,800 to ground: 10,211 capacitors to
+0), and the PDK's moscaps (`cap_nmos_06v0`, in the pads only) are two
+terminal elements with a fixed C's pattern. The fill is the core's own
+connectivity: transistors tie each cell's nets, and a logic netlist has
+large separators. The ordering, then, and the factorisation:
+
+| Same matrix | L+U | GFlop | Factor |
+|---|---|---|---|
+| KLU, AMD (Xyce's) | 4.24 M | 3.07 | 1.31 s |
+| KLU, COLAMD | 43.5 M | -- | 50.3 s |
+| KLU, METIS on A+A' (CHOLMOD's) | 3.08 M | 1.04 | 0.45 s |
+| KLU, nested dissection (CHOLMOD's NESDIS) | 3.03 M | 0.98 | 0.40 s |
+| UMFPACK, AMD, 1 thread (multifrontal, OpenBLAS) | 4.40 M | 3.07 | 0.200 s |
+| UMFPACK, METIS, 1 thread | 3.14 M | 1.03 | 0.115 s |
+| UMFPACK, METIS, 4 BLAS threads | 3.14 M | 1.03 | 0.108 s |
+
+A nested-dissection ordering cuts the work 3x; a solver that does it in
+dense blocks (BLAS-3) another 3-6x: 11x in all, one core. Slice B's
+linear solves would take about 50 s instead of 595 s, the slice about
+250 s instead of 799 s (its 150 s of device loading then the larger
+part). Xyce has no METIS ordering for KLU; its Amesos wrapper reaches
+UMFPACK if Trilinos is built with it (below).
 
 A smaller deck of chip_top's own cells (a Schmitt input pad, inverters, a
 dffrnq, a bi_t output pad with 100 pF) shows where the two differ: with

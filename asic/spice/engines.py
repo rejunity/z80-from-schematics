@@ -6,7 +6,7 @@ chip.py writes an ngspice deck for each window of the program (its
 simulate step); this script takes that deck as it is and
 
   xyce      translates it, the PDK's model library and the extracted chip,
-            for Xyce (Sandia; KLU2 through Amesos2), runs it, and writes
+            for Xyce (Sandia; KLU through Amesos), runs it, and writes
             the pins in chip.py's own .dat format beside ngspice's, so
             chip.py's checks read either
   compare   two runs of one window: every pin's largest difference where
