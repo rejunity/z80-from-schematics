@@ -595,6 +595,42 @@ On the 100-stage chain ngspice is the odd one out (404 steps, 79
 rejected, against Xyce's 1,687 and VAJAX's 779): its default steps move
 the edge, as on the chip ("Xyce" above).
 
+Per step on this machine's CPU (i7-7700, the machine to itself, one
+thread each, `engines.py cells`; VAJAX: its second transient run, the
+first compiles, over accepted steps; Xyce: its solvers' time; ngspice:
+its analysis time):
+
+| Circuit | transistors | VAJAX ms/step | Xyce ms/step | ngspice ms/step |
+|---|---|---|---|---|
+| 1 inv_1 | 2 | 0.83 | 0.044 | 0.012 |
+| 1 nand2_1 | 4 | 1.02 | 0.052 | 0.019 |
+| 10 inv_1 | 20 | 2.14 | 0.10 | 0.060 |
+| 4-bit dffrnq_1 register | 112 | 7.77 | 0.47 | 0.38 |
+| 100 inv_1, from 0 V | 200 | 20.8 | 0.72 | 0.97 |
+| 32-bit dffrnq_1 register (*) | 896 | 49.5 (sparse) | 4.1 | |
+| 1,000 inv_1, from 0 V (*) | 2,000 | 134 (sparse) | 12.8 | |
+
+(*) two copies of the timing run shared the CPU: approximate. VAJAX's
+compiling (the BSIM4 Verilog-A to JAX, then XLA) adds about 65 s a run
+before the first step; up to 200 transistors it uses its dense solver,
+past 400 its sparse one. On the 1,000-inverter chain only `n1`'s edges
+compare (within 8 ps, Xyce and VAJAX alike): started from 0 V the chain
+is metastable -- Xyce and VAJAX hold `n500` at the 2.10 V trip point for
+several ns, ngspice resolves it at once -- and the input's edges do not
+reach `n500` or `n1000` within the 30 ns, so the settled differences
+there (2-5 V) are the start, not the models. The 4-thread VAJAX runs
+were not done.
+
+So VAJAX solves this PDK's cells correctly once patched, and it is about
+10-30x slower per step than Xyce on the CPU, plus its compile time. At
+the chip's 127,285 transistors a linear extrapolation from 2,000 gives
+about 8 s a step for VAJAX alone, before the fill-in that makes the
+chip's sparse LU dominate in ngspice and Xyce (7.3 s a step for Xyce/KLU
+on window 1); that is a lower bound, not a forecast. Its GPU path does
+not help here (the GTX 1080: 8 GB, float64 at 1/32 rate; GitHub's
+runners have no GPU). VAJAX is out for the whole chip on this machine
+and in CI.
+
 Two more limits of VAJAX here: its transient takes the DC point by plain
 Newton from mid-rail -- the homotopy (gdev, gshunt, source stepping) its
 `op` analysis has is not used -- and on 100 inverters that diverges
