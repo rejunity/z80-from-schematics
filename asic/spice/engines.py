@@ -14,14 +14,22 @@ simulate step); this script takes that deck as it is and
             against the reference's, and the pins against the RTL at every
             clock edge (chip.py's check_functional)
 
+  cells     a few of chip_top's own standard cells (chains of inv_1 /
+            nand2_1, a dffrnq_1 shift register) in ngspice, Xyce and VAJAX
+            (BSIM4 as Verilog-A): wall time, steps, Newton iterations, and
+            each against ngspice
+
 usage: engines.py xyce DECK.sp [--out DIR] [--xyce PATH]
        engines.py compare REF.dat OTHER.dat --ref ref.txt [--from NS]
+       engines.py cells inv|nand|dff N --net chip.net --va bsim4.va --python VENV/bin/python
 
 The translation changes no physics at the PDK's nominal settings, with one
 exception, the diodes (below); every rule is in XYCE_* and in
 asic/spice/README.md ("Other simulators").
 """
 import argparse, json, os, re, shutil, subprocess, sys, time
+
+import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -31,7 +39,7 @@ NIXPKGS = "github:NixOS/nixpkgs/494ce7fd23ff6a5dff39e1fb11e9b6f2ac74bf25"   # pa
 
 
 # --------------------------------------------------------------- libraries
-def resolve(path, section=None, seen=None):
+def resolve(path, section=None, seen=None, drop_comments=False):
     """the lines of an ngspice library: a whole file (.include) or one
     section of it (.lib file section), every .include / .lib inside
     resolved in turn. The PDK's sections name their own file
@@ -39,6 +47,8 @@ def resolve(path, section=None, seen=None):
     beside the including one is the including file itself."""
     seen = seen if seen is not None else []
     text = open(path).read().replace("\r", "")
+    if drop_comments:     # as ngspice: a '+' line after comment lines continues the line before them
+        text = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("*"))
     lines = []
     for l in re.sub(r"\n\+", " ", text).splitlines():
         lines.append(l)
@@ -69,7 +79,7 @@ def resolve(path, section=None, seen=None):
             f = f if os.path.isabs(f) else os.path.join(os.path.dirname(path), f)
             if not os.path.exists(f):
                 f = path
-            res += resolve(f, t[2] if kw == ".lib" else None, seen)
+            res += resolve(f, t[2] if kw == ".lib" else None, seen, drop_comments)
         elif kw in (".lib", ".endl"):
             continue                      # a whole file's section marks
         else:
@@ -253,7 +263,7 @@ def xyce_ic(src, dst):
     return len(out)
 
 
-def xyce_deck(sp, out_dir, options=()):
+def xyce_deck(sp, out_dir, options=(), uic=True):
     """chip.py's ngspice deck -> (Xyce deck, the .prn it writes, ngspice's
     .dat name for it, notes)"""
     os.makedirs(out_dir, exist_ok=True)
@@ -306,7 +316,7 @@ def xyce_deck(sp, out_dir, options=()):
     libf = os.path.join(out_dir, "models.xyce.lib")
     open(libf, "w").write("\n".join(xyce_lib(lib, notes)) + "\n")
     deck = [open(sp).readline().rstrip(), f".include {libf}"] + body + list(options) + [
-        f".tran {tran[1]} {tran[2]} {tran[3]} {tran[4]} UIC",
+        f".tran {tran[1]} {tran[2]} {tran[3]} {tran[4]}" + (" UIC" if uic else ""),
         f".print tran format=noindex file={prn} " + " ".join(cols),
         ".end"]
     xsp = os.path.join(out_dir, os.path.basename(sp).replace(".sp", ".xyce.sp"))
@@ -331,10 +341,10 @@ def nix_bin(attr, name):
     return os.path.join(p.stdout.strip().splitlines()[-1], "bin", name)
 
 
-def run_xyce(sp, out_dir, xyce=None, ranks=1, options=()):
+def run_xyce(sp, out_dir, xyce=None, ranks=1, options=(), uic=True):
     """Xyce on chip.py's deck: serial, or with MPI over `ranks` processes
     (xyce-parallel: the devices' loads spread over the ranks, KLU on one)"""
-    xsp, prn, dat, notes = xyce_deck(sp, out_dir, options)
+    xsp, prn, dat, notes = xyce_deck(sp, out_dir, options, uic)
     if not xyce:
         xyce = nix_bin("xyce-parallel" if ranks > 1 else "xyce", "Xyce")
     cmd = [xyce]
@@ -364,70 +374,343 @@ def run_xyce(sp, out_dir, xyce=None, ranks=1, options=()):
 
 
 # ------------------------------------------------------------------ VAJAX
-VAJAX_DECK = """GF180 5 V inverter sm141064 {corner} bin 0 engines.py vajax
-load "{va}"
-model nfet bsim4va ( type=1 {nparams} )
-model pfet bsim4va ( type=-1 {pparams} )
-vdd (vdd 0) vsource dc=5
-vin (in 0) vsource type="pwl" wave=[0, 0, 1e-9, 0, 2e-9, 5, 12e-9, 5, 13e-9, 0]
-mn (out in 0 0) nfet w=1u l=1u
-mp (out in vdd vdd) pfet w=2u l=1u
-"""
+# VAJAX (ChipFlow) has no BSIM4 of its own; `va` is a BSIM4 Verilog-A with
+# module bsim4va, compiled by VAJAX's openvaf_jax -- not part of this
+# repository (the Berkeley-derived VA-BSIM48 that OpenVAF's tests carry is
+# CC BY-NC-SA 4.0). The PDK's cards go in as they are, every expression
+# evaluated at the corner, with BSIM4_VA_FIXES for what that port gets
+# wrong; VAJAX itself needs the local patches README.md lists
+# ("VAJAX"), and VAJAX_ENV turns on the one that is a switch.
+BSIM4_VA_FIXES = {
+    # VA-BSIM48 never defaults wk2 when it is not given (lk2, pk2 it does):
+    # k2 = k2 + wk2 / Weff with wk2 = its NOT_GIVEN mark, -12345789, so
+    # k2ox ~ -1e7 and Abulk clamps at 0.05; ngspice's C code takes 0
+    "wk2": 0.0,
+}
+VAJAX_ENV = {"VAJAX_AD_JAC": "bsim4va", "JAX_PLATFORMS": "cpu"}
+BSIM4_MODELS = {"nfet_05v0": "nfet_06v0", "nfet_06v0": "nfet_06v0",
+                "pfet_05v0": "pfet_06v0", "pfet_06v0": "pfet_06v0"}
+SPICE_SCALE = {"t": 1e12, "g": 1e9, "meg": 1e6, "k": 1e3, "m": 1e-3, "u": 1e-6, "n": 1e-9, "p": 1e-12,
+               "f": 1e-15, "a": 1e-18}
 
 
-def vajax_inverter(pdk_ngspice, va, out_dir, python, corner="typical"):
-    """VAJAX on one inverter of the PDK's own 6 V cards (bin 0, as
-    nfet_05v0 / pfet_05v0 use them), every expression in the cards
-    evaluated here: whether VAJAX's BSIM4 inverts. VAJAX itself has no
-    BSIM4 (its engine's models: PSP103, BSIM-BULK/CMG/IMG, EKV, HiSIM2, ...);
-    `va` is a BSIM4 Verilog-A file, module bsim4va, compiled by its
-    openvaf_jax -- not part of this repository (the Berkeley-derived
-    VA-BSIM48 that OpenVAF's tests carry is CC BY-NC-SA 4.0)."""
-    lines = resolve(os.path.join(pdk_ngspice, "design.ngspice"))
-    lines += resolve(os.path.join(pdk_ngspice, "sm141064.ngspice"), corner)
-    env, insub = {}, False
+def spice_num(v):
+    m = re.match(r"([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)(meg|[tgkmunpfa])?", v.strip(), re.I)
+    return float(m.group(1)) * SPICE_SCALE.get((m.group(2) or "").lower(), 1.0)
+
+
+def va_params(va):
+    """the parameter names a Verilog-A module declares"""
+    return {n.lower() for n in re.findall(r"parameter\s+(?:real|integer)\s+(\w+)", open(va).read())}
+
+
+def bsim4_bins(pdk_ngspice, va, corner="typical"):
+    """every bin of the PDK's 6 V MOSFETs (nfet_06v0.N / pfet_06v0.N) as
+    the VA's parameters: {model: [(lmin, lmax, wmin, wmax, params)]}, the
+    card's expressions evaluated with the PDK's .params at `corner`
+    (mismatch and global variation off, as design.ngspice sets them), and
+    the card parameters the VA has not"""
+    lines = resolve(os.path.join(pdk_ngspice, "design.ngspice"), drop_comments=True)
+    lines += resolve(os.path.join(pdk_ngspice, "sm141064.ngspice"), corner, drop_comments=True)
+    lines += resolve(os.path.join(pdk_ngspice, "sm141064.ngspice"), "noise_corner", drop_comments=True)
+    env, insub, last = {}, False, None
     for l in lines:
         t = l.split()
-        if t and t[0].lower() == ".subckt":
+        if not t:
+            continue
+        if t[0].lower() == ".subckt":
             insub = True
-        elif t and t[0].lower() == ".ends":
+        elif t[0].lower() == ".ends":
             insub = False
-        elif t and t[0].lower() == ".param" and not insub:
-            for k, v in param_tokens(quoted(l.split(None, 1)[1])):
-                env[k.lower()] = v
+        # .param, and its ' +name=...' lines after blank ones (noise_corner)
+        elif (t[0].lower() == ".param" or (t[0].startswith("+") and last == ".param")) and not insub:
+            tail = l.split(None, 1)[1] if t[0].lower() == ".param" and len(t) > 1 else \
+                l.strip()[1:] if t[0].startswith("+") else ""
+            for k, v in param_tokens(quoted(tail)):
+                if k:
+                    env[k.lower()] = v
+        if not t[0].startswith("+"):
+            last = t[0].lower()
+
     def num(v):
         v = v.strip("{}")
         try:
-            return float(v)
-        except ValueError:
+            return spice_num(v) if NUMBER.match(v) else float(v)
+        except (ValueError, AttributeError):
             pass
         expr = re.sub(r"[A-Za-z_]\w*", lambda m: f"({num(env[m.group(0).lower()])})"
                       if m.group(0).lower() in env else m.group(0), v)
         return float(eval(expr, {"__builtins__": {}}, {}))
-    cards = {}
+    known = va_params(va)
+    bins, dropped = {}, set()
     for l in lines:
-        m = re.match(r"\.model (nfet_06v0|pfet_06v0)\.0 \w+ (.*)", l, re.I)
-        if m:
-            pairs = [(k.lower(), num(v)) for k, v in param_tokens(quoted(m.group(2))) if k
-                     and k.lower() not in ("level", "version")]
-            cards[m.group(1).lower()] = " ".join(f"{k}={v:.10g}" for k, v in pairs)
+        m = re.match(r"\s*\.model\s+(nfet_06v0|pfet_06v0)\.(\d+)\s+(nmos|pmos)\s+(.*)", l, re.I)
+        if not m:
+            continue
+        p = {"type": 1.0 if m.group(3).lower() == "nmos" else -1.0}
+        for k, v in param_tokens(quoted(m.group(4))):
+            if not k or k.lower() in ("level", "version"):
+                continue
+            if k.lower() not in known:
+                dropped.add(k.lower())
+                continue
+            p[k.lower()] = num(v)
+        for k, v in BSIM4_VA_FIXES.items():
+            p.setdefault(k, v)
+        bins.setdefault(m.group(1).lower(), []).append((p["lmin"], p["lmax"], p["wmin"], p["wmax"], p))
+    return bins, sorted(dropped)
+
+
+def pick_bin(bins, l, w):
+    """ngspice's choice: lmin <= L < lmax, wmin <= W < wmax"""
+    for k, (lmin, lmax, wmin, wmax, _) in enumerate(bins):
+        if lmin <= l < lmax and wmin <= w < wmax:
+            return k
+    sys.exit(f"engines: no bin for L={l:g} W={w:g}")
+
+
+def net_subckts(net):
+    """chip.py's chip.net: {cell: (ports, body lines)}"""
+    cells, cur = {}, None
+    for l in open(net):
+        t = l.split()
+        if not t or t[0].startswith("*"):
+            continue
+        if t[0].lower() == ".subckt":
+            cur = t[1]
+            cells[cur] = (t[2:], [])
+        elif t[0].lower() == ".ends":
+            cur = None
+        elif cur:
+            cells[cur][1].append(l.strip())
+    return cells
+
+
+CELL = "gf180mcu_fd_sc_mcu7t5v0__"
+VDD = 5.0
+
+
+def cell_circuit(kind, n):
+    """a few of chip_top's own standard cells, each a list of (instance,
+    cell, {port: node}); the stimuli; the nodes to compare; the time span"""
+    inst = []
+    p = lambda **kw: dict(kw, VDD="vdd", VSS="0", VNW="vdd", VPW="0")
+    if kind == "inv":                   # a chain of n inv_1
+        for k in range(n):
+            inst.append((f"i{k}", CELL + "inv_1", p(I=f"n{k}", ZN=f"n{k + 1}")))
+        src = {"n0": [(0, 0), (2, 0), (2.5, VDD), (12, VDD), (12.5, 0)]}
+        probe = [f"n{k}" for k in sorted({1, max(1, n // 2), n})]
+        return inst, src, probe, 25.0
+    if kind == "nand":                  # n nand2_1 in a chain, A2 tied high
+        for k in range(n):
+            inst.append((f"g{k}", CELL + "nand2_1", p(A1=f"n{k}", A2="vdd", ZN=f"n{k + 1}")))
+        src = {"n0": [(0, 0), (2, 0), (2.5, VDD), (12, VDD), (12.5, 0)]}
+        return inst, src, [f"n{k}" for k in sorted({1, n})], 25.0
+    if kind == "dff":                   # an n-bit shift register of dffrnq_1, 100 MHz clock
+        for k in range(n):
+            inst.append((f"f{k}", CELL + "dffrnq_1", p(D=f"q{k}", Q=f"q{k + 1}", CLK="clk", RN="rn")))
+        clk = [(0, 0)]
+        for c in range(6):
+            t0 = 5 + 10 * c
+            clk += [(t0, 0), (t0 + 0.5, VDD), (t0 + 5, VDD), (t0 + 5.5, 0)]
+        src = {"clk": clk, "rn": [(0, 0), (1, 0), (1.5, VDD)], "q0": [(0, 0), (8, 0), (8.5, VDD), (18, VDD), (18.5, 0)]}
+        return inst, src, [f"q{k}" for k in range(1, n + 1)], 60.0
+    sys.exit(f"engines: no circuit {kind}")
+
+
+def cells_decks(kind, n, net, pdk_ngspice, va, out_dir, corner="typical", temp=25):
+    """one circuit of chip_top's cells as an ngspice deck (the PDK's own
+    BSIM4 4.5 / 4.6), a Xyce deck from it (xyce_deck) and a VAJAX .sim
+    (the VA, one model per bin), flattened, every transistor's L, W, AD,
+    AS, PD, PS as extracted; returns the paths and the probes"""
     os.makedirs(out_dir, exist_ok=True)
+    cells = net_subckts(net)
+    inst, src, probe, tstop = cell_circuit(kind, n)
+    used = sorted({c for _, c, _ in inst})
+    tag = f"{kind}{n}"
+    # ngspice: the cells' own subcircuits from chip.net (named *chip.net so
+    # xyce_deck translates them as chip.py's netlist)
+    cnet = os.path.join(out_dir, "cells.chip.net")
+    with open(cnet, "w") as f:
+        for c in used:
+            f.write(f".subckt {c} {' '.join(cells[c][0])}\n" + "\n".join(cells[c][1]) + "\n.ends\n")
+
+    def pwl(pts, unit="n"):
+        return " ".join(f"{a:g}{unit} {b:g}" for a, b in pts)
+    t = pdk_ngspice
+    dat = os.path.join(out_dir, f"{tag}_ng.dat")
+    sp = [f"* {tag}: chip_top's cells, GF180 {corner}, engines.py cells",
+          f".include {t}/design.ngspice", f".lib {t}/sm141064.ngspice {corner}", f".include {cnet}",
+          f".temp {temp}", ".options klu", f"V_vdd vdd 0 {VDD}"]
+    sp += [f"V_{s} {s} 0 PWL({pwl(pts)})" for s, pts in src.items()]
+    for name, c, conn in inst:
+        sp.append(f"X{name} " + " ".join(conn[port] for port in cells[c][0]) + f" {c}")
+    sp += [".control", "set wr_singlescale", "set wr_vecnames", "option numdgt=7",
+           f"tran 0.01n {tstop:g}n 0 0.1n", f"wrdata {dat} " + " ".join(f"v({x})" for x in probe),
+           "rusage all", "quit", ".endc", ".end"]
+    spf = os.path.join(out_dir, f"{tag}.sp")
+    open(spf, "w").write("\n".join(sp) + "\n")
+    # VAJAX: flat, the VA's models one per bin
+    bins, dropped = bsim4_bins(pdk_ngspice, va, corner)
     shutil.copy(va, os.path.join(out_dir, "bsim4va.va"))
-    sim = os.path.join(out_dir, "inverter.sim")
-    open(sim, "w").write(VAJAX_DECK.format(corner=corner, va="bsim4va.va", nparams=cards["nfet_06v0"],
-                                           pparams=cards["pfet_06v0"]))
-    script = (f"from vajax import CircuitEngine\nimport numpy as np, json\ne = CircuitEngine({sim!r}); e.parse()\n"
-              "e.prepare(t_stop=30e-9, dt=10e-12); r = e.run_transient()\n"
-              "t = np.asarray(r.times); o = np.asarray(r.voltages['out'])\n"
-              "at = lambda x: float(np.interp(x, t, o))\n"
-              "print(json.dumps({'out_at_0.5ns': at(0.5e-9), 'out_at_8ns': at(8e-9), 'out_at_25ns': at(25e-9)}))\n")
-    p = subprocess.run([python, "-I", "-c", script], cwd=out_dir, capture_output=True, text=True,
-                       env=dict(os.environ, JAX_PLATFORMS=os.environ.get("JAX_PLATFORMS", "cpu")))
-    res = json.loads(p.stdout.strip().splitlines()[-1]) if p.returncode == 0 else {"error": p.stderr[-2000:]}
-    res["inverts"] = bool(res.get("out_at_0.5ns", 0) > 4.5 and res.get("out_at_8ns", 5) < 0.5
-                          and res.get("out_at_25ns", 0) > 4.5)
-    print(json.dumps(res, indent=1))
+    used_bins, body, ncap, nmos = set(), [], 0, 0
+    for name, c, conn in inst:
+        ports = dict(zip(cells[c][0], [conn[p] for p in cells[c][0]]))
+        node = lambda x: "0" if x == "0" else ports.get(x, f"{name}_{x}")
+        for l in cells[c][1]:
+            tk = l.split()
+            if tk[0][0] in "Xx" and tk[5] in BSIM4_MODELS:
+                kv = {k.lower(): spice_num(v) for k, v in (x.split("=") for x in tk[6:])}
+                model = BSIM4_MODELS[tk[5]]
+                b = pick_bin(bins[model], kv["l"], kv["w"])
+                used_bins.add((model, b))
+                geo = " ".join(f"{k}={kv[k]:.6g}" for k in ("w", "l", "ad", "as", "pd", "ps") if k in kv)
+                body.append(f"m{name}_{tk[0]} ({' '.join(node(x) for x in tk[1:5])}) {model}_{b} {geo}")
+                nmos += 1
+            elif tk[0][0] in "Cc":
+                body.append(f"c{name}_{tk[0]} ({node(tk[1])} {node(tk[2])}) cap c={spice_num(tk[3]):.6g}")
+                ncap += 1
+            else:
+                sys.exit(f"engines: no VAJAX rule for {l}")
+    sim = [f"{tag} chip_top cells GF180 {corner} engines.py cells", "ground 0", 'load "bsim4va.va"',
+           'load "spice/capacitor.osdi"', "model cap sp_capacitor"]
+    for model, b in sorted(used_bins):
+        p = bins[model][b][4]
+        sim.append(f"model {model}_{b} bsim4va ( " + " ".join(f"{k}={v:.10g}" for k, v in p.items()) + " )")
+    sim.append(f"vvdd (vdd 0) vsource dc={VDD}")
+    for s, pts in src.items():
+        wave = ", ".join(f"{a * 1e-9:g}, {b:g}" for a, b in pts)
+        sim.append(f'v{s} ({s} 0) vsource type="pwl" wave=[{wave}]')
+    sim += body
+    simf = os.path.join(out_dir, f"{tag}.sim")
+    open(simf, "w").write("\n".join(sim) + "\n")
+    return {"sp": spf, "sim": simf, "dat": dat, "probe": probe, "tstop_ns": tstop, "transistors": nmos,
+            "caps": ncap, "bins": sorted(f"{m}.{b}" for m, b in used_bins), "card_params_dropped": dropped}
+
+
+VAJAX_RUN = r"""
+import json, sys, time, numpy as np
+from vajax import CircuitEngine
+from vajax.analysis.transient.adaptive import AdaptiveConfig
+sim, tstop, dat, probe, repeat = sys.argv[1], float(sys.argv[2]), sys.argv[3], sys.argv[4].split(","), int(sys.argv[5])
+max_dt = float(sys.argv[6])
+t0 = time.time(); e = CircuitEngine(sim); e.parse(); t_parse = time.time() - t0
+t0 = time.time()
+e.prepare(t_stop=tstop, dt=1e-11, temperature=298.15, adaptive_config=AdaptiveConfig(max_dt=max_dt))
+t_prep = time.time() - t0
+runs = []
+for k in range(repeat):          # the first run JIT-compiles the transient loop
+    t0 = time.time(); r = e.run_transient(); runs.append(time.time() - t0)
+st = r.stats
+t = np.asarray(r.times)
+with open(dat, "w") as f:
+    f.write(" time " + " ".join(f"v({p})" for p in probe) + "\n")
+    cols = [np.asarray(r.voltages[p]) for p in probe]
+    for k in range(len(t)):
+        f.write(" " + " ".join(f"{x:.7e}" for x in [t[k]] + [c[k] for c in cols]) + "\n")
+print(json.dumps({"parse_s": round(t_parse, 2), "prepare_s": round(t_prep, 2), "runs_s": [round(x, 3) for x in runs],
+                  "accepted": int(st.get("accepted_steps", 0)), "rejected": int(st.get("rejected_steps", 0)),
+                  "newton": int(st.get("total_nr_iterations", 0)), "solver": st.get("solver"),
+                  "loop_wall_s": float(st.get("wall_time", 0.0))}))
+"""
+
+
+def run_vajax(d, python, repeat=2, threads=None, max_dt=1e-10):
+    """VAJAX on a cells_decks() .sim: parse + model compile, prepare, then
+    the transient `repeat` times (the first JIT-compiles it)"""
+    env = dict(os.environ, **VAJAX_ENV)
+    if threads:
+        env["XLA_FLAGS"] = f"--xla_cpu_multi_thread_eigen={'true' if threads > 1 else 'false'} " \
+                           f"intra_op_parallelism_threads={threads}"
+        env["OMP_NUM_THREADS"] = str(threads)
+    dat = d["dat"].replace("_ng.dat", "_vajax.dat")
+    t0 = time.time()
+    p = subprocess.run([python, "-I", "-c", VAJAX_RUN, d["sim"], str(d["tstop_ns"] * 1e-9), dat,
+                        ",".join(d["probe"]), str(repeat), str(max_dt)], cwd=os.path.dirname(d["sim"]),
+                       capture_output=True, text=True, env=env)
+    if p.returncode:
+        return {"engine": "VAJAX", "error": (p.stdout + p.stderr)[-3000:]}
+    res = json.loads(p.stdout.strip().splitlines()[-1])
+    res.update(engine="VAJAX", wall_s=round(time.time() - t0, 1), dat=dat, threads=threads, max_dt=max_dt)
     return res
+
+
+def run_ngspice_cells(d, threads=1):
+    s = open(d["sp"]).read().replace(".control\n", f".control\nset num_threads={threads}\n", 1)
+    f = d["sp"].replace(".sp", f"_ng{threads}.sp")
+    open(f, "w").write(s)
+    t0 = time.time()
+    p = subprocess.run([chip.tool("ngspice"), "-b", f], cwd=os.path.dirname(f), capture_output=True, text=True)
+    txt = p.stdout + p.stderr
+    g = lambda pat: (re.findall(pat, txt) or [None])[-1]
+    return {"engine": f"ngspice x{threads}", "wall_s": round(time.time() - t0, 2),
+            "accepted": int(g(r"Accepted timepoints\s*=\s*(\d+)") or 0),
+            "rejected": int(g(r"Rejected timepoints\s*=\s*(\d+)") or 0),
+            "newton": int(g(r"Transient iterations\s*=\s*(\d+)") or 0),
+            "analysis_s": float(g(r"Total analysis time \(seconds\)\s*=\s*([\d.]+)") or 0),
+            "tran_s": float(g(r"Transient time\s*=\s*([\d.]+)") or 0),
+            "aborted": "aborted" in txt, "dat": d["dat"]}
+
+
+def load_dat(dat):
+    rows = [l.split() for l in open(dat) if l.strip()]
+    head = rows[0]
+    data = np.array([[float(x) for x in r] for r in rows[1:]]) if rows[1:] else np.zeros((0, len(head)))
+    return head, data
+
+
+def cells_compare(ref, other, level=VDD / 2):
+    """every probe's mid-supply crossings against the reference's, and
+    the largest difference where the reference has settled"""
+    hr, r = load_dat(ref)
+    ho, o = load_dat(other)
+    res = {"edges": 0, "missing": 0, "max_edge_ps": 0.0, "max_settled_mV": 0.0}
+    for k, name in enumerate(hr[1:], 1):
+        j = ho.index(name)
+        tr, vr, to, vo = r[:, 0], r[:, k], o[:, 0], o[:, j]
+        for i in range(1, len(tr)):
+            if (vr[i - 1] - level) * (vr[i] - level) < 0:
+                tx = tr[i - 1] + (level - vr[i - 1]) * (tr[i] - tr[i - 1]) / (vr[i] - vr[i - 1])
+                res["edges"] += 1
+                c = [to[m - 1] + (level - vo[m - 1]) * (to[m] - to[m - 1]) / (vo[m] - vo[m - 1])
+                     for m in range(1, len(to)) if (vo[m - 1] - level) * (vo[m] - level) < 0
+                     and (vo[m] > vo[m - 1]) == (vr[i] > vr[i - 1])]
+                c = [x for x in c if abs(x - tx) < 1e-9]
+                if not c:
+                    res["missing"] += 1
+                    continue
+                res["max_edge_ps"] = max(res["max_edge_ps"], min(abs(x - tx) for x in c) * 1e12)
+        # settled: the reference moves less than 1 mV within 0.5 ns either side
+        lo, hi = np.searchsorted(tr, tr - 0.5e-9), np.searchsorted(tr, tr + 0.5e-9, side="right")
+        for i in range(len(tr)):
+            w = vr[lo[i]:hi[i]]
+            if tr[i] > 0.5e-9 and tr[i] < min(tr[-1], to[-1]) - 0.5e-9 and w.max() - w.min() < 1e-3:
+                res["max_settled_mV"] = max(res["max_settled_mV"], abs(np.interp(tr[i], to, vo) - vr[i]) * 1e3)
+    res["max_edge_ps"] = round(res["max_edge_ps"], 2)
+    res["max_settled_mV"] = round(res["max_settled_mV"], 3)
+    return res
+
+
+def cells(kind, n, net, pdk_ngspice, va, python, out_dir, engines_=("ngspice", "xyce", "vajax"),
+          repeat=2, threads=1):
+    """one circuit in every engine: wall times, steps, Newton iterations,
+    and each against ngspice"""
+    d = cells_decks(kind, n, net, pdk_ngspice, va, out_dir)
+    out = {"circuit": f"{kind}{n}", "transistors": d["transistors"], "caps": d["caps"], "bins": d["bins"],
+           "card_params_dropped": d["card_params_dropped"], "runs": []}
+    if "ngspice" in engines_:
+        out["runs"].append(run_ngspice_cells(d, threads))
+    if "xyce" in engines_:
+        r = run_xyce(d["sp"], os.path.join(out_dir, "xyce"), uic=False)   # its DC point, as ngspice and VAJAX
+        out["runs"].append(r)
+    if "vajax" in engines_:
+        out["runs"].append(run_vajax(d, python, repeat, threads))
+    for r in out["runs"]:
+        if r.get("dat") and os.path.exists(r["dat"]) and r["dat"] != d["dat"] and os.path.exists(d["dat"]):
+            r["vs_ngspice"] = cells_compare(d["dat"], r["dat"])
+    json.dump(out, open(os.path.join(out_dir, "result.json"), "w"), indent=1)
+    print(json.dumps(out, indent=1))
+    return out
 
 
 # ----------------------------------------------------------------- compare
@@ -491,11 +774,17 @@ def main():
     a.add_argument("--translate-only", action="store_true")
     a.add_argument("--ranks", type=int, default=1, help="MPI processes (xyce-parallel)")
     a.add_argument("--option", action="append", default=[], help="an extra deck line, e.g. '.options timeint erroption=1'")
-    v = sub.add_parser("vajax", help="VAJAX on one inverter of the PDK's BSIM4 cards")
-    v.add_argument("--pdk-ngspice", required=True, help="the PDK's libs.tech/ngspice")
+    v = sub.add_parser("cells", help="chip_top's standard cells in ngspice, Xyce and VAJAX (BSIM4 Verilog-A)")
+    v.add_argument("kind", choices=("inv", "nand", "dff"))
+    v.add_argument("n", type=int, help="cells in the chain / bits of the shift register")
+    v.add_argument("--net", required=True, help="chip.py's chip.net (the extracted cells)")
+    v.add_argument("--pdk-ngspice", default=os.path.join(chip.PDK_ROOT, "libs.tech", "ngspice"))
     v.add_argument("--va", required=True, help="a BSIM4 Verilog-A file (module bsim4va)")
-    v.add_argument("--python", required=True, help="the Python that has vajax installed")
-    v.add_argument("--out", default="vajax-inverter")
+    v.add_argument("--python", required=True, help="the Python that has vajax installed (patched, README.md)")
+    v.add_argument("--out", default="cells")
+    v.add_argument("--engines", default="ngspice,xyce,vajax")
+    v.add_argument("--repeat", type=int, default=2, help="VAJAX transient runs (the first compiles)")
+    v.add_argument("--threads", type=int, default=1)
     c = sub.add_parser("compare")
     c.add_argument("ref")
     c.add_argument("other")
@@ -508,8 +797,10 @@ def main():
             print(xyce_deck(a.deck, out, a.option))
             return 0
         return 0 if run_xyce(a.deck, out, a.xyce, a.ranks, a.option)["rc"] == 0 else 1
-    if a.cmd == "vajax":
-        return 0 if vajax_inverter(a.pdk_ngspice, a.va, a.out, a.python)["inverts"] else 1
+    if a.cmd == "cells":
+        r = cells(a.kind, a.n, a.net, a.pdk_ngspice, a.va, a.python, os.path.join(a.out, f"{a.kind}{a.n}"),
+                  a.engines.split(","), a.repeat, a.threads)
+        return 1 if any("error" in x for x in r["runs"]) else 0
     compare(a.ref, a.other, a.ref_txt, a.t_from)
     return 0
 
