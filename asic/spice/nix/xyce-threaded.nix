@@ -5,13 +5,18 @@
 # nixpkgs as pads.py pins it; its Trilinos and Xyce, three changes. With
 # -fopenmp, SuiteSparse_config.h includes omp.h, whose C++ templates break
 # where Trilinos includes amd.h / umfpack.h inside extern "C": omp.h first.
-#   nix build -f asic/spice/nix/xyce-threaded.nix
+# AMESOS_UMFPACK_TIMING=1 makes Amesos' UMFPACK print its timing at the end
+# (matrix and vector redistribution to rank 0, conversion, factorisations).
+# mpi = true: the same over OpenMPI (xyce-parallel; the devices' loads
+# spread over the ranks, the matrix gathered to rank 0 for Amesos).
+#   nix build -f asic/spice/nix/xyce-threaded.nix [--arg mpi true]
+{ mpi ? false }:
 let
   nixpkgs = builtins.getFlake "github:NixOS/nixpkgs/494ce7fd23ff6a5dff39e1fb11e9b6f2ac74bf25";
   pkgs = nixpkgs.legacyPackages.x86_64-linux;
   inherit (pkgs) lib metis suitesparse;
 
-  trilinos = pkgs.trilinos.overrideAttrs (old: {
+  trilinos = (pkgs.trilinos.override { withMPI = mpi; }).overrideAttrs (old: {
     buildInputs = old.buildInputs ++ [ metis ];
     preConfigure = old.preConfigure + ''
       cmakeFlagsArray+=(
@@ -30,6 +35,9 @@ let
         -DEpetraExt_ENABLE_UMFPACK=OFF
         -DCMAKE_CXX_FLAGS="-O3 -fPIC -include omp.h"
       )
+    '' + lib.optionalString mpi ''
+      # Zoltan's METIS interface needs ParMETIS (third_library.c)
+      cmakeFlagsArray+=(-DZoltan_ENABLE_METIS=OFF)
     '';
     # Amesos_Umfpack orders with UMFPACK's defaults (AMD); METIS on request
     postPatch = (old.postPatch or "") + ''
@@ -41,12 +49,15 @@ let
         umfpack_di_defaults (ControlV);
         { const char *o = std::getenv ("AMESOS_UMFPACK_ORDERING");
           if (o && !std::strcmp (o, "metis")) ControlV[UMFPACK_ORDERING] = UMFPACK_ORDERING_METIS; }
-        double *Control = ControlV;'
+        double *Control = ControlV;' \
+        --replace-fail 'SetParameters( ParamList ) ;' 'SetParameters( ParamList ) ;
+        if (std::getenv ("AMESOS_UMFPACK_TIMING")) PrintTiming_ = true;'
     '';
   });
 in
 (pkgs.xyce.override {
   inherit trilinos;
+  withMPI = mpi;
   enableDocs = false;
   enableTests = false;
 }).overrideAttrs (old: {

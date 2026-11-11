@@ -596,6 +596,40 @@ slice 3.0x (B) and 3.1x (C) on one core, the linear solves 9x; what is
 left is mostly loading the devices (150 s of B's 272 s), the part MPI
 spreads.
 
+The threaded build starts 8 OpenMP threads (Epetra's vector operations)
+that spin in barriers for the whole run; `OMP_NUM_THREADS=1` takes slice B
+with UMFPACK + METIS from 272 s to 259 s (the residual load 129.9 -> 124.1
+s, the linear solves 65.4 -> 60.0 s, the same steps). Every run below sets
+it.
+
+#### Over MPI, with UMFPACK
+
+`nix build -f nix/xyce-threaded.nix --arg mpi true` is the same over
+OpenMPI (Zoltan's METIS interface off: it needs ParMETIS).
+`AMESOS_UMFPACK_TIMING=1` prints Amesos' own timing at the end. The
+devices' loads are spread over the ranks; Amesos gathers the matrix to
+rank 0 at every factorisation, where UMFPACK runs alone. Slice B,
+`type=umfpack`, METIS, `OMP_NUM_THREADS=1` and OpenBLAS on one thread a
+rank, oversubscription allowed as in the earlier MPI sweep:
+
+| Ranks | Wall | Residual load | Jacobian load | Linear solves | of which: gather to rank 0 | UMFPACK factor + solve |
+|---|---|---|---|---|---|---|
+| 1 | 266 s | 127 s | 23.4 s | 60 s | 0.003 s | 59.1 s |
+| 2 | 210 s | 75 s | 19.8 s | 74 s | 12.6 + 0.8 s | 59.4 s |
+| 3 | 188 s | 59 s | 16.0 s | 76 s | 13.1 + 1.0 s | 60.8 s |
+| 4 | 176 s | 49 s | 14.0 s | 79 s | 13.7 + 1.1 s | 62.9 s |
+
+(gather: the matrix + the vectors, 454 times; converting it to UMFPACK's
+format, 0.7 s, and the one symbolic factorisation, 0.4 s, are the rest.)
+The loads spread 2.6x over 4 ranks; gathering the matrix costs 14-15 s
+from 2 ranks on, 30 ms a factorisation. Four ranks: 176 s, 4.6x KLU's
+808 s serial and 3.6x the earlier KLU over 4 ranks (638 s). Slice C over
+4 ranks: 351 s (109 s residual, 31 s Jacobian, 172 s solves, 32 s of it
+the gather), against 543 s serial UMFPACK and KLU's 1,677 s; the same
+285 + 7 steps, 7 of 7 output edges with no shift against either, 1e-14 V,
+0 mismatches with the RTL. Slice B's outputs equal KLU's and serial
+UMFPACK's to every printed digit.
+
 A smaller deck of chip_top's own cells (a Schmitt input pad, inverters, a
 dffrnq, a bi_t output pad with 100 pF) shows where the two differ: with
 20 ps steps both put every edge within 4-11 ps of each other; at their
