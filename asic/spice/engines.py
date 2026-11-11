@@ -32,8 +32,6 @@ asic/spice/README.md ("Other simulators").
 """
 import argparse, json, os, re, shutil, subprocess, sys, time
 
-import numpy as np
-
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import chip  # noqa: E402
@@ -741,6 +739,7 @@ def run_ngspice_cells(d, threads=1):
 
 
 def load_dat(dat):
+    import numpy as np          # the cells only: CI's harness checks run without it
     rows = [l.split() for l in open(dat) if l.strip()]
     head = rows[0]
     data = np.array([[float(x) for x in r] for r in rows[1:]]) if rows[1:] else np.zeros((0, len(head)))
@@ -750,6 +749,7 @@ def load_dat(dat):
 def cells_compare(ref, other, level=VDD / 2):
     """every probe's mid-supply crossings against the reference's, and
     the largest difference where the reference has settled"""
+    import numpy as np
     hr, r = load_dat(ref)
     ho, o = load_dat(other)
     res = {"edges": 0, "missing": 0, "max_edge_ps": 0.0, "max_settled_mV": 0.0}
