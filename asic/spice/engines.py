@@ -139,6 +139,17 @@ XYCE_DIODE_RENAME = {"ik": "ikf", "tref": "tnom", "cj": "cjo", "cjsw": "cjp", "p
 XYCE_DIODE_DROP = {"cta", "ctp", "tpb", "tphp", "tlev", "tlevc", "jtun", "jtunsw", "ntun", "xtitun",
                    "tcv", "trs2",
                    "ikr"}     # ngspice disables it for these models: "IKR too small - model effect disabled"
+# Xyce's level-2 diode takes the critical voltage pnjlim limits with from IS
+# per unit area -- tVcrit = vte*log(vte/(sqrt(2)*tSatCur)), the current IS
+# * area (N_DEV_Diode.C) -- and the PDK's cards are per square metre: at 125
+# C (ss) that voltage is below 0 V (-0.036 V, diode_nd2ps_06v0) and pnjlim
+# takes the log of a negative junction voltage, a NaN (README.md, "Xyce's NaN
+# at ss"). So each diode of the chip's netlist gets a model of its own with
+# its area (times m) folded in, as ngspice scales them (diotemp.c, level 3):
+# these times it, RS divided by it, pj times m. IBV: ngspice's 1e-3 when BV
+# is given without it. IKF too, which Xyce's code leaves per area (tIKF) --
+# ngspice, the PDK's engine, scales it.
+XYCE_DIODE_AREA = ("is", "ibv", "cjo", "ikf")
 # resistors' and capacitors' noise and model entries Xyce's R / C have not
 XYCE_RC_DROP = {"af", "kf", "noise", "lf", "wf", "ef"}
 # BSIM4 instances: mulu0 (1 - mis_k * sw_stat_mismatch) is exactly 1 with
@@ -260,10 +271,58 @@ def safe(n):
     return n if SAFE.match(n) else "".join(CHARS.get(c, c) for c in n)
 
 
-def xyce_netlist(src, dst):
+def xyce_diode_models(lib):
+    """the translated library's diode models: lower-case name -> (name, [(k, v)])"""
+    out = {}
+    for l in lib:
+        t = l.split()
+        if len(t) > 3 and t[0].lower() == ".model" and t[2].lower() == "d":
+            out[t[1].lower()] = (t[1], param_tokens(l.split(None, 3)[3]))
+    return out
+
+
+def xyce_fold_area(t, diodes, folded):
+    """a diode's tokens with a model of its own, its area * m folded in
+    (XYCE_DIODE_AREA); folded: (model, area) -> (name, its .model line)"""
+    if len(t) < 4 or t[3].lower() not in diodes:
+        return t
+    kv = [x.split("=", 1) for x in t[4:]]
+    try:
+        m = spice_num(dict((k.lower(), v) for k, v in kv).get("m", "1"))
+        area = spice_num(dict((k.lower(), v) for k, v in kv).get("area", "1")) * m
+    except AttributeError:            # an expression: a library subcircuit's, left as it is
+        return t
+    name, pairs = diodes[t[3].lower()]
+    key = (name.lower(), area)
+    if key not in folded:
+        lv = {(k or "").lower() for k, _ in pairs}
+        if "bv" in lv and "ibv" not in lv:
+            pairs = pairs + [("ibv", "1e-3")]
+        new = []
+        for k, v in pairs:
+            kl, x = (k or "").lower(), v.strip("{}")
+            if kl in XYCE_DIODE_AREA:
+                v = f"{{({x})*{area!r}}}"
+            elif kl == "rs":
+                v = f"{{({x})/{area!r}}}"
+            new.append((k, v))
+        own = f"{name}_a{len(folded)}"
+        folded[key] = (own, f".model {own} d " + pairs_str(new))
+    inst = []
+    for k, v in kv:
+        if k.lower() in ("area", "m"):
+            continue
+        inst.append(f"{k}={spice_num(v) * m!r}" if k.lower() == "pj" and m != 1 else f"{k}={v}")
+    return t[:3] + [folded[key][0]] + inst
+
+
+def xyce_netlist(src, dst, diodes=None):
     """chip.py's prepared netlist (chip.net) with every name safe(); the
-    renaming is one to one (checked)"""
+    renaming is one to one (checked). diodes (xyce_diode_models): each diode
+    a model of its own with its area folded in (xyce_fold_area), returned as
+    .model lines for the library"""
     names = {}
+    folded = {}
     out = []
     for l in open(src):
         t = l.split()
@@ -280,6 +339,8 @@ def xyce_netlist(src, dst):
             t = [safe(t[0])] + [safe(x) for x in nodes[:-1]] + [nodes[-1]] + prm
         elif kw[0] in "cdr":
             t = [safe(t[0]), safe(t[1]), safe(t[2])] + t[3:]
+            if kw[0] == "d" and diodes:
+                t = xyce_fold_area(t, diodes, folded)
         else:
             sys.exit(f"engines: no rule for {t[0]} in {src}")
         for x in t:
@@ -288,6 +349,7 @@ def xyce_netlist(src, dst):
                 sys.exit(f"engines: {x} and {names[s.upper()]} would both be {s}")
         out.append(" ".join(t))
     open(dst, "w").write("\n".join(out) + "\n")
+    return [line for _, line in folded.values()]
 
 
 def xyce_ic(src, dst):
@@ -308,7 +370,7 @@ def xyce_deck(sp, out_dir, options=(), uic=True, solver="umfpack"):
     .dat name for it, notes); solver: XYCE_SOLVERS, unless options name one"""
     os.makedirs(out_dir, exist_ok=True)
     notes = {}
-    lib, body, ctl, in_ctl = [], [], [], False
+    lib, body, ctl, in_ctl, nets = [], [], [], False, []
     raw = re.sub(r"\n\+", " ", open(sp).read()).splitlines()
     for l in raw:
         t = l.split()
@@ -325,7 +387,7 @@ def xyce_deck(sp, out_dir, options=(), uic=True, solver="umfpack"):
             ctl.append(l)
         elif kw == ".include" and t[1].endswith("chip.net"):
             net = os.path.join(out_dir, "chip.xyce.net")
-            xyce_netlist(t[1], net)
+            nets.append((t[1], net))      # after the library: its diodes' models (xyce_fold_area)
             body.append(f".include {net}")
         elif kw == ".include" and t[1].endswith(".ic"):
             ic = os.path.join(out_dir, os.path.basename(t[1]).replace(".ic", ".xyce.ic"))
@@ -354,7 +416,14 @@ def xyce_deck(sp, out_dir, options=(), uic=True, solver="umfpack"):
     dat, cols = wr[1], wr[2:]
     prn = os.path.join(out_dir, os.path.basename(dat).replace(".dat", ".prn"))
     libf = os.path.join(out_dir, "models.xyce.lib")
-    open(libf, "w").write("\n".join(xyce_lib(lib, notes)) + "\n")
+    xlib = xyce_lib(lib, notes)
+    diodes = xyce_diode_models(xlib)
+    for src, net in nets:
+        own = xyce_netlist(src, net, diodes)
+        xlib += own
+        if own:
+            notes["diodes, area folded in"] = len(own)
+    open(libf, "w").write("\n".join(xlib) + "\n")
     deck = [open(sp).readline().rstrip(), f".include {libf}"] + body + list(options) + [
         f".tran {tran[1]} {tran[2]} {tran[3]} {tran[4]}" + (" UIC" if uic else ""),
         f".print tran format=noindex file={prn} " + " ".join(cols),

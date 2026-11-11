@@ -193,7 +193,7 @@ def area_cases(d, fails):
         for k, v in per.items():
             if k not in m or abs(num(m[k]) / (v / a) - 1) > 1e-9:
                 fails.append(f"area: {t[0]} {k} = {m.get(k)}, not {v:g} / {a:g}")
-        if num(m.get("jsw", "0")) not in (0, 4.88e-13 * 0.85):
+        if num(m.get("jsw", "0")) not in (0, 4.88e-13):
             fails.append(f"area: {t[0]} jsw scaled: {m.get('jsw')}")
     if seen != set(want):
         fails.append(f"area: diodes in the Xyce netlist: {sorted(seen)}")
