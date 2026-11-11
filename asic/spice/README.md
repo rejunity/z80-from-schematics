@@ -821,7 +821,12 @@ transient, its converter, 127,285 BSIM4 instances on an 8 GB GPU).
   more than 0.25 V off (0.15 V the largest: D[5] while the bench's memory
   switch turns on -- ngspice's `sw` with hysteresis, Xyce's smooth
   `vswitch`), any pin against the RTL in either engine, or no edge at
-  all (`engines.WINDOW_TOL`, `window_failures`). ngspice stays the run's
+  all (`engines.WINDOW_TOL`, `window_failures`) -- and on Xyce itself
+  aborting, printing a NaN, or stopping before the end, whatever its
+  exit code, with its own lines in the log (`XYCE_FATAL`): never a quiet
+  pass. Xyce's first step is 1 ps at every corner (`XYCE_TSTEP`; ngspice's
+  decks say 0.1 ns): from 0.1 ns its residual went NaN on the second step
+  at ss (125 C) and it aborted 5-28 ps in. ngspice stays the run's
   engine: `stitch` and `figures` read its pins. The tolerances are tt's;
   ss and ff are being measured.
 
