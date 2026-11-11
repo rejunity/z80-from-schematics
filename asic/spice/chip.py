@@ -14,19 +14,24 @@ Z80's datasheet draws its timing diagrams (Zilog PS0178, Figures 5-7).
              D in the RTL's read windows (hours); with --segment K/N only
              the K-th of N windows, from the node voltages the window
              before it ended with (CI jobs have 6 hours each)
+  xyce       Xyce (engines.py, its fast path) on a window ngspice has run:
+             the same deck, from the same state, its pins against
+             ngspice's and the RTL's; fails on a missing edge, an edge or
+             a settled level past engines.WINDOW_TOL, an RTL mismatch
   stitch     the windows' pins into the one run figures reads
   figures    the pins checked against the RTL, every output parameter of
              the datasheet measured on every cycle that has it (CLK at
              50 %, outputs at 1.5 V) against its limit and STA's number;
              Figures 5-7 as SVG
 
-usage: chip.py RUN [--work DIR] [--corner tt] [--threads N] [--segment K/N]
-               [--steps extract,reference,simulate,stitch,figures] [--sta FILE]
+usage: chip.py RUN [--work DIR] [--corner tt] [--threads N] [--segment K/N | --span FROM:TO]
+               [--steps extract,reference,simulate,xyce,stitch,figures] [--sta FILE]
   RUN        a LibreLane chip run of asic-gf180mcu (chip/runs/<tag>), or
              with --gds, only a name for the work directory's default
   --gds      the chip's GDS, for extract (default RUN/final/gds/z80_chip.gds)
   --sta      pin_timing.py's output for the run, for STA's numbers
   --segment  simulate the K-th of N windows (1-based)
+  --span     simulate FROM..TO ns as a window (from 0, or from a state)
 """
 import argparse, bisect, json, os, re, shutil, subprocess, sys
 
@@ -337,11 +342,20 @@ def deck(work, corner, edges, threads, tstop, t_from=0.0):
     return sp
 
 
-def simulate(work, corner, edges, threads, segment=None):
-    """the whole run, or the window segment = (k, n) of windows(edges, n):
-    its pins in seg/chip_<from>.dat (in the run's time), its end state in
-    seg/state_<to>.ic for the window after it"""
-    t_from, tstop = (0.0, edges[-1][0] + 100) if not segment else windows(edges, segment[1])[segment[0] - 1]
+def window_of(edges, segment=None, span=None):
+    """(from, to) ns: the whole run, the window segment = (k, n) of
+    windows(edges, n), or span"""
+    if span:
+        return span
+    return (0.0, edges[-1][0] + 100) if not segment else windows(edges, segment[1])[segment[0] - 1]
+
+
+def simulate(work, corner, edges, threads, segment=None, span=None):
+    """the whole run, or the window segment = (k, n) of windows(edges, n)
+    (or span = (from, to) ns): its pins in seg/chip_<from>.dat (in the
+    run's time), its end state in seg/state_<to>.ic for the window after it"""
+    t_from, tstop = window_of(edges, segment, span)
+    segment = segment or span
     if t_from > 0 and not os.path.exists(state_file(work, corner, t_from)):
         sys.exit(f"chip: no state to start the window at {t_from:.0f} ns from ({state_file(work, corner, t_from)})")
     sp = deck(work, corner, edges, threads, tstop, t_from)
@@ -371,6 +385,35 @@ def simulate(work, corner, edges, threads, segment=None):
         out = [lines[0]] + [" ".join([f"{float(r.split()[0]) + t_from * 1e-9:.9e}"] + r.split()[1:])
                             for r in lines[1:] if r.strip()]
         open(dat, "w").write("\n".join(out) + "\n")
+
+
+def xyce_window(work, corner, edges, t_from, tstop, threads):
+    """Xyce on the window ngspice ran (from t_from to tstop): the same
+    deck, from the state ngspice started it from, on engines.py's fast
+    path; its pins against ngspice's and the RTL's (engines.compare), in
+    seg/xyce_<from>/result.json; fails on engines.window_failures"""
+    import engines
+    ref = segment_file(work, corner, t_from)
+    if not os.path.exists(ref):
+        sys.exit(f"chip: ngspice has not run the window at {t_from:.0f} ns ({ref})")
+    sp = deck(work, corner, edges, threads, tstop, t_from)
+    out = os.path.join(work, corner, "seg", f"xyce_{t_from:.0f}")
+    print(f"chip: Xyce, {t_from / 1000:.2f} .. {tstop / 1000:.2f} us", flush=True)
+    run = engines.run_xyce(sp, out)
+    if run.get("rc") or not run.get("dat"):
+        sys.exit(f"chip: Xyce failed on the window at {t_from:.0f} ns (rc {run.get('rc')}, {out})")
+    cmp = engines.compare(ref, run["dat"], os.path.join(work, "ref.txt"), t_from)
+    bad = engines.window_failures(cmp)
+    with open(os.path.join(out, "result.json"), "w") as f:
+        json.dump({"corner": corner, "window_ns": [t_from, tstop], "xyce": run, "vs_ngspice": cmp,
+                   "tolerance": engines.WINDOW_TOL, "failures": bad}, f, indent=1)
+    print(f"chip: Xyce against ngspice, {t_from:.0f}-{tstop:.0f} ns at {corner}: {cmp['edges']} edges, "
+          f"{cmp['edges_missing']} missing, within {cmp['max_edge_shift_ns'] * 1000:.1f} ps; settled within "
+          f"{cmp['max_settled_dV'] * 1000:.1f} mV ({cmp.get('worst_pin')}); RTL mismatches ngspice "
+          f"{cmp['mismatches_ref']}, Xyce {cmp['mismatches_other']}; Xyce {run.get('wall_s')} s", flush=True)
+    if bad:
+        sys.exit("chip: Xyce against ngspice: " + "; ".join(bad))
+    return cmp
 
 
 def stitch(work, corner, edges, n):
@@ -921,6 +964,7 @@ def main():
     ap.add_argument("--threads", type=int, default=os.cpu_count() or 4)
     ap.add_argument("--steps", default="extract,reference,simulate,figures")
     ap.add_argument("--segment", help="K/N: simulate the K-th of N windows; stitch takes N")
+    ap.add_argument("--span", help="FROM:TO ns: simulate that stretch as a window")
     ap.add_argument("--gds", help="the chip's GDS for extract (default <run>/final/gds/z80_chip.gds)")
     ap.add_argument("--sta", help="pin_timing.py's output for the run (STA's numbers beside SPICE's)")
     ap.add_argument("--out", help="figures and results.json (default: chip/gf180mcu/, other corners "
@@ -936,8 +980,11 @@ def main():
         else open(os.path.join(work, "ref.txt")).read()
     edges = edges_of(ref)
     seg = tuple(int(x) for x in a.segment.split("/")) if a.segment else None
+    span = tuple(float(x) for x in a.span.split(":")) if a.span else None
     if "simulate" in steps:
-        simulate(work, a.corner, edges, a.threads, seg)
+        simulate(work, a.corner, edges, a.threads, seg, span)
+    if "xyce" in steps:
+        xyce_window(work, a.corner, edges, *window_of(edges, seg, span), a.threads)
     if "stitch" in steps:
         stitch(work, a.corner, edges, seg[1] if seg else 1)
     if "figures" in steps:
