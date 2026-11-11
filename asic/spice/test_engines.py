@@ -24,6 +24,12 @@ and Xyce's fast path (README.md, "Profile"), on a deck of one resistor:
   checks    a window or a cells run against ngspice fails on a missing
             edge, an edge or a settled level past its tolerance, and an
             RTL mismatch in either engine
+  step      Xyce's first step is 1 ps at every corner, whatever ngspice's
+            deck says (at ss, 125 C, its residual went NaN on the second
+            step from 0.1 ns, and it aborted 5-28 ps in)
+  abort     a Xyce that aborts, prints a NaN, or stops before the end
+            fails the run, with Xyce's own message; never a quiet pass
+            (a stand-in for Xyce)
   indent    the library's lines start in column 1: Xyce takes ' .param x'
             for no parameter at all, and every model using x then aborts
             ("contains unrecognized symbols") -- the PDK as ciel fetches it
@@ -88,6 +94,27 @@ wrdata {dat} v(a)
 """
 
 
+FAKE_XYCE = r"""#!/usr/bin/env python3
+import os, re, sys
+log, deck = sys.argv[sys.argv.index("-l") + 1], sys.argv[-1]
+text = open(deck).read()
+prn = re.search(r"file=(\S+)", text).group(1)
+tstop = float(re.search(r"^\.tran \S+ ([0-9.e+-]+)n", text, re.M).group(1)) * 1e-9
+mode = os.environ["FAKE_XYCE"]
+end = {"complete": tstop, "nan": 2.8e-11, "short": tstop / 2, "abort": 5e-12}[mode]
+with open(prn, "w") as f:
+    f.write("TIME V(A)\n")
+    for k in range(11):
+        f.write(f"{end * k / 10:.8e} 1.0\n")
+    f.write("End of Xyce(TM) Simulation\n")
+msg = {"complete": "", "short": "",
+       "nan": "Transient failure history: residual is NaN\nNonlinear solver: Time step too small near step number: 2\n",
+       "abort": "Parameter TOXE for model NFET_06V0.1 contains unrecognized symbols\n*** Xyce Abort ***\n"}[mode]
+open(log, "w").write("***** Welcome to the Xyce(TM) Parallel Electronic Simulator\n" + msg)
+sys.exit(1 if mode == "abort" else 0)
+"""
+
+
 def xyce_cases(d, fails):
     sp = os.path.join(d, "r.sp")
     with open(sp, "w") as f:
@@ -120,6 +147,21 @@ def xyce_cases(d, fails):
                  ("mismatches_ref", 1), ("mismatches_other", 1), ("edges", 0)):
         if not engines.window_failures(dict(good, **{k: v})):
             fails.append(f"checks: a window with {k} = {v} passes")
+    tran = [l for l in lines(engines.xyce_deck(sp, os.path.join(d, "step"))[0]) if l.startswith(".tran")]
+    if not tran or tran[0].split()[1] != "1p":
+        fails.append(f"step: Xyce's first step is not 1p: {tran}")
+    fake = os.path.join(d, "Xyce")
+    with open(fake, "w") as f:
+        f.write(FAKE_XYCE)
+    os.chmod(fake, 0o755)
+    for mode, want in (("complete", None), ("nan", "NaN"), ("abort", "Xyce Abort"), ("short", "stopped at")):
+        os.environ["FAKE_XYCE"] = mode
+        r = engines.run_xyce(sp, os.path.join(d, "x_" + mode), fake, ranks=1)
+        err = r.get("error")
+        if want is None and (err or r["rc"]):
+            fails.append(f"abort: a complete run fails: {err} (rc {r['rc']})")
+        if want and (not err or want not in err):
+            fails.append(f"abort: Xyce {mode}: {err!r} does not say {want!r}")
     lib = engines.xyce_lib([" .param nfet_x = 0", "\t.param nfet_y = 1",
                             ".model m.0 nmos level=54 toxe={1.52e-008+nfet_x}"], {})
     if any(l[:1].isspace() for l in lib):
@@ -157,7 +199,7 @@ def main():
         print("engines: FAIL", f)
     if fails:
         sys.exit(1)
-    print("engines: PASS (plain, comment, include, section, fast, env, mpi, checks, indent)")
+    print("engines: PASS (plain, comment, include, section, fast, env, mpi, checks, indent, step, abort)")
 
 
 if __name__ == "__main__":
