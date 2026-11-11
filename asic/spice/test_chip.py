@@ -22,7 +22,8 @@ started from the state at 2.6 ns. Checked here:
              doubled its steps from 1 ps to 1.3 ns there)
   span       --span FROM:TO simulates that stretch (the nightly slice,
              0:40, power-up) as a window: its own deck, pins and end state
-  xyce       the xyce step runs Xyce (engines.run_xyce, stood in for) on
+  xyce       at a corner not in engines.XYCE_CORNERS (ss) the xyce step
+             refuses, naming the list; elsewhere it runs Xyce (engines.run_xyce, stood in for) on
              the window's deck, from the state ngspice started it from,
              and fails on what engines.window_failures finds against
              ngspice's pins, or on Xyce's own failure; passes otherwise,
@@ -128,6 +129,16 @@ def main():
                 return str(e.code)
             return None
 
+        # ss: not a Xyce corner (engines.XYCE_CORNERS) -- refused, not skipped
+        calls.clear()
+        try:
+            chip.xyce_window(work, "ss", edges, 0.0, t1, 1)
+            msg = None
+        except SystemExit as e:
+            msg = str(e.code)
+        ok = msg is not None and "XYCE_CORNERS" in msg and not calls
+        print(f"xyce:      {'ok' if ok else 'FAIL'}  (at ss: {msg or 'Xyce ran'})")
+        ok or fails.append("xyce (at ss)")
         msg = xyce(0, good)
         res = os.path.join(work, "tt", "seg", "xyce_0", "result.json")
         ok = msg is None and calls and calls[-1].endswith("chip_0.sp") and os.path.exists(res)

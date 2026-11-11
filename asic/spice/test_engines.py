@@ -24,9 +24,11 @@ and Xyce's fast path (README.md, "Profile"), on a deck of one resistor:
   checks    a window or a cells run against ngspice fails on a missing
             edge, an edge or a settled level past its tolerance, and an
             RTL mismatch in either engine
-  step      Xyce's first step is 1 ps at every corner, whatever ngspice's
-            deck says (at ss, 125 C, its residual went NaN on the second
-            step from 0.1 ns, and it aborted 5-28 ps in)
+  corners   Xyce runs at tt and ff only (XYCE_CORNERS): at ss (125 C) its
+            residual goes NaN at the predictor's voltages on a longer step
+            and it stops ("Maximum number of failures"), from a 0.1 ns or a
+            1 ps first step alike; root cause under investigation. Adding
+            ss is this line and a passing run, never a quiet change
   abort     a Xyce that aborts, prints a NaN, or stops before the end
             fails the run, with Xyce's own message; never a quiet pass
             (a stand-in for Xyce)
@@ -147,9 +149,8 @@ def xyce_cases(d, fails):
                  ("mismatches_ref", 1), ("mismatches_other", 1), ("edges", 0)):
         if not engines.window_failures(dict(good, **{k: v})):
             fails.append(f"checks: a window with {k} = {v} passes")
-    tran = [l for l in lines(engines.xyce_deck(sp, os.path.join(d, "step"))[0]) if l.startswith(".tran")]
-    if not tran or tran[0].split()[1] != "1p":
-        fails.append(f"step: Xyce's first step is not 1p: {tran}")
+    if tuple(engines.XYCE_CORNERS) != ("tt", "ff"):
+        fails.append(f"corners: Xyce's corners are {engines.XYCE_CORNERS}, not tt and ff (ss: the NaN)")
     fake = os.path.join(d, "Xyce")
     with open(fake, "w") as f:
         f.write(FAKE_XYCE)
@@ -199,7 +200,7 @@ def main():
         print("engines: FAIL", f)
     if fails:
         sys.exit(1)
-    print("engines: PASS (plain, comment, include, section, fast, env, mpi, checks, indent, step, abort)")
+    print("engines: PASS (plain, comment, include, section, fast, env, mpi, checks, indent, corners, abort)")
 
 
 if __name__ == "__main__":
