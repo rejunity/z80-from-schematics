@@ -6,9 +6,11 @@ chip.py writes an ngspice deck for each window of the program (its
 simulate step); this script takes that deck as it is and
 
   xyce      translates it, the PDK's model library and the extracted chip,
-            for Xyce (Sandia; KLU through Amesos), runs it, and writes
-            the pins in chip.py's own .dat format beside ngspice's, so
-            chip.py's checks read either
+            for Xyce (Sandia), runs it on its fast path -- UMFPACK with
+            METIS ordering, one thread per process, the MPI build over 4
+            ranks (asic/spice/nix/xyce-threaded.nix; README.md, "Profile")
+            -- and writes the pins in chip.py's own .dat format beside
+            ngspice's, so chip.py's checks read either
   compare   two runs of one window: every pin's largest difference where
             the reference has settled, every output edge's 1.5 V crossing
             against the reference's, and the pins against the RTL at every
@@ -19,9 +21,10 @@ simulate step); this script takes that deck as it is and
             (BSIM4 as Verilog-A): wall time, steps, Newton iterations, and
             each against ngspice
 
-usage: engines.py xyce DECK.sp [--out DIR] [--xyce PATH]
+usage: engines.py xyce DECK.sp [--out DIR] [--xyce PATH] [--ranks N] [--solver umfpack|klu]
        engines.py compare REF.dat OTHER.dat --ref ref.txt [--from NS]
-       engines.py cells inv|nand|dff N --net chip.net --va bsim4.va --python VENV/bin/python
+       engines.py cells inv|nand|dff N --net chip.net [--engines ngspice,xyce] [--check]
+                 [--va bsim4.va --python VENV/bin/python]   (VAJAX)
 
 The translation changes no physics at the PDK's nominal settings, with one
 exception, the diodes (below); every rule is in XYCE_* and in
@@ -36,6 +39,32 @@ sys.path.insert(0, HERE)
 import chip  # noqa: E402
 
 NIXPKGS = "github:NixOS/nixpkgs/494ce7fd23ff6a5dff39e1fb11e9b6f2ac74bf25"   # pads.py's: Xyce 7.10.0
+
+# Xyce's fast path (README.md, "Profile"): UMFPACK with METIS ordering
+# (Amesos' UMFPACK, patched in xyce-threaded.nix to take METIS), one
+# OpenMP and one BLAS thread in every process (Epetra's OpenMP threads
+# otherwise spin in barriers: 5 %), and with the MPI build the devices'
+# loads over XYCE_RANKS ranks, UMFPACK on rank 0 (slice B 808 s with KLU
+# -> 259 s serial -> 176 s over 4 ranks, the same outputs). KLU stays the
+# reference (solver="klu").
+XYCE_NIX = os.path.join(HERE, "nix", "xyce-threaded.nix")
+XYCE_SOLVERS = {"umfpack": ".options linsol type=umfpack", "klu": ".options linsol type=klu"}
+XYCE_ENV = {"AMESOS_UMFPACK_ORDERING": "metis", "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1"}
+XYCE_MPI_ENV = {"OMPI_MCA_rmaps_base_oversubscribe": "1",          # OpenMPI 5: as many ranks as asked
+                "PRTE_MCA_rmaps_default_mapping_policy": ":oversubscribe"}
+XYCE_RANKS = 4
+
+# Xyce against ngspice, what fails (chip.py's windows; tt measured, README.md
+# "Other simulators"): an output edge missing or more than 0.2 ns off (82 ps
+# the largest, slice C), a settled output more than 0.25 V off (0.15 V the
+# largest: D[5] while the bench's memory switch turns on, ngspice's sw with
+# hysteresis against Xyce's smooth vswitch), any pin against the RTL in either
+# engine, or no edge to compare at all
+WINDOW_TOL = {"max_edge_shift_ns": 0.2, "max_settled_dV": 0.25}
+# the cells (engines.py cells; the PDK's own cell netlists or chip_top's
+# extracted ones): an edge more than 50 ps off (25 ps the largest, 10 inv_1),
+# a settled node more than 2 mV off (0.34 mV), a missing edge, no edge at all
+CELLS_TOL = {"max_edge_ps": 50.0, "max_settled_mV": 2.0}
 
 
 # --------------------------------------------------------------- libraries
@@ -264,9 +293,9 @@ def xyce_ic(src, dst):
     return len(out)
 
 
-def xyce_deck(sp, out_dir, options=(), uic=True):
+def xyce_deck(sp, out_dir, options=(), uic=True, solver="umfpack"):
     """chip.py's ngspice deck -> (Xyce deck, the .prn it writes, ngspice's
-    .dat name for it, notes)"""
+    .dat name for it, notes); solver: XYCE_SOLVERS, unless options name one"""
     os.makedirs(out_dir, exist_ok=True)
     notes = {}
     lib, body, ctl, in_ctl = [], [], [], False
@@ -297,10 +326,10 @@ def xyce_deck(sp, out_dir, options=(), uic=True):
         elif kw == ".temp":
             body.append(f".options device temp={t[1]}")
         elif kw == ".options":
-            # klu: Xyce's serial default; rshunt (1 Tohm on every node) -> 1 Tohm
-            # on the nodes without a DC path to ground (the rest have one)
+            # the linear solver (XYCE_SOLVERS); rshunt (1 Tohm on every node) ->
+            # 1 Tohm on the nodes without a DC path to ground (the rest have one)
             body += ([] if any(o.lower().startswith(".options linsol") for o in options)
-                     else [".options linsol type=klu"]) + [
+                     else [XYCE_SOLVERS[solver]]) + [
                 ".preprocess addresistors nodcpath 1e12", ".preprocess addresistors oneterminal 1e12"]
         elif kw == ".model" and len(t) > 2 and t[2].lower() == "sw":
             p = dict(x.split("=") for x in t[3:])
@@ -336,29 +365,59 @@ def prn_to_dat(prn, dat, t_from=0.0):
     return len(rows)
 
 
-def nix_bin(attr, name):
-    p = subprocess.run([os.path.expanduser("~/.nix-profile/bin/nix"), "build", f"{NIXPKGS}#{attr}",
-                        "--print-out-paths", "--no-link"], capture_output=True, text=True)
-    return os.path.join(p.stdout.strip().splitlines()[-1], "bin", name)
+def xyce_bin(mpi):
+    """Xyce's fast build (xyce-threaded.nix; the MPI one with mpi): $XYCE_MPI
+    or $XYCE when given, else built with nix (once; CI: from its cache)"""
+    given = os.environ.get("XYCE_MPI" if mpi else "XYCE")
+    if given:
+        return given
+    nix = shutil.which("nix") or os.path.expanduser("~/.nix-profile/bin/nix")
+    p = subprocess.run([nix, "build", "-f", XYCE_NIX, "--print-out-paths", "--no-link"]
+                       + (["--arg", "mpi", "true"] if mpi else []), capture_output=True, text=True)
+    out = p.stdout.strip().splitlines()
+    if p.returncode != 0 or not out:
+        sys.exit(f"engines: no Xyce from {XYCE_NIX}{' (mpi)' if mpi else ''}:\n{p.stderr[-2000:]}")
+    return os.path.join(out[-1], "bin", "Xyce")
 
 
-def run_xyce(sp, out_dir, xyce=None, ranks=1, options=(), uic=True):
-    """Xyce on chip.py's deck: serial, or with MPI over `ranks` processes
-    (xyce-parallel: the devices' loads spread over the ranks, KLU on one)"""
-    xsp, prn, dat, notes = xyce_deck(sp, out_dir, options, uic)
-    if not xyce:
-        xyce = nix_bin("xyce-parallel" if ranks > 1 else "xyce", "Xyce")
-    cmd = [xyce]
-    if ranks > 1:
-        mpi = subprocess.run(["ldd", xyce], capture_output=True, text=True).stdout
-        m = re.search(r"(/nix/store/[^/]*openmpi[^/]*)/lib", mpi)
-        cmd = [os.path.join(m.group(1), "bin", "mpirun"), "--allow-run-as-root", "-np", str(ranks), xyce]
+def xyce_mpirun(xyce):
+    """the mpirun of the OpenMPI an MPI build of Xyce links, or None (serial)"""
+    m = re.search(r"(/nix/store/[^/]*openmpi[^/]*)/lib/libmpi",
+                  subprocess.run(["ldd", xyce], capture_output=True, text=True).stdout)
+    return os.path.join(m.group(1), "bin", "mpirun") if m else None
+
+
+def xyce_ranks(mpirun, cpus=None):
+    """XYCE_RANKS with an MPI build, never more than the CPUs; 1 serial"""
+    return min(XYCE_RANKS, cpus or os.cpu_count() or 1) if mpirun else 1
+
+
+def xyce_command(xyce, ranks, mpirun=None):
+    """(the command line, the environment it adds) for Xyce on its fast path"""
+    env = dict(XYCE_ENV)
+    if ranks <= 1:
+        return [xyce], env
+    env.update(XYCE_MPI_ENV)
+    return [mpirun, "--allow-run-as-root", "-np", str(ranks), xyce], env
+
+
+def run_xyce(sp, out_dir, xyce=None, ranks=None, options=(), uic=True, solver="umfpack"):
+    """Xyce on chip.py's deck, its fast path: the MPI build over XYCE_RANKS
+    ranks (ranks=1: the serial build), UMFPACK with METIS; xyce: a build"""
+    xsp, prn, dat, notes = xyce_deck(sp, out_dir, options, uic, solver)
+    xyce = xyce or xyce_bin(mpi=ranks != 1)
+    mpirun = xyce_mpirun(xyce)
+    ranks = ranks or xyce_ranks(mpirun)
+    if ranks > 1 and not mpirun:
+        sys.exit(f"engines: {xyce} is not an MPI build, and {ranks} ranks were asked for")
+    cmd, env = xyce_command(xyce, ranks, mpirun)
     log = xsp.replace(".sp", ".log")
     t0 = time.time()
-    p = subprocess.run(cmd + ["-l", log, xsp], cwd=out_dir, capture_output=True, text=True)
+    p = subprocess.run(cmd + ["-l", log, xsp], cwd=out_dir, capture_output=True, text=True,
+                       env=dict(os.environ, **env))
     wall = time.time() - t0
     res = {"engine": "Xyce" + (f" MPI x{ranks}" if ranks > 1 else ""), "deck": xsp, "options": list(options),
-           "wall_s": round(wall, 1), "rc": p.returncode, "notes": notes}
+           "solver": solver, "ranks": ranks, "wall_s": round(wall, 1), "rc": p.returncode, "notes": notes}
     if os.path.exists(prn):
         res["points"] = prn_to_dat(prn, os.path.join(out_dir, os.path.basename(dat)))
         res["dat"] = os.path.join(out_dir, os.path.basename(dat))
@@ -370,6 +429,12 @@ def run_xyce(sp, out_dir, xyce=None, ranks=1, options=(), uic=True):
         m = re.findall(pat, txt)       # the last: the transient's, after the DC point's
         if m:
             res[k] = int(m[-1])
+    for k, pat in (("residual_load_s", r"Total Residual Load Time:\s*([\d.]+)"),
+                   ("jacobian_load_s", r"Total Jacobian Load Time:\s*([\d.]+)"),
+                   ("linear_s", r"Total Linear Solution Time:\s*([\d.]+)")):
+        m = re.findall(pat, txt)
+        if m:
+            res[k] = float(m[-1])
     print(json.dumps(res, indent=1))
     return res
 
@@ -560,6 +625,11 @@ def cells_decks(kind, n, net, pdk_ngspice, va, out_dir, corner="typical", temp=2
            "rusage all", "quit", ".endc", ".end"]
     spf = os.path.join(out_dir, f"{tag}.sp")
     open(spf, "w").write("\n".join(sp) + "\n")
+    if not va:                          # ngspice and Xyce only
+        return {"sp": spf, "sim": None, "dat": dat, "probe": probe, "tstop_ns": tstop, "uic": uic,
+                "transistors": sum(1 for _, c, _ in inst for l in cells[c][1] if l[0] in "XxMm"),
+                "caps": sum(1 for _, c, _ in inst for l in cells[c][1] if l[0] in "Cc"),
+                "bins": [], "card_params_dropped": []}
     # VAJAX: flat, the VA's models one per bin
     bins, dropped = bsim4_bins(pdk_ngspice, va, corner)
     shutil.copy(va, os.path.join(out_dir, "bsim4va.va"))
@@ -710,7 +780,7 @@ def cells_compare(ref, other, level=VDD / 2):
 
 
 def cells(kind, n, net, pdk_ngspice, va, python, out_dir, engines_=("ngspice", "xyce", "vajax"),
-          repeat=2, threads=1):
+          repeat=2, threads=1, xyce=None, solver="umfpack"):
     """one circuit in every engine: wall times, steps, Newton iterations,
     and each against ngspice"""
     d = cells_decks(kind, n, net, pdk_ngspice, va, out_dir)
@@ -719,7 +789,8 @@ def cells(kind, n, net, pdk_ngspice, va, python, out_dir, engines_=("ngspice", "
     if "ngspice" in engines_:
         out["runs"].append(run_ngspice_cells(d, threads))
     if "xyce" in engines_:
-        r = run_xyce(d["sp"], os.path.join(out_dir, "xyce"), uic=d["uic"])   # as ngspice and VAJAX
+        r = run_xyce(d["sp"], os.path.join(out_dir, "xyce"), xyce, ranks=1, uic=d["uic"],   # as ngspice
+                     solver=solver)                                                         # and VAJAX
         log = r["deck"].replace(".sp", ".log")
         m = re.findall(r"Total Simulation Solvers Run Time:\s*([\d.]+)", open(log).read()) if os.path.exists(log) else []
         r["solvers_s"] = float(m[-1]) if m else None
@@ -789,6 +860,35 @@ def compare(ref_dat, dat, ref_txt, t_from=0.0):
     return res
 
 
+def window_failures(res, tol=WINDOW_TOL):
+    """what fails in compare()'s result (WINDOW_TOL): [] when it passes"""
+    bad = []
+    if res["edges"] == 0:
+        bad.append("no output edge to compare")
+    if res["edges_missing"]:
+        bad.append(f"{res['edges_missing']} of {res['edges']} output edges missing")
+    for k, v in tol.items():
+        if res[k] > v:
+            bad.append(f"{k} {res[k]:g} > {v:g}")
+    for k, who in (("mismatches_ref", "ngspice"), ("mismatches_other", "Xyce")):
+        if res[k]:
+            bad.append(f"{res[k]} pins against the RTL ({who})")
+    return bad
+
+
+def cells_failures(res, tol=CELLS_TOL):
+    """what fails in cells_compare()'s result (CELLS_TOL): [] when it passes"""
+    bad = []
+    if res["edges"] == 0:
+        bad.append("no edge to compare")
+    if res["missing"]:
+        bad.append(f"{res['missing']} of {res['edges']} edges missing")
+    for k, v in tol.items():
+        if res[k] > v:
+            bad.append(f"{k} {res[k]:g} > {v:g}")
+    return bad
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -797,15 +897,19 @@ def main():
     a.add_argument("--out")
     a.add_argument("--xyce")
     a.add_argument("--translate-only", action="store_true")
-    a.add_argument("--ranks", type=int, default=1, help="MPI processes (xyce-parallel)")
+    a.add_argument("--ranks", type=int, help=f"MPI processes (default: {XYCE_RANKS} with the MPI build)")
+    a.add_argument("--solver", default="umfpack", choices=sorted(XYCE_SOLVERS))
     a.add_argument("--option", action="append", default=[], help="an extra deck line, e.g. '.options timeint erroption=1'")
     v = sub.add_parser("cells", help="chip_top's standard cells in ngspice, Xyce and VAJAX (BSIM4 Verilog-A)")
     v.add_argument("kind", choices=("inv", "nand", "dff"))
     v.add_argument("n", type=int, help="cells in the chain / bits of the shift register")
     v.add_argument("--net", required=True, help="chip.py's chip.net (the extracted cells)")
     v.add_argument("--pdk-ngspice", default=os.path.join(chip.PDK_ROOT, "libs.tech", "ngspice"))
-    v.add_argument("--va", required=True, help="a BSIM4 Verilog-A file (module bsim4va)")
-    v.add_argument("--python", required=True, help="the Python that has vajax installed (patched, README.md)")
+    v.add_argument("--va", help="a BSIM4 Verilog-A file (module bsim4va; VAJAX only)")
+    v.add_argument("--python", help="the Python that has vajax installed (patched, README.md; VAJAX only)")
+    v.add_argument("--xyce", help="a Xyce build (default: xyce-threaded.nix's serial one)")
+    v.add_argument("--solver", default="umfpack", choices=sorted(XYCE_SOLVERS))
+    v.add_argument("--check", action="store_true", help=f"fail past CELLS_TOL ({CELLS_TOL}) against ngspice")
     v.add_argument("--out", default="cells")
     v.add_argument("--engines", default="ngspice,xyce,vajax")
     v.add_argument("--repeat", type=int, default=2, help="VAJAX transient runs (the first compiles)")
@@ -821,11 +925,26 @@ def main():
         if a.translate_only:
             print(xyce_deck(a.deck, out, a.option))
             return 0
-        return 0 if run_xyce(a.deck, out, a.xyce, a.ranks, a.option)["rc"] == 0 else 1
+        return 0 if run_xyce(a.deck, out, a.xyce, a.ranks, a.option, solver=a.solver)["rc"] == 0 else 1
     if a.cmd == "cells":
+        engs = a.engines.split(",")
+        if "vajax" in engs and not (a.va and a.python):
+            sys.exit("engines: VAJAX needs --va and --python")
         r = cells(a.kind, a.n, a.net, a.pdk_ngspice, a.va, a.python, os.path.join(a.out, f"{a.kind}{a.n}"),
-                  a.engines.split(","), a.repeat, a.threads)
-        return 1 if any("error" in x for x in r["runs"]) else 0
+                  engs, a.repeat, a.threads, a.xyce, a.solver)
+        bad = [f"{x['engine']}: {x['error']}" for x in r["runs"] if "error" in x]
+        bad += [f"{x['engine']}: rc {x['rc']}" for x in r["runs"] if x.get("rc")]
+        if a.check:
+            others = [x for x in r["runs"] if not x["engine"].startswith("ngspice")]
+            bad += [f"{x['engine']}: no output" for x in others if "vs_ngspice" not in x]
+            bad += [f"{x['engine']}: {f}" for x in others if "vs_ngspice" in x for f in cells_failures(x["vs_ngspice"])]
+        for b in bad:
+            print(f"engines: {r['circuit']}: FAIL {b}")
+        if not bad and a.check:
+            print(f"engines: {r['circuit']}: PASS " + ", ".join(
+                f"{x['engine']} {x['vs_ngspice']['max_edge_ps']} ps {x['vs_ngspice']['max_settled_mV']} mV "
+                f"({x['vs_ngspice']['edges']} edges)" for x in r["runs"] if "vs_ngspice" in x))
+        return 1 if bad else 0
     compare(a.ref, a.other, a.ref_txt, a.t_from)
     return 0
 
