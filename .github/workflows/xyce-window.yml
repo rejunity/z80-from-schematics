@@ -5,6 +5,9 @@
 # ngspice's and the RTL's: a missing output edge, an edge or a settled
 # level past engines.WINDOW_TOL, or any pin against the RTL fails it.
 # ngspice stays the run's engine (stitch and figures read its pins).
+# Xyce runs at engines.XYCE_CORNERS of the run's corners only (tt, ff; at
+# ss its residual goes NaN -- README.md, "CI"); the corners job names the
+# ones left out in the run's summary.
 # Called by transistor.yml once ngspice has run the window.
 name: Xyce window
 
@@ -31,14 +34,44 @@ defaults:
     shell: bash
 
 jobs:
+  corners:
+    name: Xyce's corners of ${{ inputs.corners }} (engines.XYCE_CORNERS)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      list: ${{ steps.c.outputs.list }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: c
+        env:
+          CORNERS: ${{ inputs.corners }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, sys
+          sys.path.insert(0, "asic/spice")
+          import engines
+          asked = json.loads(os.environ["CORNERS"])
+          run = [c for c in asked if c in engines.XYCE_CORNERS]
+          out = [c for c in asked if c not in engines.XYCE_CORNERS]
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write(f"Xyce, window ${{ inputs.window }}: at {', '.join(run) or 'no corner'}"
+                      + (f"; not at {', '.join(out)} (engines.XYCE_CORNERS: at ss Xyce's residual goes NaN, "
+                         "README.md \"CI\")" if out else "") + "\n")
+          for c in out:
+              print(f"::notice::Xyce does not run at {c} (engines.XYCE_CORNERS)", file=sys.stderr)
+          print("list=" + json.dumps(run))
+          PY
+
   xyce:
     name: Xyce on window ${{ inputs.window }} of 4 (${{ matrix.corner }})
+    needs: corners
+    if: needs.corners.outputs.list != '[]'
     runs-on: ubuntu-24.04
     timeout-minutes: 355
     strategy:
       fail-fast: false
       matrix:
-        corner: ${{ fromJSON(inputs.corners) }}
+        corner: ${{ fromJSON(needs.corners.outputs.list) }}
     steps:
       - uses: actions/checkout@v5
 

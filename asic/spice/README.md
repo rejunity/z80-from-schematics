@@ -824,9 +824,14 @@ transient, its converter, 127,285 BSIM4 instances on an 8 GB GPU).
   all (`engines.WINDOW_TOL`, `window_failures`) -- and on Xyce itself
   aborting, printing a NaN, or stopping before the end, whatever its
   exit code, with its own lines in the log (`XYCE_FATAL`): never a quiet
-  pass. Xyce's first step is 1 ps at every corner (`XYCE_TSTEP`; ngspice's
-  decks say 0.1 ns): from 0.1 ns its residual went NaN on the second step
-  at ss (125 C) and it aborted 5-28 ps in. ngspice stays the run's
+  pass. Xyce runs at tt and ff only (`engines.XYCE_CORNERS`; the
+  Transistor run's Xyce jobs take those of its corners, and name the ones
+  they leave out): at ss (125 C) its residual goes NaN at the predictor's
+  voltages once a step grows (slice B: from 0.31 to 0.53 ns at 23.85 ns,
+  largest at P_VDD), only with the diodes and the MOSFETs both hot, and
+  it stops on "Maximum number of failures" -- from ngspice's 0.1 ns first
+  step and from 1 ps alike. The root cause is being looked for; ss joins
+  the list with a passing run. ngspice stays the run's
   engine: `stitch` and `figures` read its pins. The tolerances are tt's;
   ss and ff are being measured.
 
