@@ -24,11 +24,10 @@ and Xyce's fast path (README.md, "Profile"), on a deck of one resistor:
   checks    a window or a cells run against ngspice fails on a missing
             edge, an edge or a settled level past its tolerance, and an
             RTL mismatch in either engine
-  corners   Xyce runs at tt and ff only (XYCE_CORNERS): at ss (125 C) its
-            residual goes NaN at the predictor's voltages on a longer step
-            and it stops ("Maximum number of failures"), from a 0.1 ns or a
-            1 ps first step alike; root cause under investigation. Adding
-            ss is this line and a passing run, never a quiet change
+  corners   Xyce runs at tt, ss and ff (XYCE_CORNERS): ss since each
+            diode's area is folded into its model (area, below) -- before,
+            at 125 C its residual went NaN and it stopped ("Maximum number
+            of failures"); slices B and C at ss pass against ngspice
   abort     a Xyce that aborts, prints a NaN, or stops before the end
             fails the run, with Xyce's own message; never a quiet pass
             (a stand-in for Xyce)
@@ -231,8 +230,8 @@ def xyce_cases(d, fails):
                  ("mismatches_ref", 1), ("mismatches_other", 1), ("edges", 0)):
         if not engines.window_failures(dict(good, **{k: v})):
             fails.append(f"checks: a window with {k} = {v} passes")
-    if tuple(engines.XYCE_CORNERS) != ("tt", "ff"):
-        fails.append(f"corners: Xyce's corners are {engines.XYCE_CORNERS}, not tt and ff (ss: the NaN)")
+    if tuple(engines.XYCE_CORNERS) != ("tt", "ss", "ff"):
+        fails.append(f"corners: Xyce's corners are {engines.XYCE_CORNERS}, not tt, ss and ff")
     fake = os.path.join(d, "Xyce")
     with open(fake, "w") as f:
         f.write(FAKE_XYCE)

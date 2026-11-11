@@ -22,8 +22,10 @@ started from the state at 2.6 ns. Checked here:
              doubled its steps from 1 ps to 1.3 ns there)
   span       --span FROM:TO simulates that stretch (the nightly slice,
              0:40, power-up) as a window: its own deck, pins and end state
-  xyce       at a corner not in engines.XYCE_CORNERS (ss) the xyce step
-             refuses, naming the list; elsewhere it runs Xyce (engines.run_xyce, stood in for) on
+  xyce       Xyce runs at every corner (engines.XYCE_CORNERS: tt, ss, ff --
+             ss since its diodes' area is folded into their models); at a
+             corner not in the list the xyce step refuses, naming the list;
+             elsewhere it runs Xyce (engines.run_xyce, stood in for) on
              the window's deck, from the state ngspice started it from,
              and fails on what engines.window_failures finds against
              ngspice's pins, or on Xyce's own failure; passes otherwise,
@@ -129,16 +131,20 @@ def main():
                 return str(e.code)
             return None
 
-        # ss: not a Xyce corner (engines.XYCE_CORNERS) -- refused, not skipped
+        # every corner a Xyce corner (ss since the diodes' area fold); one not
+        # in engines.XYCE_CORNERS refused, not skipped
+        ok = tuple(engines.XYCE_CORNERS) == tuple(chip.CORNERS)
+        print(f"xyce:      {'ok' if ok else 'FAIL'}  (corners {', '.join(engines.XYCE_CORNERS)})")
+        ok or fails.append("xyce (corners)")
         calls.clear()
         try:
-            chip.xyce_window(work, "ss", edges, 0.0, t1, 1)
+            chip.xyce_window(work, "xx", edges, 0.0, t1, 1)
             msg = None
         except SystemExit as e:
             msg = str(e.code)
         ok = msg is not None and "XYCE_CORNERS" in msg and not calls
-        print(f"xyce:      {'ok' if ok else 'FAIL'}  (at ss: {msg or 'Xyce ran'})")
-        ok or fails.append("xyce (at ss)")
+        print(f"xyce:      {'ok' if ok else 'FAIL'}  (at a corner not in the list: {msg or 'Xyce ran'})")
+        ok or fails.append("xyce (not a Xyce corner)")
         msg = xyce(0, good)
         res = os.path.join(work, "tt", "seg", "xyce_0", "result.json")
         ok = msg is None and calls and calls[-1].endswith("chip_0.sp") and os.path.exists(res)
