@@ -235,7 +235,7 @@ def xyce_lib(lines, notes):
             tail = l.split(None, len(nodes))[len(nodes)] if len(t) > len(nodes) else ""
             pairs = [(k, v) for k, v in param_tokens(tail) if (k or "").lower() not in XYCE_MOS_DROP]
             l = " ".join(nodes) + " " + pairs_str(pairs)
-        out.append(l)
+        out.append(l.strip())     # column 1: Xyce reads ' .param x' as nothing (test_engines.py)
     return out
 
 
