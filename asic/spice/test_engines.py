@@ -13,6 +13,18 @@ without a word. Checked here, on a library made up in the same shape:
   include   ... and after a blank line, in a file reached by .include
   section   ... inside a .lib section
 
+and Xyce's fast path (README.md, "Profile"), on a deck of one resistor:
+
+  fast      the deck solves with UMFPACK (.options linsol type=umfpack),
+            KLU only when asked for (solver="klu", the reference)
+  env       every Xyce process orders with METIS and runs one OpenMP and
+            one BLAS thread (seven idle threads spun in barriers: 5 %)
+  mpi       the MPI build runs over mpirun -np 4, oversubscribe allowed;
+            the serial build alone; never more ranks than CPUs
+  checks    a window or a cells run against ngspice fails on a missing
+            edge, an edge or a settled level past its tolerance, and an
+            RTL mismatch in either engine
+
 No ngspice, Xyce or PDK.
 
 usage: test_engines.py
@@ -59,6 +71,58 @@ def params(lines):
     return out
 
 
+DECK = """* one resistor
+V1 a 0 1
+R1 a 0 1k
+.options klu rshunt=1e12
+.control
+tran 0.1n 1n 0 0.1n
+wrdata {dat} v(a)
+.endc
+.end
+"""
+
+
+def xyce_cases(d, fails):
+    sp = os.path.join(d, "r.sp")
+    with open(sp, "w") as f:
+        f.write(DECK.format(dat=os.path.join(d, "r.dat")))
+    lines = lambda x: [l.strip().lower() for l in open(x)]
+    xsp = engines.xyce_deck(sp, os.path.join(d, "fast"))[0]
+    if ".options linsol type=umfpack" not in lines(xsp) or any("type=klu" in l for l in lines(xsp)):
+        fails.append("fast: the deck does not solve with UMFPACK alone")
+    xsp = engines.xyce_deck(sp, os.path.join(d, "klu"), solver="klu")[0]
+    if ".options linsol type=klu" not in lines(xsp) or any("type=umfpack" in l for l in lines(xsp)):
+        fails.append("fast: solver='klu' does not give KLU alone")
+    cmd, env = engines.xyce_command("/x/bin/Xyce", 1)
+    want = {"AMESOS_UMFPACK_ORDERING": "metis", "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1"}
+    if cmd != ["/x/bin/Xyce"] or any(env.get(k) != v for k, v in want.items()):
+        fails.append(f"env: serial {cmd} {env}")
+    cmd, env = engines.xyce_command("/x/bin/Xyce", 4, mpirun="/m/bin/mpirun")
+    if cmd[0] != "/m/bin/mpirun" or cmd[cmd.index("-np") + 1] != "4" or cmd[-1] != "/x/bin/Xyce" \
+            or env.get("OMPI_MCA_rmaps_base_oversubscribe") != "1" \
+            or env.get("PRTE_MCA_rmaps_default_mapping_policy") != ":oversubscribe" \
+            or any(env.get(k) != v for k, v in want.items()):
+        fails.append(f"mpi: {cmd} {env}")
+    for mpirun, cpus, ranks in ((None, 8, 1), ("/m/bin/mpirun", 8, 4), ("/m/bin/mpirun", 4, 4), ("/m/bin/mpirun", 2, 2)):
+        if engines.xyce_ranks(mpirun, cpus) != ranks:
+            fails.append(f"mpi: {engines.xyce_ranks(mpirun, cpus)} ranks for {mpirun} on {cpus} CPUs, not {ranks}")
+    good = {"edges": 7, "edges_missing": 0, "max_edge_shift_ns": 0.009, "max_settled_dV": 0.03,
+            "mismatches_ref": 0, "mismatches_other": 0}
+    if engines.window_failures(good):
+        fails.append(f"checks: a window as measured fails: {engines.window_failures(good)}")
+    for k, v in (("edges_missing", 1), ("max_edge_shift_ns", 1.0), ("max_settled_dV", 1.0),
+                 ("mismatches_ref", 1), ("mismatches_other", 1), ("edges", 0)):
+        if not engines.window_failures(dict(good, **{k: v})):
+            fails.append(f"checks: a window with {k} = {v} passes")
+    cell = {"edges": 6, "missing": 0, "max_edge_ps": 25.0, "max_settled_mV": 0.4}
+    if engines.cells_failures(cell):
+        fails.append(f"checks: cells as measured fail: {engines.cells_failures(cell)}")
+    for k, v in (("missing", 1), ("max_edge_ps", 500.0), ("max_settled_mV", 50.0), ("edges", 0)):
+        if not engines.cells_failures(dict(cell, **{k: v})):
+            fails.append(f"checks: cells with {k} = {v} pass")
+
+
 def main():
     d = tempfile.mkdtemp(prefix="test_engines.")
     with open(os.path.join(d, "design.ngspice"), "w") as f:
@@ -79,11 +143,12 @@ def main():
     for n, v in {"c": "3", "d": "4", "e": "5"}.items():
         if p.get(n) != v:
             fails.append(f"section: .param {n} = {v} read as {p.get(n)}")
+    xyce_cases(d, fails)
     for f in fails:
         print("engines: FAIL", f)
     if fails:
         sys.exit(1)
-    print("engines: PASS (plain, comment, include, section)")
+    print("engines: PASS (plain, comment, include, section, fast, env, mpi, checks)")
 
 
 if __name__ == "__main__":
