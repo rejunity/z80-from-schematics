@@ -63,8 +63,11 @@ jobs:
         run: |
           root=$(python3 -c "import sys; sys.path.insert(0, 'asic/spice'); import pads; print(pads.PDKS['gf180mcu']['root'])")
           [ -d ~/.ciel/ciel/$root ] ||
-            nix run github:librelane/librelane/$LIBRELANE_VERSION#python3.pkgs.ciel -- fetch --pdk-root ~/.ciel \
+            scripts/nix_retry.sh nix run github:librelane/librelane/$LIBRELANE_VERSION#python3.pkgs.ciel -- fetch --pdk-root ~/.ciel \
               --pdk-family $(cut -d/ -f1 <<< "$root") $(cut -d/ -f3 <<< "$root")
+
+      - name: The simulators, pinned (nix; a broken download again, then built)
+        run: scripts/nix_retry.sh nix build --no-link $(python3 -c 'import sys; sys.path.insert(0, "asic/spice"); import pads; print(*(pads.TOOLS[t] for t in sys.argv[1:]))' magic)
 
       - name: The chip's GDS, from main's latest Targets run
         id: gds
@@ -122,8 +125,11 @@ jobs:
         run: |
           root=$(python3 -c "import sys; sys.path.insert(0, 'asic/spice'); import pads; print(pads.PDKS['gf180mcu']['root'])")
           [ -d ~/.ciel/ciel/$root ] ||
-            nix run github:librelane/librelane/$LIBRELANE_VERSION#python3.pkgs.ciel -- fetch --pdk-root ~/.ciel \
+            scripts/nix_retry.sh nix run github:librelane/librelane/$LIBRELANE_VERSION#python3.pkgs.ciel -- fetch --pdk-root ~/.ciel \
               --pdk-family $(cut -d/ -f1 <<< "$root") $(cut -d/ -f3 <<< "$root")
+
+      - name: The simulators, pinned (nix; a broken download again, then built)
+        run: scripts/nix_retry.sh nix build --no-link $(python3 -c 'import sys; sys.path.insert(0, "asic/spice"); import pads; print(*(pads.TOOLS[t] for t in sys.argv[1:]))' ngspice)
 
       - name: The netlist and the RTL's reference
         uses: actions/download-artifact@v8
@@ -174,8 +180,11 @@ jobs:
         run: |
           root=$(python3 -c "import sys; sys.path.insert(0, 'asic/spice'); import pads; print(pads.PDKS['gf180mcu']['root'])")
           [ -d ~/.ciel/ciel/$root ] ||
-            nix run github:librelane/librelane/$LIBRELANE_VERSION#python3.pkgs.ciel -- fetch --pdk-root ~/.ciel \
+            scripts/nix_retry.sh nix run github:librelane/librelane/$LIBRELANE_VERSION#python3.pkgs.ciel -- fetch --pdk-root ~/.ciel \
               --pdk-family $(cut -d/ -f1 <<< "$root") $(cut -d/ -f3 <<< "$root")
+
+      - name: The simulators, pinned (nix; a broken download again, then built)
+        run: scripts/nix_retry.sh nix build --no-link $(python3 -c 'import sys; sys.path.insert(0, "asic/spice"); import pads; print(*(pads.TOOLS[t] for t in sys.argv[1:]))' ngspice)
 
       - name: The netlist and the RTL's reference
         uses: actions/download-artifact@v8
@@ -232,8 +241,11 @@ jobs:
         run: |
           root=$(python3 -c "import sys; sys.path.insert(0, 'asic/spice'); import pads; print(pads.PDKS['gf180mcu']['root'])")
           [ -d ~/.ciel/ciel/$root ] ||
-            nix run github:librelane/librelane/$LIBRELANE_VERSION#python3.pkgs.ciel -- fetch --pdk-root ~/.ciel \
+            scripts/nix_retry.sh nix run github:librelane/librelane/$LIBRELANE_VERSION#python3.pkgs.ciel -- fetch --pdk-root ~/.ciel \
               --pdk-family $(cut -d/ -f1 <<< "$root") $(cut -d/ -f3 <<< "$root")
+
+      - name: The simulators, pinned (nix; a broken download again, then built)
+        run: scripts/nix_retry.sh nix build --no-link $(python3 -c 'import sys; sys.path.insert(0, "asic/spice"); import pads; print(*(pads.TOOLS[t] for t in sys.argv[1:]))' ngspice)
 
       - name: The netlist and the RTL's reference
         uses: actions/download-artifact@v8
@@ -290,8 +302,11 @@ jobs:
         run: |
           root=$(python3 -c "import sys; sys.path.insert(0, 'asic/spice'); import pads; print(pads.PDKS['gf180mcu']['root'])")
           [ -d ~/.ciel/ciel/$root ] ||
-            nix run github:librelane/librelane/$LIBRELANE_VERSION#python3.pkgs.ciel -- fetch --pdk-root ~/.ciel \
+            scripts/nix_retry.sh nix run github:librelane/librelane/$LIBRELANE_VERSION#python3.pkgs.ciel -- fetch --pdk-root ~/.ciel \
               --pdk-family $(cut -d/ -f1 <<< "$root") $(cut -d/ -f3 <<< "$root")
+
+      - name: The simulators, pinned (nix; a broken download again, then built)
+        run: scripts/nix_retry.sh nix build --no-link $(python3 -c 'import sys; sys.path.insert(0, "asic/spice"); import pads; print(*(pads.TOOLS[t] for t in sys.argv[1:]))' ngspice)
 
       - name: The netlist and the RTL's reference
         uses: actions/download-artifact@v8

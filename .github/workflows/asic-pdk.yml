@@ -71,7 +71,7 @@ jobs:
 
       # iverilog >= 12 for the gate-level run (the IHP cell models need it)
       - name: Install LibreLane ${{ env.LIBRELANE_VERSION }} and iverilog
-        run: nix profile install github:librelane/librelane/$LIBRELANE_VERSION nixpkgs#iverilog
+        run: scripts/nix_retry.sh nix profile install github:librelane/librelane/$LIBRELANE_VERSION nixpkgs#iverilog
 
       # LibreLane pins the PDK version, unless asic/<pdk>/Makefile pins its
       # own (PDK_VERSION, fetched with LibreLane's ciel): both key the cache
@@ -152,6 +152,9 @@ jobs:
       # PDK's layouts, the wires from the routed chip's SPEF -- and run in
       # ngspice at each corner, a minute or two (ngspice and Magic: the
       # versions nmi.py pins, built with nix). The GF180 7-track chip only.
+      - name: The simulators, pinned (nix; a broken download again, then built)
+        if: inputs.pdk == 'gf180mcu' && hashFiles('asic/spice/nmi.py') != '' && hashFiles(format('asic/{0}/chip/config.yaml', inputs.pdk)) != ''
+        run: scripts/nix_retry.sh nix build --no-link $(python3 -c 'import sys; sys.path.insert(0, "asic/spice"); import pads; print(*(pads.TOOLS[t] for t in sys.argv[1:]))' ngspice magic)
       - name: NMI pulse catcher at transistor level (ngspice)
         if: inputs.pdk == 'gf180mcu' && hashFiles('asic/spice/nmi.py') != '' && hashFiles(format('asic/{0}/chip/config.yaml', inputs.pdk)) != ''
         run: |
