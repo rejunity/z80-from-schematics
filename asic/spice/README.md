@@ -725,11 +725,32 @@ slice. ngspice-45 forms its saturation current with the area
 antenna diode at 125 C), and its `DEVpnjlim` limits negative voltages
 too: the same devices at the same voltages are fine there.
 
-Each chip diode given a model of its own with the area folded in (IS,
-IBV, CJO, IKF times the area, RS divided by it, `area=1`) runs the same
-1 ns slice from 0.1 ns. Folding IKF also makes Xyce scale it, which its
-code does not (`tIKF` is the model's) and ngspice does; the translation
-does neither yet.
+The translation now gives each diode of the chip's netlist a model of
+its own with its area folded in (`engines.xyce_fold_area`, test first in
+`test_engines.py`): IS, IBV (ngspice's 1e-3 when BV is given without it),
+CJO and IKF times area * m, RS divided by it, pj times m, no area or m on
+the instance -- as ngspice scales a level-3 diode (diotemp.c). Xyce's
+critical voltage then comes from the device's own saturation current
+(+1.02 V for the antenna diode at 125 C, as ngspice's). IKF is scaled
+too, which Xyce's own code does not (`tIKF` is the model's) and ngspice,
+the PDK's engine, does: Xyce's high injection follows ngspice's now, not
+the earlier Xyce runs'. The library's own diodes (the n+/p+ resistors'
+junctions, area an expression, no IS of their own) stay as they were.
+Seven models for the chip's 26 diode lines. Each run alone, ngspice's
+0.1 ns first step:
+
+| Run | Wall | Against ngspice | Against the earlier Xyce run |
+|---|---|---|---|
+| ss B, 1 ns, stock Xyce (nixpkgs, KLU) | 194 s | | (it went NaN at 28 ps) |
+| ss B, UMFPACK + METIS | 283 s | 3.6 mV, 0 / 0 RTL | 0.9 mV |
+| ss C, UMFPACK + METIS | 513 s | 7 of 7 edges; MREQ_n -58 ps, RD_n -67 ps (steps 106-313 ps), D[1..5] +8 ps; 0 / 0 RTL | 28 ps, 1.9 mV |
+| tt B, UMFPACK + METIS | 258 s | 7.7 mV, 0 / 0 RTL | 0.0 (every printed digit) |
+| ff B, UMFPACK + METIS | 271 s | 12.3 mV, 0 / 0 RTL | 0.0 (every printed digit) |
+
+At tt and ff the fold changes nothing in slice B; at ss slice C it moves
+MREQ_n's and RD_n's falls 28 ps closer to ngspice's (the "settled" 0.136
+V on D is the memory switch's, as above). Xyce runs at ss
+(`engines.XYCE_CORNERS`).
 
 ### VAJAX
 
@@ -914,18 +935,13 @@ transient, its converter, 127,285 BSIM4 instances on an 8 GB GPU).
   all (`engines.WINDOW_TOL`, `window_failures`) -- and on Xyce itself
   aborting, printing a NaN, or stopping before the end, whatever its
   exit code, with its own lines in the log (`XYCE_FATAL`): never a quiet
-  pass. Xyce runs at tt and ff only (`engines.XYCE_CORNERS`; the
-  Transistor run's Xyce jobs take those of its corners, and name the ones
-  they leave out): at ss (125 C) its residual goes NaN at the predictor's
-  voltages once a step grows (slice B: from 0.31 to 0.53 ns at 23.85 ns,
-  largest at P_VDD), only with the diodes and the MOSFETs both hot, and
-  it stops on "Maximum number of failures" -- from ngspice's 0.1 ns first
-  step and from 1 ps alike: Xyce's diode critical voltage, from the
-  saturation current per unit area, is below 0 V at 125 C and its
-  `pnjlim` takes the log of a negative voltage ("Xyce's NaN at ss"
-  above). ss joins the list with a passing run. ngspice stays the run's
-  engine: `stitch` and `figures` read its pins. The tolerances are tt's;
-  ss and ff are being measured.
+  pass. Xyce runs at tt, ss and ff (`engines.XYCE_CORNERS`; the
+  Transistor run's Xyce jobs take those of its corners, and name any
+  they leave out). ss since each diode's area is folded into a model of
+  its own (`xyce_fold_area`): before, at 125 C, Xyce's residual went NaN
+  ("Xyce's NaN at ss" above). ngspice stays the run's engine: `stitch`
+  and `figures` read its pins. The tolerances are tt's; ss and ff are
+  measured above (slices B and C).
 
   With ciel's PDK (54435919) `design.ngspice` and `sm141064.ngspice` put
   comment lines inside `+` continuations (the reader drops them first, as
