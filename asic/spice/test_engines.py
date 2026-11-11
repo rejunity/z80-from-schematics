@@ -32,6 +32,14 @@ and Xyce's fast path (README.md, "Profile"), on a deck of one resistor:
   abort     a Xyce that aborts, prints a NaN, or stops before the end
             fails the run, with Xyce's own message; never a quiet pass
             (a stand-in for Xyce)
+  area      every diode of the chip's netlist gets a model of its own with
+            its area folded in -- IS, IBV (BV given: 1e-3 if not), CJO and
+            IKF times area * m, RS divided by it, pj times m, no area or m
+            left on the instance -- as ngspice scales them (diotemp.c):
+            Xyce's diode takes its critical voltage from IS per unit area,
+            below 0 V at 125 C for the PDK's per-area cards, and its pnjlim
+            then takes the log of a negative voltage (README.md, "Xyce's
+            NaN at ss"); IKF too, which Xyce's own code leaves unscaled
   indent    the library's lines start in column 1: Xyce takes ' .param x'
             for no parameter at all, and every model using x then aborts
             ("contains unrecognized symbols") -- the PDK as ciel fetches it
@@ -117,6 +125,80 @@ sys.exit(1 if mode == "abort" else 0)
 """
 
 
+DIODE_LIB = """* a level-3 diode with per-area cards, as GF180's
+.param jsa = 0.85
+.model dpa d level=3 is={6.88e-7*jsa} ikf=229000 ibv=0.001 bv=11 cj=0.00095 rs=2e-10 jsw=4.88e-13 cjsw=1.33e-10 n=1.05
+.model dpb d level=3 is=2e-7 bv=10.5 cj=0.0009 rs=2e-10
+"""
+DIODE_NET = """.subckt cell VSS I VDD
+D0 VSS I dpa pj=1.86u area=0.2052p
+D1 I VDD dpb pj=4u area=1p
+D2 VSS VDD dpa pj=2u area=0.5p m=2
+.ends
+"""
+DIODE_DECK = """* three diodes
+.include {lib}
+.include {net}
+Xc 0 a b cell
+V1 b 0 5
+V2 a 0 1
+.options klu rshunt=1e12
+.control
+tran 0.1n 1n 0 0.1n
+wrdata {dat} v(a)
+.endc
+.end
+"""
+
+
+def area_cases(d, fails):
+    """each diode its own model, the area folded in (as ngspice scales it)"""
+    lib, net = os.path.join(d, "diodes.ngspice"), os.path.join(d, "chip.net")
+    open(lib, "w").write(DIODE_LIB)
+    open(net, "w").write(DIODE_NET)
+    sp = os.path.join(d, "dio.sp")
+    open(sp, "w").write(DIODE_DECK.format(lib=lib, net=net, dat=os.path.join(d, "dio.dat")))
+    out = os.path.join(d, "area")
+    engines.xyce_deck(sp, out)
+    models = {}
+    for l in open(os.path.join(out, "models.xyce.lib")):
+        t = l.split()
+        if len(t) > 2 and t[0].lower() == ".model" and t[2].lower() == "d":
+            models[t[1].lower()] = {k.lower(): v for k, v in engines.param_tokens(l.split(None, 3)[3])}
+    num = lambda v: eval(v.strip("{}").replace("jsa", "0.85"), {"__builtins__": {}})
+    want = {"D0": ("dpa", 0.2052e-12, 1.86e-6, {"is": 6.88e-7 * 0.85, "ikf": 229000, "ibv": 0.001, "cjo": 0.00095},
+                   {"rs": 2e-10}),
+            "D1": ("dpb", 1e-12, 4e-6, {"is": 2e-7, "ibv": 0.001, "cjo": 0.0009}, {"rs": 2e-10}),
+            "D2": ("dpa", 2 * 0.5e-12, 2 * 2e-6, {"is": 6.88e-7 * 0.85, "ikf": 229000, "ibv": 0.001, "cjo": 0.00095},
+                   {"rs": 2e-10})}
+    seen = set()
+    for l in open(os.path.join(out, "chip.xyce.net")):
+        t = l.split()
+        if not t or t[0] not in want:
+            continue
+        base, a, pj, times, per = want[t[0]]
+        kv = {k.lower(): v for k, v in (x.split("=") for x in t[4:])}
+        m = models.get(t[3].lower())
+        seen.add(t[0])
+        if t[3].lower() == base or m is None:
+            fails.append(f"area: {t[0]} uses {t[3]}, not a model of its own")
+            continue
+        if engines.spice_num(kv.get("area", "1")) != 1.0 or "m" in kv:
+            fails.append(f"area: {t[0]} keeps area / m on the instance: {kv}")
+        if abs(engines.spice_num(kv.get("pj", "0")) / pj - 1) > 1e-9:
+            fails.append(f"area: {t[0]} pj {kv.get('pj')}, not {pj:g}")
+        for k, v in times.items():
+            if k not in m or abs(num(m[k]) / (v * a) - 1) > 1e-9:
+                fails.append(f"area: {t[0]} {k} = {m.get(k)}, not {v:g} * {a:g}")
+        for k, v in per.items():
+            if k not in m or abs(num(m[k]) / (v / a) - 1) > 1e-9:
+                fails.append(f"area: {t[0]} {k} = {m.get(k)}, not {v:g} / {a:g}")
+        if num(m.get("jsw", "0")) not in (0, 4.88e-13 * 0.85):
+            fails.append(f"area: {t[0]} jsw scaled: {m.get('jsw')}")
+    if seen != set(want):
+        fails.append(f"area: diodes in the Xyce netlist: {sorted(seen)}")
+
+
 def xyce_cases(d, fails):
     sp = os.path.join(d, "r.sp")
     with open(sp, "w") as f:
@@ -196,11 +278,12 @@ def main():
         if p.get(n) != v:
             fails.append(f"section: .param {n} = {v} read as {p.get(n)}")
     xyce_cases(d, fails)
+    area_cases(d, fails)
     for f in fails:
         print("engines: FAIL", f)
     if fails:
         sys.exit(1)
-    print("engines: PASS (plain, comment, include, section, fast, env, mpi, checks, indent, corners, abort)")
+    print("engines: PASS (plain, comment, include, section, fast, env, mpi, checks, indent, corners, abort, area)")
 
 
 if __name__ == "__main__":
