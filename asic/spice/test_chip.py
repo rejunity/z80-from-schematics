@@ -112,13 +112,14 @@ def main():
         good = {"edges": 8, "edges_missing": 0, "max_edge_shift_ns": 0.009, "max_settled_dV": 0.004,
                 "mismatches_ref": 0, "mismatches_other": 0}
 
-        def xyce(run_rc, cmp):
+        def xyce(run_rc, cmp, error=None):
             def run_xyce(sp, out_dir, *a, **kw):
                 calls.append(sp)
                 os.makedirs(out_dir, exist_ok=True)
                 dat = os.path.join(out_dir, "chip_0.dat")
                 open(dat, "w").write(open(chip.segment_file(work, "tt", 0.0)).read())
-                return {"engine": "Xyce MPI x4", "rc": run_rc, "wall_s": 1.0, "dat": dat}
+                return dict({"engine": "Xyce MPI x4", "rc": run_rc, "wall_s": 1.0, "dat": dat},
+                            **({"error": error} if error else {}))
             engines.run_xyce = run_xyce
             engines.compare = lambda ref, dat, ref_txt, t_from=0.0: dict(cmp)
             try:
@@ -132,13 +133,16 @@ def main():
         ok = msg is None and calls and calls[-1].endswith("chip_0.sp") and os.path.exists(res)
         print(f"xyce:      {'ok' if ok else 'FAIL'}  ({msg or 'as ngspice: passed, ' + os.path.basename(res)})")
         ok or fails.append("xyce")
-        for what, rc, cmp in (("an edge missing", 0, dict(good, edges_missing=1)),
-                              ("an edge 1 ns off", 0, dict(good, max_edge_shift_ns=1.0)),
-                              ("an RTL mismatch", 0, dict(good, mismatches_other=2)),
-                              ("Xyce failed", 1, good)):
-            msg = xyce(rc, cmp)
-            print(f"xyce:      {'ok' if msg else 'FAIL'}  ({what}: {msg or 'passed'})")
-            msg or fails.append(f"xyce ({what})")
+        nan = "Xyce rc 0, stopped at 0.0050 ns of 1235: Maximum number of failures at time 5e-12 / *** Xyce Abort ***"
+        for what, rc, cmp, err, says in (("an edge missing", 0, dict(good, edges_missing=1), None, "missing"),
+                                         ("an edge 1 ns off", 0, dict(good, max_edge_shift_ns=1.0), None, "max_edge"),
+                                         ("an RTL mismatch", 0, dict(good, mismatches_other=2), None, "RTL"),
+                                         ("Xyce failed", 1, good, None, "rc 1"),
+                                         ("Xyce aborted at rc 0", 0, good, nan, "Xyce Abort")):
+            msg = xyce(rc, cmp, err)
+            ok = msg is not None and says in msg
+            print(f"xyce:      {'ok' if ok else 'FAIL'}  ({what}: {msg or 'passed'})")
+            ok or fails.append(f"xyce ({what})")
 
         # span: the nightly's slice, 0-40 ns, as a window of its own
         os.environ["FAKE_NGSPICE"] = "complete"

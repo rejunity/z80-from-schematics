@@ -51,6 +51,14 @@ XYCE_ENV = {"AMESOS_UMFPACK_ORDERING": "metis", "OMP_NUM_THREADS": "1", "OPENBLA
 XYCE_MPI_ENV = {"OMPI_MCA_rmaps_base_oversubscribe": "1",          # OpenMPI 5: as many ranks as asked
                 "PRTE_MCA_rmaps_default_mapping_policy": ":oversubscribe"}
 XYCE_RANKS = 4
+# Xyce's first step, at every corner: from ngspice's 0.1 ns the residual
+# went NaN on the second step at ss (125 C, the diodes and the MOSFETs
+# both hot) and Xyce aborted 5-28 ps in; from 1 ps it runs
+XYCE_TSTEP = "1p"
+# what in Xyce's output fails a run, whatever its exit code: an abort, a
+# NaN anywhere, its step control giving up (the run's end is checked too)
+XYCE_FATAL = re.compile(r"Xyce Abort|\bnan\b|Time step too small|Simulation aborted|"
+                        r"Transient failure|Simulator failed|Maximum number of failures", re.I)
 
 # Xyce against ngspice, what fails (chip.py's windows; tt measured, README.md
 # "Other simulators"): an output edge missing or more than 0.2 ns off (82 ps
@@ -344,7 +352,7 @@ def xyce_deck(sp, out_dir, options=(), uic=True, solver="umfpack"):
     libf = os.path.join(out_dir, "models.xyce.lib")
     open(libf, "w").write("\n".join(xyce_lib(lib, notes)) + "\n")
     deck = [open(sp).readline().rstrip(), f".include {libf}"] + body + list(options) + [
-        f".tran {tran[1]} {tran[2]} {tran[3]} {tran[4]}" + (" UIC" if uic else ""),
+        f".tran {XYCE_TSTEP} {tran[2]} {tran[3]} {tran[4]}" + (" UIC" if uic else ""),
         f".print tran format=noindex file={prn} " + " ".join(cols),
         ".end"]
     xsp = os.path.join(out_dir, os.path.basename(sp).replace(".sp", ".xyce.sp"))
@@ -419,7 +427,17 @@ def run_xyce(sp, out_dir, xyce=None, ranks=None, options=(), uic=True, solver="u
     if os.path.exists(prn):
         res["points"] = prn_to_dat(prn, os.path.join(out_dir, os.path.basename(dat)))
         res["dat"] = os.path.join(out_dir, os.path.basename(dat))
-    txt = open(log).read() if os.path.exists(log) else p.stdout + p.stderr
+    txt = (open(log).read() if os.path.exists(log) else "") + p.stdout + p.stderr
+    # a run that aborted, went NaN or stopped short fails, with Xyce's words
+    fatal = [l.strip() for l in txt.splitlines() if XYCE_FATAL.search(l)]
+    tstop = spice_num(next(l.split()[2] for l in open(xsp) if l.lower().startswith(".tran")))
+    reached = 0.0
+    if res.get("dat"):
+        rows = [r.split() for r in open(res["dat"]).read().splitlines()[1:] if r.strip()]
+        reached = float(rows[-1][0]) if rows else 0.0
+    if fatal or p.returncode or reached < tstop * (1 - 1e-6):
+        res["error"] = (f"Xyce rc {p.returncode}, stopped at {reached * 1e9:.4f} ns of {tstop * 1e9:.4f}"
+                        + (": " + " / ".join(dict.fromkeys(fatal))[:2000] if fatal else "") + f" ({log})")
     for k, pat in (("accepted", r"Number Successful Steps Taken:\s*(\d+)"),
                    ("rejected", r"Number Failed Steps Attempted:\s*(\d+)"),
                    ("newton", r"Number Nonlinear Iterations:\s*(\d+)"),
@@ -925,7 +943,10 @@ def main():
         if a.translate_only:
             print(xyce_deck(a.deck, out, a.option))
             return 0
-        return 0 if run_xyce(a.deck, out, a.xyce, a.ranks, a.option, solver=a.solver)["rc"] == 0 else 1
+        r = run_xyce(a.deck, out, a.xyce, a.ranks, a.option, solver=a.solver)
+        if r.get("error"):
+            print(f"engines: Xyce FAILED: {r['error']}")
+        return 1 if r.get("error") else 0
     if a.cmd == "cells":
         engs = a.engines.split(",")
         if "vajax" in engs and not (a.va and a.python):

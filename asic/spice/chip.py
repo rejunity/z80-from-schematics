@@ -400,8 +400,9 @@ def xyce_window(work, corner, edges, t_from, tstop, threads):
     out = os.path.join(work, corner, "seg", f"xyce_{t_from:.0f}")
     print(f"chip: Xyce, {t_from / 1000:.2f} .. {tstop / 1000:.2f} us", flush=True)
     run = engines.run_xyce(sp, out)
-    if run.get("rc") or not run.get("dat"):
-        sys.exit(f"chip: Xyce failed on the window at {t_from:.0f} ns (rc {run.get('rc')}, {out})")
+    if run.get("error") or run.get("rc") or not run.get("dat"):     # an abort, a NaN, a short run: never a pass
+        sys.exit(f"chip: Xyce failed on the window at {t_from:.0f} ns: "
+                 + (run.get("error") or f"rc {run.get('rc')}, no pins ({out})"))
     cmp = engines.compare(ref, run["dat"], os.path.join(work, "ref.txt"), t_from)
     bad = engines.window_failures(cmp)
     with open(os.path.join(out, "result.json"), "w") as f:
