@@ -395,7 +395,7 @@ def xyce_window(work, corner, edges, t_from, tstop, threads):
     import engines
     if corner not in engines.XYCE_CORNERS:
         sys.exit(f"chip: Xyce does not run at {corner}: engines.XYCE_CORNERS is {', '.join(engines.XYCE_CORNERS)} "
-                 "(at ss its residual goes NaN; README.md, \"CI\")")
+                 "(README.md, \"CI\")")
     ref = segment_file(work, corner, t_from)
     if not os.path.exists(ref):
         sys.exit(f"chip: ngspice has not run the window at {t_from:.0f} ns ({ref})")
