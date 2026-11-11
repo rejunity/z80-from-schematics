@@ -20,6 +20,13 @@ started from the state at 2.6 ns. Checked here:
   ramp       the supply's 20 ns ramp has breakpoints at most 0.25 ns apart,
              as the clock's edges have (the abort came after ngspice had
              doubled its steps from 1 ps to 1.3 ns there)
+  span       --span FROM:TO simulates that stretch (the nightly slice,
+             0:40, power-up) as a window: its own deck, pins and end state
+  xyce       the xyce step runs Xyce (engines.run_xyce, stood in for) on
+             the window's deck, from the state ngspice started it from,
+             and fails on what engines.window_failures finds against
+             ngspice's pins, or on Xyce's own failure; passes otherwise,
+             and leaves its result beside the window's pins
 
 Needs iverilog (chip.py's reference: the RTL's pins at every clock edge);
 no ngspice, Magic or PDK.
@@ -99,6 +106,51 @@ def main():
         print(f"complete:  {'ok' if ok else 'FAIL'}  ({msg or 'window 1 passed, end state written'})")
         ok or fails.append("complete")
 
+        # xyce: engines.run_xyce and engines.compare stood in for
+        import engines
+        calls = []
+        good = {"edges": 8, "edges_missing": 0, "max_edge_shift_ns": 0.009, "max_settled_dV": 0.004,
+                "mismatches_ref": 0, "mismatches_other": 0}
+
+        def xyce(run_rc, cmp):
+            def run_xyce(sp, out_dir, *a, **kw):
+                calls.append(sp)
+                os.makedirs(out_dir, exist_ok=True)
+                dat = os.path.join(out_dir, "chip_0.dat")
+                open(dat, "w").write(open(chip.segment_file(work, "tt", 0.0)).read())
+                return {"engine": "Xyce MPI x4", "rc": run_rc, "wall_s": 1.0, "dat": dat}
+            engines.run_xyce = run_xyce
+            engines.compare = lambda ref, dat, ref_txt, t_from=0.0: dict(cmp)
+            try:
+                chip.xyce_window(work, "tt", edges, 0.0, t1, 1)
+            except SystemExit as e:
+                return str(e.code)
+            return None
+
+        msg = xyce(0, good)
+        res = os.path.join(work, "tt", "seg", "xyce_0", "result.json")
+        ok = msg is None and calls and calls[-1].endswith("chip_0.sp") and os.path.exists(res)
+        print(f"xyce:      {'ok' if ok else 'FAIL'}  ({msg or 'as ngspice: passed, ' + os.path.basename(res)})")
+        ok or fails.append("xyce")
+        for what, rc, cmp in (("an edge missing", 0, dict(good, edges_missing=1)),
+                              ("an edge 1 ns off", 0, dict(good, max_edge_shift_ns=1.0)),
+                              ("an RTL mismatch", 0, dict(good, mismatches_other=2)),
+                              ("Xyce failed", 1, good)):
+            msg = xyce(rc, cmp)
+            print(f"xyce:      {'ok' if msg else 'FAIL'}  ({what}: {msg or 'passed'})")
+            msg or fails.append(f"xyce ({what})")
+
+        # span: the nightly's slice, 0-40 ns, as a window of its own
+        os.environ["FAKE_NGSPICE"] = "complete"
+        try:
+            chip.simulate(work, "tt", edges, 1, span=(0.0, 40.0))
+            msg = None
+        except SystemExit as e:
+            msg = str(e.code)
+        sp0 = open(os.path.join(work, "tt", "seg", "chip_0.sp")).read()
+        ok = msg is None and re.search(r"^tran \S+ 40\.000n", sp0, re.M) and os.path.exists(chip.state_file(work, "tt", 40.0))
+        print(f"span:      {'ok' if ok else 'FAIL'}  ({msg or '0-40 ns: its deck, pins and end state'})")
+        ok or fails.append("span")
         sp = open(chip.deck(work, "tt", edges, 1, t1)).read()
         brk = [float(b) for b in re.findall(r"([0-9.]+)n 0", sp[sp.index("V_brk"):sp.index("R_brk")])]
         ramp = [0.0] + [b for b in brk if b <= 20.0]
