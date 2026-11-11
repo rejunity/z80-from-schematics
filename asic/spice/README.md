@@ -638,8 +638,98 @@ inverter's edge by up to 320 ps (the coarse steps `clock_breaks()` keeps
 off the chip's clock edges).
 
 
-Not run: ss and ff, and windows after the first in Xyce's own chain (each
-slice above starts from ngspice's state).
+#### ss and ff
+
+Slices B and C at ss (125 C, 4.5 V) and ff (-40 C, 5.5 V), as at tt: the
+Transistor run 42394274800's window decks and its ngspice states at 610
+and 1735 ns (the run the tt slices come from), local paths, a shorter
+`tran`. Each run alone on the machine; ngspice on one thread; Xyce serial
+(`nix/xyce-threaded.nix` of acff0ab), `OMP_NUM_THREADS=1`; at ss Xyce's
+first step 1 ps (below). Wall seconds (accepted + rejected steps):
+
+| Corner, slice | ngspice | Xyce, KLU | Xyce, UMFPACK + METIS |
+|---|---|---|---|
+| ss, B | 1,218 (156 + 19) | NaN at 23.85 ns, after 911 s | 312 (165 + 5) |
+| ff, B | 1,132 (144 + 17) | 851 (120 + 3) | 275 (120 + 3) |
+| ss, C | 2,270 (277 + 59) | 1,690 (300 + 6) | 521 (300 + 6) |
+| ff, C | 2,495 (278 + 78) | 1,714 (281 + 7) | 525 (281 + 7) |
+| tt, C | 2,355 (278 + 64) | | 517 (285 + 7) |
+
+UMFPACK against KLU: the same steps and outputs (ff B to every printed
+digit; ss C and ff C 7 of 7 edges, 0.0 ps, 1e-15 V, 0 mismatches). At ss
+B, KLU went NaN (below) where UMFPACK's round-off took it past.
+
+Xyce against ngspice (`klu/edges.py`: every output edge, the steps its
+1.5 V crossing is interpolated across, and the settled difference both
+as `compare` takes it and interpolated):
+
+| | D[1..5] rise | MREQ_n fall | RD_n fall | settled, as compared | interpolated | RTL |
+|---|---|---|---|---|---|---|
+| tt C | +71 ps (steps 235 / 320 ps) | +79 ps (2.7 / 4.1 ns) | +82 ps (5.3 / 4.1 ns) | 0.152 V, D[1..5], 1790.43 ns | 40 mV, 1790.51 ns | 0 / 0 |
+| ss C | +8 ps (545 / 640 ps) | -86 ps (153 / 106 ps) | -92 ps (313 / 212 ps) | 0.136 V, D[1..5], 1790.46 ns | 52 mV, 1790.55 ns | 0 / 0 |
+| ff C | +118 ps (122 / 160 ps) | +55 ps (1.4 / 1.4 ns) | +70 ps (1.4 / 1.4 ns) | 0.171 V, D[1..5], 1790.40 ns | 26 mV, 1790.46 ns | 0 / 0 |
+| tt B | no output edge | | | 7.7 mV, A, 635.4 ns | 7.7 mV | 0 / 0 |
+| ss B | no output edge | | | 3.6 mV, A, 647.7 ns | 3.6 mV | 0 / 0 |
+| ff B | no output edge | | | 12.3 mV, D, 643.0 ns | 11.4 mV, A | 0 / 0 |
+
+(+: Xyce later.) Every shift is smaller than the steps it is read across:
+D's rises are the test bench's memory switch closing (`men` 0 -> VDD over
+1790-1791 ns: ngspice's `sw` at 2.7 V with hysteresis, Xyce's `vswitch`
+smooth from 2.3 to 2.7 V); MREQ_n and RD_n at tt and ff cross 1.5 V inside
+1.4-5.3 ns steps of both simulators; only at ss, where both step 0.1-0.3
+ns along a slow edge (about 0.08 V/ns), is Xyce's crossing resolved: 86-92
+ps earlier, 7 mV. Xyce is neither consistently earlier nor later. The
+"settled" 0.14-0.17 V on D is `chip.value_at`, which takes the other run's
+next saved point: at ss, Xyce's points at 1790.4 ns (0.786 V) and 1790.8
+ns (0.924 V) straddle the switch turning on, ngspice is still at 0.788 V
+at 1790.46 ns and about 0.93 V at 1790.8 ns; interpolated, 26-52 mV, still
+inside the switch's turn-on.
+
+Saving more points does not resolve it: tt slice C with Xyce's `.options
+output initial_interval=10p` (12,500 points, 517 -> 577 s) gives the same
+crossings as its 286 steps interpolated linearly (0.0 ps apart) -- the
+interval output is that interpolation. ngspice's `option interp` with
+`tran 10p` wrote a broken file (271 points, about 1e-8 V everywhere, its
+time axis 0-2.7 ns and then 125 ns). Edges to tens of ps need both
+simulators' steps limited there (a max step of 0.1-0.2 ns: about 1-2 h of
+ngspice for slice C), not their output.
+
+#### Xyce's NaN at ss: the diodes' critical voltage
+
+At ss Xyce stops on "Maximum number of failures" -- slice B at 28 ps (5 ps
+in a 1 ns run) from ngspice's 0.1 ns first step, at 23.85 ns from 1 ps --
+after a Newton iteration from the predictor's voltages comes out NaN (the
+failing linear system, `output_ls`: 309,154 NaN entries, 42,338 NaN rows,
+the whole core). Bisected on a 1 ns run of slice B, by `temp=` on the
+instances: the MOSFETs hot alone pass, the diodes hot alone pass, the
+resistors hot alone pass; the MOSFETs with the pads' diodes fail; of the
+diodes, `diode_nd2ps_06v0` (XTI 5), and of those the eight antenna cells'
+D0 (VPW to the protected net, area 0.2052p), not the pads' ESD diodes of
+the same model. Removing BV/IBV, JSW, CJP, IKF, RS, CJO or EG from the
+antenna diode's model still fails; XTI back to 3 passes.
+
+The cause: Xyce's level-2 diode computes its critical voltage from the
+saturation current per unit area -- `tVcrit = vte*log(vte/(sqrt(2)*
+tSatCur))` (N_DEV_Diode.C, `updateTemperature`), where the current uses
+`tSatCur * Area`. GF180's diode cards give IS per square metre
+(6.88e-7 * jsa for nd2ps_06v0), the instances their area. Per unit area,
+at 125 C, IS is 0.068 and the critical voltage -0.036 V (+0.28 V at 25 C,
++0.48 V at -40 C; pd2nw_06v0 -0.014 V at 125 C). Xyce's `pnjlim` then
+takes `vt*log(vnew/vt)` of a negative voltage -- a NaN -- whenever a
+Newton step proposes a junction voltage between that critical voltage and
+0 V from one at or below 0 V more than 2 vt away: an antenna net near 0 V.
+How often depends on the window (XTI 3: -0.016 V), hence the hits only
+once in a while, at different times, and not in UMFPACK's run of the same
+slice. ngspice-45 forms its saturation current with the area
+(`IS*area*m`, diotemp.c) before the critical voltage (+1.02 V for the
+antenna diode at 125 C), and its `DEVpnjlim` limits negative voltages
+too: the same devices at the same voltages are fine there.
+
+Each chip diode given a model of its own with the area folded in (IS,
+IBV, CJO, IKF times the area, RS divided by it, `area=1`) runs the same
+1 ns slice from 0.1 ns. Folding IKF also makes Xyce scale it, which its
+code does not (`tIKF` is the model's) and ngspice does; the translation
+does neither yet.
 
 ### VAJAX
 
@@ -830,8 +920,10 @@ transient, its converter, 127,285 BSIM4 instances on an 8 GB GPU).
   voltages once a step grows (slice B: from 0.31 to 0.53 ns at 23.85 ns,
   largest at P_VDD), only with the diodes and the MOSFETs both hot, and
   it stops on "Maximum number of failures" -- from ngspice's 0.1 ns first
-  step and from 1 ps alike. The root cause is being looked for; ss joins
-  the list with a passing run. ngspice stays the run's
+  step and from 1 ps alike: Xyce's diode critical voltage, from the
+  saturation current per unit area, is below 0 V at 125 C and its
+  `pnjlim` takes the log of a negative voltage ("Xyce's NaN at ss"
+  above). ss joins the list with a passing run. ngspice stays the run's
   engine: `stitch` and `figures` read its pins. The tolerances are tt's;
   ss and ff are being measured.
 
