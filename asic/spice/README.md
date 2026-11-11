@@ -694,6 +694,43 @@ time axis 0-2.7 ns and then 125 ns). Edges to tens of ps need both
 simulators' steps limited there (a max step of 0.1-0.2 ns: about 1-2 h of
 ngspice for slice C), not their output.
 
+#### Calibration: tt slice C at a 0.1 ns max step
+
+The same deck with `tran`'s max step 0.1 ns instead of 10 ns (ngspice's
+0.1 ns first step and the clock breakpoints kept), each run alone: ngspice
+on one thread 6,532 s (1,381 + 55 steps; the default 2,355 s, 278 + 64),
+Xyce UMFPACK + METIS 1,532 s (1,388 + 5; the default 517 s, 285 + 7). Every
+1.5 V crossing of an output in the slice (the 7 there are), interpolated
+linearly between each run's points, shift in ps; in brackets the steps of
+the default run across the crossing:
+
+| Edge | ngspice: default - 0.1 ns | Xyce: default - 0.1 ns | Xyce - ngspice, both 0.1 ns |
+|---|---|---|---|
+| D[1..5] rise, 1791.4 ns | +1.1 (235 ps) | +106 (320 ps) | -33.9 |
+| MREQ_n fall, 1779.8 ns | +57.5 (2.67 ns) | +131 (4.10 ns) | +5.0 |
+| RD_n fall, 1780.2 ns | +96.5 (5.34 ns) | +172 (4.10 ns) | +7.1 |
+| largest | 97 | 172 | 34 (7 on the chip's own pins) |
+
+At 0.1 ns both engines put the chip's own edges within 7 ps of each other
+-- the real disagreement; D's 34 ps is the test bench's memory switch
+(ngspice's `sw` at 2.7 V, Xyce's smooth `vswitch`), whose 1 ns ramp Xyce
+steps over in 320 ps by default. The defaults' errors sit on the edges
+they cross in steps of nanoseconds (MREQ_n, RD_n: the pads' slow falls
+into 100 pF), and stay under 0.1 ns (ngspice) and 0.2 ns (Xyce); Xyce's
+default steps are the coarser. Settled, interpolated: ngspice's default
+within 0.9 mV of its 0.1 ns run, Xyce's within 4.6 mV; the two at 0.1 ns
+21 mV apart, at the memory switch (1790.5 ns). 0 mismatches with the RTL
+in both 0.1 ns runs.
+
+So the defaults stay: an edge from a default run is good to 0.1 ns in
+ngspice and 0.2 ns in Xyce (CI's `WINDOW_TOL` allows 0.2 ns between the
+two), and a datasheet margin below that is read from a run with a finer
+max step. A finer default would cost the whole window (ngspice 2.8x, Xyce
+3.0x here); a max step of 0.1 ns only over the outputs' edges -- the
+first 10-15 ns after each clock edge, as `clock_breaks` places
+breakpoints -- would be about a fifth of the slice, roughly +40 %, if it
+is ever needed.
+
 #### Xyce's NaN at ss: the diodes' critical voltage
 
 At ss Xyce stops on "Maximum number of failures" -- slice B at 28 ps (5 ps
