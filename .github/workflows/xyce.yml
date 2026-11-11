@@ -1,0 +1,58 @@
+# Xyce's fast build (asic/spice/nix/xyce-threaded.nix): Trilinos with
+# OpenMP, ShyLU-node Basker, METIS and Amesos' UMFPACK, and Xyce 7.10
+# against it -- serial, and over OpenMPI. A cold build takes hours on a
+# runner; magic-nix-cache keeps the two builds in the Actions cache, so
+# every later job (CI's cells, the nightly slice, the Transistor run's
+# Xyce windows) substitutes them in minutes. Called by ci.yml and
+# transistor.yml before their Xyce jobs; on its own when the expression
+# changes, or by hand to fill the cache.
+name: Xyce
+
+on:
+  push:
+    paths:
+      - asic/spice/nix/**
+      - .github/workflows/xyce.yml
+  workflow_call: {}
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: Xyce's fast build (${{ matrix.variant }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [serial, mpi]
+    steps:
+      - uses: actions/checkout@v5
+
+      # Trilinos' build tree runs to many GB: the runner's preinstalled
+      # SDKs make room (fixed paths; none of them is used here)
+      - name: Disk space for the build
+        run: |
+          df -h / | tail -1
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h / | tail -1
+
+      - uses: DeterminateSystems/nix-installer-action@main
+        with:
+          extra-conf: |
+            extra-experimental-features = nix-command flakes
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: Xyce (${{ matrix.variant }}), built once, then from the cache
+        run: |
+          t0=$SECONDS
+          out=$(scripts/nix_retry.sh nix build -f asic/spice/nix/xyce-threaded.nix --no-link --print-out-paths \
+                  ${{ matrix.variant == 'mpi' && '--arg mpi true' || '' }})
+          echo "Xyce (${{ matrix.variant }}): $out, $((SECONDS - t0)) s" | tee -a "$GITHUB_STEP_SUMMARY"
+          test -x "$out/bin/Xyce"

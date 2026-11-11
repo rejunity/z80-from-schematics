@@ -794,6 +794,41 @@ transient, its converter, 127,285 BSIM4 instances on an 8 GB GPU).
   runs `chip.py`'s simulate with a stand-in for ngspice: a window ngspice
   aborted, or whose data stops before its end, has to fail, and the
   supply's ramp has to have its breakpoints.
+- Xyce, the second engine, on its fast path by default (`engines.py`:
+  `.options linsol type=umfpack`, `AMESOS_UMFPACK_ORDERING=metis`,
+  `OMP_NUM_THREADS=1` and `OPENBLAS_NUM_THREADS=1` in every process, the
+  MPI build over 4 ranks with OpenMPI's oversubscribe; `--solver klu`, the
+  reference). `xyce.yml` builds `nix/xyce-threaded.nix` serial and over
+  MPI -- hours, once: magic-nix-cache keeps both in the Actions cache,
+  and every Xyce job after it substitutes them -- when the expression
+  changes, by hand, and before each of the three below.
+  - `ci.yml`, `xyce-cells`, every push: the PDK's own cell netlists
+    (`gf180mcu_fd_sc_mcu7t5v0.spice`: inv_1, 10 inv_1, nand2_1, a 4-bit
+    dffrnq_1 register) in ngspice and Xyce, `engines.py cells --check`:
+    every edge within 50 ps (16-23 ps measured), every settled node
+    within 2 mV (0.24-0.39 mV), none missing (`CELLS_TOL`).
+  - `ci.yml`, `xyce-slice`, nightly and by hand: the chip extracted, its
+    first 40 ns at tt (`chip.py --span 0:40 --steps simulate,xyce`: the
+    supply's ramp, the pins settling) in ngspice, then the same deck in
+    Xyce, compared (`WINDOW_TOL` below).
+  - `transistor.yml`: once ngspice has run a window, `xyce-window.yml`
+    runs Xyce on the same deck from the same state, beside ngspice's next
+    window (`chip.py --steps xyce --segment K/4`); `windows: 1` is a short
+    run, the first window only and no figures.
+
+  A window or slice fails on an output edge missing or more than 0.2 ns
+  from ngspice's (82 ps the largest at tt, slice C), a settled output
+  more than 0.25 V off (0.15 V the largest: D[5] while the bench's memory
+  switch turns on -- ngspice's `sw` with hysteresis, Xyce's smooth
+  `vswitch`), any pin against the RTL in either engine, or no edge at
+  all (`engines.WINDOW_TOL`, `window_failures`). ngspice stays the run's
+  engine: `stitch` and `figures` read its pins. The tolerances are tt's;
+  ss and ff are being measured.
+
+  With ciel's PDK (54435919) `design.ngspice` and `sm141064.ngspice` put
+  comment lines inside `+` continuations (the reader drops them first, as
+  ngspice) and indent the typical section's `.param`s, which Xyce reads as
+  nothing: the library goes to Xyce from column 1.
 - `pages.yml` puts the pads, the NMI catcher and the committed whole-chip
   runs under "At transistor level" on the project's site, and the latest
   `transistor.yml` run on its own page, `transistor/`, linked from there.

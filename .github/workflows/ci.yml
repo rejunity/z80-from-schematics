@@ -3,8 +3,10 @@ name: CI
 # Every push, PR, nightly run and manual dispatch runs every job below,
 # except zexall-subset-rtl (Verilator, ~25-55 min) and pz80-recordings
 # (perfectz80 live against every recording of the pin sweep, 8 x 7-11 min):
-# main pushes, the nightly run and dispatch only. No job tolerates a
-# failure: every suite must pass in full.
+# main pushes, the nightly run and dispatch only; and xyce-slice (the chip
+# extracted, its power-up in ngspice and in Xyce, ~1-3 h): the nightly run
+# and dispatch only. No job tolerates a failure: every suite must pass in
+# full.
 on:
   push:
     branches: ['**']
@@ -674,4 +676,148 @@ jobs:
         with:
           name: zexall-subset-rtl-log
           path: zexall_subset_rtl.log
+          retention-days: 14
+
+  # =====================================================================
+  # Xyce, the second transistor-level engine (asic/spice/engines.py), on
+  # its fast path: UMFPACK with METIS ordering, one thread per process,
+  # the MPI build over 4 ranks. xyce.yml builds it once (hours) and the
+  # Actions cache keeps it (magic-nix-cache); the jobs after it take it
+  # from there. ngspice stays the reference and the sign-off engine.
+  # =====================================================================
+
+  xyce-build:
+    name: Xyce
+    uses: ./.github/workflows/xyce.yml
+
+  xyce-cells:
+    name: Xyce against ngspice on the PDK's standard cells (UMFPACK + METIS)
+    needs: xyce-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      LIBRELANE_VERSION: 3.0.14      # as transistor.yml: the PDK's cache, and ciel
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: DeterminateSystems/nix-installer-action@main
+        with:
+          extra-conf: |
+            extra-substituters = https://nix-cache.fossi-foundation.org
+            extra-trusted-public-keys = nix-cache.fossi-foundation.org:3+K59iFwXqKsL7BNu6Guy0v+uTlwsxYQxjspXzqLYQs=
+            extra-experimental-features = nix-command flakes
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+
+      # the PDK as asic-pdk.yml caches it for the GF180 chip (read only)
+      - name: The PDK from the ASIC job's cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.ciel
+          key: ciel-gf180mcu-librelane-${{ env.LIBRELANE_VERSION }}
+
+      - name: Fetch the PDK (LibreLane's ciel)
+        run: |
+          root=$(python3 -c "import sys; sys.path.insert(0, 'asic/spice'); import pads; print(pads.PDKS['gf180mcu']['root'])")
+          [ -d ~/.ciel/ciel/$root ] ||
+            scripts/nix_retry.sh nix run github:librelane/librelane/$LIBRELANE_VERSION#python3.pkgs.ciel -- fetch --pdk-root ~/.ciel \
+              --pdk-family $(cut -d/ -f1 <<< "$root") $(cut -d/ -f3 <<< "$root")
+
+      - name: ngspice, pinned, and Xyce's serial build (xyce.yml built it; from the cache)
+        run: |
+          scripts/nix_retry.sh nix build --no-link $(python3 -c 'import sys; sys.path.insert(0, "asic/spice"); import pads; print(pads.TOOLS["ngspice"])')
+          out=$(scripts/nix_retry.sh nix build -f asic/spice/nix/xyce-threaded.nix --no-link --print-out-paths)
+          echo "XYCE=$out/bin/Xyce" >> "$GITHUB_ENV"
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends python3-numpy
+
+      # the PDK's own cell netlists (no extraction) in ngspice and in Xyce:
+      # every edge within engines.CELLS_TOL (50 ps; 16-23 ps measured), every
+      # settled node within 2 mV (0.24-0.39 mV), none missing
+      - name: inv_1, 10 inv_1, nand2_1, a 4-bit dffrnq_1 register
+        run: |
+          net=$(python3 -c "import sys; sys.path.insert(0, 'asic/spice'); import chip; print(chip.PDK_ROOT)")/libs.ref/gf180mcu_fd_sc_mcu7t5v0/spice/gf180mcu_fd_sc_mcu7t5v0.spice
+          rc=0
+          for c in "inv 1" "inv 10" "nand 1" "dff 4"; do
+            python3 asic/spice/engines.py cells $c --net "$net" --engines ngspice,xyce --check --out cells > "cells-${c// /}.txt" \
+              || rc=1
+            grep "^engines:" "cells-${c// /}.txt" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+          exit $rc
+
+  xyce-slice:
+    name: Xyce against ngspice on the chip's power-up (0-40 ns, tt; nightly)
+    needs: xyce-build
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    permissions:
+      contents: read
+      actions: read           # main's latest Targets run, for the chip's GDS
+    env:
+      LIBRELANE_VERSION: 3.0.14
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: DeterminateSystems/nix-installer-action@main
+        with:
+          extra-conf: |
+            extra-substituters = https://nix-cache.fossi-foundation.org
+            extra-trusted-public-keys = nix-cache.fossi-foundation.org:3+K59iFwXqKsL7BNu6Guy0v+uTlwsxYQxjspXzqLYQs=
+            extra-experimental-features = nix-command flakes
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: The PDK from the ASIC job's cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.ciel
+          key: ciel-gf180mcu-librelane-${{ env.LIBRELANE_VERSION }}
+
+      - name: Fetch the PDK (LibreLane's ciel)
+        run: |
+          root=$(python3 -c "import sys; sys.path.insert(0, 'asic/spice'); import pads; print(pads.PDKS['gf180mcu']['root'])")
+          [ -d ~/.ciel/ciel/$root ] ||
+            scripts/nix_retry.sh nix run github:librelane/librelane/$LIBRELANE_VERSION#python3.pkgs.ciel -- fetch --pdk-root ~/.ciel \
+              --pdk-family $(cut -d/ -f1 <<< "$root") $(cut -d/ -f3 <<< "$root")
+
+      - name: The simulators, pinned, and Xyce's MPI build (from the cache)
+        run: |
+          scripts/nix_retry.sh nix build --no-link $(python3 -c 'import sys; sys.path.insert(0, "asic/spice"); import pads; print(*(pads.TOOLS[t] for t in sys.argv[1:]))' ngspice magic)
+          out=$(scripts/nix_retry.sh nix build -f asic/spice/nix/xyce-threaded.nix --arg mpi true --no-link --print-out-paths)
+          echo "XYCE_MPI=$out/bin/Xyce" >> "$GITHUB_ENV"
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends iverilog python3-numpy
+
+      - name: The chip's GDS, from main's latest Targets run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          id=$(gh run list -R "$GITHUB_REPOSITORY" --workflow targets.yml --branch main --status success \
+                 --limit 1 --json databaseId -q '.[0].databaseId')
+          gh run download "$id" -R "$GITHUB_REPOSITORY" -n asic-gf180mcu-gds -D gds
+          echo "Targets run $id: $(ls -l gds/rz80-gf180mcu-chip.gds)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Extract the layout (Magic, ~25 min) and run the RTL
+        run: python3 asic/spice/chip.py ci --work work --gds gds/rz80-gf180mcu-chip.gds --steps extract,reference
+
+      # the transistor run's first 40 ns (power-up: the supply's ramp, the
+      # pins settling) in ngspice, then the same deck in Xyce, compared:
+      # engines.WINDOW_TOL, every edge found, the pins against the RTL
+      - name: The power-up in ngspice, then in Xyce (UMFPACK + METIS, MPI x4)
+        run: |
+          set -o pipefail
+          rc=0
+          python3 asic/spice/chip.py ci --work work --corner tt --threads 4 --steps simulate,xyce --span 0:40 2>&1 \
+            | tee slice.txt || rc=$?
+          grep -E "Total analysis" work/tt/seg/chip_0.log || true
+          { echo '```'; grep -E '^chip: (ngspice|Xyce)' slice.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: xyce-slice
+          path: |
+            work/tt/seg/chip_0.dat
+            work/tt/seg/chip_0.log
+            work/tt/seg/xyce_0/result.json
+            work/tt/seg/xyce_0/*.dat
+            work/tt/seg/xyce_0/*.log
           retention-days: 14

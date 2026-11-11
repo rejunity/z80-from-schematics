@@ -1,0 +1,105 @@
+# Xyce as the Transistor run's second engine, on one of its windows:
+# chip.py's xyce step runs the window's own deck -- from the node voltages
+# ngspice started it from -- on Xyce's fast path (UMFPACK with METIS, the
+# MPI build over 4 ranks; engines.py), and checks its pins against
+# ngspice's and the RTL's: a missing output edge, an edge or a settled
+# level past engines.WINDOW_TOL, or any pin against the RTL fails it.
+# ngspice stays the run's engine (stitch and figures read its pins).
+# Called by transistor.yml once ngspice has run the window.
+name: Xyce window
+
+on:
+  workflow_call:
+    inputs:
+      window:
+        description: the window, 1-based
+        type: number
+        required: true
+      corners:
+        description: corners, as a JSON list
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  LIBRELANE_VERSION: 3.0.14      # as transistor.yml: the PDK's cache, and ciel
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  xyce:
+    name: Xyce on window ${{ inputs.window }} of 4 (${{ matrix.corner }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      matrix:
+        corner: ${{ fromJSON(inputs.corners) }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: DeterminateSystems/nix-installer-action@main
+        with:
+          extra-conf: |
+            extra-substituters = https://nix-cache.fossi-foundation.org
+            extra-trusted-public-keys = nix-cache.fossi-foundation.org:3+K59iFwXqKsL7BNu6Guy0v+uTlwsxYQxjspXzqLYQs=
+            extra-experimental-features = nix-command flakes
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+
+      # the PDK as asic-pdk.yml caches it for the GF180 chip (read only)
+      - name: The PDK from the ASIC job's cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.ciel
+          key: ciel-gf180mcu-librelane-${{ env.LIBRELANE_VERSION }}
+
+      - name: Fetch the PDK (LibreLane's ciel)
+        run: |
+          root=$(python3 -c "import sys; sys.path.insert(0, 'asic/spice'); import pads; print(pads.PDKS['gf180mcu']['root'])")
+          [ -d ~/.ciel/ciel/$root ] ||
+            scripts/nix_retry.sh nix run github:librelane/librelane/$LIBRELANE_VERSION#python3.pkgs.ciel -- fetch --pdk-root ~/.ciel \
+              --pdk-family $(cut -d/ -f1 <<< "$root") $(cut -d/ -f3 <<< "$root")
+
+      - name: Xyce, the MPI build (xyce.yml built it; from the cache)
+        run: |
+          out=$(scripts/nix_retry.sh nix build -f asic/spice/nix/xyce-threaded.nix --arg mpi true --no-link --print-out-paths)
+          echo "XYCE_MPI=$out/bin/Xyce" >> "$GITHUB_ENV"
+
+      - name: numpy (engines.py's comparison)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends python3-numpy
+
+      - name: The netlist and the RTL's reference
+        uses: actions/download-artifact@v8
+        with:
+          name: transistor-netlist
+          path: work
+
+      - name: ngspice's windows 1-${{ inputs.window }} at ${{ matrix.corner }}
+        uses: actions/download-artifact@v8
+        with:
+          name: transistor-${{ matrix.corner }}-${{ inputs.window }}
+          path: work/${{ matrix.corner }}/seg
+
+      - name: Xyce on window ${{ inputs.window }} of 4, against ngspice
+        run: |
+          set -o pipefail
+          rc=0
+          python3 asic/spice/chip.py ci --work work --corner ${{ matrix.corner }} --threads 4 \
+            --steps xyce --segment ${{ inputs.window }}/4 2>&1 | tee xyce.txt || rc=$?
+          { echo "### Xyce, window ${{ inputs.window }} at ${{ matrix.corner }}"; echo '```'
+            grep '^chip: Xyce' xyce.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: transistor-xyce-${{ matrix.corner }}-${{ inputs.window }}
+          path: |
+            work/${{ matrix.corner }}/seg/xyce_*/result.json
+            work/${{ matrix.corner }}/seg/xyce_*/*.dat
+            work/${{ matrix.corner }}/seg/xyce_*/*.log
+          retention-days: 14
