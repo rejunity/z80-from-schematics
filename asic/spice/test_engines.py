@@ -24,6 +24,11 @@ and Xyce's fast path (README.md, "Profile"), on a deck of one resistor:
   checks    a window or a cells run against ngspice fails on a missing
             edge, an edge or a settled level past its tolerance, and an
             RTL mismatch in either engine
+  indent    the library's lines start in column 1: Xyce takes ' .param x'
+            for no parameter at all, and every model using x then aborts
+            ("contains unrecognized symbols") -- the PDK as ciel fetches it
+            (54435919) indents its typical section's .params, the copy the
+            slices were run with does not
 
 No ngspice, Xyce or PDK.
 
@@ -115,6 +120,10 @@ def xyce_cases(d, fails):
                  ("mismatches_ref", 1), ("mismatches_other", 1), ("edges", 0)):
         if not engines.window_failures(dict(good, **{k: v})):
             fails.append(f"checks: a window with {k} = {v} passes")
+    lib = engines.xyce_lib([" .param nfet_x = 0", "\t.param nfet_y = 1",
+                            ".model m.0 nmos level=54 toxe={1.52e-008+nfet_x}"], {})
+    if any(l[:1].isspace() for l in lib):
+        fails.append(f"indent: {[l for l in lib if l[:1].isspace()]}")
     cell = {"edges": 6, "missing": 0, "max_edge_ps": 25.0, "max_settled_mV": 0.4}
     if engines.cells_failures(cell):
         fails.append(f"checks: cells as measured fail: {engines.cells_failures(cell)}")
@@ -148,7 +157,7 @@ def main():
         print("engines: FAIL", f)
     if fails:
         sys.exit(1)
-    print("engines: PASS (plain, comment, include, section, fast, env, mpi, checks)")
+    print("engines: PASS (plain, comment, include, section, fast, env, mpi, checks, indent)")
 
 
 if __name__ == "__main__":
