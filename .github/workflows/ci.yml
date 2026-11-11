@@ -681,9 +681,10 @@ jobs:
   # =====================================================================
   # Xyce, the second transistor-level engine (asic/spice/engines.py), on
   # its fast path: UMFPACK with METIS ordering, one thread per process,
-  # the MPI build over 4 ranks. xyce.yml builds it once (hours) and the
-  # Actions cache keeps it (magic-nix-cache); the jobs after it take it
-  # from there. ngspice stays the reference and the sign-off engine.
+  # the MPI build over 4 ranks. xyce.yml builds it once per version of
+  # asic/spice/nix/xyce-threaded.nix and keeps it in one Actions cache
+  # entry; the jobs after it restore that (.github/actions/xyce), never
+  # build. ngspice stays the reference and the sign-off engine.
   # =====================================================================
 
   xyce-build:
@@ -706,7 +707,6 @@ jobs:
             extra-substituters = https://nix-cache.fossi-foundation.org
             extra-trusted-public-keys = nix-cache.fossi-foundation.org:3+K59iFwXqKsL7BNu6Guy0v+uTlwsxYQxjspXzqLYQs=
             extra-experimental-features = nix-command flakes
-      - uses: DeterminateSystems/magic-nix-cache-action@main
 
       # the PDK as asic-pdk.yml caches it for the GF180 chip (read only)
       - name: The PDK from the ASIC job's cache
@@ -722,11 +722,14 @@ jobs:
             scripts/nix_retry.sh nix run github:librelane/librelane/$LIBRELANE_VERSION#python3.pkgs.ciel -- fetch --pdk-root ~/.ciel \
               --pdk-family $(cut -d/ -f1 <<< "$root") $(cut -d/ -f3 <<< "$root")
 
-      - name: ngspice, pinned, and Xyce's serial build (xyce.yml built it; from the cache)
+      - name: Xyce's serial build (xyce.yml's cache entry; never built here)
+        uses: ./.github/actions/xyce
+        with:
+          variant: serial
+
+      - name: ngspice, pinned, and numpy
         run: |
           scripts/nix_retry.sh nix build --no-link $(python3 -c 'import sys; sys.path.insert(0, "asic/spice"); import pads; print(pads.TOOLS["ngspice"])')
-          out=$(scripts/nix_retry.sh nix build -f asic/spice/nix/xyce-threaded.nix --no-link --print-out-paths)
-          echo "XYCE=$out/bin/Xyce" >> "$GITHUB_ENV"
           sudo apt-get update && sudo apt-get install -y --no-install-recommends python3-numpy
 
       # the PDK's own cell netlists (no extraction) in ngspice and in Xyce:
@@ -763,7 +766,6 @@ jobs:
             extra-substituters = https://nix-cache.fossi-foundation.org
             extra-trusted-public-keys = nix-cache.fossi-foundation.org:3+K59iFwXqKsL7BNu6Guy0v+uTlwsxYQxjspXzqLYQs=
             extra-experimental-features = nix-command flakes
-      - uses: DeterminateSystems/magic-nix-cache-action@main
 
       - name: The PDK from the ASIC job's cache
         uses: actions/cache/restore@v4
@@ -778,11 +780,14 @@ jobs:
             scripts/nix_retry.sh nix run github:librelane/librelane/$LIBRELANE_VERSION#python3.pkgs.ciel -- fetch --pdk-root ~/.ciel \
               --pdk-family $(cut -d/ -f1 <<< "$root") $(cut -d/ -f3 <<< "$root")
 
-      - name: The simulators, pinned, and Xyce's MPI build (from the cache)
+      - name: Xyce's MPI build (xyce.yml's cache entry; never built here)
+        uses: ./.github/actions/xyce
+        with:
+          variant: mpi
+
+      - name: The simulators, pinned, iverilog and numpy
         run: |
           scripts/nix_retry.sh nix build --no-link $(python3 -c 'import sys; sys.path.insert(0, "asic/spice"); import pads; print(*(pads.TOOLS[t] for t in sys.argv[1:]))' ngspice magic)
-          out=$(scripts/nix_retry.sh nix build -f asic/spice/nix/xyce-threaded.nix --arg mpi true --no-link --print-out-paths)
-          echo "XYCE_MPI=$out/bin/Xyce" >> "$GITHUB_ENV"
           sudo apt-get update && sudo apt-get install -y --no-install-recommends iverilog python3-numpy
 
       - name: The chip's GDS, from main's latest Targets run

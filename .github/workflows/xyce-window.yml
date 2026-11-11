@@ -5,9 +5,9 @@
 # ngspice's and the RTL's: a missing output edge, an edge or a settled
 # level past engines.WINDOW_TOL, or any pin against the RTL fails it.
 # ngspice stays the run's engine (stitch and figures read its pins).
-# Xyce runs at engines.XYCE_CORNERS of the run's corners only (tt, ff; at
-# ss its residual goes NaN -- README.md, "CI"); the corners job names the
-# ones left out in the run's summary.
+# Xyce runs at the run's corners that are in engines.XYCE_CORNERS (one
+# list, test_engines.py checks it); the corners job names any it leaves
+# out in the run's summary.
 # Called by transistor.yml once ngspice has run the window.
 name: Xyce window
 
@@ -55,8 +55,8 @@ jobs:
           out = [c for c in asked if c not in engines.XYCE_CORNERS]
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
               f.write(f"Xyce, window ${{ inputs.window }}: at {', '.join(run) or 'no corner'}"
-                      + (f"; not at {', '.join(out)} (engines.XYCE_CORNERS: at ss Xyce's residual goes NaN, "
-                         "README.md \"CI\")" if out else "") + "\n")
+                      + (f"; not at {', '.join(out)} (not in engines.XYCE_CORNERS, "
+                         f"{', '.join(engines.XYCE_CORNERS)})" if out else "") + "\n")
           for c in out:
               print(f"::notice::Xyce does not run at {c} (engines.XYCE_CORNERS)", file=sys.stderr)
           print("list=" + json.dumps(run))
@@ -81,7 +81,6 @@ jobs:
             extra-substituters = https://nix-cache.fossi-foundation.org
             extra-trusted-public-keys = nix-cache.fossi-foundation.org:3+K59iFwXqKsL7BNu6Guy0v+uTlwsxYQxjspXzqLYQs=
             extra-experimental-features = nix-command flakes
-      - uses: DeterminateSystems/magic-nix-cache-action@main
 
       # the PDK as asic-pdk.yml caches it for the GF180 chip (read only)
       - name: The PDK from the ASIC job's cache
@@ -97,10 +96,10 @@ jobs:
             scripts/nix_retry.sh nix run github:librelane/librelane/$LIBRELANE_VERSION#python3.pkgs.ciel -- fetch --pdk-root ~/.ciel \
               --pdk-family $(cut -d/ -f1 <<< "$root") $(cut -d/ -f3 <<< "$root")
 
-      - name: Xyce, the MPI build (xyce.yml built it; from the cache)
-        run: |
-          out=$(scripts/nix_retry.sh nix build -f asic/spice/nix/xyce-threaded.nix --arg mpi true --no-link --print-out-paths)
-          echo "XYCE_MPI=$out/bin/Xyce" >> "$GITHUB_ENV"
+      - name: Xyce, the MPI build (xyce.yml's cache entry; never built here)
+        uses: ./.github/actions/xyce
+        with:
+          variant: mpi
 
       - name: numpy (engines.py's comparison)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends python3-numpy

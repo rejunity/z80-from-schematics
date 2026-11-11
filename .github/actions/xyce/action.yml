@@ -1,0 +1,29 @@
+name: Xyce, from xyce.yml's cache
+description: >-
+  Xyce's fast build (asic/spice/nix/xyce-threaded.nix) from the Actions
+  cache entry xyce.yml saved for the expression's hash, as a file://
+  substituter beside cache.nixos.org; never built here (--max-jobs 0): a
+  miss fails the step, naming the key. Sets XYCE (serial) or XYCE_MPI.
+inputs:
+  variant:
+    description: serial or mpi
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Xyce (${{ inputs.variant }}), the cache entry
+      uses: actions/cache/restore@v4
+      with:
+        path: ~/xyce-nar
+        key: xyce-${{ inputs.variant }}-${{ hashFiles('asic/spice/nix/xyce-threaded.nix') }}
+        fail-on-cache-miss: true
+    - name: Xyce (${{ inputs.variant }}), into the store
+      shell: bash
+      run: |
+        t0=$SECONDS
+        out=$(scripts/nix_retry.sh nix build -f asic/spice/nix/xyce-threaded.nix --no-link --print-out-paths \
+                ${{ inputs.variant == 'mpi' && '--arg mpi true' || '' }} \
+                --extra-substituters "file://$HOME/xyce-nar" --option require-sigs false --max-jobs 0)
+        test -x "$out/bin/Xyce"
+        echo "${{ inputs.variant == 'mpi' && 'XYCE_MPI' || 'XYCE' }}=$out/bin/Xyce" >> "$GITHUB_ENV"
+        echo "Xyce (${{ inputs.variant }}): $out from the cache in $((SECONDS - t0)) s" | tee -a "$GITHUB_STEP_SUMMARY"

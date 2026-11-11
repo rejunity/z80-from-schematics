@@ -910,9 +910,15 @@ transient, its converter, 127,285 BSIM4 instances on an 8 GB GPU).
   `OMP_NUM_THREADS=1` and `OPENBLAS_NUM_THREADS=1` in every process, the
   MPI build over 4 ranks with OpenMPI's oversubscribe; `--solver klu`, the
   reference). `xyce.yml` builds `nix/xyce-threaded.nix` serial and over
-  MPI -- hours, once: magic-nix-cache keeps both in the Actions cache,
-  and every Xyce job after it substitutes them -- when the expression
-  changes, by hand, and before each of the three below.
+  MPI (40-50 min each on a runner) once per version of the expression and
+  keeps the two store paths of its own (Trilinos, Xyce; the rest is on
+  cache.nixos.org) as a file:// binary cache in one Actions cache entry,
+  `xyce-<serial|mpi>-<the expression's hash>`; every Xyce job restores it
+  (`.github/actions/xyce`) and takes Xyce from it with `--max-jobs 0`,
+  never building -- a missing entry fails the job by name. magic-nix-cache
+  lost these paths: the repository's Actions cache sits at its 10 GB limit
+  and evicts. `xyce.yml` runs when the expression changes, by hand, and
+  before each of the three below.
   - `ci.yml`, `xyce-cells`, every push: the PDK's own cell netlists
     (`gf180mcu_fd_sc_mcu7t5v0.spice`: inv_1, 10 inv_1, nand2_1, a 4-bit
     dffrnq_1 register) in ngspice and Xyce, `engines.py cells --check`:

@@ -1,11 +1,14 @@
 # Xyce's fast build (asic/spice/nix/xyce-threaded.nix): Trilinos with
 # OpenMP, ShyLU-node Basker, METIS and Amesos' UMFPACK, and Xyce 7.10
-# against it -- serial, and over OpenMPI. A cold build takes hours on a
-# runner; magic-nix-cache keeps the two builds in the Actions cache, so
-# every later job (CI's cells, the nightly slice, the Transistor run's
-# Xyce windows) substitutes them in minutes. Called by ci.yml and
-# transistor.yml before their Xyce jobs; on its own when the expression
-# changes, or by hand to fill the cache.
+# against it -- serial, and over OpenMPI. Built once per version of the
+# expression (~40-50 min on a runner), its two own store paths (Trilinos
+# and Xyce; the rest is on cache.nixos.org) kept as a file:// binary cache
+# in one Actions cache entry, xyce-<variant>-<the expression's hash>. The
+# Xyce jobs after it (CI's cells, the nightly slice, the Transistor run's
+# windows) restore that entry through .github/actions/xyce, never build.
+# (magic-nix-cache lost these paths: the repository's Actions cache is at
+# its 10 GB limit and evicts.) Called by ci.yml and transistor.yml before
+# their Xyce jobs; on its own when the expression changes, or by hand.
 name: Xyce
 
 on:
@@ -13,6 +16,7 @@ on:
     paths:
       - asic/spice/nix/**
       - .github/workflows/xyce.yml
+      - .github/actions/xyce/**
   workflow_call: {}
   workflow_dispatch: {}
 
@@ -27,7 +31,7 @@ jobs:
   build:
     name: Xyce's fast build (${{ matrix.variant }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 355
+    timeout-minutes: 240
     strategy:
       fail-fast: false
       matrix:
@@ -35,9 +39,17 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: The cache entry, if this expression was built before
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/xyce-nar
+          key: xyce-${{ matrix.variant }}-${{ hashFiles('asic/spice/nix/xyce-threaded.nix') }}
+
       # Trilinos' build tree runs to many GB: the runner's preinstalled
       # SDKs make room (fixed paths; none of them is used here)
       - name: Disk space for the build
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           df -h / | tail -1
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
@@ -47,12 +59,29 @@ jobs:
         with:
           extra-conf: |
             extra-experimental-features = nix-command flakes
-      - uses: DeterminateSystems/magic-nix-cache-action@main
 
-      - name: Xyce (${{ matrix.variant }}), built once, then from the cache
+      - name: Build Xyce (${{ matrix.variant }}), and keep its own paths as a binary cache
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           t0=$SECONDS
           out=$(scripts/nix_retry.sh nix build -f asic/spice/nix/xyce-threaded.nix --no-link --print-out-paths \
                   ${{ matrix.variant == 'mpi' && '--arg mpi true' || '' }})
-          echo "Xyce (${{ matrix.variant }}): $out, $((SECONDS - t0)) s" | tee -a "$GITHUB_STEP_SUMMARY"
           test -x "$out/bin/Xyce"
+          own=$(nix path-info -r "$out" | grep -E -- '-(trilinos|xyce)-[0-9]')
+          echo "built in $((SECONDS - t0)) s: $own" | tee -a "$GITHUB_STEP_SUMMARY"
+          nix copy --no-recursive --to "file://$HOME/xyce-nar?compression=zstd" $own
+          du -sh ~/xyce-nar | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Save the cache entry
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/xyce-nar
+          key: xyce-${{ matrix.variant }}-${{ hashFiles('asic/spice/nix/xyce-threaded.nix') }}
+
+      # what every Xyce job does with the entry: Xyce into the store from it
+      # and cache.nixos.org, nothing built
+      - name: Xyce (${{ matrix.variant }}) from the entry, as the Xyce jobs take it
+        uses: ./.github/actions/xyce
+        with:
+          variant: ${{ matrix.variant }}
