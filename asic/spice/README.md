@@ -728,8 +728,10 @@ two), and a datasheet margin below that is read from a run with a finer
 max step. A finer default would cost the whole window (ngspice 2.8x, Xyce
 3.0x here); a max step of 0.1 ns only over the outputs' edges -- the
 first 10-15 ns after each clock edge, as `clock_breaks` places
-breakpoints -- would be about a fifth of the slice, roughly +40 %, if it
-is ever needed.
+breakpoints -- would cover about a fifth of the slice: some 250 more
+steps on the default's 340, of the cheap small kind (here 0.1 ns steps
+cost ngspice 4.5 s each, the default's 6.9 s), roughly +50 %; an
+estimate, not run.
 
 #### Xyce's NaN at ss: the diodes' critical voltage
 
