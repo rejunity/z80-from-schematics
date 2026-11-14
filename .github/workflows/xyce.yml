@@ -2,8 +2,9 @@
 # OpenMP, ShyLU-node Basker, METIS and Amesos' UMFPACK, and Xyce 7.10
 # against it -- serial, and over OpenMPI. Built once per version of the
 # expression (~40-50 min on a runner), its two own store paths (Trilinos
-# and Xyce; the rest is on cache.nixos.org) kept as a file:// binary cache
-# in one Actions cache entry, xyce-<variant>-<the expression's hash>. The
+# and Xyce) exported (nix-store --export, ~70 MB with zstd) with the list
+# of their other references -- all on cache.nixos.org -- in one Actions
+# cache entry, xyce-<variant>-<the expression's hash>. The
 # Xyce jobs after it (CI's cells, the nightly slice, the Transistor run's
 # windows) restore that entry through .github/actions/xyce, never build.
 # (magic-nix-cache lost these paths: the repository's Actions cache is at
@@ -60,17 +61,25 @@ jobs:
           extra-conf: |
             extra-experimental-features = nix-command flakes
 
-      - name: Build Xyce (${{ matrix.variant }}), and keep its own paths as a binary cache
+      # its own two paths exported, Trilinos first (Xyce refers to it); the
+      # rest of the closure only listed: the restore takes it from
+      # cache.nixos.org (a binary cache holds no path without its references)
+      - name: Build Xyce (${{ matrix.variant }}), and export its own paths
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           t0=$SECONDS
           out=$(scripts/nix_retry.sh nix build -f asic/spice/nix/xyce-threaded.nix --no-link --print-out-paths \
                   ${{ matrix.variant == 'mpi' && '--arg mpi true' || '' }})
           test -x "$out/bin/Xyce"
-          own=$(nix path-info -r "$out" | grep -E -- '-(trilinos|xyce)-[0-9]')
-          echo "built in $((SECONDS - t0)) s: $own" | tee -a "$GITHUB_STEP_SUMMARY"
-          nix copy --no-recursive --to "file://$HOME/xyce-nar?compression=zstd" $own
-          du -sh ~/xyce-nar | tee -a "$GITHUB_STEP_SUMMARY"
+          all=$(nix-store -qR "$out")
+          own="$(grep -- '-trilinos-[0-9]' <<< "$all") $(grep -- '-xyce-[0-9]' <<< "$all")"
+          mkdir -p ~/xyce-nar
+          grep -v -E -- '-(trilinos|xyce)-[0-9]' <<< "$all" > ~/xyce-nar/refs.txt
+          tr ' ' '\n' <<< "$own" > ~/xyce-nar/own.txt
+          echo "$out" > ~/xyce-nar/out.txt
+          nix-store --export $own | zstd -q -T0 -3 > ~/xyce-nar/own.nar.zst
+          echo "built in $((SECONDS - t0)) s: $own; $(wc -l < ~/xyce-nar/refs.txt) references; $(du -h ~/xyce-nar/own.nar.zst | cut -f1)" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Save the cache entry
         if: steps.cache.outputs.cache-hit != 'true'

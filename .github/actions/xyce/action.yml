@@ -1,9 +1,11 @@
 name: Xyce, from xyce.yml's cache
 description: >-
   Xyce's fast build (asic/spice/nix/xyce-threaded.nix) from the Actions
-  cache entry xyce.yml saved for the expression's hash, as a file://
-  substituter beside cache.nixos.org; never built here (--max-jobs 0): a
-  miss fails the step, naming the key. Sets XYCE (serial) or XYCE_MPI.
+  cache entry xyce.yml saved for the expression's hash: its references
+  from cache.nixos.org (--max-jobs 0: nothing built), then its own two
+  paths imported (Trilinos, Xyce). A miss fails the step, naming the
+  key; so does an entry whose Xyce is not the expression's. Sets XYCE
+  (serial) or XYCE_MPI.
 inputs:
   variant:
     description: serial or mpi
@@ -21,9 +23,13 @@ runs:
       shell: bash
       run: |
         t0=$SECONDS
-        out=$(scripts/nix_retry.sh nix build -f asic/spice/nix/xyce-threaded.nix --no-link --print-out-paths \
-                ${{ inputs.variant == 'mpi' && '--arg mpi true' || '' }} \
-                --extra-substituters "file://$HOME/xyce-nar" --option require-sigs false --max-jobs 0)
+        out=$(cat ~/xyce-nar/out.txt)
+        want=$(nix eval --raw -f asic/spice/nix/xyce-threaded.nix outPath ${{ inputs.variant == 'mpi' && '--arg mpi true' || '' }})
+        if [ "$out" != "$want" ]; then
+          echo "::error::the cache entry's Xyce is $out, the expression's $want"; exit 1
+        fi
+        scripts/nix_retry.sh nix-store --realise --max-jobs 0 $(cat ~/xyce-nar/refs.txt) > /dev/null
+        zstd -dc ~/xyce-nar/own.nar.zst | sudo "$(command -v nix-store)" --import > /dev/null
         test -x "$out/bin/Xyce"
         echo "${{ inputs.variant == 'mpi' && 'XYCE_MPI' || 'XYCE' }}=$out/bin/Xyce" >> "$GITHUB_ENV"
         echo "Xyce (${{ inputs.variant }}): $out from the cache in $((SECONDS - t0)) s" | tee -a "$GITHUB_STEP_SUMMARY"

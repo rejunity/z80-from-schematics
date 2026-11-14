@@ -950,11 +950,15 @@ transient, its converter, 127,285 BSIM4 instances on an 8 GB GPU).
   MPI build over 4 ranks with OpenMPI's oversubscribe; `--solver klu`, the
   reference). `xyce.yml` builds `nix/xyce-threaded.nix` serial and over
   MPI (40-50 min each on a runner) once per version of the expression and
-  keeps the two store paths of its own (Trilinos, Xyce; the rest is on
-  cache.nixos.org) as a file:// binary cache in one Actions cache entry,
-  `xyce-<serial|mpi>-<the expression's hash>`; every Xyce job restores it
-  (`.github/actions/xyce`) and takes Xyce from it with `--max-jobs 0`,
-  never building -- a missing entry fails the job by name. magic-nix-cache
+  keeps the two store paths of its own (Trilinos, Xyce) exported
+  (`nix-store --export`, ~70 MB with zstd) with the list of their other
+  references in one Actions cache entry, `xyce-<serial|mpi>-<the
+  expression's hash>`; every Xyce job restores it (`.github/actions/xyce`):
+  the references from cache.nixos.org with `--max-jobs 0`, then the two
+  paths imported -- never building; a missing entry, or one whose Xyce is
+  not the expression's, fails the job by name. (A file:// binary cache
+  cannot hold the two alone: it refuses a path without its references.)
+  magic-nix-cache
   lost these paths: the repository's Actions cache sits at its 10 GB limit
   and evicts. `xyce.yml` runs when the expression changes, by hand, and
   before each of the three below.
