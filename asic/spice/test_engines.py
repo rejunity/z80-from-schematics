@@ -28,6 +28,8 @@ and Xyce's fast path (README.md, "Profile"), on a deck of one resistor:
             diode's area is folded into its model (area, below) -- before,
             at 125 C its residual went NaN and it stopped ("Maximum number
             of failures"); slices B and C at ss pass against ngspice
+  relative  an out directory given relative to here (CI's --out cells)
+            runs as an absolute one does
   abort     a Xyce that aborts, prints a NaN, or stops before the end
             fails the run, with Xyce's own message -- the error lines
             before its abort too; never a quiet pass
@@ -246,6 +248,17 @@ def xyce_cases(d, fails):
             fails.append(f"abort: a complete run fails: {err} (rc {r['rc']})")
         if want and (not err or want not in err):
             fails.append(f"abort: Xyce {mode}: {err!r} does not say {want!r}")
+    # relative: CI's cells run with --out cells; Xyce runs in the out
+    # directory, so the deck and the log have to be found from there
+    here = os.getcwd()
+    os.chdir(d)
+    try:
+        os.environ["FAKE_XYCE"] = "complete"
+        r = engines.run_xyce("r.sp", os.path.join("rel", "x"), fake, ranks=1)
+        if r.get("error") or r["rc"]:
+            fails.append(f"relative: a relative out directory fails: {r.get('error')} (rc {r['rc']})")
+    finally:
+        os.chdir(here)
     lib = engines.xyce_lib([" .param nfet_x = 0", "\t.param nfet_y = 1",
                             ".model m.0 nmos level=54 toxe={1.52e-008+nfet_x}"], {})
     if any(l[:1].isspace() for l in lib):
@@ -284,7 +297,7 @@ def main():
         print("engines: FAIL", f)
     if fails:
         sys.exit(1)
-    print("engines: PASS (plain, comment, include, section, fast, env, mpi, checks, indent, corners, abort, area)")
+    print("engines: PASS (plain, comment, include, section, fast, env, mpi, checks, indent, corners, abort, relative, area)")
 
 
 if __name__ == "__main__":
