@@ -29,7 +29,8 @@ and Xyce's fast path (README.md, "Profile"), on a deck of one resistor:
             at 125 C its residual went NaN and it stopped ("Maximum number
             of failures"); slices B and C at ss pass against ngspice
   abort     a Xyce that aborts, prints a NaN, or stops before the end
-            fails the run, with Xyce's own message; never a quiet pass
+            fails the run, with Xyce's own message -- the error lines
+            before its abort too; never a quiet pass
             (a stand-in for Xyce)
   area      every diode of the chip's netlist gets a model of its own with
             its area folded in -- IS, IBV (BV given: 1e-3 if not), CJO and
@@ -118,7 +119,8 @@ with open(prn, "w") as f:
     f.write("End of Xyce(TM) Simulation\n")
 msg = {"complete": "", "short": "",
        "nan": "Transient failure history: residual is NaN\nNonlinear solver: Time step too small near step number: 2\n",
-       "abort": "Parameter TOXE for model NFET_06V0.1 contains unrecognized symbols\n*** Xyce Abort ***\n"}[mode]
+       "abort": "Parameter TOXE for model NFET_06V0.1 contains unrecognized symbols:\n {1.52e-008+nfet_06v0_tox}\n"
+                "Simulation aborted due to error.  There are 0 MSG_FATAL errors and 1 MSG_ERROR\n*** Xyce Abort ***\n"}[mode]
 open(log, "w").write("***** Welcome to the Xyce(TM) Parallel Electronic Simulator\n" + msg)
 sys.exit(1 if mode == "abort" else 0)
 """
@@ -236,7 +238,7 @@ def xyce_cases(d, fails):
     with open(fake, "w") as f:
         f.write(FAKE_XYCE)
     os.chmod(fake, 0o755)
-    for mode, want in (("complete", None), ("nan", "NaN"), ("abort", "Xyce Abort"), ("short", "stopped at")):
+    for mode, want in (("complete", None), ("nan", "NaN"), ("abort", "unrecognized symbols"), ("short", "stopped at")):
         os.environ["FAKE_XYCE"] = mode
         r = engines.run_xyce(sp, os.path.join(d, "x_" + mode), fake, ranks=1)
         err = r.get("error")
