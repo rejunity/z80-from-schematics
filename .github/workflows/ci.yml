@@ -746,6 +746,18 @@ jobs:
           done
           exit $rc
 
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: xyce-cells
+          path: |
+            cells-*.txt
+            cells/*/*.sp
+            cells/*/*.dat
+            cells/*/xyce/*.sp
+            cells/*/xyce/*.log
+          retention-days: 14
+
   xyce-slice:
     name: Xyce against ngspice on the chip's power-up (0-40 ns, tt; nightly)
     needs: xyce-build

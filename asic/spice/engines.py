@@ -501,7 +501,12 @@ def run_xyce(sp, out_dir, xyce=None, ranks=None, options=(), uic=True, solver="u
         res["dat"] = os.path.join(out_dir, os.path.basename(dat))
     txt = (open(log).read() if os.path.exists(log) else "") + p.stdout + p.stderr
     # a run that aborted, went NaN or stopped short fails, with Xyce's words
-    fatal = [l.strip() for l in txt.splitlines() if XYCE_FATAL.search(l)]
+    lines = [l.strip() for l in txt.splitlines()]
+    at = [k for k, l in enumerate(lines) if XYCE_FATAL.search(l)]
+    # the fatal lines, and the error before the first of them (Xyce prints
+    # its MSG_ERROR, then "Simulation aborted due to error ... 1 MSG_ERROR")
+    fatal = ([l for l in lines[max(0, at[0] - 6):at[0]] if l and not l.startswith("*****")] if at else []) \
+        + [lines[k] for k in at]
     tstop = spice_num(next(l.split()[2] for l in open(xsp) if l.lower().startswith(".tran")))
     reached = 0.0
     if res.get("dat"):
