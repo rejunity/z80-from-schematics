@@ -482,7 +482,8 @@ def xyce_command(xyce, ranks, mpirun=None):
 def run_xyce(sp, out_dir, xyce=None, ranks=None, options=(), uic=True, solver="umfpack"):
     """Xyce on chip.py's deck, its fast path: the MPI build over XYCE_RANKS
     ranks (ranks=1: the serial build), UMFPACK with METIS; xyce: a build"""
-    xsp, prn, dat, notes = xyce_deck(sp, out_dir, options, uic, solver)
+    out_dir = os.path.abspath(out_dir)     # Xyce runs in it: the deck and the log by their full paths
+    xsp, prn, dat, notes = xyce_deck(os.path.abspath(sp), out_dir, options, uic, solver)
     xyce = xyce or xyce_bin(mpi=ranks != 1)
     mpirun = xyce_mpirun(xyce)
     ranks = ranks or xyce_ranks(mpirun)
@@ -878,6 +879,7 @@ def cells(kind, n, net, pdk_ngspice, va, python, out_dir, engines_=("ngspice", "
           repeat=2, threads=1, xyce=None, solver="umfpack"):
     """one circuit in every engine: wall times, steps, Newton iterations,
     and each against ngspice"""
+    out_dir = os.path.abspath(out_dir)     # each engine runs in its own directory
     d = cells_decks(kind, n, net, pdk_ngspice, va, out_dir)
     out = {"circuit": f"{kind}{n}", "transistors": d["transistors"], "caps": d["caps"], "bins": d["bins"], "uic": d["uic"],
            "card_params_dropped": d["card_params_dropped"], "runs": []}
@@ -1033,6 +1035,8 @@ def main():
         bad = [f"{x['engine']}: {x['error']}" for x in r["runs"] if "error" in x]
         bad += [f"{x['engine']}: rc {x['rc']}" for x in r["runs"] if x.get("rc")]
         if a.check:
+            bad += [f"{x['engine']}: no output ({x['dat']})" for x in r["runs"]
+                    if x["engine"].startswith("ngspice") and not os.path.exists(x["dat"])]
             others = [x for x in r["runs"] if not x["engine"].startswith("ngspice")]
             bad += [f"{x['engine']}: no output" for x in others if "vs_ngspice" not in x]
             bad += [f"{x['engine']}: {f}" for x in others if "vs_ngspice" in x for f in cells_failures(x["vs_ngspice"])]
