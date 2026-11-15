@@ -25,6 +25,11 @@ started from the state at 2.6 ns. Checked here:
              0.05 ns in the other: the crossings differ by hundreds of ps,
              within its step's tolerance, not off; the same edge 1 ns
              late, finely sampled in both, is off
+  settled    engines.compare's settled difference interpolates the other
+             run: one pin drifting 0.9 mV/ns (settled: under 1 mV/ns), the
+             same in both runs, saved every 0.05 ns in one and every 10 ns
+             in the other -- the other run's next point is up to 9 mV off,
+             the line between its points exact
   span       --span FROM:TO simulates that stretch (the nightly slice,
              0:40, power-up) as a window: its own deck, pins and end state
   xyce       Xyce runs at every corner (engines.XYCE_CORNERS: tt, ss, ff --
@@ -190,6 +195,23 @@ def main():
         print(f"edges:     {'ok' if ok else 'FAIL'}  (coarse against fine: {r1['max_edge_shift_ns'] * 1000:.0f} ps, "
               f"{r1.get('edges_off')} off; 1 ns late: {r2.get('edges_off')} off)")
         ok or fails.append("edges")
+
+        # settled: interpolated, not the next point
+        def dat2(path, ts):
+            with open(path, "w") as f:
+                f.write(head + "\n")
+                for t in ts:
+                    v = 2.0 + 0.0009 * t
+                    f.write(f" {t * 1e-9:.9e} " + " ".join(f"{v if p == 'M1_n' else 5.0:.6e}" for p in pins) + " 0\n")
+        fine2 = [k * 0.05 for k in range(int(260 / 0.05) + 1)]
+        coarse2 = [k * 10.0 for k in range(27)]
+        f2, c2 = os.path.join(work, "s0.dat"), os.path.join(work, "s1.dat")
+        dat2(f2, fine2), dat2(c2, coarse2)
+        r3 = real.compare(f2, c2, ref_txt)
+        ok = r3["max_settled_dV"] < 0.0005
+        print(f"settled:   {'ok' if ok else 'FAIL'}  (a 0.9 mV/ns drift saved every 10 ns: "
+              f"{r3['max_settled_dV'] * 1000:.0f} mV, {r3['worst_pin']})")
+        ok or fails.append("settled")
 
         # span: the nightly's slice, 0-40 ns, as a window of its own
         os.environ["FAKE_NGSPICE"] = "complete"
