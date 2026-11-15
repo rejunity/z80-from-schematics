@@ -2,8 +2,8 @@
 # full -- every output edge (1.5 V crossing) of the reference with the other
 # run's shift (ns, other - ref), and each output pin's largest settled
 # difference with the time it occurs
-import bisect, json, sys
-sys.path.insert(0, "/home/rz/z80-from-schematics.fable-sim-engines/asic/spice")
+import bisect, json, os, sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import chip
 ref, oth, ref_txt, t_from = sys.argv[1], sys.argv[2], sys.argv[3], float(sys.argv[4])
 tr, wr, _ = chip.load(ref); to, wo, _ = chip.load(oth)
