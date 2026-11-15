@@ -30,7 +30,7 @@ The translation changes no physics at the PDK's nominal settings, with one
 exception, the diodes (below); every rule is in XYCE_* and in
 asic/spice/README.md ("Other simulators").
 """
-import argparse, json, os, re, shutil, subprocess, sys, time
+import argparse, bisect, json, os, re, shutil, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -65,11 +65,17 @@ XYCE_FATAL = re.compile(r"Xyce Abort|\bnan\b|Time step too small|Simulation abor
 
 # Xyce against ngspice, what fails (chip.py's windows; tt measured, README.md
 # "Other simulators"): an output edge missing or more than 0.2 ns off (82 ps
-# the largest, slice C), a settled output more than 0.25 V off (0.15 V the
-# largest: D[5] while the bench's memory switch turns on, ngspice's sw with
-# hysteresis against Xyce's smooth vswitch), any pin against the RTL in either
-# engine, or no edge to compare at all
-WINDOW_TOL = {"max_edge_shift_ns": 0.2, "max_settled_dV": 0.25}
+# the largest in the slices' fine steps; plus a tenth of the step, below),
+# any pin against the RTL in either engine, no edge to compare at all, and
+# a settled output more than 25 mV off -- the other run interpolated at the
+# reference's settled points (interp_at): 11.4 mV the largest away from the
+# switch below (slice B ff, A[2]; B tt 7.7, ss 3.6; C 2.4-3.7; GitHub's window
+# 1 at tt 3.2 (Transistor run 43644392038), its power-up 0.8 (CI 43644389876))
+# -- or a data pin more than 0.1 V off while the bench's memory switch
+# turns (its control between its rails): ngspice's sw with hysteresis
+# against Xyce's smooth vswitch, 51.7 mV the largest (slice C ss D[5]; tt
+# 39.5, ff 25.6; GitHub's window 1 at tt D[2] 48.3)
+WINDOW_TOL = {"max_edge_shift_ns": 0.2, "max_settled_dV": 0.025, "max_switch_dV": 0.1}
 # ... plus, per edge, a tenth of the larger step either engine took across
 # it: each crossing is interpolated over its step. Window 1 at tt (Transistor
 # run 43644392038): MREQ_n's 100 pF fall, crossed in 6.46 / 5.44 ns steps,
@@ -914,31 +920,44 @@ def cells(kind, n, net, pdk_ngspice, va, python, out_dir, engines_=("ngspice", "
 
 
 # ----------------------------------------------------------------- compare
+def interp_at(t, v, at):
+    """v at time `at`, on the line between the saved points either side
+    (chip.value_at, the pins' check against the RTL, takes the next one)"""
+    k = min(max(bisect.bisect_left(t, at), 1), len(t) - 1)
+    t0, t1 = t[k - 1], t[k]
+    return v[k] if t1 == t0 else v[k - 1] + (v[k] - v[k - 1]) * (min(max(at, t0), t1) - t0) / (t1 - t0)
+
+
 def compare(ref_dat, dat, ref_txt, t_from=0.0):
     """two runs of one window against each other and against the RTL"""
     edges = chip.edges_of(open(ref_txt).read())
-    tr, wr, _ = chip.load(ref_dat)
+    tr, wr, men = chip.load(ref_dat)
     to, wo, _ = chip.load(dat)
     t_end = min(tr[-1], to[-1]) + t_from
     tr = [x + t_from for x in tr] if tr[0] < t_from - 1 else tr
     to = [x + t_from for x in to] if to[0] < t_from - 1 else to
-    vdd = max(wr["M1_n"])
     # settled: the reference moves less than 1 mV/ns there; outputs only (the
     # inputs are the same sources, sampled at other points)
-    worst = {}
+    # (the data pins while the bench's memory switch turns, its control
+    # between its rails, apart: WINDOW_TOL's max_switch_dV)
+    men_hi = max(men)          # the switch's control swings 0 .. the supply (M1_n may stay low all window)
+    worst, at_switch = {}, {}
     for p in wr:
         if p in chip.INPUTS:
             continue
-        best = (0.0, None)
+        best, sw = (0.0, None), (0.0, None)
         for k in range(1, len(tr) - 1, max(1, len(tr) // 4000)):
             if tr[k] < tr[0] + 25 or tr[k] > to[-1]:
                 continue
             if abs(wr[p][k + 1] - wr[p][k - 1]) / max(tr[k + 1] - tr[k - 1], 1e-6) > 1e-3:
                 continue
-            d = abs(chip.value_at(to, wo[p], tr[k]) - wr[p][k])
-            if d > best[0]:
+            d = abs(interp_at(to, wo[p], tr[k]) - wr[p][k])
+            if p in chip.BUS["D"] and 0.02 * men_hi < men[k] < 0.98 * men_hi:
+                if d > sw[0]:
+                    sw = (d, tr[k])
+            elif d > best[0]:
                 best = (d, tr[k])
-        worst[p] = best
+        worst[p], at_switch[p] = best, sw
     # every output edge's 1.5 V crossing
     shifts = []
     for p in wr:
@@ -966,6 +985,8 @@ def compare(ref_dat, dat, ref_txt, t_from=0.0):
     res = {"window_ns": [round(t_from, 1), round(t_end, 1)],
            "max_settled_dV": max((v[0] for v in worst.values()), default=0.0),
            "worst_pin": max(worst, key=lambda p: worst[p][0]) if worst else None,
+           "max_switch_dV": max((v[0] for v in at_switch.values()), default=0.0),
+           "switch_pin": max(at_switch, key=lambda p: at_switch[p][0]) if at_switch else None,
            "edges": len(shifts), "edges_missing": len(shifts) - len(found),
            "max_edge_shift_ns": max((abs(s[2]) for s in found), default=0.0),
            "edges_off": len(off),
@@ -987,8 +1008,9 @@ def window_failures(res, tol=WINDOW_TOL):
     for k, v in tol.items():
         if k == "max_edge_shift_ns" and "edges_off" in res:
             continue                    # per edge, with its steps (edge_tolerance)
-        if res[k] > v:
-            bad.append(f"{k} {res[k]:g} > {v:g}")
+        if res.get(k, 0.0) > v:
+            bad.append(f"{k} {res[k]:g} > {v:g}" + (f" ({res.get('switch_pin')}, the memory switch turning)"
+                                                    if k == "max_switch_dV" else ""))
     if res.get("edges_off"):
         w = res.get("worst_edge") or {}
         bad.append(f"{res['edges_off']} output edges past their tolerance (worst {w.get('pin')} at {w.get('ns')} ns: "

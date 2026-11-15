@@ -982,10 +982,13 @@ transient, its converter, 127,285 BSIM4 instances on an 8 GB GPU).
   step; window 1 at tt has MREQ_n's 100 pF fall crossed in 6.5 / 5.4 ns
   steps 266 ps apart, 4 % of the step, its tolerance 0.85 ns; the
   closest to its limit there, D[1], 71 ps of 232; in the finely stepped
-  slices 82 ps the largest, slice C), a settled output
-  more than 0.25 V off (0.15 V the largest: D[5] while the bench's memory
-  switch turns on -- ngspice's `sw` with hysteresis, Xyce's smooth
-  `vswitch`), any pin against the RTL in either engine, or no edge at
+  slices 82 ps the largest, slice C), a settled output more than 25 mV
+  off -- the other run interpolated at the reference's settled points;
+  11.4 mV the largest (slice B ff), window 1 at tt 3.2 -- a data pin more
+  than 0.1 V off while the bench's memory switch turns, its control between
+  its rails (51.7 mV the largest, slice C ss D[5]; window 1 48.3: ngspice's
+  `sw` with hysteresis against Xyce's smooth `vswitch`; read at the next
+  saved point instead, as before, that came to 0.14-0.18 V), any pin against the RTL in either engine, or no edge at
   all (`engines.WINDOW_TOL`, `window_failures`) -- and on Xyce itself
   aborting, printing a NaN, or stopping before the end, whatever its
   exit code, with its own lines in the log (`XYCE_FATAL`): never a quiet

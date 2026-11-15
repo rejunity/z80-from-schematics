@@ -413,7 +413,8 @@ def xyce_window(work, corner, edges, t_from, tstop, threads):
                    "tolerance": engines.WINDOW_TOL, "failures": bad}, f, indent=1)
     print(f"chip: Xyce against ngspice, {t_from:.0f}-{tstop:.0f} ns at {corner}: {cmp['edges']} edges, "
           f"{cmp['edges_missing']} missing, within {cmp['max_edge_shift_ns'] * 1000:.1f} ps; settled within "
-          f"{cmp['max_settled_dV'] * 1000:.1f} mV ({cmp.get('worst_pin')}); RTL mismatches ngspice "
+          f"{cmp['max_settled_dV'] * 1000:.1f} mV ({cmp.get('worst_pin')}), at the memory switch within "
+          f"{cmp.get('max_switch_dV', 0.0) * 1000:.1f} mV ({cmp.get('switch_pin')}); RTL mismatches ngspice "
           f"{cmp['mismatches_ref']}, Xyce {cmp['mismatches_other']}; Xyce {run.get('wall_s')} s", flush=True)
     if bad:
         sys.exit("chip: Xyce against ngspice: " + "; ".join(bad))
