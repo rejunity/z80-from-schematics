@@ -29,7 +29,9 @@ started from the state at 2.6 ns. Checked here:
              run: one pin drifting 0.9 mV/ns (settled: under 1 mV/ns), the
              same in both runs, saved every 0.05 ns in one and every 10 ns
              in the other -- the other run's next point is up to 9 mV off,
-             the line between its points exact
+             the line between its points exact; a difference on D[0] only
+             while the memory switch's control ramps is the switch's
+             (max_switch_dV), not the settled levels'
   span       --span FROM:TO simulates that stretch (the nightly slice,
              0:40, power-up) as a window: its own deck, pins and end state
   xyce       Xyce runs at every corner (engines.XYCE_CORNERS: tt, ss, ff --
@@ -212,6 +214,23 @@ def main():
         print(f"settled:   {'ok' if ok else 'FAIL'}  (a 0.9 mV/ns drift saved every 10 ns: "
               f"{r3['max_settled_dV'] * 1000:.0f} mV, {r3['worst_pin']})")
         ok or fails.append("settled")
+        mi = pins.index("D[0]")
+
+        def dat3(path, off):
+            with open(path, "w") as f:
+                f.write(head + "\n")
+                for t in fine2:
+                    men = 0.0 if t < 150 else min(5.0, (t - 150) * 5.0)   # the switch's control, 1 ns ramp
+                    vals = [5.0] * len(pins)
+                    vals[mi] = 1.0 + (off if 0 < men < 5.0 else 0.0)
+                    f.write(f" {t * 1e-9:.9e} " + " ".join(f"{v:.6e}" for v in vals) + f" {men:.6e}\n")
+        s0, s1 = os.path.join(work, "w0.dat"), os.path.join(work, "w1.dat")
+        dat3(s0, 0.0), dat3(s1, 0.05)
+        r4 = real.compare(s0, s1, ref_txt)
+        ok = r4["max_settled_dV"] < 0.001 and abs(r4.get("max_switch_dV", 0) - 0.05) < 0.002
+        print(f"settled:   {'ok' if ok else 'FAIL'}  (50 mV on D[0] while the switch ramps: settled "
+              f"{r4['max_settled_dV'] * 1000:.0f} mV, switch {r4.get('max_switch_dV', 0) * 1000:.0f} mV)")
+        ok or fails.append("settled (switch)")
 
         # span: the nightly's slice, 0-40 ns, as a window of its own
         os.environ["FAKE_NGSPICE"] = "complete"

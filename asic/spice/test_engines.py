@@ -22,8 +22,9 @@ and Xyce's fast path (README.md, "Profile"), on a deck of one resistor:
   mpi       the MPI build runs over mpirun -np 4, oversubscribe allowed;
             the serial build alone; never more ranks than CPUs
   checks    a window or a cells run against ngspice fails on a missing
-            edge, an edge or a settled level past its tolerance, and an
-            RTL mismatch in either engine
+            edge, an edge or a settled level past its tolerance (the data
+            bus while the bench's memory switch turns has its own), and
+            an RTL mismatch in either engine
   corners   Xyce runs at tt, ss and ff (XYCE_CORNERS): ss since each
             diode's area is folded into its model (area, below) -- before,
             at 125 C its residual went NaN and it stopped ("Maximum number
@@ -230,11 +231,12 @@ def xyce_cases(d, fails):
     for mpirun, cpus, ranks in ((None, 8, 1), ("/m/bin/mpirun", 8, 4), ("/m/bin/mpirun", 4, 4), ("/m/bin/mpirun", 2, 2)):
         if engines.xyce_ranks(mpirun, cpus) != ranks:
             fails.append(f"mpi: {engines.xyce_ranks(mpirun, cpus)} ranks for {mpirun} on {cpus} CPUs, not {ranks}")
-    good = {"edges": 7, "edges_missing": 0, "max_edge_shift_ns": 0.009, "max_settled_dV": 0.03,
-            "mismatches_ref": 0, "mismatches_other": 0}
+    good = {"edges": 7, "edges_missing": 0, "max_edge_shift_ns": 0.009, "max_settled_dV": 0.0114,
+            "max_switch_dV": 0.0517, "mismatches_ref": 0, "mismatches_other": 0}
     if engines.window_failures(good):
         fails.append(f"checks: a window as measured fails: {engines.window_failures(good)}")
     for k, v in (("edges_missing", 1), ("max_edge_shift_ns", 1.0), ("max_settled_dV", 1.0),
+                 ("max_settled_dV", 0.05), ("max_switch_dV", 0.2),
                  ("mismatches_ref", 1), ("mismatches_other", 1), ("edges", 0)):
         if not engines.window_failures(dict(good, **{k: v})):
             fails.append(f"checks: a window with {k} = {v} passes")
