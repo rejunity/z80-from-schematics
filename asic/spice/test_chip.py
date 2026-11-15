@@ -20,6 +20,11 @@ started from the state at 2.6 ns. Checked here:
   ramp       the supply's 20 ns ramp has breakpoints at most 0.25 ns apart,
              as the clock's edges have (the abort came after ngspice had
              doubled its steps from 1 ps to 1.3 ns there)
+  edges      engines.compare on one slow output edge (100 pF, a 9 ns
+             time constant) sampled every 6.5 ns in one engine and every
+             0.05 ns in the other: the crossings differ by hundreds of ps,
+             within its step's tolerance, not off; the same edge 1 ns
+             late, finely sampled in both, is off
   span       --span FROM:TO simulates that stretch (the nightly slice,
              0:40, power-up) as a window: its own deck, pins and end state
   xyce       Xyce runs at every corner (engines.XYCE_CORNERS: tt, ss, ff --
@@ -160,6 +165,31 @@ def main():
             ok = msg is not None and says in msg
             print(f"xyce:      {'ok' if ok else 'FAIL'}  ({what}: {msg or 'passed'})")
             ok or fails.append(f"xyce ({what})")
+
+        # edges: compare() on a slow edge, coarsely and finely sampled
+        import importlib, math
+        real = importlib.reload(engines)          # the stand-ins above replaced run_xyce / compare
+        pins = [p for p in chip.PINS if p not in ("VDD", "VSS")]
+        head = " time " + " ".join(f"v({chip.node(p)})" for p in pins) + " v(men)"
+
+        def dat(path, ts, late=0.0):
+            with open(path, "w") as f:
+                f.write(head + "\n")
+                for t in ts:
+                    v = 5.0 if t < 100 + late else 5.0 * math.exp(-(t - 100 - late) / 9.0)
+                    f.write(f" {t * 1e-9:.9e} " + " ".join(f"{v if p == 'M1_n' else 5.0:.6e}" for p in pins) + " 0\n")
+        coarse = [k * 6.5 for k in range(31)]
+        fine = [k * 0.05 for k in range(4001)]
+        a, b, c = (os.path.join(work, f"e{k}.dat") for k in range(3))
+        dat(a, coarse), dat(b, fine), dat(c, fine, late=1.0)
+        ref_txt = os.path.join(work, "ref.txt")
+        r1 = real.compare(a, b, ref_txt)
+        r2 = real.compare(b, c, ref_txt)
+        ok = r1["edges"] >= 1 and r1["max_edge_shift_ns"] > 0.2 and r1.get("edges_off") == 0 \
+            and r2.get("edges_off") == 1
+        print(f"edges:     {'ok' if ok else 'FAIL'}  (coarse against fine: {r1['max_edge_shift_ns'] * 1000:.0f} ps, "
+              f"{r1.get('edges_off')} off; 1 ns late: {r2.get('edges_off')} off)")
+        ok or fails.append("edges")
 
         # span: the nightly's slice, 0-40 ns, as a window of its own
         os.environ["FAKE_NGSPICE"] = "complete"

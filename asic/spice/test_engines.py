@@ -28,6 +28,10 @@ and Xyce's fast path (README.md, "Profile"), on a deck of one resistor:
             diode's area is folded into its model (area, below) -- before,
             at 125 C its residual went NaN and it stopped ("Maximum number
             of failures"); slices B and C at ss pass against ngspice
+  edges     an output edge is off when its shift passes 0.2 ns plus a tenth
+            of the larger step either engine took across it: the crossing
+            is interpolated over that step (window 1 at tt: MREQ_n's 100 pF
+            fall, 6.5 / 5.4 ns steps, 266 ps apart; a 0.05 ns step, 0.205)
   relative  an out directory given relative to here (CI's --out cells)
             runs as an absolute one does
   abort     a Xyce that aborts, prints a NaN, or stops before the end
@@ -263,6 +267,16 @@ def xyce_cases(d, fails):
                             ".model m.0 nmos level=54 toxe={1.52e-008+nfet_x}"], {})
     if any(l[:1].isspace() for l in lib):
         fails.append(f"indent: {[l for l in lib if l[:1].isspace()]}")
+    for steps, tol in (((0.05, 0.04), 0.205), ((6.46, 5.44), 0.846)):
+        if abs(engines.edge_tolerance(*steps) - tol) > 1e-9:
+            fails.append(f"edges: tolerance {engines.edge_tolerance(*steps)} for steps {steps}, not {tol}")
+    coarse = dict(good, max_edge_shift_ns=0.266, edges_off=0)
+    if engines.window_failures(coarse):
+        fails.append(f"edges: 266 ps across 6 ns steps fails: {engines.window_failures(coarse)}")
+    off = dict(good, max_edge_shift_ns=0.3, edges_off=1,
+               worst_edge={"pin": "M1_n", "ns": 3396.2, "shift_ns": 0.3, "tolerance_ns": 0.205})
+    if not engines.window_failures(off):
+        fails.append("edges: an edge past its tolerance passes")
     cell = {"edges": 6, "missing": 0, "max_edge_ps": 25.0, "max_settled_mV": 0.4}
     if engines.cells_failures(cell):
         fails.append(f"checks: cells as measured fail: {engines.cells_failures(cell)}")
@@ -297,7 +311,7 @@ def main():
         print("engines: FAIL", f)
     if fails:
         sys.exit(1)
-    print("engines: PASS (plain, comment, include, section, fast, env, mpi, checks, indent, corners, abort, relative, area)")
+    print("engines: PASS (plain, comment, include, section, fast, env, mpi, checks, edges, indent, corners, abort, relative, area)")
 
 
 if __name__ == "__main__":
