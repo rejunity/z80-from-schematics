@@ -178,7 +178,7 @@ def main():
                 for t in ts:
                     v = 5.0 if t < 100 + late else 5.0 * math.exp(-(t - 100 - late) / 9.0)
                     f.write(f" {t * 1e-9:.9e} " + " ".join(f"{v if p == 'M1_n' else 5.0:.6e}" for p in pins) + " 0\n")
-        coarse = [k * 6.5 for k in range(31)]
+        coarse = [1.25 + k * 6.5 for k in range(31)]     # 258 ps from the true crossing, as 266 on MREQ_n
         fine = [k * 0.05 for k in range(4001)]
         a, b, c = (os.path.join(work, f"e{k}.dat") for k in range(3))
         dat(a, coarse), dat(b, fine), dat(c, fine, late=1.0)
