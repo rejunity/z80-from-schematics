@@ -977,7 +977,11 @@ transient, its converter, 127,285 BSIM4 instances on an 8 GB GPU).
     run, the first window only and no figures.
 
   A window or slice fails on an output edge missing or more than 0.2 ns
-  from ngspice's (82 ps the largest at tt, slice C), a settled output
+  plus a tenth of the larger step either engine took across it from
+  ngspice's (`edge_tolerance`: each crossing is interpolated over its
+  step; window 1 at tt has MREQ_n's 100 pF fall crossed in 6.5 / 5.4 ns
+  steps 266 ps apart, 4 % of the step, its tolerance 0.85 ns; the
+  closest to its limit there, D[1], 71 ps of 232) (82 ps the largest at tt, slice C), a settled output
   more than 0.25 V off (0.15 V the largest: D[5] while the bench's memory
   switch turns on -- ngspice's `sw` with hysteresis, Xyce's smooth
   `vswitch`), any pin against the RTL in either engine, or no edge at

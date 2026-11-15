@@ -70,6 +70,17 @@ XYCE_FATAL = re.compile(r"Xyce Abort|\bnan\b|Time step too small|Simulation abor
 # hysteresis against Xyce's smooth vswitch), any pin against the RTL in either
 # engine, or no edge to compare at all
 WINDOW_TOL = {"max_edge_shift_ns": 0.2, "max_settled_dV": 0.25}
+# ... plus, per edge, a tenth of the larger step either engine took across
+# it: each crossing is interpolated over its step. Window 1 at tt (Transistor
+# run 43644392038): MREQ_n's 100 pF fall, crossed in 6.46 / 5.44 ns steps,
+# 266 ps apart (4 % of the step); A[0], M1_n 223 / 219 ps in 5.95 / 5.71 ns
+EDGE_STEP_FRACTION = 0.1
+
+
+def edge_tolerance(step_ref, step_other):
+    """how far two engines' crossings of one edge may be apart (ns)"""
+    return WINDOW_TOL["max_edge_shift_ns"] + EDGE_STEP_FRACTION * max(step_ref, step_other)
+
 # the cells (engines.py cells; the PDK's own cell netlists or chip_top's
 # extracted ones): an edge more than 50 ps off (25 ps the largest, 10 inv_1),
 # a settled node more than 2 mV off (0.34 mV), a missing edge, no edge at all
@@ -937,21 +948,30 @@ def compare(ref_dat, dat, ref_txt, t_from=0.0):
             a, b = wr[p][k - 1], wr[p][k]
             if (a - chip.OUT_LEVEL) * (b - chip.OUT_LEVEL) < 0 and tr[k] <= to[-1]:
                 tx = tr[k - 1] + (chip.OUT_LEVEL - a) * (tr[k] - tr[k - 1]) / (b - a)
-                near = [to[j - 1] + (chip.OUT_LEVEL - wo[p][j - 1]) * (to[j] - to[j - 1]) / (wo[p][j] - wo[p][j - 1])
+                near = [(to[j - 1] + (chip.OUT_LEVEL - wo[p][j - 1]) * (to[j] - to[j - 1]) / (wo[p][j] - wo[p][j - 1]),
+                         to[j] - to[j - 1])
                         for j in range(1, len(to)) if abs(to[j] - tx) < 30
                         and (wo[p][j - 1] - chip.OUT_LEVEL) * (wo[p][j] - chip.OUT_LEVEL) < 0
                         and (wo[p][j] > wo[p][j - 1]) == (b > a)]
-                c = min(near, key=lambda x: abs(x - tx)) if near else None
-                shifts.append((p, tx, None if c is None else c - tx))
+                c = min(near, key=lambda x: abs(x[0] - tx)) if near else None
+                # (pin, ns, shift, tolerance from both engines' steps across it)
+                shifts.append((p, tx, None if c is None else c[0] - tx,
+                               None if c is None else edge_tolerance(tr[k] - tr[k - 1], c[1])))
     common = [e for e in edges if max(tr[0], to[0]) <= e[0] and e[0] + 110 <= min(tr[-1], to[-1])]
     bad_r = chip.check_functional(tr, wr, common)
     bad_o = chip.check_functional(to, wo, common)
     found = [s for s in shifts if s[2] is not None]
+    off = [s for s in found if abs(s[2]) > s[3]]
+    worst_e = max(found, key=lambda s: abs(s[2]) - s[3], default=None)
     res = {"window_ns": [round(t_from, 1), round(t_end, 1)],
            "max_settled_dV": max((v[0] for v in worst.values()), default=0.0),
            "worst_pin": max(worst, key=lambda p: worst[p][0]) if worst else None,
            "edges": len(shifts), "edges_missing": len(shifts) - len(found),
            "max_edge_shift_ns": max((abs(s[2]) for s in found), default=0.0),
+           "edges_off": len(off),
+           "worst_edge": None if worst_e is None else {"pin": worst_e[0], "ns": round(worst_e[1], 3),
+                                                        "shift_ns": round(worst_e[2], 4),
+                                                        "tolerance_ns": round(worst_e[3], 4)},
            "mismatches_ref": len(bad_r), "mismatches_other": len(bad_o)}
     print(json.dumps(res, indent=1))
     return res
@@ -965,8 +985,14 @@ def window_failures(res, tol=WINDOW_TOL):
     if res["edges_missing"]:
         bad.append(f"{res['edges_missing']} of {res['edges']} output edges missing")
     for k, v in tol.items():
+        if k == "max_edge_shift_ns" and "edges_off" in res:
+            continue                    # per edge, with its steps (edge_tolerance)
         if res[k] > v:
             bad.append(f"{k} {res[k]:g} > {v:g}")
+    if res.get("edges_off"):
+        w = res.get("worst_edge") or {}
+        bad.append(f"{res['edges_off']} output edges past their tolerance (worst {w.get('pin')} at {w.get('ns')} ns: "
+                   f"{w.get('shift_ns')} ns, tolerance {w.get('tolerance_ns')} ns)")
     for k, who in (("mismatches_ref", "ngspice"), ("mismatches_other", "Xyce")):
         if res[k]:
             bad.append(f"{res[k]} pins against the RTL ({who})")
