@@ -33,6 +33,12 @@ and Xyce's fast path (README.md, "Profile"), on a deck of one resistor:
             of the larger step either engine took across it: the crossing
             is interpolated over that step (window 1 at tt: MREQ_n's 100 pF
             fall, 6.5 / 5.4 ns steps, 266 ps apart; a 0.05 ns step, 0.205)
+  handover  ngspice's end state (wrnodev: .ic v(xchip.xu_top.<name>)) reaches
+            the nodes Xyce has: the core's nets and instances carry dots in
+            their own names (u_core.u_addr._398_/I, Xu_core.u_addr._398_),
+            so only the netlist's instances are levels of the hierarchy --
+            split at every dot, 24,194 of the chip's 37,586 started at 0 V
+            and windows 2-4 left the RTL (Transistor run 43751779789)
   relative  an out directory given relative to here (CI's --out cells)
             runs as an absolute one does
   abort     a Xyce that aborts, prints a NaN, or stops before the end
@@ -207,6 +213,46 @@ def area_cases(d, fails):
         fails.append(f"area: diodes in the Xyce netlist: {sorted(seen)}")
 
 
+HANDOVER_NET = """.subckt z80_chip P_A0 VDD VSS
+Xu_top P_A0 VDD VSS top
+.ends
+.subckt top A VDD VSS
+Xu_core.u_addr._398_ A u_core.u_addr._398_/I VDD VSS cell
+Xu_core.u_addr._399_ u_core.u_addr._398_/I B VDD VSS cell
+.ends
+.subckt cell I Z VDD VSS
+R1 I mid 1k
+R2 mid Z 1k
+.ends
+"""
+HANDOVER_IC = """* Intermediate Transient Solution
+.ic v(p_vdd) = 5
+.ic v(xchip.xu_top.u_core.u_addr._398_/i) = 1.25
+.ic v(xchip.xu_top.b) = 0.5
+.ic v(xchip.xu_top.xu_core.u_addr._398_.mid) = 2.5
+.ic v(xchip.xu_top.xu_core.u_addr._399_.mid) = 3.5
+"""
+
+
+def handover_case(d, fails):
+    net, ic = os.path.join(d, "h.chip.net"), os.path.join(d, "state_1.ic")
+    with open(net, "w") as f:
+        f.write(HANDOVER_NET)
+    with open(ic, "w") as f:
+        f.write(HANDOVER_IC)
+    out = os.path.join(d, "state_1.xyce.ic")
+    engines.xyce_ic(ic, out, net, {"xchip": "z80_chip"})
+    got = {l.split("(")[1].split(")")[0].upper(): l.split("=")[1].strip() for l in open(out) if l.startswith(".ic")}
+    want = {"P_VDD": "5",
+            "XCHIP:XU_TOP:" + engines.safe("u_core.u_addr._398_/I").upper(): "1.25",
+            "XCHIP:XU_TOP:B": "0.5",
+            "XCHIP:XU_TOP:" + engines.safe("Xu_core.u_addr._398_").upper() + ":MID": "2.5",
+            "XCHIP:XU_TOP:" + engines.safe("Xu_core.u_addr._399_").upper() + ":MID": "3.5"}
+    for k, v in want.items():
+        if got.get(k) != v:
+            fails.append(f"handover: {k} = {v} not in Xyce's .ic ({sorted(got)})")
+
+
 def xyce_cases(d, fails):
     sp = os.path.join(d, "r.sp")
     with open(sp, "w") as f:
@@ -308,12 +354,13 @@ def main():
         if p.get(n) != v:
             fails.append(f"section: .param {n} = {v} read as {p.get(n)}")
     xyce_cases(d, fails)
+    handover_case(d, fails)
     area_cases(d, fails)
     for f in fails:
         print("engines: FAIL", f)
     if fails:
         sys.exit(1)
-    print("engines: PASS (plain, comment, include, section, fast, env, mpi, checks, edges, indent, corners, abort, relative, area)")
+    print("engines: PASS (plain, comment, include, section, fast, env, mpi, checks, edges, indent, corners, abort, relative, area, handover)")
 
 
 if __name__ == "__main__":
