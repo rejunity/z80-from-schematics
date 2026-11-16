@@ -38,7 +38,11 @@ and Xyce's fast path (README.md, "Profile"), on a deck of one resistor:
             their own names (u_core.u_addr._398_/I, Xu_core.u_addr._398_),
             so only the netlist's instances are levels of the hierarchy --
             split at every dot, 24,194 of the chip's 37,586 started at 0 V
-            and windows 2-4 left the RTL (Transistor run 43751779789)
+            and windows 2-4 left the RTL (Transistor run 43751779789); and a
+            window that starts from a state runs without UIC, the state
+            fixed through Xyce's operating point: under UIC every node Xyce
+            has and the state does not name (devices' own nodes) started at
+            0 V, and window 2's floating data bus dropped 24 mV at once
   relative  an out directory given relative to here (CI's --out cells)
             runs as an absolute one does
   abort     a Xyce that aborts, prints a NaN, or stops before the end
@@ -251,6 +255,19 @@ def handover_case(d, fails):
     for k, v in want.items():
         if got.get(k) != v:
             fails.append(f"handover: {k} = {v} not in Xyce's .ic ({sorted(got)})")
+    for state, uic in ((True, False), (False, True)):
+        sp = os.path.join(d, f"w{int(state)}.sp")
+        with open(os.path.join(d, "w.chip.net"), "w") as f:
+            f.write(HANDOVER_NET)
+        with open(sp, "w") as f:
+            f.write("* a window\n.include " + os.path.join(d, "w.chip.net") + "\n"
+                    + (".include " + ic + "\n" if state else "")
+                    + "Xchip a vdd 0 z80_chip\nV1 vdd 0 5\n.control\ntran 0.1n 10n 0 10n uic\n"
+                    "wrdata " + os.path.join(d, "w.dat") + " v(a)\n.endc\n.end\n")
+        xsp = engines.xyce_deck(sp, os.path.join(d, f"w{int(state)}"))[0]
+        tran = [l for l in open(xsp) if l.lower().startswith(".tran")][0]
+        if ("uic" in tran.lower()) != uic:
+            fails.append(f"handover: {'from a state' if state else 'from 0 V'} the .tran is {tran.strip()!r}")
 
 
 def xyce_cases(d, fails):
