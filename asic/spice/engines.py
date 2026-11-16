@@ -368,15 +368,57 @@ def xyce_netlist(src, dst, diodes=None):
     return [line for _, line in folded.values()]
 
 
-def xyce_ic(src, dst):
-    """ngspice's wrnodev state (.ic v(xchip.xcell.node) = V) for Xyce:
-    ':' between the levels, every name safe(); the PDK's moscaps' and
-    other subcircuits' own nodes inside the chip's cells as well"""
+def net_hierarchy(net):
+    """chip.net's subcircuits: {subckt: ({instance: its subckt}, {node})},
+    all lower case as ngspice writes them"""
+    subs, cur = {}, None
+    for l in re.sub(r"\n\+", " ", open(net).read()).splitlines():
+        t = l.split()
+        if not t or t[0].startswith("*"):
+            continue
+        kw = t[0].lower()
+        if kw == ".subckt":
+            nodes, _ = params_split(t[2:])
+            cur = subs.setdefault(t[1].lower(), ({}, set()))
+            cur[1].update(x.lower() for x in nodes)
+        elif kw == ".ends":
+            cur = None
+        elif cur is not None and kw[0] == "x":
+            nodes, _ = params_split(t[1:])
+            cur[0][kw] = nodes[-1].lower()
+            cur[1].update(x.lower() for x in nodes[:-1])
+        elif cur is not None and kw[0] in "cdrm":
+            cur[1].update(x.lower() for x in t[1:3 if kw[0] != "m" else 5])
+    return subs
+
+
+def xyce_ic(src, dst, net=None, top=None):
+    """ngspice's wrnodev state (.ic v(xchip.xu_top.node) = V) for Xyce:
+    ':' between the levels, every name safe(). Names carry dots of their
+    own (the core's u_core.u_addr._398_/I, its instances Xu_core.u_addr.
+    _398_): with net (chip.net) and top ({instance: subckt}, the deck's
+    own), only the netlist's instances are levels -- the longest that
+    matches -- and the rest is one node's name; past them (the PDK's
+    subcircuits: the moscaps' own nodes, which Xyce has not) every dot"""
+    subs = net_hierarchy(net) if net else {}
+    top = {k.lower(): v.lower() for k, v in (top or {}).items()}
     out = []
     for l in open(src):
         m = re.match(r"\s*\.ic\s+v\((.*)\)\s*=\s*(\S+)", l)
-        if m:
-            out.append(f".ic v({':'.join(safe(x) for x in m.group(1).split('.'))})={m.group(2)}")
+        if not m:
+            continue
+        parts, levels, inst, nodes = m.group(1).split("."), [], top, set()
+        while len(parts) > 1:
+            j = next((j for j in range(len(parts) - 1, 0, -1) if ".".join(parts[:j]) in inst), 0)
+            if not j:
+                break
+            sub = inst[".".join(parts[:j])]
+            levels.append(".".join(parts[:j]))
+            parts = parts[j:]
+            inst, nodes = subs.get(sub, ({}, set()))
+        rest = ".".join(parts)
+        names = levels + ([rest] if rest in nodes or not subs else parts)
+        out.append(f".ic v({':'.join(safe(x) for x in names)})={m.group(2)}")
     open(dst, "w").write("\n".join(out) + "\n")
     return len(out)
 
@@ -386,7 +428,7 @@ def xyce_deck(sp, out_dir, options=(), uic=True, solver="umfpack"):
     .dat name for it, notes); solver: XYCE_SOLVERS, unless options name one"""
     os.makedirs(out_dir, exist_ok=True)
     notes = {}
-    lib, body, ctl, in_ctl, nets = [], [], [], False, []
+    lib, body, ctl, in_ctl, nets, ics = [], [], [], False, [], []
     raw = re.sub(r"\n\+", " ", open(sp).read()).splitlines()
     for l in raw:
         t = l.split()
@@ -407,7 +449,7 @@ def xyce_deck(sp, out_dir, options=(), uic=True, solver="umfpack"):
             body.append(f".include {net}")
         elif kw == ".include" and t[1].endswith(".ic"):
             ic = os.path.join(out_dir, os.path.basename(t[1]).replace(".ic", ".xyce.ic"))
-            notes["initial node voltages"] = xyce_ic(t[1], ic)
+            ics.append((t[1], ic))        # once the netlist and the deck's instances are known (xyce_ic)
             body.append(f".include {ic}")
         elif kw in (".include", ".lib"):
             lib += resolve(t[1], t[2] if kw == ".lib" and len(t) > 2 else None)
@@ -440,6 +482,14 @@ def xyce_deck(sp, out_dir, options=(), uic=True, solver="umfpack"):
         if own:
             notes["diodes, area folded in"] = len(own)
     open(libf, "w").write("\n".join(xlib) + "\n")
+    top = {}
+    for l in body:                       # the deck's own instances (Xchip ... z80_chip)
+        t = l.split()
+        if t and t[0][0] in "Xx" and not t[0].startswith("."):
+            nodes, _ = params_split(t[1:])
+            top[t[0]] = nodes[-1]
+    for src, ic in ics:
+        notes["initial node voltages"] = xyce_ic(src, ic, nets[0][0] if nets else None, top)
     deck = [open(sp).readline().rstrip(), f".include {libf}"] + body + list(options) + [
         f".tran {tran[1]} {tran[2]} {tran[3]} {tran[4]}" + (" UIC" if uic else ""),
         f".print tran format=noindex file={prn} " + " ".join(cols),
