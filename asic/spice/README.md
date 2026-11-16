@@ -976,6 +976,31 @@ transient, its converter, 127,285 BSIM4 instances on an 8 GB GPU).
     window (`chip.py --steps xyce --segment K/4`); `windows: 1` is a short
     run, the first window only and no figures.
 
+  A window after the first starts from ngspice's end state of the one
+  before (`wrnodev`, 37,586 `.ic` lines). Two things made Xyce leave it
+  (Transistor run 43751779789: windows 2-4 red at every corner, rails
+  off, 78-95 pins against the RTL, ss aborting 28 ns in):
+  - the core's nets and instances carry dots in their own names
+    (`u_core.u_addr._398_/I`, `Xu_core.u_addr._398_`), and the `.ic`
+    names were split at every dot: 24,194 initial conditions reached no
+    node and those nodes started at 0 V. `xyce_ic` now walks the
+    netlist's own instances (`net_hierarchy`), the longest name first;
+    Xyce ignores only the 2,260 moscaps' own nodes, which it has not.
+  - under UIC every node Xyce has and the state does not name (devices'
+    own) started at 0 V, and window 2's floating data bus (100 kohm
+    pull-up, 100 pF) dropped 24 mV at once. A window from a state runs
+    without UIC: Xyce fixes the `.ic` nodes through its operating point
+    and solves the rest. The power-up starts from 0 V under UIC, as
+    ngspice.
+
+  Window 2's first 80 ns from run 43751779789's window 1 state, Xyce
+  against ngspice: tt settled within 0.48 mV, at the memory switch 48 mV,
+  5 of 5 edges within 65 ps; ss 0.12 mV, 64 mV, 134 ps (it aborted at 28
+  ns before); 0 RTL mismatches. Its first 1,200 ns (MPI x4, ~25 min a
+  corner here): 20 of 20 edges, none past its tolerance; settled within
+  2.6 (tt), 1.7 (ss), 4.7 mV (ff); at the memory switch within 48, 64,
+  28 mV; 0 RTL mismatches.
+
   A window or slice fails on an output edge missing or more than 0.2 ns
   plus a tenth of the larger step either engine took across it from
   ngspice's (`edge_tolerance`: each crossing is interpolated over its
