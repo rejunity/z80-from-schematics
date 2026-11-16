@@ -491,7 +491,12 @@ def xyce_deck(sp, out_dir, options=(), uic=True, solver="umfpack"):
     for src, ic in ics:
         notes["initial node voltages"] = xyce_ic(src, ic, nets[0][0] if nets else None, top)
     deck = [open(sp).readline().rstrip(), f".include {libf}"] + body + list(options) + [
-        f".tran {tran[1]} {tran[2]} {tran[3]} {tran[4]}" + (" UIC" if uic else ""),
+        # from a state (ics): no UIC -- Xyce fixes the .ic nodes through its
+        # operating point and solves the nodes the state does not name
+        # (devices' own); under UIC they started at 0 V and kicked the
+        # floating data bus 24 mV (window 2 at tt). From 0 V (the power-up,
+        # the cells): UIC, as ngspice
+        f".tran {tran[1]} {tran[2]} {tran[3]} {tran[4]}" + (" UIC" if uic and not ics else ""),
         f".print tran format=noindex file={prn} " + " ".join(cols),
         ".end"]
     xsp = os.path.join(out_dir, os.path.basename(sp).replace(".sp", ".xyce.sp"))
