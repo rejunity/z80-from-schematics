@@ -74,6 +74,8 @@ jobs:
         corner: ${{ fromJSON(needs.corners.outputs.list) }}
     steps:
       - uses: actions/checkout@v5
+      - name: The runner's CPU (runners differ by up to 1.7x; compare engines on one)
+        run: lscpu | grep -E '^(Model name|CPU\(s\)|Thread\(s\) per core|Core\(s\) per socket|L3 cache):' | tee /dev/stderr | sed 's/^/    /' >> "$GITHUB_STEP_SUMMARY"
 
       - uses: DeterminateSystems/nix-installer-action@main
         with:
